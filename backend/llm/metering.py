@@ -10,7 +10,8 @@
 - `float_or_none` is the tolerant number parser both the parser and the client use for `cost`.
 - `aggregate` folds a list of `Usage` into a `FeatureUsage`.
 - `format_log_line` renders the one INFO line every LLM call logs (feature-agnostic).
-- The process-level session cost total (`SESSION_COST_CAP_USD`) lives here; the client enforces it.
+- The process-level session cost total (`SESSION_COST_CAP_USD`) lives here; the client enforces it;
+  `session_cost_status()` is the one-call snapshot a footer readout or a CLI prints.
 """
 
 from __future__ import annotations
@@ -37,6 +38,25 @@ def add_session_cost(cost_usd: float) -> float:
 def reset_session_cost() -> None:
     global _session_cost_usd
     _session_cost_usd = 0.0
+
+
+def session_cost_status() -> dict[str, Any]:
+    """Snapshot of the session cost cap for a readout (footer, CLI): `spent_usd` (the running
+    live total), `cap_usd` (`SESSION_COST_CAP_USD`, read now), `remaining_usd`, `exceeded`
+    (exactly the client's refusal condition, `spent >= cap`) and `enforced` (False in mock mode,
+    where no call is ever refused and no cost accrues)."""
+    from ..config import settings  # lazy: keep this module import-light
+
+    s = settings()
+    spent = session_cost_usd()
+    cap = float(s.session_cost_cap_usd)
+    return {
+        "spent_usd": spent,
+        "cap_usd": cap,
+        "remaining_usd": round(max(cap - spent, 0.0), 10),
+        "exceeded": spent >= cap,
+        "enforced": not s.mock_openrouter,
+    }
 
 
 # --------------------------------------------------------------------------- tokens / prices
