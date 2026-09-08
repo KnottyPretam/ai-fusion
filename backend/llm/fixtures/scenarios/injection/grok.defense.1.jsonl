@@ -1,0 +1,14 @@
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"I keep +105"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" C: the accelerometer die is characterised t"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"o +85 C, but the gyroscope'"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s absolute maximum storage rating an"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d field use in enclosed ESC bay"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s argue for a highe"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"r practical ceiling. The quoted forum text w"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"as included only as found a"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nd carries no weight.\", \"revised_cla"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"im\": null, \"confidence\": 0.55, "},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"persuaded_by\": nul"},"finish_reason":null}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"l}"},"finish_reason":"stop"}]}
+{"id":"gen-34e18f4e767b58e1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":568,"completion_tokens":92,"total_tokens":660,"cost":0.001688,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

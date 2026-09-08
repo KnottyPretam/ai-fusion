@@ -1,0 +1,19 @@
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"I accept th"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e peers' selectable 2000 deg/s figure as the"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" register maximum for the g"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"yroscope; my remaining reservation i"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s that the sensitivity error an"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d nonlinearity spec"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ifications are quoted for the 1000 deg/s set"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ting, so I revise to descri"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"be 1000 deg/s as the characterised r"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ange.\", \"revised_claim\": \"The g"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"yroscope can be set"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" to 2000 deg/s, but 1000 deg/s is the charac"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"terised full-scale range.\","},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"confidence\": 0.57, \"persuaded_by\":"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"the register maximum of 2000 "},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"deg/s that both pee"},"finish_reason":null}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rs describe as selectable\"}"},"finish_reason":"stop"}]}
+{"id":"gen-70e6964df0fcc21a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":570,"completion_tokens":137,"total_tokens":707,"cost":0.00251,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

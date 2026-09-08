@@ -1,0 +1,11 @@
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The acceler"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ometer's address is 0x18 or 0x19 and the gyr"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"oscope's is 0x68 or 0x69; t"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he 0x68 figure belongs to the gyrosc"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ope, which is a separate I2C ta"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rget with its own c"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"hip id 0x0F at register 0x00.\", \"revised_cla"},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"im\": null, \"confidence\": 0."},"finish_reason":null}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"94, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-9b26e951d892a09c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":563,"completion_tokens":76,"total_tokens":639,"cost":0.001582,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

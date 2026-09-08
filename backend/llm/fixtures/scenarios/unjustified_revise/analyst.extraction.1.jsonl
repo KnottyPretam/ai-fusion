@@ -1,0 +1,24 @@
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Addr"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ess selection\", \"st"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"atement\": \"The accelerometer and gyroscope a"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"re independent I2C devices "},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"whose addresses are selected by thei"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"r own SDO pins.\", \"models\": [\"R"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1\", \"R2\", \"R3\"]}], "},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"divergences\": [{\"id\": \"d1\", \"topic\": \"Accel"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"erometer I2C address\", \"pos"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"itions\": [{\"model\": \"R1\", \"claim\": \""},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"The accelerometer answers at 0x"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"18 with SDO1 low or"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 0x19 with SDO1 high.\", \"evidence_cited\": nu"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ll}, {\"model\": \"R2\", \"claim"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": \"The accelerometer answers at 0x6"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"8 by default or 0x69 with SDO p"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ulled high.\", \"evid"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ence_cited\": null}, {\"model\": \"R3\", \"claim\":"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"The accelerometer address"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" is 0x18 (SDO1 low) or 0x19 (SDO1 hi"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"gh); the gyroscope uses 0x68 or"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 0x69.\", \"evidence_"},"finish_reason":null}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cited\": null}], \"materiality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-4a2f5f793a95df6c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":675,"completion_tokens":180,"total_tokens":855,"cost":0.000351,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

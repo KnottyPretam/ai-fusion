@@ -1,0 +1,34 @@
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Uppe"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"r gyroscope range\","},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"statement\": \"The gyroscope's highest selec"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"table full-scale range is 2"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"000 deg/s.\", \"models\": [\"R1\", \"R3\"]}"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"], \"divergences\": [{\"id\": \"d1\","},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"topic\": \"Maximum "},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"gyroscope full-scale range\", \"positions\": [{"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"model\": \"R1\", \"claim\": \"Th"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e gyroscope full-scale range is sele"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ctable up to 2000 deg/s.\", \"evi"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"dence_cited\": null}"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", {\"model\": \"R2\", \"claim\": \"The gyroscope to"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ps out at 1000 deg/s full s"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cale.\", \"evidence_cited\": null}, {\"m"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"odel\": \"R3\", \"claim\": \"The gyro"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"scope supports sele"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ctable ranges from 125 deg/s up to 2000 deg/"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s.\", \"evidence_cited\": null"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"}], \"materiality\": \"high\"}, {\"id\": \""},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d2\", \"topic\": \"Lowest selectabl"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e gyroscope range\","},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"positions\": [{\"model\": \"R1\", \"claim\": \"Doe"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s not state a lower bound; "},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"describes the range only as selectab"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"le up to 2000 deg/s.\", \"evidenc"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e_cited\": null}, {\""},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model\": \"R2\", \"claim\": \"Does not state a low"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"er bound.\", \"evidence_cited"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": null}, {\"model\": \"R3\", \"claim\": \""},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"The lowest selectable range is "},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"125 deg/s.\", \"evide"},"finish_reason":null}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nce_cited\": null}], \"materiality\": \"low\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-ea2575524961c3a3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":650,"completion_tokens":259,"total_tokens":909,"cost":0.0004408,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

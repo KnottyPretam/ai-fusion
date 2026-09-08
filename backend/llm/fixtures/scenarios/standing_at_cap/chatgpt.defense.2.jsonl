@@ -1,0 +1,20 @@
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The peers a"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"re consistent that the gyroscope is selectab"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"le up to 2000 deg/s; I acce"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"pt that the 2000 deg/s setting is a "},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"documented mode, but I still re"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ad the top setting "},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"as a reduced-accuracy extension beyond the 1"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"000 deg/s nominal range, so"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" I revise the wording rather than th"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e conclusion.\", \"revised_claim\""},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"The gyroscope's "},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nominal full-scale range is 1000 deg/s, with"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" an extended 2000 deg/s mod"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e of reduced accuracy.\", \"confidence"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": 0.6, \"persuaded_by\": \"the pe"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ers' point that the"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 2000 deg/s setting is selectable through th"},"finish_reason":null}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e range register\"}"},"finish_reason":"stop"}]}
+{"id":"gen-2af1bd50c9c9a479","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":567,"completion_tokens":146,"total_tokens":713,"cost":0.002594,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

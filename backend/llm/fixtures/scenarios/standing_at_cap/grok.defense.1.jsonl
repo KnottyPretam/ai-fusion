@@ -1,0 +1,12 @@
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The datashe"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et's gyroscope specification table gives the"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" full-scale range as +/-125"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", +/-250, +/-500, +/-1000 and +/-200"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 deg/s selected through GYRO_R"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ANGE; 1000 deg/s is"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" a mid-scale setting and the maximum is 2000"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" deg/s.\", \"revised_claim\": "},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"null, \"confidence\": 0.93, \"persuaded"},"finish_reason":null}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-a7c8f9ecca0e6fed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":567,"completion_tokens":82,"total_tokens":649,"cost":0.001626,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

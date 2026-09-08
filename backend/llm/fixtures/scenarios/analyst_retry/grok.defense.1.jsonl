@@ -1,0 +1,10 @@
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Reset value"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" of the bandwidth register is 0x80, decoded "},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"as 2000 Hz ODR / 532 Hz ban"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"dwidth in the datasheet table; 0x81 "},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"selects 230 Hz and is not the d"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"efault.\", \"revised_"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"claim\": null, \"confidence\": 0.92, \"persuaded"},"finish_reason":null}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-4235f64090a1e422","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":594,"completion_tokens":66,"total_tokens":660,"cost":0.001584,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,27 @@
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-d7d7bda7-0","index":0,"text":"Small quad, no aiding sensors: accuracy is vibration-limited. Mahony is simpler to tune and predictable; EKF adds bookkeeping without benefit here.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"For a 250 g "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"quadrotor a Mahony-style complementary filter is "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the better choice. "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"On a Cortex-M4 at 168 "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"MHz an EKF with a 6- or "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"7-state quaternion "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model is affordable, but the "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cost is not the "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"point: the filter's accuracy is dominated "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by vibration on "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the accelerometer and by how "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"well you tune the accelerometer trust, not "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by the "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"estimator structure. A Mahony filter "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with a bias estimator "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"runs in a few microseconds at "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1 kHz, has "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"two gains you can tune "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on the bench, and behaves predictably under "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"saturation. An "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"EKF gives you covariance bookkeeping "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"you will not use "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on a vehicle that has no "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"aiding sensors beyond "},"finish_reason":null}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the IMU and a magnetometer."},"finish_reason":"stop"}]}
+{"id":"gen-d7d7bda735b30a36","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":44,"completion_tokens":197,"total_tokens":241,"cost":0.005145,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":37}}}

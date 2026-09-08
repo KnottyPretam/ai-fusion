@@ -1,0 +1,17 @@
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Zero"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"-rate offset\", \"sta"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tement\": \"The gyroscope zero-rate offset is "},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"+/-1 deg/s typical at 25 C."},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\", \"models\": [\"R1\", \"R2\", \"R3\"]}, {\""},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"topic\": \"Temperature drift\", \"s"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tatement\": \"The zer"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"o-rate offset temperature drift is +/-0.015 "},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"deg/s per kelvin typical.\","},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"models\": [\"R1\", \"R2\", \"R3\"]}, {\"to"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"pic\": \"Source\", \"statement\": \"T"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he figures are in t"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he gyroscope electrical characteristics tabl"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e of the datasheet BST-BMI0"},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"88-DS001.\", \"models\": [\"R1\", \"R2\", \""},"finish_reason":null}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"R3\"]}], \"divergences\": []}"},"finish_reason":"stop"}]}
+{"id":"gen-41dcefe97631c763","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":643,"completion_tokens":125,"total_tokens":768,"cost":0.0002786,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

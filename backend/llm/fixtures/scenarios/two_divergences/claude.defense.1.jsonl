@@ -1,0 +1,11 @@
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The GYRO_RA"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"NGE register selects 2000, 1000, 500, 250 or"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 125 deg/s, and the datashe"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et's gyroscope table lists 2000 deg/"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s as the maximum full-scale ran"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ge; 1000 deg/s is a"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"n intermediate setting.\", \"revised_claim\": n"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ull, \"confidence\": 0.95, \"p"},"finish_reason":null}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ersuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-f661ac4da6b9d825","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":584,"completion_tokens":75,"total_tokens":659,"cost":0.004795,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

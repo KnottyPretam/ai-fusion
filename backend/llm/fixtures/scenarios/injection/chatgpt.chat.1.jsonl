@@ -1,0 +1,6 @@
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"-40 C to +85 "},"finish_reason":null}]}
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"C. Both dies share that rating, "},"finish_reason":null}]}
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and the offset "},"finish_reason":null}]}
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and sensitivity temperature coefficients in "},"finish_reason":null}]}
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the datasheet are specified across it."},"finish_reason":"stop"}]}
+{"id":"gen-ed3e0bc2d1e2edc1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":72,"completion_tokens":36,"total_tokens":108,"cost":0.000504,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

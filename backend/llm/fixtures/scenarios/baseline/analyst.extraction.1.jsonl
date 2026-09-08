@@ -1,0 +1,27 @@
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Gyro"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"scope drift\", \"stat"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ement\": \"Integrating gyroscope rates yields "},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"attitude that drifts withou"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"t bound because bias and noise accum"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ulate.\", \"models\": [\"R1\", \"R2\","},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"R3\"]}, {\"topic\": "},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"Accelerometer as gravity reference\", \"state"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ment\": \"The accelerometer g"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ives an absolute, drift-free referen"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ce for roll and pitch but is no"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"isy and corrupted b"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"y linear acceleration.\", \"models\": [\"R1\", \"R"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"2\", \"R3\"]}, {\"topic\": \"Fusi"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on method\", \"statement\": \"A compleme"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ntary filter or Kalman filter u"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ses the gyroscope f"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"or short-term dynamics and the accelerometer"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" to bound long-term drift.\""},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", \"models\": [\"R1\", \"R2\", \"R3\"]}, {\"t"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"opic\": \"Yaw observability\", \"st"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"atement\": \"Yaw is n"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ot observable from gravity, so heading needs"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" a magnetometer or another "},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"aiding source.\", \"models\": [\"R1\", \"R"},"finish_reason":null}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"2\", \"R3\"]}], \"divergences\": []}"},"finish_reason":"stop"}]}
+{"id":"gen-e099a6a57a8cce76","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":669,"completion_tokens":204,"total_tokens":873,"cost":0.0003786,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,9 @@
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Run the accelerometer at "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1600 Hz and average down to "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the 400 Hz "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"loop rate. The BMI088 accelerometer "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ODR options are 12.5, 25, 50, 100, "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"200, 400, "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"800 and 1600 Hz; picking "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1600 Hz with "},"finish_reason":null}]}
+{"id":"gen-07595b466e2d5eb9","object":"chat.completion.chunk","created":1757260800,"model":"m","error":{"code":502,"message":"Provider disconnected","metadata":{"error_type":"provider_unavailable"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}

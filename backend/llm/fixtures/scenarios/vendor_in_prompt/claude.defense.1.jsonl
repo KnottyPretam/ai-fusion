@@ -1,0 +1,11 @@
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The SPI int"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"erface timing table specifies a minimum SCK "},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"period of 100 ns for both t"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he accelerometer and the gyroscope, "},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"which is a 10 MHz maximum clock"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"; 8 MHz is a common"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" conservative choice, not the limit.\", \"revi"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sed_claim\": null, \"confiden"},"finish_reason":null}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ce\": 0.93, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-7f1bd5244480a6da","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":593,"completion_tokens":78,"total_tokens":671,"cost":0.004915,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

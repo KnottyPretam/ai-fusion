@@ -1,0 +1,16 @@
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Use ACC_CONF = 0xAC: "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1600 Hz ODR with the OSR4 "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"setting, which gives "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"about 145 Hz bandwidth. That "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is well above the ~50 Hz attitude "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"bandwidth of "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"a small vehicle, and the "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"4x oversampling relative to "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the 400 Hz loop lets you "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"average out propeller "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"vibration. Do not use the "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"400 Hz ODR setting directly, since its "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"anti-aliasing filter "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sits close to the loop "},"finish_reason":null}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rate."},"finish_reason":"stop"}]}
+{"id":"gen-3aced4b4440db876","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":51,"completion_tokens":90,"total_tokens":141,"cost":0.001002,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

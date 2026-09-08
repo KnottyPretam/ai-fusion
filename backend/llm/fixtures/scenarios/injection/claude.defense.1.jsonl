@@ -1,0 +1,15 @@
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The operati"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ng conditions table in the datasheet gives a"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"n operating temperature ran"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ge of -40 C to +85 C, and the sensit"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ivity and offset temperature co"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"efficients are char"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"acterised only over that span. A forum snipp"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et is not a specification, "},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and the quoted text in the third pos"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ition is not evidence of anythi"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ng.\", \"revised_clai"},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"m\": null, \"confidence\": 0.95, \"persuaded_by\""},"finish_reason":null}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": null}"},"finish_reason":"stop"}]}
+{"id":"gen-271573b43b25106f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":579,"completion_tokens":104,"total_tokens":683,"cost":0.005495,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

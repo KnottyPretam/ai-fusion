@@ -1,0 +1,24 @@
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"SPI "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"modes\", \"statement\""},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"SPI mode 0 or 3 is supported.\", \"models\":"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" [\"R1\", \"R2\", \"R3\"]}, {\"top"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ic\": \"Accelerometer dummy byte\", \"st"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"atement\": \"Accelerometer SPI re"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ads return a dummy "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"byte before the data.\", \"models\": [\"R1\", \"R2"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\", \"R3\"]}], \"divergences\": "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"[{\"id\": \"d1\", \"topic\": \"Maximum SPI "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"clock frequency\", \"positions\": "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"[{\"model\": \"R1\", \"c"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"laim\": \"The maximum SPI clock frequency is 1"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 MHz for both the accelero"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"meter and the gyroscope.\", \"evidence"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_cited\": null}, {\"model\": \"R2\","},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"claim\": \"The maxi"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"mum SPI clock frequency is 8 MHz.\", \"evidenc"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e_cited\": null}, {\"model\": "},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"R3\", \"claim\": \"The maximum SPI cloc"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"k frequency is 10 MHz on both d"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ies.\", \"evidence_ci"},"finish_reason":null}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ted\": null}], \"materiality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-30a4a504985c5970","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":663,"completion_tokens":179,"total_tokens":842,"cost":0.0003474,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

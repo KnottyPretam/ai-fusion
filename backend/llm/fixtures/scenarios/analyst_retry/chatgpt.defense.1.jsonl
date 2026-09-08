@@ -1,0 +1,16 @@
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Both peers "},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"give the GYRO_BANDWIDTH reset value as 0x80,"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" which the register map lis"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ts as ODR 2000 Hz with a 532 Hz filt"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"er bandwidth; 0x81 is the 230 H"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"z setting I had con"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"fused with the power-on default.\", \"revised_"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"claim\": \"Default bandwidth "},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is 532 Hz, from a GYRO_BANDWIDTH res"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et value of 0x80.\", \"confidence"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": 0.88, \"persuaded"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_by\": \"the 0x80 reset value and the 532 Hz b"},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"andwidth row cited by both "},"finish_reason":null}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-6651a98860ce95e7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":590,"completion_tokens":111,"total_tokens":701,"cost":0.00229,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

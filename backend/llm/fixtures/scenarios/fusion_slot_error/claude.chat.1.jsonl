@@ -1,0 +1,11 @@
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-39cd61e8-0","index":0,"text":"Accel max ODR 1600 Hz (code 0x0C); gyro is 2000 Hz.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"The BMI088 accelerometer's maximum "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"output data rate is 1600 Hz "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"(ACC_CONF odr field "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"= 0x0C). The ODR options "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"run from 12.5 Hz to 1600 Hz "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"in powers "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"of two; the gyroscope is "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the part that goes "},"finish_reason":null}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to 2000 Hz."},"finish_reason":"stop"}]}
+{"id":"gen-39cd61e81c81850b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":59,"completion_tokens":64,"total_tokens":123,"cost":0.001895,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":13}}}

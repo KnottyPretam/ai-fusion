@@ -1,0 +1,9 @@
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"10 MHz is t"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he SPI maximum on both the accelerometer and"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" gyroscope dies per the int"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"erface timing table; there is no 8 M"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Hz limit in the datasheet.\", \"r"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"evised_claim\": null"},"finish_reason":null}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", \"confidence\": 0.9, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-be1abda59d25c678","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":591,"completion_tokens":63,"total_tokens":654,"cost":0.00156,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

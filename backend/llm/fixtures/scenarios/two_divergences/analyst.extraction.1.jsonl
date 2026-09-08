@@ -1,0 +1,34 @@
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Rang"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e is selectable\", \""},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"statement\": \"The gyroscope full-scale range "},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is selectable across severa"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"l settings.\", \"models\": [\"R1\", \"R3\"]"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"}], \"divergences\": [{\"id\": \"d1\""},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", \"topic\": \"Maximum"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" gyroscope full-scale range\", \"positions\": ["},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"{\"model\": \"R1\", \"claim\": \"T"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he gyroscope full-scale range is sel"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ectable up to 2000 deg/s.\", \"ev"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"idence_cited\": null"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"}, {\"model\": \"R2\", \"claim\": \"The gyroscope m"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"aximum full-scale range is "},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1000 deg/s.\", \"evidence_cited\": null"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"}, {\"model\": \"R3\", \"claim\": \"Th"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e top selectable gy"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"roscope range is 2000 deg/s.\", \"evidence_cit"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ed\": null}], \"materiality\":"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"high\"}, {\"id\": \"d2\", \"topic\": \"Max"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"imum SPI clock frequency\", \"pos"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"itions\": [{\"model\":"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"R1\", \"claim\": \"Both the gyroscope and acce"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"lerometer SPI interfaces ru"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"n at up to 10 MHz.\", \"evidence_cited"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": \"minimum SCK period 100 ns\"}"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", {\"model\": \"R2\", \""},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"claim\": \"The SPI bus is limited to 8 MHz.\", "},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"evidence_cited\": null}, {\""},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model\": \"R3\", \"claim\": \"The SPI cloc"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"k goes up to 10 MHz on both die"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s.\", \"evidence_cite"},"finish_reason":null}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d\": null}], \"materiality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-22ef34db694f703b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":675,"completion_tokens":257,"total_tokens":932,"cost":0.0004434,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,31 @@
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Defa"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ult output data rat"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e\", \"statement\": \"The gyroscope powers on at"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" a 2000 Hz output data rate"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".\", \"models\": [\"R1\", \"R2\", \"R3\"]}, {"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"topic\": \"Typical reconfigurati"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on\", \"statement\": \""},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Flight software usually lowers the rate to 1"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"000 Hz / 116 Hz after reset"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".\", \"models\": [\"R1\", \"R2\"]}], \"diver"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"gences\": [{\"id\": \"d1\", \"topic\":"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"Default filter ba"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ndwidth and GYRO_BANDWIDTH reset value\", \"po"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sitions\": [{\"model\": \"R1\", "},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"claim\": \"Default bandwidth is 532 H"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"z, from a GYRO_BANDWIDTH reset "},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"value of 0x80.\", \"e"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"vidence_cited\": \"GYRO_BANDWIDTH = 0x80\"}, {\""},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model\": \"R2\", \"claim\": \"Def"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ault bandwidth is 230 Hz, from a GYR"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"O_BANDWIDTH reset value of 0x81"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".\", \"evidence_cited"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": \"GYRO_BANDWIDTH reset value 0x81\"}, {\"mod"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"el\": \"R3\", \"claim\": \"Defaul"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"t bandwidth is 532 Hz (reset value 0"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"x80); 0x81 is the 2000 Hz / 230"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" Hz alternative.\", "},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"evidence_cited\": \"bandwidth register reset "},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"value 0x80\"}], \"materiality"},"finish_reason":null}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-385ea937a2491e57","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":654,"completion_tokens":230,"total_tokens":884,"cost":0.0004068,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

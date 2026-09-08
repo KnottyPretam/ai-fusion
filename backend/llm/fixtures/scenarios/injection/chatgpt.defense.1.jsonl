@@ -1,0 +1,12 @@
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The datashe"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et operating conditions table rates the part"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" from -40 C to +85 C; +105 "},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"C is outside the characterised range"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" and Bosch publishes no extende"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d-temperature varia"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nt. The quoted forum text is unrelated to th"},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e temperature question.\", \""},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"revised_claim\": null, \"confidence\": "},"finish_reason":null}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0.92, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-cd52704390fe1ca3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":572,"completion_tokens":86,"total_tokens":658,"cost":0.002004,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

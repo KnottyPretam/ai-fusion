@@ -1,0 +1,20 @@
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-0b22463b-0","index":0,"text":"Integrate Phi G G^T Phi^T q; give both standard forms.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Continuous model: p-dot = "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"v, v-dot = w, with E[w(t) "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"w(s)] = q "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"delta(t - s). Discretise: Phi "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"= [[1, T], [0, 1]], and Q "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"= q "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"* [[T^3/3, T^2/2], [T^2/2, T]] "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"from integrating Phi(tau) G "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"G^T Phi(tau)^T q over the step. "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"If you instead "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"assume a piecewise-constant acceleration with "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"variance sigma_a^2 per step you get Q "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"= sigma_a^2 "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"* [[T^4/4, T^3/2], [T^3/2, T^2]]. "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Both are standard; the "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"continuous white-noise form is the one "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"that stays consistent "},"finish_reason":null}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"if you change T."},"finish_reason":"stop"}]}
+{"id":"gen-0b22463bb87589df","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":47,"completion_tokens":129,"total_tokens":176,"cost":0.000868,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":14}}}

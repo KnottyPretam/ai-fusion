@@ -1,0 +1,44 @@
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Comp"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ute budget\", \"state"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ment\": \"A Cortex-M4 at 168 MHz can run eithe"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"r estimator at the IMU rate"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"; runtime is not the deciding factor"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".\", \"models\": [\"R1\", \"R2\", \"R3\""},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"]}, {\"topic\": \"Vibr"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ation dominates accuracy\", \"statement\": \"Acc"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"elerometer vibration and ho"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"w much to trust the accelerometer do"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"minate practical accuracy on a "},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"small airframe.\", \""},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"models\": [\"R1\", \"R3\"]}], \"divergences\": [{\"i"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d\": \"d1\", \"topic\": \"Preferr"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ed attitude estimator for a 250 g qu"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"adrotor\", \"positions\": [{\"model"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": \"R1\", \"claim\": \""},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"A Mahony-style complementary filter with a b"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ias estimator is the better"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" choice; accuracy is dominated by ac"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"celerometer vibration and tunin"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"g, not by estimator"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" structure.\", \"evidence_cited\": \"runtime of "},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"a few microseconds at 1 kHz"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"; only two gains to tune\"}, {\"model\""},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"R2\", \"claim\": \"A multiplicat"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ive quaternion EKF "},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with gyro-bias states is the better choice b"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ecause measurement trust ad"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"apts through the covariance and furt"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"her sensors become measurement "},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"models.\", \"evidence"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_cited\": \"under 50 microseconds per update o"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"n a Cortex-M4 with hardware"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" floating point\"}, {\"model\": \"R3\", \""},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"claim\": \"The Mahony complementa"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ry filter is the be"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tter choice; the problem is vibration-limite"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d, the EKF covariance is ha"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nd-tuned in practice and its lineari"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sation adds failure modes.\", \"e"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"vidence_cited\": nul"},"finish_reason":null}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"l}], \"materiality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-bc793c7c26fa4a00","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":641,"completion_tokens":334,"total_tokens":975,"cost":0.000529,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

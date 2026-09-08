@@ -1,0 +1,8 @@
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"You are rig"},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ht, I revise.\", \"revised_claim\": \"The accele"},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rometer answers at 0x18 wit"},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"h SDO1 low or 0x19 with SDO1 high.\","},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"confidence\": 0.7, \"persuaded_"},"finish_reason":null}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by\": \"the peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-d1b5c9bfcd0c46d6","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":571,"completion_tokens":52,"total_tokens":623,"cost":0.001662,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
