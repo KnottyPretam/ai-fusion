@@ -1,0 +1,45 @@
+[project]
+name = "triplex"
+version = "0.1.0"
+description = "Triplex: a Claude / ChatGPT / Grok council via OpenRouter with on-demand Analyze and Fusion"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "httpx>=0.27.0",
+  "pydantic>=2.9.0",
+  "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "respx>=0.21",
+  "hypothesis>=6.100",
+  "syrupy>=4.6",
+  "ruff>=0.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not live' --import-mode=importlib"
+norecursedirs = [".claude", ".venv", "node_modules", "frontend", "data"]
+asyncio_mode = "auto"
+markers = [
+  "live: hits the real OpenRouter API; needs OPENROUTER_API_KEY; never in the default run",
+]
+filterwarnings = ["error::DeprecationWarning:backend.*"]
+
+[tool.ruff]
+extend-exclude = [".claude", "frontend", "data"]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]

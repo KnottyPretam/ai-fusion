@@ -1,0 +1,10 @@
+/* FROZEN after Stage 0: layout only. Feature styling lives in features/<x>/*.module.css */
+* { box-sizing: border-box; }
+.app { display: flex; height: 100vh; width: 100vw; overflow: hidden; background: var(--bg); color: var(--fg); }
+.app-sidebar { width: 240px; flex: 0 0 240px; border-right: 1px solid var(--border); overflow-y: auto; background: var(--bg-muted); }
+.app-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.app-config { flex: 0 0 auto; border-bottom: 1px solid var(--border); padding: 6px 10px; background: var(--bg-muted); }
+.app-send { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.app-analyze, .app-fusion { flex: 0 0 auto; max-height: 40vh; overflow-y: auto; border-top: 1px solid var(--border); }
+.app-analyze:empty, .app-fusion:empty { display: none; }
+.app-meter { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 4px 10px; font-size: 12px; background: var(--bg-muted); }

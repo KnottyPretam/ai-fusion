@@ -1,0 +1,24 @@
+# secrets
+.env
+.env.*
+!.env.example
+# runtime data
+data/
+*.log
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+# node / vite
+node_modules/
+frontend/dist/
+frontend/node_modules/.vite/
+# test artefacts
+playwright-report/
+test-results/
+frontend/test-results/
+# claude code agent worktrees live inside the repo
+.claude/worktrees/
