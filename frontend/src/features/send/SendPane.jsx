@@ -22,10 +22,15 @@ import styles from './send.module.css'
 
 const STREAM_KEYS = ['send', 'analyze', 'fusion']
 
+// Shown next to the main composer while slotConfig.grounded is on (PLAN §8 Phase 5).
+export const GROUNDED_HINT_TITLE =
+  'Grounded mode: every Send (three calls) and every solo continue carries the OpenRouter web-search plugin, which adds a per-request search fee plus the prompt tokens of the injected results. Analyze and Fusion calls are never grounded. Toggle it in the config bar.'
+
 export default function SendPane() {
   const dispatch = useDispatch()
   const run = useRunStream()
   const conversation = useSlice('conversation')
+  const slotConfig = useSlice('slotConfig')
   const streams = useSlice('streams') || {}
   const models = useSlice('models') || { loaded: false, error: null }
   const [prompt, setPrompt] = useState('')
@@ -125,6 +130,7 @@ export default function SendPane() {
 
   const streamError = streams.send && streams.send.status === 'error' ? streams.send.error : null
   const banner = bannerFor === currentId ? localError || streamError : null
+  const grounded = !!(slotConfig && slotConfig.grounded)
 
   return (
     <div className={styles.pane} data-testid="send-grid-root">
@@ -151,16 +157,23 @@ export default function SendPane() {
           submit()
         }}
       >
-        <textarea
-          data-testid="send-composer"
-          aria-label="Prompt for all three models"
-          placeholder={conversation ? 'Send to all three models… (Enter to send, Shift+Enter for a newline)' : 'Start a conversation: send a prompt to all three models (Enter to send)'}
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={locked}
-          rows={3}
-        />
+        <div className={styles.composerBody}>
+          {grounded ? (
+            <div className={`${styles.hint} ${styles.groundedHint}`} data-testid="send-grounded-hint" title={GROUNDED_HINT_TITLE}>
+              web search on
+            </div>
+          ) : null}
+          <textarea
+            data-testid="send-composer"
+            aria-label="Prompt for all three models"
+            placeholder={conversation ? 'Send to all three models… (Enter to send, Shift+Enter for a newline)' : 'Start a conversation: send a prompt to all three models (Enter to send)'}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={locked}
+            rows={3}
+          />
+        </div>
         <button type="submit" className={styles.sendButton} data-testid="send-button" disabled={locked || !prompt.trim()}>
           {sendStreaming ? 'Streaming…' : 'Send'}
         </button>

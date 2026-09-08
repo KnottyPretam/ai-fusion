@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import './index.jsx' // registers the `slots` slice at module scope
 import { applyEvents, sample } from '../../state/testing.jsx'
 import { initialState, rootReducer } from '../../state/registry.js'
-import { DEFAULT_EFFORTS, SLOT_IDS, effortsFor, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, turnExtras, vendorModels } from './slice.js'
+import { COST_CAP_CODE, DEFAULT_EFFORTS, SLOT_IDS, effortsFor, isCostCapError, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, turnExtras, vendorModels } from './slice.js'
 
 const CFG = {
   slots: {
@@ -294,6 +294,20 @@ describe('derived helpers', () => {
     // Unknown turn ids sort after every ranked error; a missing thread still lists the errors.
     expect(threadItems([m('user', 'zz')], grok).map((it) => it.kind)).toEqual(['error', 'error', 'message'])
     expect(threadItems(null, grok).map((it) => it.kind)).toEqual(['error', 'error'])
+  })
+
+  test('isCostCapError matches the frozen code, the code inside a message, and the backend wording', () => {
+    expect(COST_CAP_CODE).toBe('cost_cap_exceeded')
+    expect(isCostCapError('cost_cap_exceeded', null)).toBe(true) // slot_error{code}
+    expect(isCostCapError(null, 'cost_cap_exceeded')).toBe(true) // complete_json's error string
+    expect(isCostCapError(null, 'cost_cap_exceeded: session total 10.2 > 10')).toBe(true)
+    // backend/llm/client.py's message, as persisted in SendTurn.errors[slot] / ContinueTurn.error
+    expect(isCostCapError(null, 'session cost cap reached: spent $10.0412 of SESSION_COST_CAP_USD=$10.00; live calls refused')).toBe(true)
+    expect(isCostCapError(502, 'Provider disconnected')).toBe(false)
+    expect(isCostCapError('internal_error', 'ValueError: costume capsule')).toBe(false)
+    expect(isCostCapError(null, null)).toBe(false)
+    expect(isCostCapError(undefined, '')).toBe(false)
+    expect(isCostCapError(null, 42)).toBe(false)
   })
 
   test('safeCitationHref admits only absolute http(s) urls', () => {

@@ -68,6 +68,19 @@
 .badge { padding: 0 6px; border-radius: 8px; background: var(--primary-soft); color: var(--primary); }
 .badge[data-coerced='true'] { background: var(--warn-soft); color: var(--warn); }
 .configError { font-size: 11px; color: var(--err); }
+.groundedBadge {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.headerWarn { font-size: 11px; padding: 3px 6px; font-weight: 400; }
 
 .scroll {
   flex: 1 1 auto;
@@ -158,6 +171,7 @@
   white-space: pre-wrap;
 }
 .errorCode { font-family: var(--mono); }
+.capNote { margin-top: 4px; font-size: 11px; opacity: 0.9; }
 .notAppended { font-size: 11px; color: var(--fg-muted); padding: 0 12px 6px; }
 
 .solo {
@@ -177,6 +191,8 @@
   gap: 6px;
   align-items: flex-end;
 }
+.composerBody { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.groundedHint { color: var(--ok); font-weight: 600; }
 .composer textarea {
   flex: 1 1 auto;
   min-width: 0;

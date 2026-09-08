@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import SlotConfigBar, { analystGroups } from './index.jsx'
+import SlotConfigBar, { GROUNDED_LABEL, GROUNDED_TITLE, analystGroups } from './index.jsx'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch } from '../../state/store.jsx'
 
@@ -195,6 +195,27 @@ describe('SlotConfigBar', () => {
     await act(async () => fetchFn.release[1]())
     await act(async () => {})
     expect(screen.getByTestId('config-max-iterations')).toHaveValue('5')
+  })
+
+  test('the grounded toggle reads "Grounded (web search on Send)" and its title explains the extra cost (PLAN §8 Phase 5)', async () => {
+    stubFetch()
+    renderWithStore(<SlotConfigBar />, { preloaded: { conversation: CONV, slotConfig: CFG, models: loadedModels() } })
+    await act(async () => {})
+    expect(GROUNDED_LABEL).toBe('Grounded (web search on Send)')
+    const label = screen.getByTestId('config-grounded-label')
+    expect(label.tagName).toBe('LABEL')
+    expect(label).toHaveTextContent('Grounded (web search on Send)')
+    expect(within(label).getByTestId('config-grounded')).not.toBeChecked() // the text is the checkbox's label
+    expect(label).toHaveAttribute('title', GROUNDED_TITLE)
+    expect(GROUNDED_TITLE).toMatch(/web-search plugin/)
+    expect(GROUNDED_TITLE).toMatch(/Costs extra/)
+    expect(GROUNDED_TITLE).toMatch(/per-request search fee/)
+    expect(GROUNDED_TITLE).toMatch(/prompt tokens/)
+    expect(GROUNDED_TITLE).toMatch(/never to Analyze or Fusion/)
+    // Clicking the label text toggles the box and PUTs grounded: true.
+    const user = userEvent.setup()
+    await user.click(screen.getByText('Grounded (web search on Send)'))
+    await waitFor(() => expect(screen.getByTestId('config-grounded')).toBeChecked())
   })
 
   test('a rejected PUT shows the error code and reverts to the server copy', async () => {

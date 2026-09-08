@@ -455,4 +455,34 @@ describe('SendPane', () => {
     await waitFor(() => expect(screen.getByTestId('send-error')).toHaveTextContent('busy'))
   })
 
+  test('the composer shows the "web search on" hint only while grounded is on (PLAN §8 Phase 5)', async () => {
+    stubFetch([{ method: 'GET', url: '/api/models', respond: json(MODELS) }])
+    let dispatch
+    renderWithStore(
+      <>
+        <SendPane />
+        <DispatchProbe onReady={(d) => (dispatch = d)} />
+      </>,
+      { preloaded: { conversation: conv(), slotConfig: CFG } },
+    )
+    await act(async () => {}) // catalog load settles
+    expect(screen.queryByTestId('send-grounded-hint')).toBeNull()
+    for (const slot of ['claude', 'chatgpt', 'grok']) expect(screen.queryByTestId(`slot-${slot}-grounded`)).toBeNull()
+    // The config bar's optimistic update (or a loaded conversation) turns it on.
+    act(() => dispatch({ type: 'slotConfig/update', patch: { grounded: true } }))
+    const hint = screen.getByTestId('send-grounded-hint')
+    expect(hint).toHaveTextContent('web search on')
+    expect(hint).toHaveAttribute('title', expect.stringMatching(/web-search plugin/))
+    expect(hint).toHaveAttribute('title', expect.stringMatching(/never grounded/))
+    expect(hint.querySelector('a')).toBeNull()
+    // The hint sits with the composer, and every column header carries the grounded badge.
+    expect(hint.parentElement).toBe(screen.getByTestId('send-composer').parentElement)
+    for (const slot of ['claude', 'chatgpt', 'grok']) expect(screen.getByTestId(`slot-${slot}-grounded`)).toHaveTextContent('grounded')
+    expect(screen.getByTestId('send-composer')).not.toBeDisabled()
+    act(() => dispatch({ type: 'slotConfig/update', patch: { grounded: false } }))
+    expect(screen.queryByTestId('send-grounded-hint')).toBeNull()
+    // Without a conversation there is no slotConfig: no hint.
+    act(() => dispatch({ type: 'conversation/cleared' }))
+    expect(screen.queryByTestId('send-grounded-hint')).toBeNull()
+  })
 })
