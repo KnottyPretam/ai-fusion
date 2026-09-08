@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from backend.config import DEFAULT_SLOT_CONFIG
+from backend.features import analyze as feature
 from backend.llm import mock
+from backend.prompts import analyze as prompts
 from backend.schemas import AnalyzeTurn, Extraction, SendTurn
 from backend.store import conversations as store
 from tests.analyze.conftest import extraction_calls, extraction_text, persist
@@ -270,6 +274,142 @@ async def test_mock_miss_degrades_instead_of_crashing(persisted_conversation, an
     assert events[1]["error"] == "no fixture no_such_scenario_w5/analyst.extraction.1"
     assert events[-1]["turn"]["error"] == "no fixture no_such_scenario_w5/analyst.extraction.2"
     assert [c["fixture"] for c in extraction_calls()] == [None, None]
+
+
+# --------------------------------------------------------------------------- retry parity
+def test_retry_follow_up_mirrors_the_client_rule():
+    """What the retry carries (docs/semantics.md "Analyze" / "Analyze on a transport error"):
+    nothing for no output at all; the correction message for any output; the assistant echo
+    only when that output is not blank (providers reject empty assistant content)."""
+    retry = prompts.retry_message
+    assert feature.retry_follow_up("", "Provider disconnected") == []  # transport error
+    assert feature.retry_follow_up("", "parse_error: empty response") == []  # empty stream
+    assert feature.retry_follow_up("  \n\t", "parse_error: empty response") == [
+        {"role": "user", "content": retry("parse_error: empty response")}
+    ]
+    assert feature.retry_follow_up("{not json", "parse_error: no JSON object found") == [
+        {"role": "assistant", "content": "{not json"},
+        {"role": "user", "content": retry("parse_error: no JSON object found")},
+    ]
+    assert feature.retry_follow_up("x", None) == [
+        {"role": "assistant", "content": "x"},
+        {"role": "user", "content": retry("unknown error")},
+    ]
+
+
+async def test_whitespace_only_output_is_retried_without_an_assistant_echo(
+    persisted_conversation, analyze, local_fixtures
+):
+    """A blank first attempt IS output that failed parsing, so the retry carries the correction
+    message — but never an (empty) assistant echo, which providers reject with a 400 (the
+    client's own rule for its internal retry: `if raw_text.strip()`)."""
+    local_fixtures("analyst_whitespace_then_ok")
+    conv = persisted_conversation
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "analyze_retry", "analyze_done"]
+    assert events[1]["error"] == "parse_error: empty response"
+    turn = events[-1]["turn"]
+    assert turn["status"] == "ok" and turn["error"] is None
+    assert turn["raw_attempts"] == ["  \n\t", extraction_text("planted_factual")]
+    assert turn["extraction"]["divergences"][0]["id"] == "d1"
+    first, second = extraction_calls()
+    assert [m["role"] for m in second["messages"]] == ["system", "user", "user"]
+    assert second["messages"][:2] == first["messages"]
+    assert second["messages"][-1]["content"] == prompts.retry_message(events[1]["error"])
+    assert all(m["content"].strip() for m in second["messages"])  # no blank message anywhere
+    assert turn["usage"]["totals"]["calls"] == 2  # both attempts carried a usage chunk
+
+
+async def test_empty_output_is_retried_with_the_identical_request(
+    persisted_conversation, analyze, local_fixtures
+):
+    """No output at all leaves nothing to correct: the identical request is re-sent, the same
+    rule as a transport error (and what tests/e2e's robustness oracle asserts for empty text)."""
+    local_fixtures("analyst_empty_then_ok")
+    conv = persisted_conversation
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "analyze_retry", "analyze_done"]
+    assert events[1]["error"] == "parse_error: empty response"
+    turn = events[-1]["turn"]
+    assert turn["status"] == "ok"
+    assert turn["raw_attempts"] == ["", extraction_text("planted_factual")]
+    first, second = extraction_calls()
+    assert second["messages"] == first["messages"]
+    assert turn["usage"]["totals"]["calls"] == 2
+
+
+# --------------------------------------------------------------------------- failure after the first event
+async def test_unexpected_failure_after_the_first_event_is_a_terminal_error_event(
+    persisted_conversation, analyze, get_conversation, monkeypatch
+):
+    """docs/api-contract.md: after the first event nothing can change the HTTP status; a
+    failure is the terminal `error{message}` event, the guard is released, nothing persisted."""
+
+    real_append_turn = store.append_turn
+
+    async def raising(conv_id: str, turn) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("backend.features.analyze.store.append_turn", raising)
+    conv = persisted_conversation
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text  # committed by analyze_start
+    assert r.headers["content-type"].startswith("text/event-stream")
+    assert _types(events) == ["analyze_start", "error"]
+    assert events[-1]["message"] == "OSError: disk full"
+    assert not store.is_busy(conv.id)
+    assert len(extraction_calls()) == 1  # the analyst had already been called
+    public = await get_conversation(conv.id)
+    assert [t["type"] for t in public["turns"]] == ["send"]  # no AnalyzeTurn persisted
+    # The conversation is usable again: with the store healed, a fresh run succeeds.
+    monkeypatch.setattr("backend.features.analyze.store.append_turn", real_append_turn)
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200 and _types(events) == ["analyze_start", "analyze_done"]
+    assert not store.is_busy(conv.id)
+
+
+async def test_conversation_deleted_mid_run_is_a_terminal_error_event(
+    persisted_conversation, analyze, monkeypatch, client
+):
+    """The store's not_found HTTPException raised by `append_turn` after the first event is
+    converted to the terminal `error` event (never a 404 or a 500) and the guard is released."""
+    conv = persisted_conversation
+    real_complete_json = feature.client.complete_json
+
+    async def deleting(**kw):
+        result = await real_complete_json(**kw)
+        assert await store.delete(conv.id)  # gone before the persistence write
+        return result
+
+    monkeypatch.setattr(feature.client, "complete_json", deleting)
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "error"]
+    assert events[-1]["message"].startswith("HTTPException: 404")
+    assert "not_found" in events[-1]["message"]
+    assert not store.is_busy(conv.id)
+    assert len(extraction_calls()) == 1
+    r = await client.get(f"/api/conversations/{conv.id}")
+    assert r.status_code == 404
+
+
+async def test_terminal_error_is_logged_with_the_traceback(
+    persisted_conversation, analyze, monkeypatch, caplog
+):
+    async def raising(conv_id: str, turn) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("backend.features.analyze.store.append_turn", raising)
+    with caplog.at_level("ERROR", logger="triplex.features.analyze"):
+        _, events = await analyze(persisted_conversation.id)
+    assert _types(events) == ["analyze_start", "error"]
+    records = [r for r in caplog.records if r.name == "triplex.features.analyze"]
+    assert records and records[-1].exc_info is not None
+    assert persisted_conversation.id in records[-1].getMessage()
+    with pytest.raises(RuntimeError, match="boom"):
+        raise records[-1].exc_info[1]
 
 
 # --------------------------------------------------------------------------- meter

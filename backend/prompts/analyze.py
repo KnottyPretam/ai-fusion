@@ -3,7 +3,10 @@
 Everything here is Triplex-authored text that reaches the analyst model, so it must stay free of
 vendor/product names and slot ids (leak tests scan it). Model-authored responses are quoted data:
 each one is wrapped with `prompts.delimited(label, response)` behind `QUOTED_DATA_NOTICE` so the
-analyst never treats instructions found inside a response as its own.
+analyst never treats instructions found inside a response as its own. `delimited` neutralises
+every `<<<` inside the quoted text (docs/semantics.md "Delimiter breakout"), so a response that
+quotes the closing marker can never end its own block and spill into the instruction zone; the
+blocks are otherwise verbatim.
 """
 
 from __future__ import annotations
