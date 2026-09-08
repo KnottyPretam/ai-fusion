@@ -35,35 +35,35 @@ disagreement is surfaced, never silently averaged.
 
 ### Functional
 
-- [ ] **R1 — Send (base feature):** one prompt → the three configured models in
+- [x] **R1 — Send (base feature):** one prompt → the three configured models in  ✅ S2 d4f0962: tests/send (3 parallel streams, per-slot payloads)
       parallel via OpenRouter; all three outputs streamed and displayed. No analysis
       unless requested.
-- [ ] **R2 — Per-model configuration:** for each slot (Claude / ChatGPT / Grok),
+- [x] **R2 — Per-model configuration:** for each slot (Claude / ChatGPT / Grok),  ✅ S1/S2: env overrides tests/test_config.py + UI controls + tests/send payload assertions
       independently set (a) the specific model and (b) the reasoning **effort**
       (e.g., off / low / medium / high), from both config file and UI.
-- [ ] **R3 — Analyze:** on-demand structured comparison of the latest responses:
+- [x] **R3 — Analyze:** on-demand structured comparison of the latest responses:  ✅ S2: tests/analyze (planted_factual isolates d1; idempotent cached hit)
       similarities reported as agreements, differences as divergences with per-model
       positions and a materiality rating.
-- [ ] **R4 — Fusion:** on-demand iterative loop seeded by Analyze's divergences. Each
+- [x] **R4 — Fusion:** on-demand iterative loop seeded by Analyze's divergences. Each  ✅ S2: tests/fusion (converged / stalemate / max_iterations / unjustified / unavailable)
       round, every model holding a differing position receives the (anonymized) peer
       claims and latest justifications and must defend or revise. Loop runs until all
       divergences resolve, nothing changed in a round (stalemate), or
       **`max_iterations`** — settable in the UI per run — is reached. Output is a
       fusion report with the per-divergence iteration trace and final status.
-- [ ] **R5 — Thread continuation:** post follow-ups into any single model's thread;
+- [x] **R5 — Thread continuation:** post follow-ups into any single model's thread;  ✅ S2: tests/send rabbit-hole byte-identical threads; fusion messages in slot threads (tests/fusion)
       other threads untouched. Fusion exchanges live in the relevant model's history so
       later rabbit-holing carries that context.
-- [ ] **R6 — Grounded mode (later phase):** toggle to web-search-enabled variants for
+- [ ] **R6 — Grounded mode (later phase):** toggle to web-search-enabled variants for  🔶 toggle + plugin wired (S2); live citations verified in Stage 4
       questions needing current data (vendor parts, datasheets, pricing).
 
 ### Non-functional
 
-- [ ] Streaming responses; Analyze/Fusion progress shown round by round.
-- [ ] Cost, token, and latency display **per feature invocation** (Fusion multiplies
+- [x] Streaming responses; Analyze/Fusion progress shown round by round.  ✅ S1/S2: SSE token streaming; round_start/exchange/round_done events; live panes
+- [x] Cost, token, and latency display **per feature invocation** (Fusion multiplies  ✅ S1 + review fixes: meter shows last invocation per feature + Fusion multiplier vs the fused Send
       calls; the meter must make that visible).
-- [ ] Local persistence of full conversation state (JSON on disk to start).
-- [ ] Deterministic **mock/replay mode** for offline development and tests.
-- [ ] All keys via `.env` (never committed). Single provider key: OpenRouter.
+- [x] Local persistence of full conversation state (JSON on disk to start).  ✅ S1: backend/store JSON per conversation, atomic writes, sidecar index
+- [x] Deterministic **mock/replay mode** for offline development and tests.  ✅ S1: backend/llm/mock + 14 scenarios; whole suite runs with outbound HTTP blocked
+- [x] All keys via `.env` (never committed). Single provider key: OpenRouter.  ✅ S0: config.settings() + .env.example; conftest blanks the key for non-live tests
 
 ---
 
@@ -258,48 +258,48 @@ Each phase = one Claude Code session on its own git branch, driven in Plan Mode 
 with tests written from the acceptance criteria before implementation.
 
 ### Phase 0 — Bring-up & reconnaissance
-- [ ] Clone fork; `uv sync`; add OpenRouter key to `.env`; run the stock app end-to-end.
-- [ ] Fetch current OpenRouter slugs for the target Claude / ChatGPT / Grok models;
+- [x] Clone fork; `uv sync`; add OpenRouter key to `.env`; run the stock app end-to-end.  ✅ superseded: greenfield build (Appendix B); `uv sync` + `npm ci`; app runs in mock mode via ./start.sh
+- [x] Fetch current OpenRouter slugs for the target Claude / ChatGPT / Grok models;  ✅ recon 2026-09-07 (docs/openrouter-notes.md, docs/decisions.md); catalog fixture backend/llm/fixtures/models.json
       verify the current unified-reasoning parameter shape and which slots honor it.
-- [ ] Run `/init`; trim `CLAUDE.md` (run commands, structure notes, "update PLAN.md
+- [x] Run `/init`; trim `CLAUDE.md` (run commands, structure notes, "update PLAN.md  ✅ S0: CLAUDE.md in karpathy's structure (docs/reference/llm-council-CLAUDE.md kept verbatim)
       checkboxes as you go").
-- [ ] Capture 2–3 full raw API transcripts as `fixtures/` for replay.
+- [ ] Capture 2–3 full raw API transcripts as `fixtures/` for replay.  🔶 hand-authored scenario corpus (S1); real transcripts recorded in Stage 4 (MOCK_RECORD_DIR)
 - **AC:** stock flow completes with all three target models; costs visible in logs.
 
 ### Phase 1 — Test scaffolding & schemas
-- [ ] `MOCK_OPENROUTER=1` replay layer serving fixtures.
-- [ ] Pydantic models for Extraction and FusionRound schemas + unit tests (valid,
+- [x] `MOCK_OPENROUTER=1` replay layer serving fixtures.  ✅ S1: backend/llm/mock.py (scenario counters, sticky-last, recorded lookup, calls capture)
+- [x] Pydantic models for Extraction and FusionRound schemas + unit tests (valid,  ✅ S0/S1: tests/test_schemas.py + hypothesis fuzz of the lenient extractor (tests/llm)
       invalid, malformed/fenced/chatty JSON cases).
 - **AC:** `uv run pytest` green with no network.
 
 ### Phase 2 — Send + per-model settings + threads (the base feature)
-- [ ] Strip the always-on pipeline: Send performs collection only.
-- [ ] Per-slot model + effort config, wired from UI to request payloads.
-- [ ] Per-slot thread persistence and solo continuation (input box per tab).
+- [x] Strip the always-on pipeline: Send performs collection only.  ✅ greenfield: Send is collection only (backend/features/send.py); Analyze/Fusion are on-demand routes
+- [x] Per-slot model + effort config, wired from UI to request payloads.  ✅ S1/S2: per-column model + effort controls → PUT slot_config → payload assertions in tests/send
+- [x] Per-slot thread persistence and solo continuation (input box per tab).  ✅ S1/S2: threads per slot in the store; per-column solo composer; tests/send continue tests
 - **AC:** a test asserts each slot's request carries its own model slug and reasoning
   setting; three outputs stream and render; rabbit-hole one slot ≥3 turns with the
   other threads byte-identical before/after.
 
 ### Phase 3 — Analyze
-- [ ] Analyst extraction on demand; strict-JSON prompt (Appendix A); validation + one
+- [x] Analyst extraction on demand; strict-JSON prompt (Appendix A); validation + one  ✅ S2: backend/features/analyze.py — strict json_schema + lenient parse + one retry + degraded path
       retry; graceful-degrade path.
-- [ ] Similar / Differs report UI.
+- [x] Similar / Differs report UI.  ✅ S1: frontend/src/features/analyze (Similar / Differs table, not-fused marker)
 - **AC:** on a fixture with a planted factual disagreement, Analyze isolates it with
   correct per-model positions; re-running Analyze on the same turn is idempotent.
 
 ### Phase 4 — Fusion
-- [ ] Iteration loop per §6 with UI-settable `max_iterations`; early exit on
+- [x] Iteration loop per §6 with UI-settable `max_iterations`; early exit on  ✅ S2: backend/features/fusion.py — UI-settable max_iterations (1..5), converged/stalemate/cap exits
       convergence and on stalemate; convergence checks via analyst.
-- [ ] Exchanges appended to the correct slot thread; per-divergence timeline UI.
-- [ ] Leak tests: no real slot/model names in any challenge prompt.
+- [x] Exchanges appended to the correct slot thread; per-divergence timeline UI.  ✅ S2: challenge+reply appended with meta; S1: frontend/src/features/fusion timeline
+- [x] Leak tests: no real slot/model names in any challenge prompt.  ✅ S2: leak tests over every captured defense/convergence payload (tests/fusion, tests/analyze)
 - **AC:** `max_iterations=1` reduces to a single cross-exam round; a planted resolvable
   disagreement converges and exits before the cap; a planted stalemate exits at the cap
   with `standing` status and both justifications shown; unjustified `revise` is flagged.
 
 ### Phase 5 — Grounding & cost control
-- [ ] Grounded-mode toggle mapping slots to web-search-enabled variants (verify the
+- [ ] Grounded-mode toggle mapping slots to web-search-enabled variants (verify the  🔶 implemented via OpenRouter `plugins:[{id:web}]` (S2 tests/send grounded); live citation AC pending Stage 4
       current OpenRouter mechanism during this phase — do not trust this doc).
-- [ ] Per-call token caps enforced; footer cost meter from usage data, per feature.
+- [x] Per-call token caps enforced; footer cost meter from usage data, per feature.  ✅ S1/S2: MAX_TOKENS_STAGE per call, truncated flag + warning; meter from usage per feature
 - **AC:** a current-events question answers with citations in grounded mode; a
   cap-exceeded path truncates gracefully with a visible warning.
 
