@@ -18,7 +18,11 @@ passed to the transport in an internal `extra` dict stripped before any real req
 **sticky-last** when files run out, reset by `mock.reset()` from an autouse fixture in
 `tests/conftest.py` (lazy import); `MOCK_SCENARIO` read per lookup; no file at all →
 mid-stream error chunk `{error:{code:"mock_miss"}}` so callers exercise their error path.
-`MOCK_RECORD_DIR` tees live traffic into the same format; `MOCK_DELAY_MS` paces replay.
+`MOCK_RECORD_DIR` tees live traffic into the same format: the tee writes `<role>.<purpose>.<n>.jsonl`
+(numbering continues from the files already on disk; never overwritten) AND `recorded/<sha256>.jsonl`,
+so `MOCK_FIXTURES_DIR=$MOCK_RECORD_DIR` replays a recording directly and
+`MOCK_RECORD_DIR=backend/llm/fixtures/scenarios/<name>` records a scenario; `requests.jsonl` lists
+both names per call. `MOCK_DELAY_MS` paces replay.
 
 Scenarios (W-fix authors; README per scenario states planted content, expected outcome, and the
 exact per-role call sequence):

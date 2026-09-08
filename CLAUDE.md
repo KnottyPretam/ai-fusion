@@ -137,7 +137,9 @@ Shared files (`schemas.py`, `config.py`, `main.py`, `App.jsx`, `state/*`, `api/*
 - `uv run pytest -q` — unit, feature, e2e, golden (syrupy), fuzz (hypothesis) and leak tests, all offline (`-m 'not live'` is the default; outbound HTTP is blocked by the shared conftest)
 - `cd frontend && npm test` (vitest) and `npm run build`; `npx playwright test` drives the app in mock mode in the system Chrome on ports 8011/5174
 - `uv run pytest -m live` — manual live smoke test against OpenRouter; needs `OPENROUTER_API_KEY` in `.env`; never in CI
-- `scripts/record_fixtures.py` records real traffic into `backend/llm/fixtures/recorded/` for replay
+- Recording: run live with `MOCK_RECORD_DIR=backend/llm/fixtures` — the client tees every call into
+  replayable `recorded/<sha256>.jsonl` fixtures plus per-role scenario files (numbering continues on
+  disk, never overwritten); `scripts/record_fixtures.py` (Stage 4) wraps this for a scripted session
 
 ## Data Flow Summary
 

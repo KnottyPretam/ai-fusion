@@ -56,8 +56,11 @@ export async function loadConversations(dispatch) {
   return items
 }
 
-export async function loadConversation(dispatch, id) {
+// `isCurrent(conversation)` (optional) lets a caller drop a response that arrived after the user
+// moved on (two quick selects, a stream that ended after a conversation switch).
+export async function loadConversation(dispatch, id, { isCurrent } = {}) {
   const conversation = await api.getConversation(id)
+  if (isCurrent && !isCurrent(conversation)) return conversation
   dispatch({ type: 'conversation/loaded', conversation })
   return conversation
 }
@@ -72,9 +75,12 @@ export async function createConversation(dispatch, body = {}) {
   return conversation
 }
 
-export async function deleteConversation(dispatch, id) {
+// Pass `{ selected }` (the currently selected id) so deleting the open conversation also clears
+// the per-conversation slices (slotConfig, live buffers) via the frozen `conversation/cleared`.
+export async function deleteConversation(dispatch, id, { selected } = {}) {
   await api.deleteConversation(id)
   dispatch({ type: 'conversation/deleted', id })
+  if (selected === id) dispatch({ type: 'conversation/cleared' })
 }
 
 export async function renameConversation(dispatch, id, title) {
@@ -83,28 +89,39 @@ export async function renameConversation(dispatch, id, title) {
   return conversation
 }
 
-export async function loadModels(dispatch) {
-  try {
-    const items = await api.listModels()
-    dispatch({ type: 'models/loaded', items })
-    return items
-  } catch (e) {
-    dispatch({ type: 'models/error', error: e.message })
-    throw e
-  }
+// Concurrent catalog loads (several panes mount at once; StrictMode double-fires effects) share
+// one in-flight request.
+let modelsInFlight = null
+export function loadModels(dispatch) {
+  if (modelsInFlight) return modelsInFlight
+  modelsInFlight = (async () => {
+    try {
+      const items = await api.listModels()
+      dispatch({ type: 'models/loaded', items })
+      return items
+    } catch (e) {
+      dispatch({ type: 'models/error', error: e.message })
+      throw e
+    } finally {
+      modelsInFlight = null
+    }
+  })()
+  return modelsInFlight
 }
 
 // Optimistic local update, then PUT; on failure reload the server copy.
-export async function saveSlotConfig(dispatch, conversationId, patch, current) {
+// `isCurrent()` (optional) drops the server copy when the user switched conversations meanwhile.
+export async function saveSlotConfig(dispatch, conversationId, patch, current, { isCurrent } = {}) {
   dispatch({ type: 'slotConfig/update', patch })
   const merged = mergeSlotConfig(current, patch)
+  const still = () => !isCurrent || isCurrent(conversationId)
   try {
     const slotConfig = await api.putSlotConfig(conversationId, merged)
-    dispatch({ type: 'slotConfig/loaded', conversationId, slotConfig })
+    if (still()) dispatch({ type: 'slotConfig/loaded', conversationId, slotConfig })
     return slotConfig
   } catch (e) {
     const slotConfig = await api.getSlotConfig(conversationId)
-    dispatch({ type: 'slotConfig/loaded', conversationId, slotConfig })
+    if (still()) dispatch({ type: 'slotConfig/loaded', conversationId, slotConfig })
     throw e
   }
 }
