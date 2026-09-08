@@ -136,7 +136,10 @@ Shared files (`schemas.py`, `config.py`, `main.py`, `App.jsx`, `state/*`, `api/*
 
 - `uv run pytest -q` — unit, feature, e2e, golden (syrupy), fuzz (hypothesis) and leak tests, all offline (`-m 'not live'` is the default; outbound HTTP is blocked by the shared conftest)
 - `cd frontend && npm test` (vitest) and `npm run build`; `npx playwright test` drives the app in mock mode in the system Chrome on ports 8011/5174
-- `uv run pytest -m live` — manual live smoke test against OpenRouter; needs `OPENROUTER_API_KEY` in `.env`; never in CI
+- `uv run pytest -m live -rs tests/live` — nine budgeted live checks (needs `OPENROUTER_API_KEY` in `.env`; never in CI; cumulative cost asserted < $0.50)
+- `uv run python scripts/live_smoke.py [--record DIR] [--budget-usd 0.5]` — one call per slot at the configured effort, an analyst Extraction, one grounded call; refuses without a key or with `MOCK_OPENROUTER=1` unless `--allow-mock`
+- `uv run python scripts/record_fixtures.py --scenario <name> --fixtures-dir data/recordings [--grounded] [--max-iterations N]` — records a live Send → Analyze → Fusion through the ASGI app into `<fixtures-dir>/scenarios/<name>` (fixed anon map) and writes a README skeleton; replay with `MOCK_FIXTURES_DIR=data/recordings MOCK_SCENARIO=<name>` or `MOCK_FIXTURES_DIR=data/recordings/scenarios/<name>` (content-keyed). Exit codes 0/1/2/3 = ok / check failed / refused / cost cap hit
+- `GET /api/session/cost` → `{spent_usd, cap_usd, remaining_usd, exceeded, enforced}` (process-level running total behind `SESSION_COST_CAP_USD`)
 - Recording: run live with `MOCK_RECORD_DIR=backend/llm/fixtures` — the client tees every call into
   replayable `recorded/<sha256>.jsonl` fixtures plus per-role scenario files (numbering continues on
   disk, never overwritten); `scripts/record_fixtures.py` (Stage 4) wraps this for a scripted session

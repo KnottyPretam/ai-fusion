@@ -22,7 +22,12 @@ mid-stream error chunk `{error:{code:"mock_miss"}}` so callers exercise their er
 (numbering continues from the files already on disk; never overwritten) AND `recorded/<sha256>.jsonl`,
 so `MOCK_FIXTURES_DIR=$MOCK_RECORD_DIR` replays a recording directly and
 `MOCK_RECORD_DIR=backend/llm/fixtures/scenarios/<name>` records a scenario; `requests.jsonl` lists
-both names per call. `MOCK_DELAY_MS` paces replay.
+both names per call. `MOCK_DELAY_MS` paces replay. `scripts/record_fixtures.py` records with the
+FIXED anon map (`store.MOCK_ANON_MAP`, via `store.create(anon_map=...)`) so live recordings replay
+under the same labels; a raw recording directory also holds `requests.jsonl` and `recorded/`, which
+must be deleted (and the scenario row added to the table above) before the directory is shipped
+under `backend/llm/fixtures/scenarios/`, because the corpus validator allows only
+`<role>.<purpose>.<n>.jsonl` + `README.md`.
 
 Scenarios (W-fix authors; README per scenario states planted content, expected outcome, and the
 exact per-role call sequence):

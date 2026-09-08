@@ -175,3 +175,16 @@ the quoted text (`<<<` → `<< <`) so a model- or web-authored string can never 
 quoted blocks are verbatim except for this one substitution. Any other place that interpolates
 model-authored text into a prompt (e.g. a divergence `topic`) must go through `delimited` (and
 `anon.scrub`) as well.
+
+**Analyze on a transport error.** A transport error on the first analyst attempt (error delta,
+raw text empty) also triggers Analyze's single retry: the retry re-sends the IDENTICAL messages (no
+`assistant: <raw>` + `user: failed validation` pair, since there is no output to correct),
+`analyze_retry.error` carries the transport message, and `raw_attempts` records `""` for that
+attempt. (`complete_json`'s own internal retry never fires on a transport delta; this rule is
+Analyze's.)
+
+**Truncated analyst / defense / convergence output.** A `complete_json` attempt whose stream ends
+with `finish_reason == "length"` logs one WARNING (`complete_json output truncated at max_tokens=…
+role= purpose= model= attempt=i/n`); AnalyzeTurn / FusionTurn carry no `truncated` field — the
+lenient-parse error text ("(output may be truncated)") reaches `analyze_retry{error}` /
+`AnalyzeTurn.error` / `Exchange.error`.

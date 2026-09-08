@@ -42,6 +42,9 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   (`from ..llm import catalog` inside the handler) so tests can
   `monkeypatch.setattr("backend.llm.catalog.get_meta", ...)`.
 - `GET /api/models` → 200 bare JSON array of `ModelMeta` (offline fixture in mock mode).
+- `GET /api/session/cost` → 200 `{spent_usd, cap_usd, remaining_usd, exceeded, enforced}` =
+  `backend.llm.metering.session_cost_status()` (process-level, not per conversation; `enforced`
+  is false in mock mode). Owner: integrator (`backend/routers/session.py`).
 - Request bodies: `POST …/send {prompt: str}` (blank → 422 `{detail:{error:"empty_prompt"}}` via
   `unprocessable("empty_prompt")`); `POST …/slots/{slot}/continue {prompt}` — the router declares
   `slot: str` and raises `api_errors.not_found("slot")` when `slot not in SLOT_IDS` (a `SlotId`
