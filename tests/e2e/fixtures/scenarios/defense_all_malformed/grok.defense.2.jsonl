@@ -1,0 +1,2 @@
+{"id": "gen-c4ccf24f502d2ddd", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "```json\n{\"stance\": \""}, "finish_reason": "length"}]}
+{"id": "gen-c4ccf24f502d2ddd", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 523, "completion_tokens": 5, "total_tokens": 528, "cost": 0.0001096, "completion_tokens_details": {"reasoning_tokens": 0}}}

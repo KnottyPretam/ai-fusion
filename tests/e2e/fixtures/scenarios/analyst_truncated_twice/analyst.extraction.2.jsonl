@@ -1,0 +1,16 @@
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "```json\n{\"agreements\": ["}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "{\"topic\": \"Upper gyrosco"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "pe range\", \"statement\": "}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"The gyroscope's highest"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " selectable full-scale r"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ange is 2000 deg/s.\", \"m"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "odels\": [\"R1\", \"R3\"]}], "}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"divergences\": [{\"id\": \""}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "d1\", \"topic\": \"Maximum g"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "yroscope full-scale rang"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "e\", \"positions\": [{\"mode"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "l\": \"R1\", \"claim\": \"The "}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "gyroscope full-scale ran"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ge is selectable up to 2"}, "finish_reason": null}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "000 deg/s.\", \"evidence"}, "finish_reason": "length"}]}
+{"id": "gen-77218177bf1869f5", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 509, "completion_tokens": 90, "total_tokens": 599, "cost": 0.0001918, "completion_tokens_details": {"reasoning_tokens": 0}}}

@@ -1,0 +1,3 @@
+{"id": "gen-36dff7e4ed2cfbf1", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "They now agree, mark it "}, "finish_reason": null}]}
+{"id": "gen-36dff7e4ed2cfbf1", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "resolved."}, "finish_reason": "stop"}]}
+{"id": "gen-36dff7e4ed2cfbf1", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 524, "completion_tokens": 9, "total_tokens": 533, "cost": 0.0001138, "completion_tokens_details": {"reasoning_tokens": 0}}}

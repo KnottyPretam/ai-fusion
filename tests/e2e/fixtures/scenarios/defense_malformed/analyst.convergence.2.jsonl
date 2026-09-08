@@ -1,0 +1,4 @@
+{"id": "gen-f82cbdce86ed0bc7", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "```\n{\"statuses\": [{\"dive"}, "finish_reason": null}]}
+{"id": "gen-f82cbdce86ed0bc7", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "rgence_id\": \"d1\", \"statu"}, "finish_reason": null}]}
+{"id": "gen-f82cbdce86ed0bc7", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "s\": \"standing\"}]}\n```"}, "finish_reason": "stop"}]}
+{"id": "gen-f82cbdce86ed0bc7", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 503, "completion_tokens": 18, "total_tokens": 521, "cost": 0.0001186, "completion_tokens_details": {"reasoning_tokens": 0}}}
