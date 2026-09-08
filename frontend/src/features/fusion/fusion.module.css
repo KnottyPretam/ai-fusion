@@ -1,0 +1,65 @@
+/* W11: Fusion pane. Palette tokens from index.css (frozen). */
+.pane { padding: 6px 10px 10px; font-size: 13px; }
+
+.bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 28px; }
+.title { font-weight: 600; color: var(--fusion); }
+.stepper { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
+.stepBtn { width: 24px; height: 24px; padding: 0; line-height: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
+.stepInput { width: 44px; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; text-align: center; color: var(--fg); background: var(--bg); }
+.runBtn { height: 26px; padding: 0 12px; border: 1px solid var(--fusion); border-radius: 4px; background: var(--fusion); color: #fff; font-weight: 600; }
+.runBtn:disabled { background: var(--fusion-soft); color: var(--fusion); }
+.hint { color: var(--fg-muted); font-size: 12px; }
+.state { margin-left: auto; font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--fg-muted); background: var(--bg-muted); }
+.state_running { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.state_done { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.state_error { border-color: var(--err); color: var(--err); background: var(--err-soft); }
+
+.progress { margin-top: 6px; padding: 4px 8px; border-left: 3px solid var(--primary); background: var(--primary-soft); color: var(--fg); font-size: 12px; }
+.notice { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--warn); border-radius: 4px; background: var(--warn-soft); color: var(--fg); }
+.error { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--err); border-radius: 4px; background: var(--err-soft); color: var(--err); }
+.notFused { margin-top: 6px; color: var(--fg-muted); font-size: 12px; }
+.notFusedItem { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px dashed var(--border); border-radius: 4px; }
+
+.scroll { overflow-x: auto; margin-top: 8px; }
+.timeline { border-collapse: collapse; width: 100%; font-size: 12px; }
+.th { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); color: var(--fg-muted); font-weight: 600; white-space: nowrap; }
+.rowHead { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); font-weight: 400; min-width: 160px; }
+.divId { display: inline-block; font-family: var(--mono); font-weight: 600; color: var(--fusion); margin-right: 6px; }
+.topic { color: var(--fg); }
+.materiality { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; background: var(--bg-muted); border: 1px solid var(--border); color: var(--fg-muted); font-size: 11px; }
+.cell { vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); border-left: 1px solid var(--border); min-width: 130px; }
+.cellSkipped { background: var(--bg-muted); text-align: center; }
+.exchanges { display: flex; flex-direction: column; gap: 3px; margin-bottom: 4px; }
+.exchange { display: inline-block; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); background: var(--bg); white-space: nowrap; }
+.exDefend { border-color: var(--border); }
+.exRevise { border-color: var(--fusion); background: var(--fusion-soft); }
+.exUnavailable { border-style: dashed; color: var(--fg-muted); background: var(--bg-muted); font-style: italic; }
+.label { font-family: var(--mono); font-weight: 600; }
+.flag { margin-left: 6px; color: var(--warn); font-weight: 600; }
+.status { display: inline-block; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); font-size: 11px; border: 1px solid transparent; }
+.stResolved { color: var(--ok); background: var(--ok-soft); border-color: var(--ok); }
+.stUnjustified { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); border-style: dashed; }
+.stStanding { color: var(--err); background: var(--err-soft); border-color: var(--err); }
+.stPending { color: var(--fg-muted); background: var(--bg-muted); border-color: var(--border); }
+.trace { vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); border-left: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--fg-muted); }
+.muted { color: var(--fg-muted); }
+
+.final { margin-top: 10px; border: 1px solid var(--fusion); border-radius: 6px; background: var(--bg); }
+.finalHead { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--fusion-soft); }
+.finalTitle { font-weight: 600; color: var(--fusion); }
+.exit { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); }
+.exit_converged { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.exit_stalemate { color: var(--err); border-color: var(--err); background: var(--err-soft); }
+.exit_max_iterations { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.exit_error { color: var(--err); border-color: var(--err); background: var(--err-soft); }
+.roundsRun { margin-left: auto; color: var(--fg-muted); font-size: 12px; }
+.finalList { list-style: none; margin: 0; padding: 0; }
+.finalItem { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.finalItem:last-child { border-bottom: none; }
+.finalRow { display: flex; align-items: center; gap: 8px; }
+.caption { color: var(--fg-muted); font-size: 11px; margin-top: 2px; }
+.sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 6px; }
+.side { border: 1px solid var(--border); border-radius: 4px; background: var(--bg-muted); }
+.sideHead { display: flex; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
+.claim { font-weight: 600; }
+.usage { padding: 6px 10px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--fg-muted); background: var(--bg-muted); }
