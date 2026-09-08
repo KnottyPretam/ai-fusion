@@ -51,7 +51,9 @@ def counters() -> dict[tuple[str, str, str], int]:
     return dict(_counters)
 
 
-def _existing_numbers(scenario_dir: Path, role: str, purpose: str) -> list[int]:
+def existing_numbers(scenario_dir: Path, role: str, purpose: str) -> list[int]:
+    """Sorted `n` of every `<role>.<purpose>.<n>.jsonl` under `scenario_dir` ([] when the
+    directory does not exist yet). Shared with the live tee so recordings continue numbering."""
     pattern = re.compile(rf"^{re.escape(role)}\.{re.escape(purpose)}\.(\d+)\.jsonl$")
     nums: list[int] = []
     if not scenario_dir.is_dir():
@@ -69,7 +71,7 @@ def resolve_scenario_file(
     """The file to serve for call number `n`: exact match, else sticky-last (the highest
     existing number below `n`), else None (mock_miss)."""
     scenario_dir = fixtures_dir / "scenarios" / scenario
-    nums = _existing_numbers(scenario_dir, role, purpose)
+    nums = existing_numbers(scenario_dir, role, purpose)
     if not nums:
         return None
     if n in nums:

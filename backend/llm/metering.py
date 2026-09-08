@@ -2,8 +2,12 @@
 
 - `usage_from_chunk` builds a `Usage` from OpenRouter's final usage chunk plus wall-clock latency.
 - `estimate_usage` synthesises a `Usage` when the stream ended without a usage chunk
-  (catalog price x a len(text)//4 token estimate).
-- `price_fallback` is the catalog-price x tokens computation shared by both.
+  (catalog price x a len(text)//4 token estimate); it returns the `EstimatedUsage` marker
+  subclass so the client's INFO line can say `usage=estimated`.
+- `price_fallback` is the catalog-price x tokens computation shared by both. A usage chunk
+  WITHOUT `cost` gets it immediately; the live client then tries `GET /generation` and overrides
+  `cost_usd` with the post-hoc `total_cost` when the lookup succeeds (docs/semantics.md).
+- `float_or_none` is the tolerant number parser both the parser and the client use for `cost`.
 - `aggregate` folds a list of `Usage` into a `FeatureUsage`.
 - `format_log_line` renders the one INFO line every LLM call logs (feature-agnostic).
 - The process-level session cost total (`SESSION_COST_CAP_USD`) lives here; the client enforces it.
@@ -65,7 +69,8 @@ def _int(v: Any) -> int:
         return 0
 
 
-def _float(v: Any) -> float | None:
+def float_or_none(v: Any) -> float | None:
+    """`float(v)`, or None when `v` is None or not a number (never raises)."""
     if v is None:
         return None
     try:
@@ -84,13 +89,15 @@ def usage_from_chunk(
     generation_id: str | None = None,
 ) -> Usage:
     """Map OpenRouter's `usage` object to `Usage`. `cost` (credits taken as USD) is used
-    verbatim when present; a missing cost falls back to catalog price x tokens."""
+    verbatim when present. A missing cost is filled with catalog price x tokens here; in live
+    mode the client performs the `GET /generation?id=` lookup first and replaces `cost_usd`
+    with the reported `total_cost`, falling back to this catalog price only when that fails."""
     u = usage or {}
     prompt = _int(u.get("prompt_tokens"))
     completion = _int(u.get("completion_tokens"))
     details = u.get("completion_tokens_details") or {}
     reasoning = _int(details.get("reasoning_tokens")) if isinstance(details, dict) else 0
-    cost = _float(u.get("cost"))
+    cost = float_or_none(u.get("cost"))
     if cost is None:
         cost = price_fallback(model, prompt, completion)
     return Usage(
@@ -106,6 +113,11 @@ def usage_from_chunk(
     )
 
 
+class EstimatedUsage(Usage):
+    """A `Usage` synthesised without a usage chunk. Identical fields (it serialises exactly like
+    `Usage`); the subclass only lets the client mark its log line as an estimate."""
+
+
 def estimate_usage(
     *,
     model: str,
@@ -119,7 +131,7 @@ def estimate_usage(
     """Synthesised usage for a stream that ended without a usage chunk."""
     prompt = estimate_tokens(prompt_text)
     completion = estimate_tokens(completion_text)
-    return Usage(
+    return EstimatedUsage(
         prompt_tokens=prompt,
         completion_tokens=completion,
         reasoning_tokens=0,
