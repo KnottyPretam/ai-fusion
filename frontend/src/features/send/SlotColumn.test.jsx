@@ -1,0 +1,354 @@
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import './index.jsx' // registers the `slots` slice
+import SlotColumn from './SlotColumn.jsx'
+import { domainOf, fmtCost, fmtTokens } from './SlotColumn.jsx'
+import { applyEvents, renderWithStore, sample } from '../../state/testing.jsx'
+
+const CFG = {
+  slots: {
+    claude: { model: 'anthropic/claude-opus-5', effort: 'medium' },
+    chatgpt: { model: 'openai/gpt-5.6-sol', effort: 'medium' },
+    grok: { model: 'x-ai/grok-4.6', effort: 'medium' },
+  },
+  analyst_model: 'openai/gpt-5.6-luna',
+  max_iterations: 2,
+  materiality_min: 'medium',
+  grounded: false,
+}
+
+const MODELS = [
+  { id: 'anthropic/claude-opus-5', name: 'Claude Opus 5', vendor: 'anthropic', efforts: ['off', 'low', 'medium', 'high'], mandatory_reasoning: false },
+  { id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5', vendor: 'anthropic', efforts: ['off', 'low', 'medium', 'high'], mandatory_reasoning: false },
+  { id: 'openai/gpt-5.6-sol', name: 'GPT-5.6 Sol', vendor: 'openai', efforts: ['off', 'low', 'medium', 'high'], mandatory_reasoning: false },
+  { id: 'openai/gpt-5.6-luna', name: 'GPT-5.6 Luna', vendor: 'openai', efforts: ['off', 'low', 'medium', 'high'], mandatory_reasoning: false },
+  { id: 'x-ai/grok-4.6', name: 'Grok 4.6', vendor: 'x-ai', efforts: ['low', 'medium', 'high'], mandatory_reasoning: true },
+]
+
+function modelsState(items = MODELS) {
+  const byId = {}
+  for (const m of items) byId[m.id] = m
+  return { items, byId, loaded: true, error: null }
+}
+
+function conv(over = {}) {
+  return {
+    schema_version: 1,
+    id: 'c1',
+    title: 'T',
+    created_at: '2026-09-07T00:00:00.000Z',
+    updated_at: '2026-09-07T00:00:00.000Z',
+    slot_config: CFG,
+    threads: { claude: [], chatgpt: [], grok: [] },
+    turns: [],
+    ...over,
+  }
+}
+
+function preloadedWith(c, extra = {}) {
+  return { conversation: c, slotConfig: c ? c.slot_config : null, models: modelsState(), ...extra }
+}
+
+const msg = (role, content, over = {}) => ({ role, content, kind: 'chat', turn_id: 't1', ts: '2026-09-07T00:00:00.000Z', meta: null, ...over })
+
+afterEach(() => vi.unstubAllGlobals())
+
+describe('SlotColumn: persisted thread', () => {
+  test('fusion messages render with the fusion marker and the round label', () => {
+    const c = conv({
+      threads: {
+        claude: [
+          msg('user', 'What is the gyro range?'),
+          msg('assistant', 'Up to **2000** deg/s.'),
+          msg('user', 'Peers hold otherwise…', { kind: 'fusion_challenge', turn_id: 'f1', meta: { divergence_id: 'd1', round: 1 } }),
+          msg('assistant', '{"stance":"defend","justification":"datasheet","revised_claim":null,"confidence":0.9,"persuaded_by":null}', { kind: 'fusion_reply', turn_id: 'f1', meta: { divergence_id: 'd1', round: 1 } }),
+        ],
+        chatgpt: [],
+        grok: [],
+      },
+    })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const messages = screen.getAllByTestId('slot-claude-message')
+    expect(messages).toHaveLength(4)
+    expect(messages[0]).toHaveAttribute('data-role', 'user')
+    expect(messages[0].className).not.toContain('fusion')
+    expect(messages[1].className).not.toContain('fusion')
+    expect(messages[2]).toHaveAttribute('data-kind', 'fusion_challenge')
+    expect(messages[2].className).toContain('fusion')
+    expect(messages[3]).toHaveAttribute('data-kind', 'fusion_reply')
+    expect(messages[3].className).toContain('fusion')
+    const labels = screen.getAllByTestId('slot-claude-fusion-label')
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toHaveTextContent('Fusion round 1 · d1')
+    expect(labels[0]).toHaveTextContent('challenge')
+    expect(labels[1]).toHaveTextContent('Fusion round 1 · d1')
+    expect(labels[1]).toHaveTextContent('reply')
+    // The raw JSON reply is shown verbatim (pretty-printed), not through markdown.
+    expect(messages[3]).toHaveTextContent('"stance": "defend"')
+    // Assistant chat replies go through markdown inside .markdown-content.
+    expect(messages[1].querySelector('.markdown-content strong')).toHaveTextContent('2000')
+  })
+
+  test('persisted per-slot reasoning / citations / truncation / effort come from the latest turn after refetch', () => {
+    const turn = {
+      id: 't1',
+      type: 'send',
+      prompt: 'q',
+      slot_config: CFG,
+      responses: { claude: 'answer', chatgpt: 'b', grok: 'c' },
+      reasoning: { claude: 'persisted chain of thought' },
+      citations: { claude: [{ type: 'url_citation', url_citation: { url: 'https://www.bosch-sensortec.com/bmi088', title: 'BMI088 datasheet' } }] },
+      truncated: { claude: true },
+      effort_applied: { claude: 'low', chatgpt: 'medium', grok: 'medium' },
+      usage: { calls: [{ prompt_tokens: 100, completion_tokens: 2400, reasoning_tokens: 0, cost_usd: 0.0123, latency_ms: 850, model: 'anthropic/claude-opus-5', role: 'claude', purpose: 'chat' }], totals: {} },
+    }
+    const c = conv({ threads: { claude: [msg('user', 'q'), msg('assistant', 'answer')], chatgpt: [], grok: [] }, turns: [turn] })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const reasoning = screen.getByTestId('slot-claude-reasoning')
+    expect(reasoning.tagName).toBe('DETAILS')
+    expect(reasoning).toHaveTextContent('persisted chain of thought')
+    const cites = screen.getByTestId('slot-claude-citations')
+    const link = within(cites).getByRole('link')
+    expect(link).toHaveTextContent('bosch-sensortec.com')
+    expect(link).toHaveAttribute('href', 'https://www.bosch-sensortec.com/bmi088')
+    expect(cites).toHaveTextContent('BMI088 datasheet')
+    expect(screen.getByTestId('slot-claude-truncated')).toHaveTextContent(/truncated/i)
+    // Effort badge: applied 'low' vs configured 'medium' -> coerced marker.
+    const badge = screen.getByTestId('slot-claude-effort-badge')
+    expect(badge).toHaveTextContent('low (coerced)')
+    expect(badge).toHaveAttribute('data-coerced', 'true')
+    const chip = screen.getByTestId('slot-claude-status')
+    expect(chip).toHaveTextContent('2500 tok')
+    expect(chip).toHaveTextContent('$0.0123')
+    expect(chip).toHaveTextContent('850 ms')
+  })
+
+  test('a persisted slot error renders the error box with the partial text (nothing appended)', () => {
+    const turn = {
+      id: 't1',
+      type: 'send',
+      prompt: 'q',
+      slot_config: CFG,
+      responses: { claude: 'a', chatgpt: 'b', grok: null },
+      errors: { grok: 'Provider disconnected' },
+      partial: { grok: 'partial grok text' },
+      effort_applied: { claude: 'medium', chatgpt: 'medium', grok: 'medium' },
+      usage: { calls: [], totals: {} },
+    }
+    const c = conv({ turns: [turn] })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    expect(screen.getByTestId('slot-grok-error')).toHaveTextContent('Provider disconnected')
+    expect(screen.getByTestId('slot-grok-persisted-error')).toHaveTextContent('partial grok text')
+    expect(screen.queryAllByTestId('slot-grok-message')).toHaveLength(0)
+    // No coerced marker when applied == configured.
+    expect(screen.getByTestId('slot-grok-effort-badge')).toHaveAttribute('data-coerced', 'false')
+  })
+})
+
+describe('SlotColumn: live stream', () => {
+  test('streams markdown, then shows the truncation warning on slot_done{truncated}', () => {
+    const state = applyEvents('send', [sample.turnStart(), sample.slotStart('chatgpt'), sample.slotDelta('chatgpt', 'Hello **world**')], { preloaded: preloadedWith(conv()) })
+    const { unmount } = renderWithStore(<SlotColumn slot="chatgpt" pendingPrompt="hi" onContinue={() => {}} />, { preloaded: state })
+    const live = screen.getByTestId('slot-chatgpt-live')
+    expect(screen.getByTestId('slot-chatgpt-pending')).toHaveTextContent('hi')
+    expect(live.querySelector('.markdown-content strong')).toHaveTextContent('world')
+    expect(screen.getByTestId('slot-chatgpt-status')).toHaveTextContent('streaming')
+    expect(screen.queryByTestId('slot-chatgpt-truncated')).toBeNull()
+    unmount()
+    const done = applyEvents('send', [{ ...sample.slotDone('chatgpt'), finish_reason: 'length', truncated: true }], { state })
+    renderWithStore(<SlotColumn slot="chatgpt" onContinue={() => {}} />, { preloaded: done })
+    expect(screen.getByTestId('slot-chatgpt-truncated')).toHaveTextContent(/truncated/i)
+    expect(screen.getByTestId('slot-chatgpt-status')).toHaveTextContent('done')
+    expect(screen.getByTestId('slot-chatgpt-status')).toHaveTextContent('30 tok')
+  })
+
+  test('live reasoning is collapsible and citations are domain-named links', () => {
+    const state = applyEvents(
+      'send',
+      [
+        sample.turnStart(),
+        sample.slotStart('claude'),
+        { type: 'slot_reasoning', slot: 'claude', text: 'let me think' },
+        { type: 'slot_citations', slot: 'claude', items: [{ type: 'url_citation', url_citation: { url: 'https://www.example.org/a/b', title: 'Example' } }] },
+        sample.slotDelta('claude', 'text'),
+      ],
+      { preloaded: preloadedWith(conv()) },
+    )
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: state })
+    const details = screen.getByTestId('slot-claude-reasoning')
+    expect(details.tagName).toBe('DETAILS')
+    expect(details).toHaveTextContent('let me think')
+    const link = within(screen.getByTestId('slot-claude-citations')).getByRole('link')
+    expect(link).toHaveTextContent('example.org')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  test('slot_error shows the error box with code and keeps the partial text', () => {
+    const state = applyEvents('send', [sample.turnStart(), sample.slotStart('grok'), sample.slotDelta('grok', 'partial grok'), { ...sample.slotError('grok', 'Provider disconnected'), code: 502 }], {
+      preloaded: preloadedWith(conv()),
+    })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: state })
+    const box = screen.getByTestId('slot-grok-error')
+    expect(box).toHaveTextContent('Provider disconnected')
+    expect(box).toHaveTextContent('[502]')
+    expect(screen.getByTestId('slot-grok-live')).toHaveTextContent('partial grok')
+    expect(screen.getByTestId('slot-grok')).toHaveAttribute('data-status', 'error')
+  })
+
+  test('effort badge reports the applied effort with the coerced marker while live', () => {
+    const state = applyEvents('send', [sample.turnStart(), { type: 'slot_start', slot: 'grok', model: 'x-ai/grok-4.6', effort: 'low', effort_coerced: true }], { preloaded: preloadedWith(conv()) })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: state })
+    expect(screen.getByTestId('slot-grok-effort-badge')).toHaveTextContent('low (coerced)')
+  })
+})
+
+describe('SlotColumn: header controls', () => {
+  test('model dropdown is filtered by vendor', () => {
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(conv()) })
+    const select = screen.getByTestId('slot-claude-model')
+    const values = [...select.querySelectorAll('option')].map((o) => o.value)
+    expect(values).toEqual(['anthropic/claude-opus-5', 'anthropic/claude-sonnet-5'])
+    expect(select).toHaveValue('anthropic/claude-opus-5')
+    expect(select).not.toBeDisabled()
+  })
+
+  test('model dropdown keeps the configured slug when the catalog lacks it', () => {
+    const c = conv({ slot_config: { ...CFG, slots: { ...CFG.slots, chatgpt: { model: 'openai/gpt-7-nova', effort: 'high' } } } })
+    renderWithStore(<SlotColumn slot="chatgpt" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const select = screen.getByTestId('slot-chatgpt-model')
+    const values = [...select.querySelectorAll('option')].map((o) => o.value)
+    expect(values).toEqual(['openai/gpt-7-nova', 'openai/gpt-5.6-sol', 'openai/gpt-5.6-luna'])
+    expect(select).toHaveValue('openai/gpt-7-nova')
+    // Unknown model -> the four default efforts.
+    const efforts = [...screen.getByTestId('slot-chatgpt-effort').querySelectorAll('option')].map((o) => o.value)
+    expect(efforts).toEqual(['off', 'low', 'medium', 'high'])
+  })
+
+  test("effort selector hides 'off' for a mandatory-reasoning model and shows it otherwise", () => {
+    renderWithStore(
+      <>
+        <SlotColumn slot="grok" onContinue={() => {}} />
+        <SlotColumn slot="claude" onContinue={() => {}} />
+      </>,
+      { preloaded: preloadedWith(conv()) },
+    )
+    const grok = [...screen.getByTestId('slot-grok-effort').querySelectorAll('option')].map((o) => o.value)
+    expect(grok).toEqual(['low', 'medium', 'high'])
+    expect(grok).not.toContain('off')
+    const claude = [...screen.getByTestId('slot-claude-effort').querySelectorAll('option')].map((o) => o.value)
+    expect(claude).toEqual(['off', 'low', 'medium', 'high'])
+    expect(screen.getByTestId('slot-claude-effort')).toHaveValue('medium')
+  })
+
+  test('controls are disabled without a conversation', () => {
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: { conversation: null, slotConfig: null, models: modelsState() } })
+    expect(screen.getByTestId('slot-claude-model')).toBeDisabled()
+    expect(screen.getByTestId('slot-claude-effort')).toBeDisabled()
+    expect(screen.getByTestId('slot-claude-composer')).toBeDisabled()
+    expect(screen.getByTestId('slot-claude-continue')).toBeDisabled()
+    expect(screen.getByTestId('slot-claude-label')).toHaveTextContent('Claude')
+  })
+
+  test('changing the effort PUTs the merged slot config and adopts the server copy', async () => {
+    const calls = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init = {}) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        calls.push({ method: init.method || 'GET', url, body })
+        return { ok: true, status: 200, json: async () => body }
+      }),
+    )
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(conv()) })
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high')
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].method).toBe('PUT')
+    expect(calls[0].url).toBe('/api/conversations/c1/slot_config')
+    expect(calls[0].body.slots.claude).toEqual({ model: 'anthropic/claude-opus-5', effort: 'high' })
+    expect(calls[0].body.slots.grok).toEqual(CFG.slots.grok) // full config, other slots intact
+    expect(calls[0].body.analyst_model).toBe('openai/gpt-5.6-luna')
+    await waitFor(() => expect(screen.getByTestId('slot-claude-effort')).toHaveValue('high'))
+  })
+
+  test("switching to a mandatory model with effort 'off' coerces the effort in the same PUT", async () => {
+    const calls = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init = {}) => {
+        const body = init.body ? JSON.parse(init.body) : undefined
+        calls.push({ method: init.method || 'GET', url, body })
+        return { ok: true, status: 200, json: async () => body }
+      }),
+    )
+    const items = [...MODELS, { id: 'anthropic/claude-fable-5.1', name: 'Fable', vendor: 'anthropic', efforts: ['low', 'medium', 'high'], mandatory_reasoning: true }]
+    const c = conv({ slot_config: { ...CFG, slots: { ...CFG.slots, claude: { model: 'anthropic/claude-opus-5', effort: 'off' } } } })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: { conversation: c, slotConfig: c.slot_config, models: modelsState(items) } })
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-model'), 'anthropic/claude-fable-5.1')
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].body.slots.claude).toEqual({ model: 'anthropic/claude-fable-5.1', effort: 'low' })
+    await waitFor(() => expect(screen.getByTestId('slot-claude-effort')).toHaveValue('low'))
+    const efforts = [...screen.getByTestId('slot-claude-effort').querySelectorAll('option')].map((o) => o.value)
+    expect(efforts).toEqual(['low', 'medium', 'high'])
+  })
+
+  test('a failed save reloads the server copy and shows the error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init = {}) => {
+        if ((init.method || 'GET') === 'PUT') return { ok: false, status: 422, json: async () => ({ detail: { error: 'unsupported_effort', slot: 'claude', model: 'anthropic/claude-opus-5', effort: 'high', supported: ['low'] } }) }
+        return { ok: true, status: 200, json: async () => CFG }
+      }),
+    )
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(conv()) })
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high')
+    await waitFor(() => expect(screen.getByTestId('slot-claude-config-error')).toHaveTextContent('unsupported_effort'))
+    expect(screen.getByTestId('slot-claude-effort')).toHaveValue('medium')
+  })
+})
+
+describe('SlotColumn: solo composer', () => {
+  test('Enter posts the continue prompt; Shift+Enter inserts a newline', async () => {
+    const onContinue = vi.fn()
+    renderWithStore(<SlotColumn slot="grok" onContinue={onContinue} />, { preloaded: preloadedWith(conv()) })
+    const user = userEvent.setup()
+    const ta = screen.getByTestId('slot-grok-composer')
+    await user.type(ta, 'line one{Shift>}{Enter}{/Shift}line two')
+    expect(ta).toHaveValue('line one\nline two')
+    expect(onContinue).not.toHaveBeenCalled()
+    await user.type(ta, '{Enter}')
+    expect(onContinue).toHaveBeenCalledWith('line one\nline two')
+    expect(ta).toHaveValue('')
+  })
+
+  test('the Continue button submits and is disabled while any stream is streaming', async () => {
+    const onContinue = vi.fn()
+    const { unmount } = renderWithStore(<SlotColumn slot="claude" onContinue={onContinue} />, { preloaded: preloadedWith(conv()) })
+    const user = userEvent.setup()
+    await user.type(screen.getByTestId('slot-claude-composer'), 'go')
+    await user.click(screen.getByTestId('slot-claude-continue'))
+    expect(onContinue).toHaveBeenCalledWith('go')
+    unmount()
+    const streaming = { send: { status: 'idle', error: null, httpStatus: null }, analyze: { status: 'streaming', error: null, httpStatus: null }, fusion: { status: 'idle', error: null, httpStatus: null } }
+    renderWithStore(<SlotColumn slot="claude" onContinue={onContinue} />, { preloaded: preloadedWith(conv(), { streams: streaming }) })
+    expect(screen.getByTestId('slot-claude-composer')).toBeDisabled()
+    expect(screen.getByTestId('slot-claude-continue')).toBeDisabled()
+  })
+})
+
+describe('formatting helpers', () => {
+  test('fmtTokens / fmtCost / domainOf', () => {
+    expect(fmtTokens(999)).toBe('999')
+    expect(fmtTokens(12345)).toBe('12.3k')
+    expect(fmtTokens(null)).toBe('-')
+    expect(fmtCost(0)).toBe('$0')
+    expect(fmtCost(0.00001)).toBe('<$0.0001')
+    expect(fmtCost(0.0123)).toBe('$0.0123')
+    expect(fmtCost(undefined)).toBe('-')
+    expect(domainOf('https://www.example.com/x?y=1')).toBe('example.com')
+    expect(domainOf('not a url')).toBe('not a url')
+  })
+})
