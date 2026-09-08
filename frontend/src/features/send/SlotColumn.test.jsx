@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import './index.jsx' // registers the `slots` slice
 import SlotColumn from './SlotColumn.jsx'
 import { domainOf, fmtCost, fmtTokens } from './SlotColumn.jsx'
+import { useDispatch } from '../../state/store.jsx'
 import { applyEvents, renderWithStore, sample } from '../../state/testing.jsx'
+
+// Captures the store's dispatch so a test can do what the sidebar does (conversation/loaded).
+function DispatchProbe({ onReady }) {
+  onReady(useDispatch())
+  return null
+}
 
 const CFG = {
   slots: {
@@ -144,6 +151,77 @@ describe('SlotColumn: persisted thread', () => {
     // No coerced marker when applied == configured.
     expect(screen.getByTestId('slot-grok-effort-badge')).toHaveAttribute('data-coerced', 'false')
   })
+
+  test('every errored turn stays in the history at its place, not only the newest one', () => {
+    const usage = { calls: [], totals: {} }
+    const t1 = { id: 't1', type: 'send', prompt: 'q1', slot_config: CFG, responses: { claude: 'a1', chatgpt: 'b1', grok: null }, errors: { grok: 'Provider disconnected' }, partial: { grok: 'partial one' }, usage }
+    const t2 = { id: 't2', type: 'send', prompt: 'q2', slot_config: CFG, responses: { claude: 'a2', chatgpt: 'b2', grok: 'c2' }, usage }
+    const t3 = { id: 't3', type: 'continue', slot: 'grok', prompt: 'q3', response: null, error: 'timeout', slot_config: CFG, usage }
+    const c = conv({
+      threads: { claude: [], chatgpt: [], grok: [msg('user', 'q2', { turn_id: 't2' }), msg('assistant', 'c2', { turn_id: 't2' })] },
+      turns: [t1, t2, t3],
+    })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const blocks = screen.getAllByTestId('slot-grok-persisted-error')
+    expect(blocks.map((b) => b.getAttribute('data-turn-id'))).toEqual(['t1', 't3'])
+    expect(blocks[0]).toHaveTextContent('q1')
+    expect(blocks[0]).toHaveTextContent('partial one')
+    expect(blocks[0]).toHaveTextContent('Provider disconnected')
+    expect(blocks[0]).toHaveTextContent('nothing was appended')
+    expect(blocks[1]).toHaveTextContent('q3')
+    expect(blocks[1]).toHaveTextContent('timeout')
+    // Chronological order in the column: t1's error, t2's exchange, t3's error.
+    const order = [...screen.getByTestId('slot-grok-thread').querySelectorAll('[data-turn-id]')].map((el) => el.getAttribute('data-turn-id'))
+    expect(order).toEqual(['t1', 't2', 't2', 't3'])
+    expect(screen.getAllByTestId('slot-grok-message')).toHaveLength(2)
+    // The `slot-<slot>-error` test id follows the newest turn only.
+    expect(screen.getByTestId('slot-grok-error')).toHaveTextContent('timeout')
+    expect(screen.queryByText('No messages yet.')).toBeNull()
+  })
+
+  test('an errored turn older than the newest successful one is still shown, in front of it', () => {
+    const usage = { calls: [], totals: {} }
+    const t1 = { id: 't1', type: 'send', prompt: 'q1', slot_config: CFG, responses: { claude: null, chatgpt: 'b1', grok: 'c1' }, errors: { claude: 'boom' }, partial: {}, usage }
+    const t2 = { id: 't2', type: 'send', prompt: 'q2', slot_config: CFG, responses: { claude: 'a2', chatgpt: 'b2', grok: 'c2' }, usage }
+    const c = conv({ threads: { claude: [msg('user', 'q2', { turn_id: 't2' }), msg('assistant', 'a2', { turn_id: 't2' })], chatgpt: [], grok: [] }, turns: [t1, t2] })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const block = screen.getByTestId('slot-claude-persisted-error')
+    expect(block).toHaveAttribute('data-turn-id', 't1')
+    expect(block).toHaveTextContent('boom')
+    expect(block.compareDocumentPosition(screen.getAllByTestId('slot-claude-message')[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByTestId('slot-claude-error')).toBeNull() // not the newest turn
+    // Chip still reflects the newest (successful) turn: no error status.
+    expect(screen.getByTestId('slot-claude-status')).toHaveAttribute('data-status', 'idle')
+  })
+
+  test('the thread opens scrolled to the newest message and re-scrolls when the thread reloads', () => {
+    const heightSpy = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(777)
+    try {
+      const c = conv({ threads: { claude: [msg('user', 'q'), msg('assistant', 'a')], chatgpt: [], grok: [] } })
+      let dispatch
+      renderWithStore(
+        <>
+          <SlotColumn slot="claude" onContinue={() => {}} />
+          <DispatchProbe onReady={(d) => (dispatch = d)} />
+        </>,
+        { preloaded: preloadedWith(c) },
+      )
+      const el = screen.getByTestId('slot-claude-thread')
+      expect(el.scrollTop).toBe(777)
+      el.scrollTop = 0
+      heightSpy.mockReturnValue(999)
+      // Selecting another conversation in the sidebar (a new thread object) scrolls to its newest message.
+      const c2 = conv({ id: 'c2', threads: { claude: [msg('user', 'q'), msg('assistant', 'a'), msg('user', 'q2', { turn_id: 't2' }), msg('assistant', 'a2', { turn_id: 't2' })], chatgpt: [], grok: [] } })
+      act(() => dispatch({ type: 'conversation/loaded', conversation: c2 }))
+      expect(el.scrollTop).toBe(999)
+      // An unrelated store change (no new thread) leaves the user's scroll position alone.
+      el.scrollTop = 0
+      act(() => dispatch({ type: 'conversations/list', items: [] }))
+      expect(el.scrollTop).toBe(0)
+    } finally {
+      heightSpy.mockRestore()
+    }
+  })
 })
 
 describe('SlotColumn: live stream', () => {
@@ -182,6 +260,27 @@ describe('SlotColumn: live stream', () => {
     const link = within(screen.getByTestId('slot-claude-citations')).getByRole('link')
     expect(link).toHaveTextContent('example.org')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  test('citation links are only made for http(s) urls; other schemes render as text', () => {
+    const items = [
+      { type: 'url_citation', url_citation: { url: 'javascript:alert(1)', title: 'evil' } },
+      { type: 'url_citation', url_citation: { url: 'data:text/html,hi', title: 'data' } },
+      { type: 'url_citation', url_citation: { url: 'https://good.example/x', title: 'Good' } },
+    ]
+    const state = applyEvents('send', [sample.turnStart(), sample.slotStart('claude'), { type: 'slot_citations', slot: 'claude', items }, sample.slotDelta('claude', 'text')], {
+      preloaded: preloadedWith(conv()),
+    })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: state })
+    const cites = screen.getByTestId('slot-claude-citations')
+    const links = within(cites).getAllByRole('link')
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveAttribute('href', 'https://good.example/x')
+    expect(cites.querySelector('a[href^="javascript"], a[href^="data"]')).toBeNull()
+    const unlinked = within(cites).getAllByTestId('citation-unlinked')
+    expect(unlinked.map((u) => u.textContent)).toEqual(['javascript:alert(1)', 'data:text/html,hi'])
+    expect(cites).toHaveTextContent('evil')
+    expect(cites.querySelectorAll('li')).toHaveLength(3)
   })
 
   test('slot_error shows the error box with code and keeps the partial text', () => {

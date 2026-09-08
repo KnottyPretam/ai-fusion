@@ -5,10 +5,11 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { saveSlotConfig } from '../../api/http.js'
-import { SLOT_LABELS, citationUrl, effortsFor, emptySlot, mergeCitations, nearestEffort, slotTurns, vendorModels } from './slice.js'
+import { SLOT_LABELS, citationUrl, effortsFor, emptySlot, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, vendorModels } from './slice.js'
 import styles from './send.module.css'
 
 const STREAM_KEYS = ['send', 'analyze', 'fusion']
+const EMPTY_THREAD = [] // stable identity: the scroll effect keys on the thread object
 
 export function fmtTokens(n) {
   if (n == null || Number.isNaN(n)) return '-'
@@ -70,13 +71,16 @@ function Citations({ items, testId }) {
       <ol className={styles.citations}>
         {list.map((it, i) => {
           const url = citationUrl(it)
+          const href = safeCitationHref(url) // third-party data: only http(s) becomes a link
           const title = it && it.url_citation ? it.url_citation.title : null
           return (
             <li key={url || i}>
-              {url ? (
-                <a href={url} target="_blank" rel="noreferrer noopener">
-                  {domainOf(url)}
+              {href ? (
+                <a href={href} target="_blank" rel="noreferrer noopener">
+                  {domainOf(href)}
                 </a>
+              ) : url ? (
+                <span data-testid="citation-unlinked">{url}</span>
               ) : (
                 <span>(no url)</span>
               )}
@@ -142,6 +146,25 @@ function Message({ slot, msg, extras, isLatest }) {
   )
 }
 
+// A send/continue turn where this slot ended in slot_error: nothing was appended to the thread
+// (docs/semantics.md), so the prompt, the partial text and the error are rendered from the turn.
+// Test ids on the error box follow the Extras rule: only for the newest turn of the slot.
+function PersistedError({ slot, extras, isLatest }) {
+  return (
+    <div data-testid={`slot-${slot}-persisted-error`} data-turn-id={extras.turnId}>
+      <div className={`${styles.msg} ${styles.user} ${styles.pending}`} data-role="user" data-kind="chat">
+        <div className={styles.plain}>{extras.prompt}</div>
+      </div>
+      <div className={`${styles.msg} ${styles.assistant}`} data-role="assistant" data-kind="chat">
+        {extras.partial ? <Markdown text={extras.partial} /> : null}
+        <div className={styles.extras}>
+          <ErrorBox message={extras.error} testId={isLatest ? `slot-${slot}-error` : undefined} partial={!!extras.partial} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Chip({ slot, status, usage, model, effort, coerced }) {
   const parts = []
   if (usage) {
@@ -185,14 +208,22 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
   const effort = spec ? spec.effort : ''
   const modelOptions = useMemo(() => vendorModels(models.items, slot, model), [models.items, slot, model])
   const effortOptions = effortsFor(models, model)
-  const thread = (conversation && conversation.threads && conversation.threads[slot]) || []
-  const { byTurn, latest } = useMemo(() => slotTurns(conversation, slot), [conversation, slot])
+  const thread = (conversation && conversation.threads && conversation.threads[slot]) || EMPTY_THREAD
+  const { byTurn, latest, errored, rank } = useMemo(() => slotTurns(conversation, slot), [conversation, slot])
+  const items = useMemo(() => threadItems(thread, { byTurn, errored, rank }), [thread, byTurn, errored, rank])
   const anyStreaming = busy || STREAM_KEYS.some((k) => streams[k] && streams[k].status === 'streaming')
   const [configError, setConfigError] = useState(null)
   const [draft, setDraft] = useState('')
   const scrollRef = useRef(null)
 
   const isLive = live.status !== 'idle'
+
+  // Newest message in view: when the thread (re)loads — a conversation selected in the sidebar,
+  // the refetch after a turn — the column must not open scrolled to the oldest message.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [thread])
 
   // Follow the stream: keep the newest text in view while this slot is streaming.
   useEffect(() => {
@@ -252,7 +283,6 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
         }
       : { status: null, usage: null, model, effort: null, coerced: false }
 
-  const showPersistedError = !isLive && latest && latest.error
   const controlsDisabled = !conversation || !slotConfig
 
   return (
@@ -309,30 +339,20 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
       </div>
 
       <div className={styles.scroll} data-testid={`slot-${slot}-thread`} ref={scrollRef}>
-        {!thread.length && !isLive && !pendingPrompt && !showPersistedError ? <div className={styles.empty}>No messages yet.</div> : null}
-        {thread.map((m, i) => (
-          <Message
-            key={`${m.turn_id || 't'}-${i}`}
-            slot={slot}
-            msg={m}
-            extras={m.role === 'assistant' && m.kind !== 'fusion_reply' ? byTurn[m.turn_id] : null}
-            isLatest={!!latest && m.turn_id === latest.turnId}
-          />
-        ))}
-
-        {showPersistedError ? (
-          <div data-testid={`slot-${slot}-persisted-error`}>
-            <div className={`${styles.msg} ${styles.user} ${styles.pending}`} data-role="user" data-kind="chat">
-              <div className={styles.plain}>{latest.prompt}</div>
-            </div>
-            <div className={`${styles.msg} ${styles.assistant}`} data-role="assistant" data-kind="chat">
-              {latest.partial ? <Markdown text={latest.partial} /> : null}
-              <div className={styles.extras}>
-                <ErrorBox message={latest.error} testId={`slot-${slot}-error`} partial={!!latest.partial} />
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {!items.length && !isLive && !pendingPrompt ? <div className={styles.empty}>No messages yet.</div> : null}
+        {items.map((it, i) =>
+          it.kind === 'error' ? (
+            <PersistedError key={`err-${it.extras.turnId}`} slot={slot} extras={it.extras} isLatest={!!latest && it.extras.turnId === latest.turnId} />
+          ) : (
+            <Message
+              key={`${it.msg.turn_id || 't'}-${i}`}
+              slot={slot}
+              msg={it.msg}
+              extras={it.msg.role === 'assistant' && it.msg.kind !== 'fusion_reply' ? byTurn[it.msg.turn_id] : null}
+              isLatest={!!latest && it.msg.turn_id === latest.turnId}
+            />
+          ),
+        )}
 
         {isLive || pendingPrompt ? (
           <div data-testid={`slot-${slot}-live`}>
