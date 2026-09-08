@@ -1,0 +1,237 @@
+// Analyze pane (W10): Analyze / Re-run buttons + the Similar / Differs report. Labels are
+// R1/R2/R3 only — the pane never renders a slot name or the anon map (it never sees one).
+//
+// data-testids (for Playwright):
+//   analyze                      pane root (data-status, data-of-turn)
+//   analyze-run                  Analyze button (POST {} — cache hit returns the same turn)
+//   analyze-rerun                Re-run button (POST {force:true}); rendered once a turn exists
+//   analyze-hint                 why the buttons are disabled
+//   analyze-cached               "cached" chip (analyze_done.cached)
+//   analyze-status               running indicator
+//   analyze-retry                retry indicator (analyze_retry), with the validation error
+//   analyze-error                error box (terminal error event / pre-stream failure)
+//   analyze-degraded             degraded box; analyze-fusion-disabled inside it
+//   analyze-raw-attempts         <details> with analyze-raw-attempt-<n> <pre> blocks
+//   analyze-report               the Similar / Differs report
+//   analyze-agreements           <ul>; analyze-agreement-<n>, analyze-agreement-<n>-<label>
+//   analyze-divergences          <table>; analyze-divergence-<id> rows (data-fused="yes|no"),
+//                                analyze-cell-<id>-<label>, analyze-materiality-<id>,
+//                                analyze-not-fused-<id>
+import { useCallback } from 'react'
+import { loadConversation } from '../../api/http.js'
+import { useRunStream } from '../../api/runStream.js'
+import { useDispatch, useSlice } from '../../state/store.jsx'
+import { LABELS, RANK, initial, isSendTurnComplete, latestSendTurn } from './slice.js'
+import css from './analyze.module.css'
+
+export default function AnalyzePane() {
+  const dispatch = useDispatch()
+  const run = useRunStream()
+  const conversation = useSlice('conversation')
+  const slotConfig = useSlice('slotConfig')
+  const streams = useSlice('streams') || {}
+  const analyze = useSlice('analyze') || initial()
+
+  const send = latestSendTurn(conversation)
+  const complete = isSendTurnComplete(send)
+  const streaming = Object.values(streams).some((st) => st && st.status === 'streaming')
+  const canRun = !!conversation && complete && !streaming
+
+  const start = useCallback(
+    async (body) => {
+      if (!conversation) return
+      const id = conversation.id
+      try {
+        await run('analyze', `/api/conversations/${id}/analyze`, body)
+        await loadConversation(dispatch, id)
+      } catch {
+        // Surfaced through the streams / analyze slices (sse/end{ok:false} -> error box).
+      }
+    },
+    [conversation, run, dispatch],
+  )
+
+  if (!conversation) return null
+
+  const materialityMin = (slotConfig && slotConfig.materiality_min) || 'medium'
+  const minRank = RANK[materialityMin] ?? RANK.medium
+  const turn = analyze.turn
+  const extraction = turn && turn.extraction
+
+  let hint = null
+  if (!send) hint = 'send a prompt first'
+  else if (!complete) hint = 'waiting for all three responses'
+  else if (streaming) hint = 'a stream is running'
+
+  return (
+    <div className={css.pane} data-testid="analyze" data-status={analyze.status} data-of-turn={analyze.ofTurn || ''}>
+      <div className={css.toolbar}>
+        <span className={css.title}>Analyze</span>
+        <button type="button" className={css.btn} data-testid="analyze-run" disabled={!canRun} onClick={() => start({})} title="Compare the latest send turn (cached when already analyzed)">
+          Analyze
+        </button>
+        {turn && (
+          <button type="button" className={`${css.btn} ${css.btnSecondary}`} data-testid="analyze-rerun" disabled={!canRun} onClick={() => start({ force: true })} title="Force a fresh analyst call">
+            Re-run
+          </button>
+        )}
+        {analyze.status === 'done' && analyze.cached && (
+          <span className={css.chip} data-testid="analyze-cached" title="Served from the existing analyze turn; no analyst call was made">
+            cached
+          </span>
+        )}
+        {hint && (
+          <span className={css.hint} data-testid="analyze-hint">
+            {hint}
+          </span>
+        )}
+      </div>
+
+      {analyze.status === 'running' && (
+        <div className={css.status} data-testid="analyze-status">
+          Analyzing the latest send turn…
+        </div>
+      )}
+      {analyze.status === 'retrying' && (
+        <div className={css.retry} data-testid="analyze-retry">
+          Retrying: the analyst output failed validation; sending the error back once.
+          {analyze.error && (
+            <details>
+              <summary>validation error</summary>
+              <pre className={css.raw}>{analyze.error}</pre>
+            </details>
+          )}
+        </div>
+      )}
+      {analyze.status === 'error' && (
+        <div className={css.error} data-testid="analyze-error">
+          Analyze failed: {analyze.error || 'unknown error'}
+        </div>
+      )}
+      {analyze.status === 'degraded' && turn && <Degraded turn={turn} />}
+
+      {extraction && <Report extraction={extraction} materialityMin={materialityMin} minRank={minRank} />}
+    </div>
+  )
+}
+
+function Degraded({ turn }) {
+  const attempts = Array.isArray(turn.raw_attempts) ? turn.raw_attempts : []
+  return (
+    <div className={css.degraded} data-testid="analyze-degraded">
+      <div>
+        <strong>Analysis degraded.</strong> The analyst did not return a valid extraction after one retry.{' '}
+        <span data-testid="analyze-fusion-disabled">Fusion disabled for this turn.</span>
+      </div>
+      {turn.error && <pre className={css.raw}>{turn.error}</pre>}
+      <details data-testid="analyze-raw-attempts">
+        <summary>
+          raw analyst attempts ({attempts.length})
+        </summary>
+        {attempts.map((raw, i) => (
+          <pre key={i} className={css.raw} data-testid={`analyze-raw-attempt-${i + 1}`}>
+            {raw}
+          </pre>
+        ))}
+      </details>
+    </div>
+  )
+}
+
+function Report({ extraction, materialityMin, minRank }) {
+  const agreements = Array.isArray(extraction.agreements) ? extraction.agreements : []
+  const divergences = Array.isArray(extraction.divergences) ? extraction.divergences : []
+  return (
+    <div className={css.report} data-testid="analyze-report">
+      <section className={css.section}>
+        <h3 className={css.heading}>
+          Similar
+          <span className={css.caption}>convergence, not verified truth</span>
+        </h3>
+        {agreements.length === 0 ? (
+          <p className={css.empty}>No agreements identified.</p>
+        ) : (
+          <ul className={css.agreements} data-testid="analyze-agreements">
+            {agreements.map((ag, i) => (
+              <li key={i} data-testid={`analyze-agreement-${i + 1}`}>
+                <span className={css.topic}>{ag.topic}</span>
+                <span className={css.statement}>{ag.statement}</span>
+                <span className={css.labels}>
+                  {(ag.models || []).map((l) => (
+                    <span key={l} className={css.label} data-testid={`analyze-agreement-${i + 1}-${l}`}>
+                      {l}
+                    </span>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className={css.section}>
+        <h3 className={css.heading}>
+          Differs
+          <span className={css.caption}>rows below materiality "{materialityMin}" are not fused</span>
+        </h3>
+        {divergences.length === 0 ? (
+          <p className={css.empty}>No divergences identified.</p>
+        ) : (
+          <div className={css.tableWrap}>
+            <table className={css.table} data-testid="analyze-divergences">
+              <thead>
+                <tr>
+                  <th>topic</th>
+                  {LABELS.map((l) => (
+                    <th key={l}>{l}</th>
+                  ))}
+                  <th>materiality</th>
+                </tr>
+              </thead>
+              <tbody>
+                {divergences.map((d) => {
+                  const notFused = (RANK[d.materiality] ?? 0) < minRank
+                  return (
+                    <tr key={d.id} className={notFused ? css.notFused : undefined} data-testid={`analyze-divergence-${d.id}`} data-fused={notFused ? 'no' : 'yes'}>
+                      <td>
+                        <span className={css.divId}>{d.id}</span>
+                        {d.topic}
+                      </td>
+                      {LABELS.map((l) => {
+                        const p = (d.positions || []).find((x) => x && x.model === l)
+                        return (
+                          <td key={l} data-testid={`analyze-cell-${d.id}-${l}`}>
+                            {p ? (
+                              <>
+                                <div className={css.claim}>{p.claim}</div>
+                                <div className={css.evidence}>{p.evidence_cited ? `evidence: ${p.evidence_cited}` : 'no evidence cited'}</div>
+                              </>
+                            ) : (
+                              <span className={css.none} title="no position on this divergence">
+                                —
+                              </span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td>
+                        <span className={`${css.badge} ${css['m_' + d.materiality] || ''}`} data-testid={`analyze-materiality-${d.id}`}>
+                          {d.materiality}
+                        </span>
+                        {notFused && (
+                          <span className={css.notFusedTag} data-testid={`analyze-not-fused-${d.id}`}>
+                            not fused
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
