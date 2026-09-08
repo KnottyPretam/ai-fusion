@@ -200,3 +200,24 @@ def test_get_meta_in_mock_mode_never_touches_the_network(respx_router):
     # The autouse blocker fails any unmocked request; a plain get_meta must not trigger one.
     assert catalog.get_meta("x-ai/grok-4.6") is not None
     assert respx_router.calls.call_count == 0
+
+
+async def test_live_fetch_failure_is_not_retried_on_every_call(live_transport, respx_router):
+    """After a failed fetch the fixture is served from memory for FETCH_RETRY_S: the UI's
+    GET /api/models on every mount must not re-attempt the network each time."""
+    respx_router.get(MODELS_URL).mock(side_effect=httpx.ConnectError("down"))
+    await catalog.get_catalog()
+    await catalog.get_catalog()
+    assert respx_router.calls.call_count == 1 and catalog.cache_source() == "fixture"
+    assert catalog.get_meta("anthropic/claude-opus-5") is not None
+
+    await catalog.get_catalog(force_refresh=True)  # an explicit refresh always retries
+    assert respx_router.calls.call_count == 2
+
+    catalog._fetch_failed_at -= catalog.FETCH_RETRY_S + 1  # the retry window has passed
+    respx_router.get(MODELS_URL).mock(return_value=httpx.Response(200, json=_fake_models_doc()))
+    models = await catalog.get_catalog()
+    assert respx_router.calls.call_count == 3 and catalog.cache_source() == "network"
+    assert [m.id for m in models] == ["acme/fake-1", "acme/fake-2"]
+    await catalog.get_catalog()  # a successful fetch is cached normally again
+    assert respx_router.calls.call_count == 3

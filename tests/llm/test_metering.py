@@ -102,3 +102,17 @@ def test_format_log_line_is_feature_agnostic():
         assert needle in line
     assert "feature=" not in line
     assert "estimated" in metering.format_log_line(u, estimated=True)
+
+
+def test_estimate_usage_is_marked_estimated_and_serialises_like_usage():
+    u = metering.estimate_usage(model="anthropic/claude-opus-5", completion_text="a" * 40)
+    assert isinstance(u, metering.EstimatedUsage) and isinstance(u, Usage)
+    assert u.model_dump() == Usage(**u.model_dump()).model_dump()
+    real = metering.usage_from_chunk({"cost": 0.1}, model="m")
+    assert not isinstance(real, metering.EstimatedUsage)
+
+
+def test_float_or_none():
+    assert metering.float_or_none(None) is None
+    assert metering.float_or_none("0.5") == 0.5 and metering.float_or_none(2) == 2.0
+    assert metering.float_or_none("n/a") is None and metering.float_or_none([]) is None

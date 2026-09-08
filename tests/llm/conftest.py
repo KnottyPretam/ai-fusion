@@ -16,18 +16,21 @@ LLM_FIXTURES_DIR = HERE / "fixtures"
 BASE_URL = "https://openrouter.test/api/v1"
 CHAT_URL = BASE_URL + "/chat/completions"
 MODELS_URL = BASE_URL + "/models"
+GENERATION_URL = BASE_URL + "/generation"
 
 
 @pytest.fixture(autouse=True)
 def _llm_module_state():
     """Keep process-level state of the llm package from leaking between tests."""
-    from backend.llm import catalog, metering
+    from backend.llm import catalog, client, metering
 
     catalog._reset_cache()
     metering.reset_session_cost()
+    client._record_counters.clear()
     yield
     catalog._reset_cache()
     metering.reset_session_cost()
+    client._record_counters.clear()
 
 
 @pytest.fixture

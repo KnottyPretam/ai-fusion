@@ -3,7 +3,10 @@
 - Live: `GET {OPENROUTER_BASE_URL}/models` (no auth needed), cached in memory and on disk at
   `settings().data_dir / "models.json"` with TTL `settings().catalog_ttl_s`.
 - Mock mode (`MOCK_OPENROUTER=1`) or ANY fetch failure: the offline fixture
-  `backend/llm/fixtures/models.json` (same shape as the real endpoint: `{"data": [...]}`).
+  `backend/llm/fixtures/models.json` (same shape as the real endpoint: `{"data": [...]}`). A
+  failed live fetch is not retried for `FETCH_RETRY_S` (the fixture is served from memory), so
+  the UI's `GET /api/models` on every mount does not hammer an unreachable endpoint;
+  `force_refresh=True` always retries.
 - `get_meta(model)` reads the in-memory cache, then the offline fixture; None when unknown. It
   never performs network I/O (and nothing here does in mock mode).
 
@@ -32,12 +35,14 @@ log = logging.getLogger("triplex.llm.catalog")
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "models.json"
 DISK_CACHE_NAME = "models.json"
 FETCH_TIMEOUT_S = 30.0
+FETCH_RETRY_S = 60.0  # after a failed live fetch: serve the fixture from memory this long
 
 # In-memory cache (filled by get_catalog) and the memoised offline fixture (get_meta fallback).
 _mem: list[ModelMeta] | None = None
 _mem_by_id: dict[str, ModelMeta] = {}
 _mem_loaded_at: float = 0.0
 _mem_source: str | None = None  # "network" | "disk" | "fixture"
+_fetch_failed_at: float | None = None  # time.time() of the last failed live fetch
 _offline: list[ModelMeta] | None = None
 _offline_by_id: dict[str, ModelMeta] = {}
 
@@ -152,20 +157,24 @@ def _write_disk_cache(path: Path, fetched_at: float, entries: list[Any]) -> None
 
 # --------------------------------------------------------------------------- cache state
 def _set_mem(models: list[ModelMeta], source: str, loaded_at: float) -> None:
-    global _mem, _mem_by_id, _mem_loaded_at, _mem_source
+    global _mem, _mem_by_id, _mem_loaded_at, _mem_source, _fetch_failed_at
     _mem = list(models)
     _mem_by_id = {m.id: m for m in _mem}
     _mem_loaded_at = loaded_at
     _mem_source = source
+    if source != "fixture":
+        _fetch_failed_at = None
 
 
 def _reset_cache() -> None:
     """Tests only: forget every cached catalog (memory + memoised fixture)."""
     global _mem, _mem_by_id, _mem_loaded_at, _mem_source, _offline, _offline_by_id
+    global _fetch_failed_at
     _mem = None
     _mem_by_id = {}
     _mem_loaded_at = 0.0
     _mem_source = None
+    _fetch_failed_at = None
     _offline = None
     _offline_by_id = {}
 
@@ -190,6 +199,7 @@ async def _fetch_entries(base_url: str, timeout_s: float) -> list[Any]:
 
 # --------------------------------------------------------------------------- public API
 async def get_catalog(*, force_refresh: bool = False) -> list[ModelMeta]:
+    global _fetch_failed_at
     s = settings()
     if s.mock_openrouter:
         models = load_offline()
@@ -205,6 +215,13 @@ async def get_catalog(*, force_refresh: bool = False) -> list[ModelMeta]:
         and now - _mem_loaded_at < ttl
     ):
         return list(_mem)
+    if (
+        not force_refresh
+        and _mem is not None
+        and _fetch_failed_at is not None
+        and now - _fetch_failed_at < FETCH_RETRY_S
+    ):
+        return list(_mem)  # recent fetch failure: do not retry on every call
 
     path = _disk_cache_path()
     if not force_refresh:
@@ -228,6 +245,7 @@ async def get_catalog(*, force_refresh: bool = False) -> list[ModelMeta]:
         )
         models = load_offline()
         _set_mem(models, "fixture", now)
+        _fetch_failed_at = now
         return list(models)
 
     _write_disk_cache(path, now, entries)

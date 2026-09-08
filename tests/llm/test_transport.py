@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
 
 from backend.llm import catalog, metering, mock
+from backend.llm import client as client_mod
 from backend.llm.client import stream_completion
-from backend.schemas import ModelMeta
+from backend.schemas import ModelMeta, canonical_request_key
 from tests.llm.conftest import (
     CHAT_URL,
+    GENERATION_URL,
     chunk,
     citation,
     collect,
@@ -135,14 +138,20 @@ async def test_reasoning_citations_and_truncation_over_http(live_transport, resp
 
 
 async def test_stream_without_usage_chunk_synthesises_usage(live_transport, respx_router, caplog):
-    caplog.set_level("INFO")
+    caplog.set_level("INFO", logger="triplex.llm")
     _ok_route(respx_router, chunk(content="x" * 80, finish="stop"))
     deltas = await collect(_call())
     assert kinds(deltas) == ["text", "done"]
     u = deltas[-1].usage
     assert u.completion_tokens == 20 and u.prompt_tokens == len(MSGS[0]["content"]) // 4
     assert u.cost_usd == pytest.approx(u.prompt_tokens * 5e-6 + 20 * 25e-6)
-    assert any("estimated" in r.getMessage() for r in caplog.records)
+    assert isinstance(u, metering.EstimatedUsage)
+    # ONE INFO line per call (semantics.md), and it is the one carrying the `estimated` marker.
+    info = [
+        r for r in caplog.records if r.name.startswith("triplex.llm") and r.levelno == logging.INFO
+    ]
+    assert len(info) == 1 and info[0].name == "triplex.llm.client"
+    assert "usage=estimated" in info[0].getMessage()
 
 
 async def test_one_info_log_line_per_call(live_transport, respx_router, caplog):
@@ -344,3 +353,263 @@ async def test_structured_outputs_meta_does_not_change_stream_completion(
     route = _ok_route(respx_router, chunk(content="x", finish="stop"), chunk(usage=usage_obj()))
     await collect(_call(effort="low"))
     assert "response_format" not in json.loads(route.calls.last.request.content)
+
+
+# --------------------------------------------------------------------------- record tee: safety
+async def test_record_dir_numbering_survives_a_process_restart(
+    live_transport, respx_router, monkeypatch, tmp_path, caplog
+):
+    """A new process starts with empty in-memory counters: numbering must continue from the files
+    on disk and an earlier transcript must never be truncated (live recordings cost money)."""
+    caplog.set_level("INFO", logger="triplex.llm.client")
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    _ok_route(respx_router, chunk(content="first run"), chunk(usage=usage_obj()))
+    await collect(_call(role="chatgpt", purpose="chat"))
+    one = rec / "chatgpt.chat.1.jsonl"
+    original = one.read_bytes()
+    assert any(
+        "recorded" in r.getMessage() and "chatgpt.chat.1.jsonl" in r.getMessage()
+        for r in caplog.records
+    )
+
+    monkeypatch.setattr(client_mod, "_record_counters", {})  # simulate a process restart
+    _ok_route(respx_router, chunk(content="second run"), chunk(usage=usage_obj()))
+    await collect(_call(role="chatgpt", purpose="chat"))
+    assert one.read_bytes() == original
+    two = rec / "chatgpt.chat.2.jsonl"
+    assert two.is_file() and "second run" in two.read_text()
+    reqs = [json.loads(ln) for ln in (rec / "requests.jsonl").read_text().splitlines()]
+    assert [r["fixture"] for r in reqs] == ["chatgpt.chat.1.jsonl", "chatgpt.chat.2.jsonl"]
+
+
+async def test_record_dir_never_truncates_a_file_a_concurrent_writer_created(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    rec.mkdir()
+    foreign = '{"foreign": true}\n'
+
+    def handler(request):
+        # Another process claims claude.chat.1 while this call is in flight.
+        (rec / "claude.chat.1.jsonl").write_text(foreign)
+        return httpx.Response(
+            200, content=sse_body(chunk(content="mine"), chunk(usage=usage_obj()))
+        )
+
+    respx_router.post(CHAT_URL).mock(side_effect=handler)
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"]
+    assert (rec / "claude.chat.1.jsonl").read_text() == foreign
+    assert "mine" in (rec / "claude.chat.2.jsonl").read_text()
+    req = json.loads((rec / "requests.jsonl").read_text().splitlines()[-1])
+    assert req["fixture"] == "claude.chat.2.jsonl"
+    assert client_mod._record_counters[(str(rec.resolve()), "claude", "chat")] == 2
+
+
+async def test_record_dir_writes_a_fixture_the_mock_replays_directly(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    """The tee also writes `recorded/<sha256>.jsonl`, the content-keyed file the mock serves
+    first, so MOCK_FIXTURES_DIR=<MOCK_RECORD_DIR> replays the recording as-is."""
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    payloads = [chunk(content="live text", finish="stop"), chunk(usage=usage_obj(cost=0.002))]
+    _ok_route(respx_router, *payloads)
+    await collect(_call())
+    key = canonical_request_key("anthropic/claude-opus-5", MSGS, None)
+    recorded = rec / "recorded" / f"{key}.jsonl"
+    assert [json.loads(ln) for ln in recorded.read_text().splitlines()] == [
+        json.loads(p) for p in payloads
+    ]
+    req = json.loads((rec / "requests.jsonl").read_text().splitlines()[-1])
+    assert req["recorded"] == f"recorded/{key}.jsonl" and req["fixture"] == "claude.chat.1.jsonl"
+
+    monkeypatch.setenv("MOCK_OPENROUTER", "1")
+    monkeypatch.setenv("MOCK_FIXTURES_DIR", str(rec))
+    monkeypatch.delenv("MOCK_RECORD_DIR")
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"] and deltas[0].text == "live text"
+    assert deltas[-1].usage.cost_usd == 0.002
+    assert mock.calls[-1]["fixture"] == f"recorded/{key}.jsonl"
+    assert respx_router.calls.call_count == 1  # only the live call touched the network
+
+
+async def test_early_close_releases_the_transport_immediately(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    """aclose() on stream_completion must close the inner transport NOW (open response, client
+    and record tee), not whenever the garbage collector gets round to the inner generator."""
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    _ok_route(
+        respx_router,
+        chunk(content="a"),
+        chunk(content="b", finish="stop"),
+        chunk(usage=usage_obj()),
+    )
+    gen = _call()
+    first = await gen.__anext__()
+    assert first.kind == "text" and first.text == "a"
+    await gen.aclose()
+    # _live_stream's `finally` closes the tee: the file exists only if the inner generator
+    # was closed synchronously by aclose().
+    req = json.loads((rec / "requests.jsonl").read_text().splitlines()[-1])
+    assert req["fixture"] == "claude.chat.1.jsonl"
+    assert metering.session_cost_usd() == 0.0  # the done delta was never consumed
+
+
+# --------------------------------------------------------------------------- /generation fallback
+CATALOG_COST = 120 * 5e-6 + 40 * 25e-6  # usage_obj() defaults x claude-opus-5 catalog prices
+
+
+def _no_cost_stream(respx_router, *, header=True, cid="gen-test"):
+    return _ok_route(
+        respx_router,
+        chunk(content="x", finish="stop", cid=cid),
+        chunk(content="", usage=usage_obj(cost=None), cid=cid),
+        headers={"X-Generation-Id": "gen-1"} if header else None,
+    )
+
+
+async def test_missing_cost_uses_the_generation_lookup(live_transport, respx_router):
+    _no_cost_stream(respx_router)
+    gen = respx_router.get(GENERATION_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"total_cost": 0.00777}})
+    )
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"]
+    done = deltas[-1]
+    assert done.usage.cost_usd == 0.00777 and done.usage.generation_id == "gen-1"
+    assert gen.call_count == 1
+    req = gen.calls.last.request
+    assert req.url.params["id"] == "gen-1"
+    assert req.headers["Authorization"] == "Bearer test-key"
+    assert metering.session_cost_usd() == pytest.approx(0.00777)
+
+
+async def test_generation_lookup_uses_the_chunk_id_without_a_header(live_transport, respx_router):
+    _no_cost_stream(respx_router, header=False, cid="gen-from-chunk")
+    gen = respx_router.get(GENERATION_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"total_cost": 0.5}})
+    )
+    deltas = await collect(_call())
+    assert deltas[-1].usage.cost_usd == 0.5
+    assert gen.calls.last.request.url.params["id"] == "gen-from-chunk"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.Response(500, json={"error": {"code": 500, "message": "boom"}}),
+        httpx.Response(404, json={"error": {"code": 404, "message": "Resource not found"}}),
+        httpx.Response(200, json={"data": {"total_cost": None}}),
+        httpx.Response(200, json={"data": {"total_cost": -1}}),
+        httpx.Response(200, json={"data": {"total_cost": "n/a"}}),
+        httpx.Response(200, content=b"not json"),
+        httpx.ConnectError("refused"),
+        httpx.ReadTimeout("slow"),
+    ],
+    ids=["500", "404", "null-cost", "negative", "non-numeric", "not-json", "connect", "timeout"],
+)
+async def test_generation_lookup_failure_falls_back_to_catalog_price(
+    live_transport, respx_router, failure
+):
+    _no_cost_stream(respx_router)
+    route = respx_router.get(GENERATION_URL)
+    if isinstance(failure, httpx.Response):
+        route.mock(return_value=failure)
+    else:
+        route.mock(side_effect=failure)
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"]  # the lookup never breaks the stream
+    assert deltas[-1].usage.cost_usd == pytest.approx(CATALOG_COST)
+    assert route.call_count == 1
+    assert metering.session_cost_usd() == pytest.approx(CATALOG_COST)
+
+
+async def test_generation_lookup_skipped_when_the_usage_chunk_has_cost(
+    live_transport, respx_router
+):
+    _ok_route(
+        respx_router,
+        chunk(content="x", finish="stop"),
+        chunk(usage=usage_obj(cost=0.001)),
+        headers={"X-Generation-Id": "gen-1"},
+    )
+    route = respx_router.get(GENERATION_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"total_cost": 9.9}})
+    )
+    deltas = await collect(_call())
+    assert deltas[-1].usage.cost_usd == 0.001 and route.call_count == 0
+
+
+async def test_generation_lookup_skipped_without_any_generation_id(live_transport, respx_router):
+    _no_cost_stream(respx_router, header=False, cid="")
+    route = respx_router.get(GENERATION_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"total_cost": 9.9}})
+    )
+    deltas = await collect(_call())
+    assert deltas[-1].usage.cost_usd == pytest.approx(CATALOG_COST) and route.call_count == 0
+
+
+async def test_generation_lookup_never_runs_in_mock_mode(respx_router, monkeypatch, tmp_path):
+    """Contract: the /generation fallback is live only; mock replay uses the catalog price."""
+    scenario = tmp_path / "scenarios" / "nocost"
+    scenario.mkdir(parents=True)
+    (scenario / "claude.chat.1.jsonl").write_text(
+        chunk(content="no cost here", finish="stop", cid="gen-nocost")
+        + "\n"
+        + chunk(content="", usage=usage_obj(cost=None), cid="gen-nocost")
+        + "\n"
+    )
+    monkeypatch.setenv("MOCK_FIXTURES_DIR", str(tmp_path))
+    monkeypatch.setenv("MOCK_SCENARIO", "nocost")
+    route = respx_router.get(GENERATION_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"total_cost": 9.9}})
+    )
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"]
+    assert deltas[-1].usage.cost_usd == pytest.approx(CATALOG_COST)
+    assert route.call_count == 0 and respx_router.calls.call_count == 0
+
+
+# --------------------------------------------------------------------------- non-SSE 2xx bodies
+async def test_json_error_body_under_http_200_is_an_error_delta(live_transport, respx_router):
+    respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "error": {
+                    "code": 429,
+                    "message": "Rate limit exceeded",
+                    "metadata": {"error_type": "rate_limit_exceeded"},
+                }
+            },
+        )
+    )
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["error"]
+    e = deltas[0]
+    assert (e.code, e.message, e.error_type) == (429, "Rate limit exceeded", "rate_limit_exceeded")
+    assert metering.session_cost_usd() == 0.0
+
+
+async def test_non_sse_2xx_body_is_a_transport_error_not_an_empty_done(
+    live_transport, respx_router
+):
+    respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(200, content=b"<html>proxy says hi</html>")
+    )
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["error"]
+    e = deltas[0]
+    assert e.code == "transport_error" and e.error_type == "triplex"
+    assert "not an SSE stream" in e.message and "proxy says hi" in e.message
+
+
+async def test_empty_2xx_body_still_synthesises_done(live_transport, respx_router):
+    respx_router.post(CHAT_URL).mock(return_value=httpx.Response(200, content=b""))
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["done"] and deltas[0].usage.completion_tokens == 0

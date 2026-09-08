@@ -208,3 +208,14 @@ async def test_empty_fixture_file_still_terminates(mini_fixtures, monkeypatch, t
     monkeypatch.setenv("MOCK_SCENARIO", "e")
     deltas = await _chat()
     assert kinds(deltas) == ["done"]  # synthesised done, never hangs or raises
+
+
+def test_existing_numbers_is_sorted_and_safe_on_a_missing_dir(tmp_path):
+    assert mock.existing_numbers(tmp_path / "nope", "claude", "chat") == []
+    d = tmp_path / "s"
+    d.mkdir()
+    for n in (3, 1, 10):
+        (d / f"claude.chat.{n}.jsonl").write_text("{}\n")
+    (d / "claude.defense.1.jsonl").write_text("{}\n")
+    (d / "claude.chat.x.jsonl").write_text("{}\n")
+    assert mock.existing_numbers(d, "claude", "chat") == [1, 3, 10]

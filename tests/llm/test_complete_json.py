@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -11,6 +12,7 @@ from hypothesis import strategies as st
 from backend.llm import catalog, mock
 from backend.llm.client import RETRY_USER_MESSAGE, complete_json, extract_json
 from backend.schemas import ConvergenceCheck, DefenseReply, Extraction, ModelMeta
+from tests.llm.conftest import CHAT_URL, chunk, error_chunk, sse_body, usage_obj
 
 # --------------------------------------------------------------------------- extract_json (fuzz)
 _json_scalars = (
@@ -103,6 +105,20 @@ def test_extract_json_examples(text, expected):
 def test_extract_json_failures(text):
     value, err = extract_json(text)
     assert value is None and isinstance(err, str) and err
+
+
+def test_truncated_nested_output_is_a_parse_error_not_an_inner_object():
+    """'Outermost braces': a complete inner object must never be returned for a truncated
+    reply, or the retry would tell the model its output failed validation instead of being
+    cut off."""
+    text = '{"agreements": [{"label": "R1", "claim": "2000 deg/s"}], "divergences": [{"id": "d1"'
+    for variant in (text, "```json\n" + text, "Here it is:\n" + text):
+        value, err = extract_json(variant)
+        assert value is None and err and "truncated" in err, variant
+    # a stray non-JSON object before the real one is still skipped, nesting inside a COMPLETE
+    # object is untouched, and a stray closing brace after it does not matter
+    assert extract_json('{ not json } {"a": {"b": 1}}') == ({"a": {"b": 1}}, None)
+    assert extract_json('{"a": {"b": 1}} }') == ({"a": {"b": 1}}, None)
 
 
 # --------------------------------------------------------------------------- complete_json
@@ -302,3 +318,77 @@ def _fixture_deltas(path):
 
     lines = [ln for ln in path.read_text().splitlines() if ln.strip()]
     return list(parse_sse_lines(f"data: {ln}" for ln in lines))
+
+
+# --------------------------------------------------------------------------- transport errors
+DEFENSE = dict(
+    role="claude",
+    purpose="defense",
+    model="anthropic/claude-opus-5",
+    effort="low",
+    max_tokens=2000,
+)
+
+
+async def test_transport_error_after_partial_text_returns_immediately(live_transport, respx_router):
+    """Partial JSON then a mid-stream 429: `(None, "", usage, message)`, no retry."""
+    route = respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body(
+                chunk(content='{"stance": "def'),
+                error_chunk(429, "Rate limit exceeded", "rate_limit_exceeded"),
+            ),
+        )
+    )
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, **DEFENSE
+    )
+    assert parsed is None and raw == "" and error == "Rate limit exceeded"
+    assert usage.totals.calls == 0 and usage.calls == []
+    assert route.call_count == 1
+
+
+async def test_transport_failure_keeps_its_reason(live_transport, respx_router):
+    respx_router.post(CHAT_URL).mock(side_effect=httpx.ConnectError("connection refused by host"))
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=Extraction, retries=1, **ANALYST
+    )
+    assert parsed is None and raw == "" and usage.totals.calls == 0
+    assert "connection refused by host" in error and error != "transport_error"
+
+
+async def test_missing_api_key_keeps_its_reason(live_transport, respx_router, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=Extraction, retries=1, **ANALYST
+    )
+    assert parsed is None and "OPENROUTER_API_KEY" in error
+    assert respx_router.calls.call_count == 0
+
+
+async def test_empty_first_attempt_retries_without_an_empty_assistant_message(
+    live_transport, respx_router
+):
+    """Providers reject empty assistant content, so an empty reply is not echoed back."""
+    good = json.dumps({"stance": "defend", "justification": "datasheet table 3", "confidence": 0.9})
+    route = respx_router.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200, content=sse_body(chunk(content="", finish="stop"), chunk(usage=usage_obj()))
+            ),
+            httpx.Response(
+                200, content=sse_body(chunk(content=good, finish="stop"), chunk(usage=usage_obj()))
+            ),
+        ]
+    )
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, **DEFENSE
+    )
+    assert isinstance(parsed, DefenseReply) and error is None and raw == good
+    assert route.call_count == 2 and usage.totals.calls == 2
+    sent = json.loads(route.calls[1].request.content)["messages"]
+    assert sent[: len(MSGS)] == MSGS
+    assert [m["role"] for m in sent[len(MSGS) :]] == ["user"]  # no empty assistant turn
+    assert sent[-1]["content"] == RETRY_USER_MESSAGE.format(error="parse_error: empty response")
+    assert all(m["content"].strip() for m in sent)

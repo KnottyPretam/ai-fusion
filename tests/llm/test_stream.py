@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 
+from backend.llm import metering
 from backend.llm.stream import SSEParser, parse_sse_lines
 from tests.llm.conftest import chunk, citation, error_chunk, kinds, sse_lines, usage_obj
 
@@ -153,7 +155,7 @@ def test_generation_id_is_the_first_chunk_id():
 
 
 def test_stream_without_usage_chunk_synthesises_done_with_estimate(caplog):
-    caplog.set_level("INFO", logger="triplex.llm.stream")
+    caplog.set_level("DEBUG", logger="triplex.llm.stream")
     text = "x" * 40
     deltas = _parse(chunk(content=text, finish="stop", model="anthropic/claude-opus-5"))
     assert kinds(deltas) == ["text", "done"]
@@ -162,7 +164,26 @@ def test_stream_without_usage_chunk_synthesises_done_with_estimate(caplog):
     assert done.usage.completion_tokens == len(text) // 4 == 10
     # catalog price of claude-opus-5: $25 / M output tokens
     assert abs(done.usage.cost_usd - 10 * 25e-6) < 1e-12
-    assert any("estimated" in r.getMessage() for r in caplog.records)
+    assert isinstance(done.usage, metering.EstimatedUsage)
+    # The estimate is logged at DEBUG only: the client's single INFO line carries the marker
+    # (semantics.md: one INFO log line per LLM call).
+    records = [r for r in caplog.records if r.name == "triplex.llm.stream"]
+    assert records and all(r.levelno == logging.DEBUG for r in records)
+    assert any("estimated" in r.getMessage() for r in records)
+
+
+def test_usage_cost_missing_flag_tracks_the_usage_chunk():
+    p = SSEParser()
+    p.feed("data: " + chunk(content="x"))
+    assert p.usage_cost_missing is False
+    p.feed("data: " + chunk(usage=usage_obj(cost=None)))
+    assert p.usage_cost_missing is True
+    with_cost = SSEParser()
+    with_cost.feed("data: " + chunk(usage=usage_obj(cost=0.1)))
+    assert with_cost.usage_cost_missing is False
+    bad = SSEParser()
+    bad.feed("data: " + chunk(usage=usage_obj(cost="n/a")))
+    assert bad.usage_cost_missing is True
 
 
 def test_stream_that_just_ends_without_done_sentinel_still_terminates():

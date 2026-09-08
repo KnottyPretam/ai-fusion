@@ -16,7 +16,10 @@ Rules (docs/api-contract.md addendum, docs/fixtures.md, docs/openrouter-notes.md
   truncated=finish_reason=="length", generation_id=<first chunk id>)`. `finish_reason` is the
   last non-null value seen on any chunk.
 - Exactly one terminal delta (`done` or `error`), nothing after it. A stream that ends without a
-  usage chunk gets a synthesised `done` (catalog price x len(text)//4; logged as an estimate).
+  usage chunk gets a synthesised `done` (catalog price x len(text)//4, an `EstimatedUsage`); the
+  client's single INFO line per call carries the `estimated` marker, the parser only logs DEBUG.
+- `usage_cost_missing` records whether the usage chunk lacked a numeric `cost`, so the live
+  client can try the `GET /generation` lookup before settling for the catalog price.
 
 `SSEParser` is the incremental form (`feed(line)` / `finish()`) the live client drives from
 `aiter_lines()`; `parse_sse_lines` wraps it for iterables (fixtures, tests).
@@ -49,6 +52,7 @@ class SSEParser:
         self.prompt_text = prompt_text  # only used for the synthesised-usage estimate
         self.finished = False  # a terminal delta has been emitted
         self.synthesized = False  # the done delta was synthesised (no usage chunk)
+        self.usage_cost_missing = False  # the usage chunk carried no numeric `cost`
         self.finish_reason: str | None = None
         self.generation_id: str | None = None
         self.text_parts: list[str] = []
@@ -107,7 +111,7 @@ class SSEParser:
             purpose=self.purpose,
             generation_id=self.generation_id,
         )
-        log.info(
+        log.debug(
             "stream ended without a usage chunk; usage estimated (len(text)//4=%d tokens x "
             "catalog price) model=%s generation_id=%s",
             usage.completion_tokens,
@@ -176,6 +180,7 @@ class SSEParser:
         if "usage" in chunk and chunk.get("usage") is not None:
             usage = chunk.get("usage") if isinstance(chunk.get("usage"), dict) else {}
             self.finished = True
+            self.usage_cost_missing = metering.float_or_none(usage.get("cost")) is None
             u = metering.usage_from_chunk(
                 usage,
                 model=self.model,

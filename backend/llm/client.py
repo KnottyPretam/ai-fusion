@@ -11,15 +11,25 @@
 Cost cap: with `MOCK_OPENROUTER=0`, once the process-level running total of `cost_usd` reaches
 `SESSION_COST_CAP_USD` every live call yields a single
 `Delta(kind="error", code="cost_cap_exceeded", error_type="triplex")`.
+
+Cost (docs/semantics.md, Metering/logging): `cost_usd` = the usage chunk's `cost`; when the chunk
+carries no cost the live transport asks `GET {base}/generation?id=<generation_id>` for
+`data.total_cost` (short timeout, never raises, live only) before settling for the catalog
+price x tokens the parser already filled in. One INFO line per call, with `usage=estimated`
+when no usage chunk arrived at all.
+
+A consumer that stops early (`aclose()` on the generator) closes the inner transport at once:
+the open httpx response / client and the record tee are released before `aclose()` returns.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +37,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from ..config import settings
-from ..schemas import Delta, Effort, FeatureUsage, strict_json_schema
+from ..schemas import Delta, Effort, FeatureUsage, canonical_request_key, strict_json_schema
 from . import catalog, metering, mock
 from . import reasoning as reasoning_mod
 from .errors import (
@@ -102,22 +112,39 @@ def _messages_text(messages: list[dict[str, Any]]) -> str:
 
 
 # --------------------------------------------------------------------------- recording (live tee)
-_record_counters: dict[tuple[str, str], int] = {}
+# (record dir, role, purpose) -> highest number handed out in THIS process; seeded from disk.
+_record_counters: dict[tuple[str, str, str], int] = {}
+_RECORD_NAME_ATTEMPTS = 1000
 
 
 class _Recorder:
-    """Tees the raw `data:` JSON lines of a live call into the fixture format under
-    MOCK_RECORD_DIR as <role>.<purpose>.<n>.jsonl, plus requests.jsonl with the payload."""
+    """Tees the raw `data:` JSON lines of a live call into the fixture format (docs/fixtures.md)
+    under MOCK_RECORD_DIR:
+
+    - `<role>.<purpose>.<n>.jsonl` -- the scenario layout, so pointing MOCK_RECORD_DIR at
+      `<fixtures>/scenarios/<name>` records a scenario `MOCK_SCENARIO=<name>` replays. `n`
+      continues from the files already on disk (a process restart never renumbers from 1) and a
+      transcript file is only ever CREATED, never truncated: mode "x", and a name a concurrent
+      writer took moves on to the next number.
+    - `recorded/<sha256>.jsonl` -- the content-keyed copy the mock serves first when
+      `MOCK_FIXTURES_DIR` points at MOCK_RECORD_DIR (the first recording of a request is kept).
+    - `requests.jsonl` -- one line per call: the payload and both fixture names as written.
+    """
 
     def __init__(self, directory: Path, role: str, purpose: str, payload: dict[str, Any]) -> None:
         self.dir = directory
         self.role = role
         self.purpose = purpose
         self.payload = payload
-        n = _record_counters.get((role, purpose), 0) + 1
-        _record_counters[(role, purpose)] = n
-        self.name = f"{role}.{purpose}.{n}.jsonl"
+        self.key = (str(directory), role, purpose)
+        existing = mock.existing_numbers(directory, role, purpose)
+        self.n = max([_record_counters.get(self.key, 0), *existing]) + 1
+        _record_counters[self.key] = self.n
         self.lines: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return f"{self.role}.{self.purpose}.{self.n}.jsonl"
 
     def line(self, raw: str) -> None:
         s = raw.strip()
@@ -128,19 +155,49 @@ class _Recorder:
             return
         self.lines.append(payload)
 
+    def _create(self, path: Path) -> bool:
+        """Write the transcript to a NEW file; False (nothing touched) when it already exists."""
+        try:
+            with path.open("x", encoding="utf-8") as fh:
+                fh.write("\n".join(self.lines) + "\n")
+        except FileExistsError:
+            return False
+        return True
+
     def close(self) -> None:
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
             fixture: str | None = None
+            recorded: str | None = None
             if self.lines:
-                fixture = self.name
-                with (self.dir / self.name).open("w", encoding="utf-8") as fh:
-                    fh.write("\n".join(self.lines) + "\n")
+                for _ in range(_RECORD_NAME_ATTEMPTS):
+                    if self._create(self.dir / self.name):
+                        fixture = self.name
+                        break
+                    # Another writer (a parallel process) took this number since __init__:
+                    # never truncate its transcript, move on to the next free one.
+                    self.n += 1
+                    _record_counters[self.key] = max(_record_counters.get(self.key, 0), self.n)
+                if fixture is None:
+                    log.warning(
+                        "no free fixture name for %s.%s under %s", self.role, self.purpose, self.dir
+                    )
+                sha = canonical_request_key(
+                    str(self.payload.get("model", "")),
+                    list(self.payload.get("messages") or []),
+                    self.payload.get("response_format"),
+                )
+                recorded = f"recorded/{sha}.jsonl"
+                rec_path = self.dir / recorded
+                rec_path.parent.mkdir(parents=True, exist_ok=True)
+                if not self._create(rec_path):
+                    log.info("recorded fixture %s exists; kept the earlier transcript", rec_path)
             with (self.dir / "requests.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(
                     json.dumps(
                         {
                             "fixture": fixture,
+                            "recorded": recorded,
                             "role": self.role,
                             "purpose": self.purpose,
                             "model": self.payload.get("model"),
@@ -150,6 +207,8 @@ class _Recorder:
                     )
                     + "\n"
                 )
+            if fixture is not None:
+                log.info("recorded %s/%s", self.dir, fixture)
         except OSError as e:
             log.warning("could not record fixture under %s: %s", self.dir, e)
 
@@ -187,6 +246,61 @@ def _stamp_generation(d: Delta, gen_id: str | None) -> Delta:
     return d
 
 
+GENERATION_TIMEOUT_S = 10.0  # upper bound for the post-hoc /generation cost lookup
+_STRAY_BODY_LIMIT = 4096  # bytes of a non-SSE 2xx body kept for the error message
+
+
+async def _fetch_generation_cost(
+    client: httpx.AsyncClient,
+    base: str,
+    gen_id: str,
+    headers: dict[str, str],
+    timeout_s: float,
+) -> float | None:
+    """`GET {base}/generation?id=<gen_id>` -> `data.total_cost` (USD). None on ANY failure
+    (non-2xx, transport error, timeout, malformed body, non-finite or negative value); logs at
+    DEBUG and never raises. docs/openrouter-notes.md, "Generation endpoint"."""
+    try:
+        req_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+        req_headers["Accept"] = "application/json"
+        resp = await client.get(
+            base + "/generation", params={"id": gen_id}, headers=req_headers, timeout=timeout_s
+        )
+        if not (200 <= resp.status_code < 300):
+            log.debug("generation lookup %s: HTTP %s", gen_id, resp.status_code)
+            return None
+        doc = resp.json()
+        data = doc.get("data") if isinstance(doc, dict) else None
+        cost = metering.float_or_none(data.get("total_cost")) if isinstance(data, dict) else None
+        if cost is None or not math.isfinite(cost) or cost < 0:
+            log.debug("generation lookup %s: no usable total_cost", gen_id)
+            return None
+        return cost
+    except Exception as e:
+        log.debug("generation lookup %s failed: %s: %s", gen_id, type(e).__name__, e)
+        return None
+
+
+def _non_sse_body_deltas(parser: SSEParser, body: str) -> list[Delta]:
+    """A 2xx response whose body carried no SSE data at all. A JSON `{"error": ...}` document
+    (a proxy error under HTTP 200) maps through the parser's error rule; anything else is a
+    transport error -- never a successful empty `done`."""
+    doc = _try_load(body)
+    if isinstance(doc, dict) and doc.get("error") is not None:
+        out = parser.feed("data: " + json.dumps(doc, ensure_ascii=False))
+        if parser.finished:
+            return out
+    parser.finished = True
+    return [
+        Delta(
+            kind="error",
+            code=TRANSPORT_ERROR,
+            message=f"response was not an SSE stream: {body[:300]}",
+            error_type=ERROR_TYPE_TRIPLEX,
+        )
+    ]
+
+
 async def _live_stream(
     *,
     role: str,
@@ -196,13 +310,17 @@ async def _live_stream(
     payload: dict[str, Any],
 ) -> AsyncIterator[Delta]:
     s = settings()
-    url = s.openrouter_base_url.rstrip("/") + "/chat/completions"
+    base = s.openrouter_base_url.rstrip("/")
+    url = base + "/chat/completions"
     headers = build_headers(s.openrouter_api_key or "", s.http_referer, s.app_title)
+    gen_timeout = min(GENERATION_TIMEOUT_S, s.request_timeout_s)
     parser = SSEParser(
         model=model, role=role, purpose=purpose, prompt_text=_messages_text(messages)
     )
     recorder = _Recorder(s.mock_record_dir, role, purpose, payload) if s.mock_record_dir else None
     gen_id: str | None = None
+    stray: list[str] = []  # non-SSE lines of a body that never produced a chunk
+    stray_len = 0
     try:
         async with httpx.AsyncClient(timeout=s.request_timeout_s) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as resp:
@@ -215,10 +333,26 @@ async def _live_stream(
                 async for line in resp.aiter_lines():
                     if recorder is not None:
                         recorder.line(line)
+                    if parser.chunks == 0 and stray_len < _STRAY_BODY_LIMIT:
+                        st = line.strip()
+                        if st and not st.startswith(("data:", ":", "event:", "id:", "retry:")):
+                            stray.append(st)
+                            stray_len += len(st)
                     for d in parser.feed(line):
+                        if d.kind == "done" and d.usage is not None and parser.usage_cost_missing:
+                            gid = gen_id or d.generation_id
+                            if gid:
+                                cost = await _fetch_generation_cost(
+                                    client, base, gid, headers, gen_timeout
+                                )
+                                if cost is not None:
+                                    d.usage.cost_usd = cost
                         yield _stamp_generation(d, gen_id)
                     if parser.finished:
                         break
+                if not parser.finished and parser.chunks == 0 and stray:
+                    for d in _non_sse_body_deltas(parser, "\n".join(stray)):
+                        yield _stamp_generation(d, gen_id)
         if not parser.finished:
             for d in parser.finish():
                 yield _stamp_generation(d, gen_id)
@@ -269,6 +403,7 @@ async def stream_completion(
 ) -> AsyncIterator[Delta]:
     started = time.monotonic()
     terminal = False
+    gen: AsyncGenerator[Delta, None] | None = None
     try:
         s = settings()
         meta = catalog.get_meta(model)
@@ -349,7 +484,8 @@ async def stream_completion(
                 d.usage = u
                 if not is_mock:
                     metering.add_session_cost(u.cost_usd)
-                log.info(metering.format_log_line(u, mock=is_mock))
+                estimated = isinstance(u, metering.EstimatedUsage)
+                log.info(metering.format_log_line(u, estimated=estimated, mock=is_mock))
                 yield d
             elif d.kind == "error":
                 terminal = True
@@ -387,6 +523,15 @@ async def stream_completion(
                 message=f"{type(e).__name__}: {e}",
                 error_type=ERROR_TYPE_TRIPLEX,
             )
+    finally:
+        # A consumer that stops early (aclose) must release the transport NOW, not when the
+        # garbage collector finalises the inner generator: close the httpx response/client and
+        # the record tee before returning control.
+        if gen is not None:
+            try:
+                await gen.aclose()
+            except Exception:  # pragma: no cover - defensive: never raises across the boundary
+                log.exception("closing the transport generator failed")
 
 
 # --------------------------------------------------------------------------- lenient JSON
@@ -405,14 +550,24 @@ def _try_load(candidate: str) -> Any | None:
         return None
 
 
-def _balanced_objects(text: str):
-    """Yield every balanced `{...}` substring (string-aware), longest-first per start."""
-    starts = [i for i, ch in enumerate(text) if ch == "{"][:_MAX_SCAN_STARTS]
-    for start in starts:
+def _balanced_objects(text: str) -> tuple[list[str], bool]:
+    """Every OUTERMOST balanced `{...}` substring of `text` in order (string-aware inside an
+    object; quotes outside any object are prose and ignored), plus whether the text ends inside
+    an unclosed object. Objects nested in another object are never candidates on their own: a
+    complete inner object must not mask a truncated outer one (the model would then be told its
+    output failed validation instead of being cut off)."""
+    objects: list[str] = []
+    i = 0
+    n = len(text)
+    for _ in range(_MAX_SCAN_STARTS):
+        start = text.find("{", i)
+        if start == -1:
+            return objects, False
         depth = 0
         in_str = False
         esc = False
-        for j in range(start, len(text)):
+        end = -1
+        for j in range(start, n):
             ch = text[j]
             if in_str:
                 if esc:
@@ -429,8 +584,13 @@ def _balanced_objects(text: str):
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    yield text[start : j + 1]
+                    end = j
                     break
+        if end == -1:
+            return objects, True  # unclosed: whatever is nested inside is not a candidate
+        objects.append(text[start : end + 1])
+        i = end + 1
+    return objects, False
 
 
 def extract_json(text: str) -> tuple[Any | None, str | None]:
@@ -457,8 +617,11 @@ def extract_json(text: str) -> tuple[Any | None, str | None]:
         v = _try_load(c)
         if isinstance(v, dict):
             return v, None
+    truncated = False
     for c in candidates:
-        for obj in _balanced_objects(c):
+        objects, unclosed = _balanced_objects(c)
+        truncated = truncated or unclosed
+        for obj in objects:
             v = _try_load(obj)
             if isinstance(v, dict):
                 return v, None
@@ -467,7 +630,7 @@ def extract_json(text: str) -> tuple[Any | None, str | None]:
         if v is not None:
             return None, f"expected a JSON object, got {type(v).__name__}"
     return None, "no JSON object found in the response" + (
-        " (output may be truncated)" if first != -1 and last <= first else ""
+        " (output may be truncated)" if truncated else ""
     )
 
 
@@ -518,9 +681,12 @@ async def complete_json(
         if transport_error is not None:
             usage.set_wall_clock(int((time.monotonic() - started) * 1000))
             te = transport_error
-            if te.error_type == ERROR_TYPE_TRIPLEX and te.code is not None:
-                msg = str(te.code)
+            if te.code == COST_CAP_EXCEEDED:
+                # The contract's stable key: the UI keys its persistent warning on it.
+                msg = COST_CAP_EXCEEDED
             else:
+                # Every other failure keeps its reason (docs/api-contract.md: "transport
+                # message"): a bare code such as `transport_error` would drop the cause.
                 msg = te.message or (str(te.code) if te.code is not None else TRANSPORT_ERROR)
             return None, "", usage, msg
 
@@ -545,10 +711,15 @@ async def complete_json(
                 model,
                 error,
             )
-            convo = convo + [
-                {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": RETRY_USER_MESSAGE.format(error=error)},
+            follow_up: list[dict[str, Any]] = [
+                {"role": "user", "content": RETRY_USER_MESSAGE.format(error=error)}
             ]
+            if raw_text.strip():
+                # An empty reply is not echoed back: providers reject empty assistant content
+                # (Anthropic's Messages API requires non-empty text blocks), which would turn
+                # the one retry into a guaranteed 400.
+                follow_up.insert(0, {"role": "assistant", "content": raw_text})
+            convo = convo + follow_up
 
     usage.set_wall_clock(int((time.monotonic() - started) * 1000))
     return None, raw_text, usage, error
