@@ -17,6 +17,7 @@
 .progress { margin-top: 6px; padding: 4px 8px; border-left: 3px solid var(--primary); background: var(--primary-soft); color: var(--fg); font-size: 12px; }
 .notice { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--warn); border-radius: 4px; background: var(--warn-soft); color: var(--fg); }
 .error { margin-top: 6px; padding: 6px 8px; border: 1px solid var(--err); border-radius: 4px; background: var(--err-soft); color: var(--err); }
+.stale { margin-top: 6px; padding: 4px 8px; border-left: 3px solid var(--warn); background: var(--warn-soft); color: var(--fg-muted); font-size: 12px; }
 .notFused { margin-top: 6px; color: var(--fg-muted); font-size: 12px; }
 .notFusedItem { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px dashed var(--border); border-radius: 4px; }
 

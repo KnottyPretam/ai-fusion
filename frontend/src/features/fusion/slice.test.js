@@ -164,6 +164,91 @@ describe('fusion slice: conversation lifecycle', () => {
     expect(s.fusion).toMatchObject({ turnId: 'f2', exitReason: 'converged' })
   })
 
+  test('a refetch after a run that failed after fusion_start keeps the failure and the partial timeline', () => {
+    const failed = [start, fusionStart(), ...ROUND1, { type: 'error', message: 'boom' }, { type: 'sse/end', feature: 'fusion', ok: false, error: 'boom' }]
+    // (1) no fusion turn on the server (the contract persists none on error{message})
+    let s = applyEvents('fusion', failed, { state: rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation() }) })
+    const failure = s.fusion
+    expect(failure).toMatchObject({ status: 'error', error: 'boom', turnId: 'f1', conversationId: 'c1' })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation() })
+    expect(s.fusion).toBe(failure)
+    expect(s.fusion.rounds).toHaveLength(1)
+    // (2) an OLDER fusion turn further up the conversation must not silently replace the failure
+    const older = fusionTurnFromEvents([fusionStart({ turn_id: 'f0', standing: ['d1'] })], { id: 'f0', exit_reason: 'stalemate' })
+    const withOlder = conversation([sendTurn(), analyzeTurn(), older, sendTurn('s2'), analyzeTurn('a9', 's2')])
+    s = applyEvents('fusion', failed, { state: rootReducer(initialState(), { type: 'conversation/loaded', conversation: withOlder }) })
+    expect(s.fusion.turnId).toBe('f1')
+    const kept = s.fusion
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: withOlder })
+    expect(s.fusion).toBe(kept)
+    expect(s.fusion).toMatchObject({ status: 'error', error: 'boom', turnId: 'f1' })
+    expect(s.fusion.rounds).toHaveLength(1)
+    // (3) a conversation switch drops it
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([sendTurn()], 'c2') })
+    expect(s.fusion).toMatchObject({ status: 'idle', error: null, turnId: null, rounds: [], conversationId: 'c2' })
+    // (4) the abort variant is kept the same way
+    s = applyEvents('fusion', [start, fusionStart(), { type: 'sse/abort', feature: 'fusion' }], { state: rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation() }) })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation() })
+    expect(s.fusion).toMatchObject({ status: 'error', error: 'aborted', turnId: 'f1' })
+    // (5) the next run's sse/start clears it
+    s = applyEvents('fusion', [start], { state: s })
+    expect(s.fusion).toMatchObject({ status: 'running', error: null, turnId: null, conversationId: 'c1' })
+  })
+
+  test('a run lost client-side that the producer completed anyway is superseded by its persisted turn', () => {
+    // run-to-completion rule: after a disconnect/abort the backend still persists the FusionTurn whose
+    // id fusion_start announced; once the refetch holds that very turn its record replaces the failure
+    let s = rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation() })
+    s = applyEvents('fusion', [start, fusionStart(), ...ROUND1, { type: 'sse/abort', feature: 'fusion' }], { state: s })
+    expect(s.fusion).toMatchObject({ status: 'error', error: 'aborted', turnId: 'f1' })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([sendTurn(), analyzeTurn(), fusionTurn]) })
+    expect(s.fusion).toMatchObject({ status: 'done', error: null, turnId: 'f1', exitReason: 'max_iterations' })
+    expect(s.fusion.rounds).toHaveLength(2)
+    expect(s.fusion.final).toEqual(fusionTurn.final)
+  })
+
+  test('a refetch after an HTTP failure re-hydrates the persisted report and keeps the failure visible', () => {
+    const conv = conversation([sendTurn(), analyzeTurn(), fusionTurn])
+    let s = rootReducer(initialState(), { type: 'conversation/loaded', conversation: conv })
+    s = applyEvents('fusion', [start, { type: 'sse/end', feature: 'fusion', ok: false, error: 'busy', status: 409, body: { detail: { error: 'busy' } } }], { state: s })
+    expect(s.fusion).toMatchObject({ status: 'error', error: 'busy', turnId: null })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conv })
+    expect(s.fusion).toMatchObject({ status: 'done', turnId: 'f1', error: 'busy', exitReason: 'max_iterations', conversationId: 'c1' })
+    expect(s.fusion.final).toEqual(fusionTurn.final)
+    expect(s.fusion.rounds).toHaveLength(2)
+    // a later refetch of the same turn is a no-op (identity kept, the failure stays visible)
+    const hydrated = s.fusion
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([...conv.turns, sendTurn('s2')]) })
+    expect(s.fusion).toBe(hydrated)
+    // the turn persisted by the still-running producer lands on the next refetch and clears the error
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([...conv.turns, { ...fusionTurn, id: 'f2' }]) })
+    expect(s.fusion).toMatchObject({ status: 'done', turnId: 'f2', error: null })
+  })
+
+  test('a pre-stream failure with nothing persisted stays visible; the next sse/start clears it', () => {
+    let s = rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation() })
+    s = applyEvents('fusion', [start, { type: 'sse/end', feature: 'fusion', ok: false, error: 'Failed to fetch' }], { state: s })
+    const failure = s.fusion
+    expect(failure).toMatchObject({ status: 'error', error: 'Failed to fetch', turnId: null })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation() })
+    expect(s.fusion).toBe(failure)
+    s = applyEvents('fusion', [start], { state: s })
+    expect(s.fusion).toMatchObject({ status: 'running', error: null })
+  })
+
+  test('a conversation switch mid-stream never clobbers the live timeline', () => {
+    let s = rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation() })
+    s = applyEvents('fusion', [start, fusionStart(), ...ROUND1], { state: s })
+    const live = s.fusion
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([sendTurn(), analyzeTurn(), fusionTurn], 'c2') })
+    expect(s.fusion).toBe(live)
+    expect(s.fusion).toMatchObject({ status: 'running', conversationId: 'c1' })
+    // the run's own refetch (of c1) after fusion_done then settles on that turn
+    s = applyEvents('fusion', [...ROUND2, doneEvents[doneEvents.length - 1], endOk], { state: s })
+    s = rootReducer(s, { type: 'conversation/loaded', conversation: conversation([sendTurn(), analyzeTurn(), fusionTurn]) })
+    expect(s.fusion).toMatchObject({ status: 'done', turnId: 'f1', conversationId: 'c1' })
+  })
+
   test('conversation/deleted for the tracked conversation resets', () => {
     let s = rootReducer(initialState(), { type: 'conversation/loaded', conversation: conversation([sendTurn(), analyzeTurn(), fusionTurn]) })
     s = rootReducer(s, { type: 'conversation/deleted', id: 'other' })

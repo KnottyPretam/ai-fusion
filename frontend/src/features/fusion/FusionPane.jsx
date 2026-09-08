@@ -10,6 +10,7 @@ import { loadConversation } from '../../api/http.js'
 import {
   MAX_ITERATIONS,
   MIN_ITERATIONS,
+  RANK,
   STANCE_VERB,
   analyzeTurnById,
   buildTimeline,
@@ -19,6 +20,7 @@ import {
   labelsWithPosition,
   latestClaim,
   latestJustification,
+  latestSendTurn,
   traceText,
   usageSummary,
 } from './derive.js'
@@ -203,9 +205,19 @@ export default function FusionPane() {
   const run = useRunStream()
 
   const configured = clampIterations((slotConfig && slotConfig.max_iterations) || 2)
-  const [iterations, setIterations] = useState(configured)
+  const [iterations, setIterations] = useState(configured) // the committed value, always 1..5
+  // '' while the user has cleared the number field to type a new count (a controlled number input
+  // that snapped '' straight to 1 made the next keystroke append: '1' + '4' -> 14 -> 5); null otherwise.
+  const [draft, setDraft] = useState(null)
   // Re-sync the stepper whenever the persisted default changes (config bar / conversation switch).
-  useEffect(() => setIterations(configured), [configured])
+  useEffect(() => {
+    setIterations(configured)
+    setDraft(null)
+  }, [configured])
+  function stepIterations(delta) {
+    setDraft(null)
+    setIterations((v) => clampIterations(v + delta))
+  }
 
   if (!conversation) return null
 
@@ -213,8 +225,18 @@ export default function FusionPane() {
   const running = fusion.status === 'running'
   const analyzeTurn = analyzeTurnById(conversation, fusion.ofAnalyze) || (fusion.analyzeTurn && fusion.analyzeTurn.id === fusion.ofAnalyze ? fusion.analyzeTurn : null)
   const divs = divergenceMap(analyzeTurn)
-  const notFused = analyzeTurn ? Object.values(divs).filter((d) => !fusion.standing.includes(d.id)) : []
+  // "not fused" follows the CURRENT slotConfig.materiality_min (docs/semantics.md: the marker and the
+  // button rule match the NEXT run), not the as-run `standing` stamped on the persisted turn.
+  const materialityMin = (slotConfig && slotConfig.materiality_min) || (conversation.slot_config && conversation.slot_config.materiality_min) || 'medium'
+  const minRank = RANK[materialityMin] ?? RANK.medium
+  const notFused = Object.values(divs).filter((d) => (RANK[d.materiality] ?? -1) < minRank)
   const nextStanding = gate.standing
+  // The shown result (report or notice) belongs to the send turn its Analyze turn was run on; after
+  // a newer Send it is stale and the next run fuses the latest send turn instead.
+  const latestSend = latestSendTurn(conversation)
+  const shownFor = analyzeTurn ? analyzeTurn.of_turn : fusion.notice && fusion.analyzeTurn ? fusion.analyzeTurn.of_turn : null
+  const showsResult = fusion.status === 'done' && (fusion.notice || fusion.turnId)
+  const stale = !!(showsResult && shownFor && latestSend && shownFor !== latestSend.id)
 
   async function onRun() {
     const id = conversation.id
@@ -248,7 +270,7 @@ export default function FusionPane() {
             className={css.stepBtn}
             data-testid="fusion-iterations-dec"
             disabled={running || iterations <= MIN_ITERATIONS}
-            onClick={() => setIterations((v) => clampIterations(v - 1))}
+            onClick={() => stepIterations(-1)}
             aria-label="fewer iterations"
           >
             −
@@ -260,9 +282,17 @@ export default function FusionPane() {
             min={MIN_ITERATIONS}
             max={MAX_ITERATIONS}
             step={1}
-            value={iterations}
+            value={draft ?? iterations}
             disabled={running}
-            onChange={(e) => setIterations(e.target.value === '' ? MIN_ITERATIONS : clampIterations(e.target.value))}
+            onChange={(e) => {
+              if (e.target.value === '') {
+                setDraft('')
+                return
+              }
+              setDraft(null)
+              setIterations(clampIterations(e.target.value))
+            }}
+            onBlur={() => setDraft(null)}
             aria-label="max iterations"
           />
           <button
@@ -270,7 +300,7 @@ export default function FusionPane() {
             className={css.stepBtn}
             data-testid="fusion-iterations-inc"
             disabled={running || iterations >= MAX_ITERATIONS}
-            onClick={() => setIterations((v) => clampIterations(v + 1))}
+            onClick={() => stepIterations(1)}
             aria-label="more iterations"
           >
             +
@@ -306,9 +336,15 @@ export default function FusionPane() {
           {NOTICE_TEXT[fusion.notice] || fusion.notice}
         </div>
       ) : null}
-      {fusion.status === 'error' && fusion.error ? (
+      {fusion.error ? (
         <div className={css.error} data-testid="fusion-error">
           Fusion failed: {fusion.error}
+          {fusion.status === 'done' ? ' — showing the last persisted report' : ''}
+        </div>
+      ) : null}
+      {stale ? (
+        <div className={css.stale} data-testid="fusion-stale">
+          for an earlier send turn ({shownFor}); the next run fuses the latest one
         </div>
       ) : null}
 
@@ -316,7 +352,7 @@ export default function FusionPane() {
 
       {notFused.length ? (
         <div className={css.notFused} data-testid="fusion-not-fused">
-          not fused (below materiality threshold):{' '}
+          not fused (below materiality "{materialityMin}"):{' '}
           {notFused.map((d) => (
             <span key={d.id} className={css.notFusedItem}>
               {d.id} ({d.materiality}) {d.topic}

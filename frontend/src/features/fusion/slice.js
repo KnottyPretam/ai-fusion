@@ -8,6 +8,11 @@
 //                           documented non-crash ends on the auto-run path (see `notice`).
 //                 'error' = the stream failed: HTTP failure, an `error{message}` that is not one
 //                           of the two notices, an abort, or a stream that ended without fusion_done.
+//   error         the failure message. Non-null on 'error'; ALSO possibly non-null on a 'done'
+//                 state: after a pre-stream failure (HTTP 4xx/5xx, network error, abort before
+//                 fusion_start) the refetch re-hydrates the persisted report and carries the
+//                 failure over so it stays visible next to it. It clears on the next `sse/start`
+//                 or when a newer fusion turn hydrates.
 //   analyzing     true between analyze_start and fusion_start on the fusion stream (auto-run prefix)
 //   analyzeTurn   the AnalyzeTurn carried by analyze_done on the fusion stream (topics before refetch)
 //   notice        null | 'nothing_to_fuse' | 'analyze_degraded'   (normal end states, no fusion turn)
@@ -177,18 +182,35 @@ export function fusionReducer(s = initialFusion(), a) {
     case 'conversation/loaded': {
       const conv = a.conversation
       if (!conv) return initialFusion()
-      if (s.status === 'running') return s // never clobber a live timeline
-      const sameConv = s.conversationId === conv.id
-      // An end state of THIS conversation that persisted no fusion turn (the two notices, an HTTP
-      // failure, an abort) is kept until the next run or a conversation switch: the refetch after
-      // `error{nothing_to_fuse}` must not wipe the "nothing to fuse" message, even when an older
-      // fusion turn exists further up the conversation.
-      if (sameConv && s.status !== 'idle' && s.turnId === null) return s
+      if (s.status === 'running') return s // never clobber a live timeline (even across a conversation switch)
       const turn = newestFusionTurn(conv)
-      if (turn) {
-        if (sameConv && turn.id === s.turnId) return s
-        return stateFromTurn(turn, conv.id)
+      if (s.conversationId === conv.id) {
+        // A refetch of THIS conversation. Only these end states survive it:
+        // - the two documented notices (normal ends that persist no fusion turn): the refetch after
+        //   `error{nothing_to_fuse}` must not wipe the "nothing to fuse" message, even when an
+        //   older fusion turn exists further up the conversation;
+        if (s.status === 'done' && s.notice) return s
+        // - the report already shown (same persisted turn): identity kept;
+        if (s.status === 'done' && turn && turn.id === s.turnId) return s
+        if (s.status === 'error') {
+          if (s.turnId === null) {
+            // - a pre-stream failure (HTTP 4xx/5xx such as 409 busy, a network error, an abort
+            //   before fusion_start) left no timeline behind: re-hydrate the persisted report so it
+            //   is not hidden behind the failure, and carry the failure over (cleared by the next
+            //   sse/start or a newer fusion turn). Nothing persisted → keep the failure visible.
+            return turn ? { ...stateFromTurn(turn, conv.id), error: s.error } : s
+          }
+          // - a run that failed after fusion_start (error{message}, abort, or a stream that ended
+          //   without fusion_done) persisted no fusion turn by contract: keep the failure and the
+          //   partial timeline until the next run or a conversation switch, even when an OLDER
+          //   fusion turn exists. The one exception is the server now holding the very turn this
+          //   run announced in fusion_start: the producer ran to completion after a client-side
+          //   disconnect/abort (run-to-completion rule), so its persisted record supersedes the
+          //   failure.
+          return turn && turn.id === s.turnId ? stateFromTurn(turn, conv.id) : s
+        }
       }
+      if (turn) return stateFromTurn(turn, conv.id)
       return { ...initialFusion(), conversationId: conv.id }
     }
     case 'conversation/cleared':
