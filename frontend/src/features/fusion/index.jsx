@@ -1,5 +1,9 @@
-// PLACEHOLDER (Stage 0). The owning workstream replaces this file with the real pane and
-// registers its slice here at module scope: registerSlice('<key>', reducer, initialState).
-export default function Placeholder() {
-  return <div data-testid="placeholder-fusion" style={{ padding: 8, color: 'var(--fg-muted)' }}>fusion pane pending</div>
-}
+// W11 (fusion-ui). Registers the `fusion` slice at module scope and exports the pane that App.jsx
+// imports by convention.
+import { registerSlice } from '../../state/registry.js'
+import { fusionReducer, initialFusion } from './slice.js'
+import FusionPane from './FusionPane.jsx'
+
+registerSlice('fusion', fusionReducer, initialFusion)
+
+export default FusionPane
