@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import './index.jsx' // registers the `slots` slice at module scope
 import { applyEvents, sample } from '../../state/testing.jsx'
 import { initialState, rootReducer } from '../../state/registry.js'
-import { DEFAULT_EFFORTS, effortsFor, mergeCitations, nearestEffort, slotTurns, turnExtras, vendorModels } from './slice.js'
+import { DEFAULT_EFFORTS, SLOT_IDS, effortsFor, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, turnExtras, vendorModels } from './slice.js'
 
 const CFG = {
   slots: {
@@ -152,6 +152,41 @@ describe('slots slice: turn lifecycle', () => {
     expect(cleared.conversation).toBeNull()
   })
 
+  test('events after conversation/loaded on an idle slot are ignored (stale stream of the previous conversation)', () => {
+    const live = applyEvents('send', [...allStarted(), sample.slotDelta('claude', 'A')])
+    const conv = { id: 'c2', title: 'B', slot_config: CFG, threads: { claude: [], chatgpt: [], grok: [] }, turns: [] }
+    const loaded = rootReducer(live, { type: 'conversation/loaded', conversation: conv })
+    expect(loaded.slots.claude.status).toBe('idle')
+    const cite = { type: 'url_citation', url_citation: { url: 'https://a.example/1' } }
+    const stale = applyEvents(
+      'send',
+      [
+        sample.slotDelta('claude', 'B'),
+        { type: 'slot_reasoning', slot: 'claude', text: 'hmm' },
+        { type: 'slot_citations', slot: 'claude', items: [cite] },
+        sample.slotDone('chatgpt'),
+        { ...sample.slotError('grok', 'boom'), partial: 'half' },
+        sample.turnDone(),
+        { type: 'sse/end', feature: 'send', ok: true },
+      ],
+      { state: loaded },
+    )
+    // Identity kept: nothing of conversation A's stream reaches B's columns, badge included.
+    expect(stale.slots).toBe(loaded.slots)
+    for (const k of SLOT_IDS) expect(stale.slots[k]).toMatchObject({ status: 'idle', buffer: '', reasoning: '', citations: [], usage: null, error: null, model: null })
+    // A fresh turn in the new conversation streams normally: slot_start is the only idle -> streaming path.
+    const fresh = applyEvents('send', [sample.turnStart('t9'), sample.slotStart('claude'), sample.slotDelta('claude', 'new')], { state: stale })
+    expect(fresh.slots.claude).toMatchObject({ status: 'streaming', buffer: 'new', model: 'm', effort: 'medium' })
+    expect(fresh.slots.grok.status).toBe('idle')
+    // Same after conversation/cleared; a stale terminal error settles nothing.
+    const cleared = rootReducer(live, { type: 'conversation/cleared' })
+    const staleErr = applyEvents('send', [sample.slotDelta('claude', 'B'), { type: 'error', message: 'upstream died' }], { state: cleared })
+    expect(staleErr.slots).toBe(cleared.slots)
+    // And a delta before its slot_start (contract violation) no longer promotes the slot.
+    const early = applyEvents('send', [sample.turnStart(), sample.slotDelta('claude', 'x')])
+    expect(early.slots.claude).toMatchObject({ status: 'idle', buffer: '' })
+  })
+
   test('initial state has exactly the three slots with the documented shape', () => {
     const s = initialState()
     expect(Object.keys(s.slots).sort()).toEqual(['chatgpt', 'claude', 'grok'])
@@ -227,6 +262,45 @@ describe('derived helpers', () => {
     expect(Object.keys(grok.byTurn)).toEqual(['t1', 't2'])
     expect(grok.latest).toMatchObject({ turnId: 't2', type: 'continue', reasoning: 'why', effort: 'high' })
     expect(slotTurns(conv, 'claude').latest.turnId).toBe('t1')
-    expect(slotTurns(null, 'claude')).toEqual({ byTurn: {}, latest: null })
+    expect(slotTurns(null, 'claude')).toEqual({ byTurn: {}, latest: null, errored: [], rank: {} })
+  })
+
+  test('slotTurns lists errored turns in order; threadItems interleaves them with the thread', () => {
+    const usage = { calls: [], totals: {} }
+    const t1 = { id: 't1', type: 'send', prompt: 'q1', slot_config: CFG, responses: { claude: 'a1', chatgpt: 'b1', grok: null }, errors: { grok: 'boom' }, partial: { grok: 'half' }, usage }
+    const t2 = { id: 't2', type: 'send', prompt: 'q2', slot_config: CFG, responses: { claude: 'a2', chatgpt: 'b2', grok: 'c2' }, usage }
+    const f3 = { id: 'f3', type: 'fusion', of_analyze: 'x', max_iterations: 1, standing: [], rounds: [], final: [], exit_reason: 'stalemate', usage }
+    const t4 = { id: 't4', type: 'continue', slot: 'grok', prompt: 'q4', response: null, error: 'again', slot_config: CFG, usage }
+    const conv = { turns: [t1, t2, f3, t4] }
+    const grok = slotTurns(conv, 'grok')
+    expect(grok.errored).toEqual(['t1', 't4'])
+    expect(grok.rank).toEqual({ t1: 0, t2: 1, f3: 2, t4: 3 })
+    expect(grok.latest.turnId).toBe('t4')
+    expect(slotTurns(conv, 'claude').errored).toEqual([])
+    const m = (role, turn_id, kind = 'chat') => ({ role, content: role + turn_id, kind, turn_id })
+    const thread = [m('user', 't2'), m('assistant', 't2'), m('user', 'f3', 'fusion_challenge'), m('assistant', 'f3', 'fusion_reply')]
+    const items = threadItems(thread, grok)
+    expect(items.map((it) => (it.kind === 'error' ? `error:${it.extras.turnId}` : `${it.msg.role}:${it.msg.turn_id}`))).toEqual([
+      'error:t1',
+      'user:t2',
+      'assistant:t2',
+      'user:f3',
+      'assistant:f3',
+      'error:t4',
+    ])
+    expect(items[0].extras).toMatchObject({ error: 'boom', partial: 'half', prompt: 'q1' })
+    // No errored turns: a plain message list in thread order.
+    expect(threadItems(thread, slotTurns(conv, 'claude')).map((it) => it.kind)).toEqual(['message', 'message', 'message', 'message'])
+    // Unknown turn ids sort after every ranked error; a missing thread still lists the errors.
+    expect(threadItems([m('user', 'zz')], grok).map((it) => it.kind)).toEqual(['error', 'error', 'message'])
+    expect(threadItems(null, grok).map((it) => it.kind)).toEqual(['error', 'error'])
+  })
+
+  test('safeCitationHref admits only absolute http(s) urls', () => {
+    expect(safeCitationHref('https://www.example.org/a?b=1')).toBe('https://www.example.org/a?b=1')
+    expect(safeCitationHref('http://example.org')).toBe('http://example.org')
+    for (const bad of ['javascript:alert(1)', 'data:text/html,hi', 'file:///etc/passwd', '//example.org/x', '/relative', 'not a url', '', null, undefined, 42]) {
+      expect(safeCitationHref(bad)).toBeNull()
+    }
   })
 })

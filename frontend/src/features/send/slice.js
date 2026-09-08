@@ -9,6 +9,14 @@
 // The persisted thread (conversation.threads[slot]) is the source of truth: `conversation/loaded`
 // clears every live buffer, so after the pane refetches the column renders the stored history and
 // the per-slot extras stamped on the turn.
+//
+// Stale-stream rule: `slot_start` precedes every other per-slot event of a turn (docs/semantics.md
+// addendum; backend/features/send.py emits it before the first delta) and is the ONLY event that
+// takes a slot from `idle` to `streaming`. So a `slot_delta / slot_reasoning / slot_citations /
+// slot_done / slot_error` for a slot that is `idle` can only come from a stream whose columns were
+// already reset by `conversation/loaded` or `conversation/cleared` (the user switched conversation
+// mid-stream): it is ignored, so conversation A's reply never streams into conversation B's
+// columns. The pane side of that isolation (pending prompt, post-stream refetch) is in SendPane.
 
 export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
 // Duplicated from backend/schemas.py SLOT_VENDORS (state/* is frozen, so it lives here).
@@ -47,6 +55,18 @@ export function isSlotId(x) {
 
 export function citationUrl(item) {
   return item && item.url_citation && typeof item.url_citation.url === 'string' ? item.url_citation.url : null
+}
+
+// Annotations are third-party data (web-search results): only an absolute http(s) url may become
+// an <a href>; anything else (javascript:, data:, relative, garbage) is shown as text.
+export function safeCitationHref(url) {
+  if (typeof url !== 'string') return null
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? url : null
+  } catch {
+    return null
+  }
 }
 
 // Merge raw annotation objects, de-duplicated by url_citation.url; keeps `existing` identity when
@@ -110,22 +130,25 @@ function reduceEvent(s, ev) {
     case 'slot_delta': {
       if (!isSlotId(ev.slot) || typeof ev.text !== 'string' || !ev.text) return s
       const cur = s[ev.slot]
-      return patch(s, ev.slot, { buffer: cur.buffer + ev.text, status: cur.status === 'idle' ? 'streaming' : cur.status })
+      if (cur.status === 'idle') return s // stale stream (see header)
+      return patch(s, ev.slot, { buffer: cur.buffer + ev.text })
     }
     case 'slot_reasoning': {
       if (!isSlotId(ev.slot) || typeof ev.text !== 'string' || !ev.text) return s
       const cur = s[ev.slot]
-      return patch(s, ev.slot, { reasoning: cur.reasoning + ev.text, status: cur.status === 'idle' ? 'streaming' : cur.status })
+      if (cur.status === 'idle') return s
+      return patch(s, ev.slot, { reasoning: cur.reasoning + ev.text })
     }
     case 'slot_citations': {
       if (!isSlotId(ev.slot)) return s
       const cur = s[ev.slot]
+      if (cur.status === 'idle') return s
       const merged = mergeCitations(cur.citations, ev.items)
-      if (merged === cur.citations && cur.status !== 'idle') return s
-      return patch(s, ev.slot, { citations: merged, status: cur.status === 'idle' ? 'streaming' : cur.status })
+      if (merged === cur.citations) return s
+      return patch(s, ev.slot, { citations: merged })
     }
     case 'slot_done': {
-      if (!isSlotId(ev.slot)) return s
+      if (!isSlotId(ev.slot) || s[ev.slot].status === 'idle') return s
       return patch(s, ev.slot, {
         status: 'done',
         error: null,
@@ -137,6 +160,7 @@ function reduceEvent(s, ev) {
     case 'slot_error': {
       if (!isSlotId(ev.slot)) return s
       const cur = s[ev.slot]
+      if (cur.status === 'idle') return s
       // Partial text is kept: the deltas already in the buffer, or the server's `partial` if longer.
       const partial = typeof ev.partial === 'string' ? ev.partial : ''
       return patch(s, ev.slot, {
@@ -252,17 +276,42 @@ export function turnExtras(turn, slot) {
   return null
 }
 
-// { byTurn: {turnId -> extras}, latest: extras of the newest send/continue turn for the slot }
+// { byTurn: {turnId -> extras}, latest: extras of the newest send/continue turn for the slot,
+//   errored: turn ids (in turn order) of the send/continue turns where this slot ended in
+//   slot_error, rank: {turnId -> index in conversation.turns} for every turn }
 export function slotTurns(conversation, slot) {
   const byTurn = {}
+  const errored = []
+  const rank = {}
   let latest = null
   const turns = conversation && Array.isArray(conversation.turns) ? conversation.turns : []
-  for (const t of turns) {
+  turns.forEach((t, i) => {
+    if (t && t.id != null) rank[t.id] = i
     const x = turnExtras(t, slot)
     if (x) {
       byTurn[x.turnId] = x
       latest = x
+      if (x.error) errored.push(x.turnId)
     }
+  })
+  return { byTurn, latest, errored, rank }
+}
+
+// The column's render list: the persisted thread interleaved with the turns where this slot
+// errored. On slot_error nothing is appended to the thread (docs/semantics.md) — the failed
+// exchange lives only on the turn — so every such turn is shown at its place in the history
+// (before the first message of a later turn), not just the newest one.
+// Items: { kind: 'message', msg } | { kind: 'error', extras }.
+export function threadItems(thread, { byTurn, errored, rank }) {
+  const list = Array.isArray(thread) ? thread : []
+  if (!errored || !errored.length) return list.map((msg) => ({ kind: 'message', msg }))
+  const pos = (id) => (id != null && id in rank ? rank[id] : Infinity)
+  const out = []
+  let e = 0
+  for (const msg of list) {
+    while (e < errored.length && pos(errored[e]) < pos(msg.turn_id)) out.push({ kind: 'error', extras: byTurn[errored[e++]] })
+    out.push({ kind: 'message', msg })
   }
-  return { byTurn, latest }
+  while (e < errored.length) out.push({ kind: 'error', extras: byTurn[errored[e++]] })
+  return out
 }
