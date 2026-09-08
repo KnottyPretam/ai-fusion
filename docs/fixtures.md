@@ -106,6 +106,6 @@ Sticky-last never advances beyond the last existing file.
   `grok.defense.1/2` defend; `analyst.convergence.1` → d1 resolved, d2 standing. Round 2
   challenges d2 only: counters are at 3 → sticky `.2` for every slot (chatgpt revises again) →
   `analyst.convergence.2` → sticky `.1` (its d1 line is ignored; d1 keeps resolved, d2 standing) →
-  round == cap → exit `max_iterations`, final [d1 resolved, d2 standing]. 8 files.
+  round == cap → exit `max_iterations`, final [d1 resolved, d2 standing]. 11 files (3 chat + 1 extraction + 6 defense + 1 convergence).
 - `analyst_retry` — `analyst.extraction.1` fenced + truncated, `.2` valid; `mock.calls[-1]`'s
   last user message contains "failed validation".

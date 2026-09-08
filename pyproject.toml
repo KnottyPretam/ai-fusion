@@ -28,7 +28,7 @@ package = false
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-m 'not live' --import-mode=importlib"
-norecursedirs = [".claude", ".venv", "node_modules", "frontend", "data"]
+norecursedirs = [".claude", ".venv", "node_modules", "frontend", "data", ".hypothesis"]
 asyncio_mode = "auto"
 markers = [
   "live: hits the real OpenRouter API; needs OPENROUTER_API_KEY; never in the default run",

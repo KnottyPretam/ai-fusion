@@ -28,9 +28,25 @@ def _cfg(**efforts: str):
     return cfg
 
 
-def test_stub_catalog_counts_as_unknown_models():
-    """W1's stub raises NotImplementedError until it lands; that must read as 'unknown'."""
+def test_stub_catalog_counts_as_unknown_models(monkeypatch):
+    """A catalog that is still a stub (NotImplementedError) must read as 'unknown model'."""
+
+    def _stub(model: str):
+        raise NotImplementedError("stub")
+
+    monkeypatch.setattr("backend.llm.catalog.get_meta", _stub)
     validate_slot_config(_cfg(grok="off"))  # no exception
+
+
+def test_real_catalog_rejects_off_for_mandatory_reasoning_model():
+    """With the real offline catalog, grok-4.6 (mandatory reasoning) cannot be set to 'off'."""
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        validate_slot_config(_cfg(grok="off"))
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"] == "unsupported_effort"
 
 
 def test_unknown_model_passes(monkeypatch):
