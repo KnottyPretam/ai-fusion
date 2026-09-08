@@ -1,0 +1,3 @@
+{"id": "gen-4c328c44d6353ef9", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "I stand by my answer; no"}, "finish_reason": null}]}
+{"id": "gen-4c328c44d6353ef9", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " JSON is needed here."}, "finish_reason": "stop"}]}
+{"id": "gen-4c328c44d6353ef9", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 507, "completion_tokens": 12, "total_tokens": 519, "cost": 0.0001134, "completion_tokens_details": {"reasoning_tokens": 0}}}

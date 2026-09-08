@@ -1,0 +1,2 @@
+{"id": "gen-da8d1fd315257473", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": "stop"}]}
+{"id": "gen-da8d1fd315257473", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 505, "completion_tokens": 1, "total_tokens": 506, "cost": 0.000102, "completion_tokens_details": {"reasoning_tokens": 0}}}

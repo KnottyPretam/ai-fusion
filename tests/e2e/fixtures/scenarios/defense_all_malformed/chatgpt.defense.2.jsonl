@@ -1,0 +1,2 @@
+{"id": "gen-93da5d09ea29b0f6", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Fine, you win."}, "finish_reason": "stop"}]}
+{"id": "gen-93da5d09ea29b0f6", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 536, "completion_tokens": 4, "total_tokens": 540, "cost": 0.0001112, "completion_tokens_details": {"reasoning_tokens": 0}}}

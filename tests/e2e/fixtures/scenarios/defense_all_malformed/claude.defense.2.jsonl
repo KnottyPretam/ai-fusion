@@ -1,0 +1,5 @@
+{"id": "gen-88e0b2033225f784", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"stance\": \"maybe\", \"jus"}, "finish_reason": null}]}
+{"id": "gen-88e0b2033225f784", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "tification\": \"x\", \"revis"}, "finish_reason": null}]}
+{"id": "gen-88e0b2033225f784", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ed_claim\": null, \"confid"}, "finish_reason": null}]}
+{"id": "gen-88e0b2033225f784", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ence\": 0.5}"}, "finish_reason": "stop"}]}
+{"id": "gen-88e0b2033225f784", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 501, "completion_tokens": 21, "total_tokens": 522, "cost": 0.0001212, "completion_tokens_details": {"reasoning_tokens": 0}}}

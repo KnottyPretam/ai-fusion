@@ -1,0 +1,12 @@
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"stance\": \"defend\", \"ju"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "stification\": \"The datas"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "heet's GYRO_RANGE regist"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "er (0x0F) lists code 0x0"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "0 as 2000 deg/s, the wid"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "est setting; nothing the"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " peers cite contradicts "}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "that figure.\", \"revised_"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "claim\": null, \"confidenc"}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "e\": 0.85, \"persuaded_by\""}, "finish_reason": null}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": ": null}"}, "finish_reason": "stop"}]}
+{"id": "gen-22f858cc12600091", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 535, "completion_tokens": 62, "total_tokens": 597, "cost": 0.000169, "completion_tokens_details": {"reasoning_tokens": 0}}}

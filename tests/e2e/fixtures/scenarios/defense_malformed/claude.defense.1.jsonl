@@ -1,0 +1,4 @@
+{"id": "gen-29e859013638821e", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"stance\": \"defend\", \"ju"}, "finish_reason": null}]}
+{"id": "gen-29e859013638821e", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "stification\": \"The datas"}, "finish_reason": null}]}
+{"id": "gen-29e859013638821e", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "heet's GYRO_"}, "finish_reason": "length"}]}
+{"id": "gen-29e859013638821e", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 535, "completion_tokens": 15, "total_tokens": 550, "cost": 0.000122, "completion_tokens_details": {"reasoning_tokens": 0}}}

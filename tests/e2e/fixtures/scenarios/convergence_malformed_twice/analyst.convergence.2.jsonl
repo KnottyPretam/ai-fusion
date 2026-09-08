@@ -1,0 +1,4 @@
+{"id": "gen-014e9de960025a83", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"statuses\": [{\"divergen"}, "finish_reason": null}]}
+{"id": "gen-014e9de960025a83", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ce_id\": \"d1\", \"status\": "}, "finish_reason": null}]}
+{"id": "gen-014e9de960025a83", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"maybe\"}]}"}, "finish_reason": "stop"}]}
+{"id": "gen-014e9de960025a83", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 501, "completion_tokens": 15, "total_tokens": 516, "cost": 0.0001152, "completion_tokens_details": {"reasoning_tokens": 0}}}

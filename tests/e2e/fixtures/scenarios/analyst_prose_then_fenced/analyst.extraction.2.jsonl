@@ -1,0 +1,63 @@
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "```json\n{\n  \"agreements\""}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": ": [\n    {\n      \"topic\":"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " \"Upper gyroscope range\""}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": ",\n      \"statement\": \"Th"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "e gyroscope's highest se"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "lectable full-scale rang"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "e is 2000 deg/s.\",\n     "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " \"models\": [\n        \"R1"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\",\n        \"R3\"\n      ]\n"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "    }\n  ],\n  \"divergence"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "s\": [\n    {\n      \"id\": "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"d1\",\n      \"topic\": \"Ma"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ximum gyroscope full-sca"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "le range\",\n      \"positi"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ons\": [\n        {\n      "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "    \"model\": \"R1\",\n     "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "     \"claim\": \"The gyros"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "cope full-scale range is"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " selectable up to 2000 d"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "eg/s.\",\n          \"evide"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "nce_cited\": null\n       "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " },\n        {\n          "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"model\": \"R2\",\n         "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " \"claim\": \"The gyroscope"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " tops out at 1000 deg/s "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "full scale.\",\n          "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"evidence_cited\": null\n "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "       },\n        {\n    "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "      \"model\": \"R3\",\n   "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "       \"claim\": \"The gyr"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "oscope supports selectab"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "le ranges from 125 deg/s"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " up to 2000 deg/s.\",\n   "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "       \"evidence_cited\":"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " null\n        }\n      ],"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\n      \"materiality\": \"h"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "igh\"\n    },\n    {\n      "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"id\": \"d2\",\n      \"topic"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\": \"Lowest selectable gy"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "roscope range\",\n      \"p"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ositions\": [\n        {\n "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "         \"model\": \"R1\",\n"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "          \"claim\": \"Does"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " not state a lower bound"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "; describes the range on"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ly as selectable up to 2"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "000 deg/s.\",\n          \""}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "evidence_cited\": null\n  "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "      },\n        {\n     "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "     \"model\": \"R2\",\n    "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "      \"claim\": \"Does not"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " state a lower bound.\",\n"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "          \"evidence_cite"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "d\": null\n        },\n    "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "    {\n          \"model\":"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " \"R3\",\n          \"claim\""}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": ": \"The lowest selectable"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " range is 125 deg/s.\",\n "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "         \"evidence_cited"}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\": null\n        }\n      "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "],\n      \"materiality\": "}, "finish_reason": null}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\"low\"\n    }\n  ]\n}\n```"}, "finish_reason": "stop"}]}
+{"id": "gen-0518a24571af488a", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 509, "completion_tokens": 372, "total_tokens": 881, "cost": 0.0004738, "completion_tokens_details": {"reasoning_tokens": 0}}}

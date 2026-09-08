@@ -1,0 +1,13 @@
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Here is my verdict:\n{\"st"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ance\": \"defend\", \"justif"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ication\": \"The datasheet"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "'s GYRO_RANGE register ("}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "0x0F) lists code 0x00 as"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " 2000 deg/s, the widest "}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "setting; nothing the pee"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "rs cite contradicts that"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " figure.\", \"revised_clai"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "m\": null, \"confidence\": "}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "0.85, \"persuaded_by\": nu"}, "finish_reason": null}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ll}\nThanks for asking."}, "finish_reason": "stop"}]}
+{"id": "gen-c4ebd82625f237e4", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 517, "completion_tokens": 72, "total_tokens": 589, "cost": 0.0001754, "completion_tokens_details": {"reasoning_tokens": 0}}}

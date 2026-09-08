@@ -1,0 +1,24 @@
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\n  \"stance\": \"revise\",\n"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "  \"justification\": \"Both"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " peers state the gyrosco"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "pe range is selectable u"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "p to 2000 deg/s, and the"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " datasheet's GYRO_RANGE "}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "register (0x0F) confirms"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " codes 0x00 through 0x04"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " for 2000, 1000, 500, 25"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "0 and 125 deg/s. I had q"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "uoted the 1000 deg/s int"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ermediate setting as the"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " maximum, which is incor"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "rect.\",\n  \"revised_claim"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\": \"The gyroscope full-s"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "cale range is selectable"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " up to 2000 deg/s.\",\n  \""}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "confidence\": 0.9,\n  \"per"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "suaded_by\": \"the specifi"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "c GYRO_RANGE register co"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "des and the 2000 deg/s m"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "aximum cited by both pee"}, "finish_reason": null}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "rs\"\n}"}, "finish_reason": "stop"}]}
+{"id": "gen-eb83929027743b2b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 518, "completion_tokens": 134, "total_tokens": 652, "cost": 0.0002376, "completion_tokens_details": {"reasoning_tokens": 0}}}

@@ -1,0 +1,6 @@
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Here is my comparison of"}, "finish_reason": null}]}
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " the three reviewers. Al"}, "finish_reason": null}]}
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "l three agree on the upp"}, "finish_reason": null}]}
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "er range; R2 disagrees o"}, "finish_reason": null}]}
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "n the maximum."}, "finish_reason": "stop"}]}
+{"id": "gen-b407dbb01472f46b", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 522, "completion_tokens": 28, "total_tokens": 550, "cost": 0.0001324, "completion_tokens_details": {"reasoning_tokens": 0}}}
