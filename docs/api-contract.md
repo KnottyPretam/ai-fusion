@@ -13,7 +13,8 @@ line, `type` inside, `X-Accel-Buffering: no`).
 `{"detail": {"error": "<code>", ...extra}}`, always raised through `backend/api_errors.py`:
 `not_found()` (404, `what`), `conflict("busy")`, `conflict("incomplete_send_turn", missing=[...])`,
 `conflict("nothing_to_fuse")`, `conflict("analyze_degraded")`, `conflict("no_send_turn")`,
-`unprocessable("<code>", ...)` (422). Tests assert `r.status_code` and
+`unprocessable("<code>", ...)` (422; codes in use: `empty_prompt`, `not_a_send_turn`,
+`not_an_analyze_turn`, `unsupported_effort`, `invalid_max_iterations`). Tests assert `r.status_code` and
 `r.json()["detail"]["error"]`; FastAPI's own request-body validation keeps its default
 `{"detail": [...]}` list (the frontend renders it as `code: "validation_error"`).
 
