@@ -72,6 +72,10 @@ def busy_guard(conv_id: str) -> AbstractAsyncContextManager[None]:
     release it early. Re-entrant per task: implemented with a contextvars.ContextVar of held ids
     plus a module-level set; entering for an id already held by the current task (or a task
     created from it) is a no-op. This is what lets run_fusion call run_analyze.
+    Enter the guard as the LAST pre-check, after every 404/409/422 check, so a nested run_analyze
+    never raises a pre-stream error while the outer guard is held. A guard object that entered as
+    a re-entrant no-op exits as a no-op; only the object that actually acquired the id releases
+    it (W2 test: enter twice in one task, exit the inner one, the id is still busy elsewhere).
 
     The store keeps NO process-level cache of documents or the index: every call resolves
     settings().data_dir afresh (tests switch DATA_DIR per test). Only per-id asyncio.Locks and

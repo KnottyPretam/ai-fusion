@@ -8,7 +8,7 @@ set -euo pipefail
 branch="$1"; shift
 base=$(git merge-base main "$branch")
 changed=$(git diff --name-only "$base" "$branch")
-frozen='^(backend/(schemas|config|main|sse|api_errors)\.py|backend/[a-z_]+/__init__\.py|pyproject\.toml|uv\.lock|\.python-version|frontend/(package\.json|package-lock\.json|vite\.config\.js|index\.html|playwright\.config\.js)|frontend/src/(App\.jsx|main\.jsx|index\.css|App\.css|test-setup\.js|smoke\.test\.jsx)|frontend/src/(state|api)/|tests/conftest\.py|tests/helpers\.py|tests/test_schemas\.py|tests/test_smoke\.py|tests/test_config\.py|docs/|scripts/|start\.sh|README\.md|PLAN\.md|CLAUDE\.md|\.env\.example|\.gitignore)'
+frozen='^(backend/(schemas|config|main|sse|api_errors)\.py|backend/[a-z_]+/__init__\.py|pyproject\.toml|uv\.lock|\.python-version|frontend/(package\.json|package-lock\.json|vite\.config\.js|index\.html|playwright\.config\.js)|frontend/src/(App\.jsx|main\.jsx|index\.css|App\.css|test-setup\.js|smoke\.test\.jsx)|frontend/src/(state|api)/|tests/conftest\.py|tests/helpers\.py|tests/test_schemas\.py|tests/test_smoke\.py|tests/test_config\.py|docs/|scripts/check_freeze\.sh|start\.sh|README\.md|PLAN\.md|CLAUDE\.md|\.env\.example|\.gitignore)'
 rc=0; n=0
 while IFS= read -r f; do
   [ -z "$f" ] && continue

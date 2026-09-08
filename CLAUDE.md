@@ -37,7 +37,7 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 
 **`store/conversations.py`** — the ONLY module that touches disk
 - One JSON file per conversation under `DATA_DIR`, atomic tmp+rename, per-conversation lock around the read-modify-write only, sidecar index for listing
-- `create()` stamps the `anon_map` (a random permutation) once; it is never re-derived
+- `create()` stamps the `anon_map` once (fixed R1=claude / R2=chatgpt / R3=grok in mock mode so replay is deterministic; a random permutation live); it is never re-derived
 - Generic `append_to_thread()` / `append_turn()`; features construct their own turn objects and never edit the store
 
 **`anon.py`** — the anonymization firewall
@@ -54,12 +54,12 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 - Pure layout. Imports each pane by convention from `features/<x>/index.jsx`; never edited after Stage 0
 
 **`state/store.jsx`, `state/registry.js`, `state/reducers.js`** (FROZEN)
-- Slot-keyed store (`useReducer` + context). Slice keys: `conversation, conversations, slotConfig, models, slots, analyze, fusion, meter`
+- Slot-keyed store (`useReducer` + context). Core slices: `conversation, conversations, slotConfig, models, streams`; feature slices: `slots, analyze, fusion, meter`
 - `registerSlice(key, reducer, initial)`: every slice receives every action; features register their slice from their own `index.jsx`
 
 **`api/sse.js`, `api/http.js`, `api/runStream.js`** (FROZEN)
 - Buffered SSE reader (`decode(value, {stream:true})`, split on `\n\n`, skip `:` lines, AbortController) — fixes the unbuffered-chunk bug llm-council's `api.js` had
-- `runStream(feature, url, body)` checks `response.ok` first and dispatches every event verbatim as `{type:'sse', feature, event}`
+- `runStream(dispatch, feature, url, body, {onEvent})` / `useRunStream()(feature, url, body)` checks `response.ok` first and dispatches every event verbatim as `{type:'sse', feature, event}`
 
 **`features/send/`** — three live columns (one per slot), each with its own model/effort controls, its own solo composer, and the persisted thread with fusion messages visually marked
 **`features/analyze/`** — Analyze button + *Similar* / *Differs* report (R-labels only)
@@ -151,7 +151,7 @@ ANALYZE: latest send turn, labelled R1/R2/R3 → analyst (strict JSON) → {agre
     ↓  (on demand, max_iterations from the UI)
 FUSION: for each standing divergence, every label with a position is challenged in its own thread
         → defend | revise (flagged if unjustified) → analyst convergence check
-        → exit: converged | stalemate | max_iterations   (standing items reported with both sides)
+        → exit: converged | stalemate | max_iterations | error   (standing items reported with both sides)
     ↓
 Footer meter: tokens / $ / latency per feature; threads + turns persisted as JSON per conversation
 ```

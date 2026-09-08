@@ -71,10 +71,28 @@ def _no_real_key(request, monkeypatch):
     """Non-live tests never see a real key and always run in mock mode, even if the shell exports
     one. Live tests (-m live) take OPENROUTER_API_KEY from the shell or .env (config loads .env
     lazily with override=False); tests/live/conftest.py sets MOCK_OPENROUTER=0 and skips when the
-    key is absent."""
+    key is absent. Transport tests (W1) that exercise the real httpx path offline set
+    `monkeypatch.setenv("MOCK_OPENROUTER", "0")` and a fake key inside the test, then use
+    `respx.mock` / `@respx.mock` normally (routers nest under the autouse blocker)."""
     if "live" not in request.keywords:
         monkeypatch.setenv("OPENROUTER_API_KEY", "")
         monkeypatch.setenv("MOCK_OPENROUTER", "1")
+        # A developer .env must not leak defaults into the offline suite.
+        for k in (
+            "SLOT_CLAUDE_MODEL",
+            "SLOT_CLAUDE_EFFORT",
+            "SLOT_CHATGPT_MODEL",
+            "SLOT_CHATGPT_EFFORT",
+            "SLOT_GROK_MODEL",
+            "SLOT_GROK_EFFORT",
+            "ANALYST_MODEL",
+            "FUSION_MAX_ITERATIONS",
+            "MATERIALITY_MIN",
+            "GROUNDED_DEFAULT",
+            "MOCK_FIXTURES_DIR",
+            "MOCK_RECORD_DIR",
+        ):
+            monkeypatch.delenv(k, raising=False)
     yield
 
 

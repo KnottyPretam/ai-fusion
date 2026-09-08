@@ -53,7 +53,7 @@ Divergences below threshold are shown by the UI as "not fused". Loop:
 for round in 1..max_iterations:
     for each d in standing whose status after the previous round is "standing" (all in round 1),
         in standing order, for EVERY label L with a Position on d:
-        challenge L in its own thread (sequential per slot in id order; slots in parallel):
+        challenge L in its own thread (sequential per slot in standing order; slots in parallel):
           messages = thread(slot_of(L)) + user(challenge_prompt(d, L, peers=render_peer_block(...)))
           complete_json(role=slot, purpose="defense", model/effort of that slot, DefenseReply)
           append [fusion_challenge(user), fusion_reply(assistant, raw verbatim)] to that thread (meta={d, round})
@@ -72,14 +72,16 @@ for round in 1..max_iterations:
 ```
 A divergence marked `resolved`/`resolved_unjustified` keeps that status in every later
 `post_round_status` and is not re-challenged; `post_round_status` and `final` always list every
-id in `standing`, in `standing` order; `final` = the last `post_round_status` (all `standing`
-after a stalemate/error exit). `resolved_unjustified` is decided in the round the analyst first
+id in `standing`, in `standing` order; `final` = the last `post_round_status` (ids resolved in an
+earlier round keep that status; ids never resolved are `standing`, so a round-1 stalemate/error
+exit yields all `standing`). `resolved_unjustified` is decided in the round the analyst first
 marks the divergence resolved: if every `revise` exchange on that divergence across all rounds
 of this turn is flagged, the status is `resolved_unjustified`. Convergence prompt payload = one
 object per standing divergence with ≥1 revise this round: `{"divergence_id", "topic", "claims":
 {"R1": current_claim, …}}`, instructing the analyst to answer only `resolved|standing`; response
-`ConvergenceCheck{statuses}`; ids missing from the reply, ids not sent, or unknown status values
-→ `standing`. `FusionTurn.usage` covers fusion calls only; an auto-run AnalyzeTurn carries its
+`ConvergenceCheck{statuses}`; standing ids missing from the reply or carrying an unknown status stay
+`standing`; ids the analyst returns that were not sent this round are ignored (a previously
+resolved id keeps its status). `FusionTurn.usage` covers fusion calls only; an auto-run AnalyzeTurn carries its
 own. Fusion thread messages carry `turn_id` = the FusionTurn id and `meta={"divergence_id": d,
 "round": n}`; `fusion_reply.content` = `raw_text` verbatim; defense and convergence calls use
 `complete_json(retries=1)` (silent internal retry). The challenge prompt wraps `{your_claim}`,
@@ -90,7 +92,9 @@ Extraction position; `latest_justification(d, L)` = justification of L's most re
 else `evidence_cited` or "(none given)". The challenge prompt contains Appendix A's
 "only if a specific point persuades you… caving without cause is failure" clause and asks for
 `persuaded_by`. Round cost = (#standing × #labels with positions) slot calls + ≤1 analyst call.
-`final` lists exactly the `standing` ids with their last status. Timeline is derived client-side
+`final` lists exactly the `standing` ids with their last status. `standing` uses the
+CONVERSATION's slot_config at Fusion time (stamped on the FusionTurn); the UI's "not fused" marker
+and Fusion-button rule use the current `slotConfig` slice, so they match the next Fusion run. Timeline is derived client-side
 from `rounds`.
 
 **Effort.** `reasoning.build` never raises: `off` → `{"enabled": false}` unless
@@ -121,7 +125,8 @@ goldens, Playwright and the start.sh demo are deterministic), a random permutati
 persisted, stripped from every API response, never shown in the UI (Analyze/Fusion show
 R1/R2/R3 only). `scrub` replaces matches with `[model]`. Leak tests
 assert that Triplex-authored messages (analyst prompts, challenge prompts, convergence prompts)
-never contain `FORBIDDEN_IDENTITY_STRINGS` or `anon_map` values — checked on vendor-name-free
+never contain `FORBIDDEN_IDENTITY_STRINGS` (word-bounded), `FORBIDDEN_MODEL_CODENAMES` in slug
+context (`-luna`, `-sol`, `-astra`), or `anon_map` values (`scrub` handles both lists) — checked on vendor-name-free
 fixtures plus a negative fixture whose *user prompt* says "Claude" and must still pass (user
 prompts and a slot's own prior replies are out of scope). `scrub` is applied only inside
 `render_peer_block` to claims/justifications; runtime `find_leaks` logs a warning, never blocks.
@@ -148,6 +153,15 @@ TURN (never in threads) and the column shows them after refetch. `append_to_thre
 for send and continue; `max_tokens` keys `"send"` / `"continue"`. Producers are
 `asyncio.create_task`s writing to one Queue; the generator only drains it, so a closed consumer
 never cancels producers or releases the busy guard early (the producer task's `finally` does).
+
+**Producer model for every feature and the busy guard.** Analyze and Fusion use the same shape as
+Send: the feature runs every pre-check (404/409/422) first, enters `busy_guard` LAST (so the nested
+`run_analyze` inside `run_fusion` never raises a pre-stream error while the outer guard is held),
+spawns ONE `asyncio.create_task` that performs all LLM calls and persistence and releases the guard
+in its `finally` after the last persistence write, and the generator only drains that task's
+Queue. On client disconnect the task runs to completion and persists (turn + `fusion_done` state).
+A guard object that entered as a re-entrant no-op exits as a no-op; only the object that actually
+acquired the id releases it.
 
 **DEFAULT_SLOT_CONFIG.** Never handed out directly: `store.create` uses
 `settings().default_slot_config` (fresh, env-overridable), `update_slot_config` replaces the

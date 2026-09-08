@@ -41,8 +41,10 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   (`from ..llm import catalog` inside the handler) so tests can
   `monkeypatch.setattr("backend.llm.catalog.get_meta", ...)`.
 - `GET /api/models` → 200 bare JSON array of `ModelMeta` (offline fixture in mock mode).
-- Request bodies: `POST …/send {prompt: str}` (blank → 422 `{error:"empty_prompt"}`);
-  `POST …/slots/{slot}/continue {prompt}` (unknown slot → 404);
+- Request bodies: `POST …/send {prompt: str}` (blank → 422 `{detail:{error:"empty_prompt"}}` via
+  `unprocessable("empty_prompt")`); `POST …/slots/{slot}/continue {prompt}` — the router declares
+  `slot: str` and raises `api_errors.not_found("slot")` when `slot not in SLOT_IDS` (a `SlotId`
+  Literal path param would produce a 422 validation array instead);
   `POST …/analyze {of_turn?: str, force?: bool=false}`;
   `POST …/fusion {of_analyze?: str, max_iterations: int}` (required, 1..5; pydantic 422 otherwise).
 - `POST …/send {prompt}`, `POST …/slots/{slot}/continue {prompt}` (`turn_start.feature` is
@@ -58,7 +60,11 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
 - `POST …/fusion {of_analyze?, max_iterations (required, 1..5)}` → (if Analyze must be auto-run:
   the full `analyze_*` sequence first) `fusion_start{turn_id, of_analyze, max_iterations,
   standing}`, `round_start{round}`, `exchange{round, …Exchange}`, `round_done{round,
-  post_round_status, changed}`, `fusion_done{turn, exit_reason, usage}`.
+  post_round_status, changed}`, `fusion_done{turn, exit_reason, usage}` (`usage` = `turn.usage`,
+  a FeatureUsage). `fusion_done` is emitted for EVERY persisted FusionTurn, including
+  `exit_reason:"error"`. On the auto-run path the stream may instead end after `analyze_done` /
+  `analyze_degraded` with the terminal `error{message:"nothing_to_fuse"|"analyze_degraded"}` (no
+  fusion turn persisted); the fusion pane treats these as normal, non-crash end states.
 
 
 ### `backend/schemas.py` (pydantic v2, `SCHEMA_VERSION = 1`)
@@ -88,8 +94,10 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
 - Turns (all have `id: str` uuid4 minted by the feature *before* its first SSE event, `ts` ISO
   UTC `Z`, `slot_config` as-run stamp, `usage: FeatureUsage`):
   `SendTurn{type:"send", prompt, responses: dict[SlotId, str|None], errors: dict[SlotId,str],
-  partial: dict[SlotId,str]}`; `ContinueTurn{type:"continue", slot, prompt, response: str|None,
-  error: str|None}`; `AnalyzeTurn{type:"analyze", of_turn: str, extraction: Extraction|None,
+  partial: dict[SlotId,str], reasoning: dict[SlotId,str], citations: dict[SlotId,list[dict]],
+  truncated: dict[SlotId,bool], effort_applied: dict[SlotId,Effort]}`; `ContinueTurn{type:"continue",
+  slot, prompt, response: str|None, error: str|None, reasoning: str|None, citations: list[dict],
+  truncated: bool, effort_applied: Effort|None}`; `AnalyzeTurn{type:"analyze", of_turn: str, extraction: Extraction|None,
   status:"ok"|"degraded", error: str|None, raw_attempts: list[str]}`; `FusionTurn{type:"fusion",
   of_analyze: str, max_iterations, standing: list[str], rounds: list[FusionRound],
   final: list[RoundStatus], exit_reason:"converged"|"stalemate"|"max_iterations"|"error"}`;
@@ -99,7 +107,7 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   dict[SlotId, list[ThreadMessage]], turns: list[Turn], anon_map: dict[Label, SlotId]}`;
   `ConversationPublic` = same minus `anon_map`; `to_public(conv)`; `ConversationSummary{id,
   title, created_at, updated_at, turn_count}`; `new_anon_map(rng=None)` (shuffled permutation,
-  stamped by `store.create`, never re-derived).
+  stamped by `store.create` in LIVE mode; mock mode stamps `store.MOCK_ANON_MAP`; never re-derived).
 - `Delta{kind:"text"|"reasoning"|"citations"|"done"|"error", text, items, usage, finish_reason,
   truncated, generation_id, code, message, error_type}`.
 - `ModelMeta{id, name, vendor, context_length, price_prompt, price_completion (USD/token),
@@ -125,8 +133,12 @@ MOCK_FIXTURES_DIR, MOCK_RECORD_DIR, MOCK_DELAY_MS=0, DEFAULT_SLOT_CONFIG, MAX_IT
 MAX_TOKENS_STAGE={send:8000, continue:8000, extraction:4000, defense:2000, convergence:1000},
 SESSION_COST_CAP_USD (default 10; live calls refused once exceeded), REQUEST_TIMEOUT_S=300,
 CATALOG_TTL_S=86400, GROUNDED_ENGINE=None, GROUNDED_MAX_RESULTS=5, LOG_LEVEL,
-FORBIDDEN_IDENTITY_STRINGS` (slot ids, configured slugs, vendor/product names; matched
-case-insensitively on word boundaries). Feature-private constants live in the feature module.
+FORBIDDEN_IDENTITY_STRINGS` (vendor/product names + slot ids, matched case-insensitively on word
+boundaries) and `FORBIDDEN_MODEL_CODENAMES` (`luna`, `sol`, `astra`: matched only in slug context,
+i.e. preceded by `-`). `settings().default_slot_config` is a fresh `DEFAULT_SLOT_CONFIG` copy with
+`.env` overrides `SLOT_<CLAUDE|CHATGPT|GROK>_MODEL / _EFFORT`, `ANALYST_MODEL`,
+`FUSION_MAX_ITERATIONS`, `MATERIALITY_MIN`, `GROUNDED_DEFAULT` (spec R2). Feature-private
+constants live in the feature module.
 
 
 ### Cross-workstream function signatures (frozen; Stage 0 ships stub modules raising `NotImplementedError` so every worktree imports cleanly; importers import lazily inside handlers and monkeypatch in tests)
@@ -147,10 +159,14 @@ def build(effort: Effort | None, meta: ModelMeta | None) -> tuple[dict | None, E
 # backend/llm/stream.py                         (W1)
 def parse_sse_lines(lines: Iterable[str]) -> Iterator[Delta]
 # backend/store/conversations.py                (W2)
-async def create(slot_config: SlotConfig | None = None, title: str | None = None) -> Conversation
+async def create(slot_config: SlotConfig | None = None, title: str | None = None,
+                 *, anon_map: dict[Label, SlotId] | None = None) -> Conversation
+    # anon_map (tests only) stamped verbatim; else MOCK_ANON_MAP in mock mode, new_anon_map() live
 async def load(conv_id: str) -> Conversation | None
 async def list_summaries() -> list[ConversationSummary]
-async def delete(conv_id) / rename(conv_id, title) / update_slot_config(conv_id, cfg) -> Conversation
+async def delete(conv_id: str) -> bool                       # False when missing (router -> 404)
+async def rename(conv_id: str, title: str) -> Conversation      # raises api_errors.not_found() when missing
+async def update_slot_config(conv_id: str, cfg: SlotConfig) -> Conversation  # replaces the object; not_found() when missing
 async def append_to_thread(conv_id, slot: SlotId, msgs: list[ThreadMessage]) -> None   # atomic batch
 async def append_turn(conv_id, turn: Turn) -> None
 def busy_guard(conv_id) -> AsyncContextManager   # second feature call on same conv → 409 busy
@@ -165,7 +181,9 @@ async def run_analyze(conv_id, *, of_turn: str | None = None, force: bool = Fals
 # backend/features/fusion.py                    (W6)
 async def run_fusion(conv_id, *, of_analyze: str | None, max_iterations: int) -> AsyncIterator[dict]
 ```
-Feature generators yield the SSE event dicts below; routers wrap them in `StreamingResponse`.
+Feature generators yield the SSE event dicts below; routers `return await sse.sse_response(gen)`
+(never a bare `StreamingResponse`). Every pre-check runs before the first yield; `busy_guard` is
+entered LAST, after every 404/409/422 check.
 
 
 ### Frontend contract (`src/state`, `src/api` — frozen W8 code; this text matches it verbatim)
@@ -203,13 +221,17 @@ conversationId, patch, current)` (optimistic `slotConfig/update`, PUT of the mer
 or `'validation_error'` for FastAPI validation arrays. Panes that load on mount must swallow
 rejections (`loadModels(dispatch).catch(() => {})`) — the frozen smoke test renders `<App/>`
 under Node's fetch, where a relative URL rejects. The pane that opened a stream calls
-`loadConversation(dispatch, id)` once after `runStream` resolves.
+`loadConversation(dispatch, id)` once after `runStream` resolves; W9 also calls
+`loadConversations(dispatch)` after the first send of a conversation resolves (the backend
+auto-titles it), and the sidebar (W12) renders `state.conversation.title` for the selected row.
 
 **Derived rules for panes:** latest send turn = last element of `conversation.turns` with
 `type === 'send'`; it is complete when every slot in `responses` is non-null (Analyze button
-rule). Fusion button enabled when an `analyze` turn with `status === 'ok'` exists for that send
-turn and its `standing` set (materiality rank ≥ `slot_config.materiality_min`, `RANK = {low:0,
-medium:1, high:2}` duplicated locally) is non-empty; iterations stepper default =
+rule). Fusion button enabled when the latest send turn is complete and no ok `analyze` turn for it
+has an empty `standing` set (materiality rank ≥ the current `slotConfig.materiality_min`,
+`RANK = {low:0, medium:1, high:2}` duplicated locally) — when no ok analyze exists the stream
+auto-runs Analyze first and the pane renders the `analyze_*` prefix; disabled while any stream
+is `streaming`; iterations stepper default =
 `slotConfig.max_iterations`, range 1..5. Per-column model dropdown = `models.items.filter(m =>
 m.vendor === SLOT_VENDORS[slot])` plus the currently configured slug if absent, with
 `SLOT_VENDORS = {claude:'anthropic', chatgpt:'openai', grok:'x-ai'}` duplicated inside
@@ -264,8 +286,12 @@ jest-dom,user-event}`, `jsdom`, `@playwright/test`, `react-markdown`, `remark-gf
   every test a fresh event loop, so a module-level client raises "Event loop is closed".
 - `ModelMeta.vendor` = the slug prefix before the first `/` (`anthropic`, `openai`, `x-ai`, …),
   never OpenRouter's display name; `name` = OpenRouter `name`. `schemas.SLOT_VENDORS` maps
-  slots to vendors. `llm/fixtures/models.json` must contain at least the ten slugs in
-  `docs/decisions.md` with their verified `reasoning` blocks and `supported_parameters`.
+  slots to vendors. `llm/fixtures/models.json` must contain at least the eight distinct slugs in
+  `docs/decisions.md` (three defaults, the analyst, two flagships, two budget) with their verified
+  `reasoning` blocks and `supported_parameters`.
+- Transport tests (W1) that exercise the real httpx path offline do `monkeypatch.setenv(
+  "MOCK_OPENROUTER", "0"); monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")` inside the
+  test and then use `respx.mock` / `@respx.mock` normally — routers nest under the autouse blocker.
 
 ### Store (`backend/store`, W2)
 
@@ -283,6 +309,7 @@ jest-dom,user-event}`, `jsdom`, `@playwright/test`, `react-markdown`, `remark-gf
 ### Mock capture (`backend/llm/mock.py`)
 
 `mock.calls` records every transport call in order (`{role, purpose, model, messages, reasoning,
-response_format, plugins, max_tokens, fixture}`); `mock.reset()` clears counters and calls.
+response_format, plugins, max_tokens, fixture}` — dicts, so `mock.calls[i]["fixture"]`);
+`mock.reset()` clears counters and calls.
 `MOCK_SCENARIO` and `MOCK_FIXTURES_DIR` are read from `settings()` on every lookup; tests switch
 scenario with `monkeypatch.setenv("MOCK_SCENARIO", "stalemate")`.

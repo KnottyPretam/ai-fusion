@@ -300,8 +300,8 @@ def to_public(conv: Conversation) -> ConversationPublic:
 
 
 def new_anon_map(rng: random.Random | None = None) -> dict[Label, SlotId]:
-    """A random, per-conversation R-label -> slot permutation. Created once by store.create,
-    persisted, and never re-derived from list position."""
+    """A random, per-conversation R-label -> slot permutation. Stamped once by store.create in
+    LIVE mode (mock mode stamps store.MOCK_ANON_MAP), persisted, never re-derived from position."""
     slots = list(SLOT_IDS)
     (rng or random).shuffle(slots)
     return dict(zip(LABELS, slots, strict=True))
