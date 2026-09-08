@@ -17,3 +17,4 @@
 .rename { flex: 1 1 auto; min-width: 0; padding: 3px 4px; border: 1px solid var(--primary); border-radius: 3px; }
 .empty { padding: 12px 10px; color: var(--fg-muted); font-style: italic; }
 .error { margin: 4px 10px; padding: 2px 6px; color: var(--err); background: var(--err-soft); border: 1px solid var(--err); border-radius: 4px; font-size: 12px; }
+.hint { padding: 4px 10px; color: var(--fg-muted); font-style: italic; font-size: 12px; }

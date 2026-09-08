@@ -1,11 +1,18 @@
 // Sidebar (W12): conversation list. Loads the list on mount, creates / selects / renames /
-// deletes through the frozen loaders in api/http.js, and renders state.conversation.title for
-// the selected row (the backend auto-titles a conversation on its first Send and W9 refreshes
-// the list afterwards). Uses the frozen conversation / conversations slices; no slice of its own.
+// deletes through the frozen loaders / primitives in api/http.js, and renders state.conversation
+// (title, turn count, updated_at) for the selected row (the backend auto-titles a conversation on
+// its first Send and W9 refreshes the list afterwards; later streams only refetch the
+// conversation). New / select / delete are disabled while ANY feature stream is running: the
+// pane that opened the stream refetches the conversation it captured when the stream ends, so a
+// switch mid-stream would snap back and book the in-flight usage into the wrong conversation.
+// Uses the frozen conversation / conversations / streams slices; no slice of its own.
 import { useEffect, useRef, useState } from 'react'
-import { createConversation, deleteConversation, loadConversation, loadConversations, renameConversation } from '../../api/http.js'
+import { api, createConversation, deleteConversation, loadConversations, renameConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import css from './conversations.module.css'
+
+export const STREAM_FEATURES = ['send', 'analyze', 'fusion']
+const CREATING = Symbol('creating')
 
 export function fmtWhen(ts) {
   if (!ts) return ''
@@ -22,14 +29,27 @@ export default function Sidebar() {
   const dispatch = useDispatch()
   const conversations = useSlice('conversations') || []
   const current = useSlice('conversation')
+  const streams = useSlice('streams') || {}
+  const busy = STREAM_FEATURES.some((k) => streams[k] && streams[k].status === 'streaming')
+  const [listLoaded, setListLoaded] = useState(false) // first list request settled (ok or not)
   const [editing, setEditing] = useState(null) // {id, title} while renaming
   const [confirming, setConfirming] = useState(null) // id awaiting delete confirmation
   const [error, setError] = useState(null)
   const editingRef = useRef(null)
   editingRef.current = editing
+  // The user's latest selection intent: set synchronously by the handlers (so an in-flight
+  // request can tell it was superseded) and synced from the store when the selection changes
+  // elsewhere (the Send composer creating a conversation).
+  const selectedRef = useRef(current ? current.id : null)
+  const selectSeq = useRef(0)
+  useEffect(() => {
+    selectedRef.current = current ? current.id : null
+  }, [current])
 
   useEffect(() => {
-    loadConversations(dispatch).catch(() => {})
+    loadConversations(dispatch)
+      .catch(() => {})
+      .then(() => setListLoaded(true))
   }, [dispatch])
 
   const run = (p) => {
@@ -37,11 +57,41 @@ export default function Sidebar() {
     return p.catch((e) => setError(errorText(e)))
   }
 
-  const onNew = () => run(createConversation(dispatch, {}))
-  const onSelect = (id) => run(loadConversation(dispatch, id))
+  const onNew = () => {
+    selectSeq.current += 1 // supersedes any in-flight select
+    selectedRef.current = CREATING
+    return run(createConversation(dispatch, {}))
+  }
+  // Only the most recent click lands in the store: two quick selects issue two GETs and the
+  // frozen loader would apply whichever response arrives last.
+  const onSelect = (id) => {
+    const n = (selectSeq.current += 1)
+    selectedRef.current = id
+    const fresh = () => selectSeq.current === n
+    return run(
+      api.getConversation(id).then(
+        (conversation) => {
+          if (fresh()) dispatch({ type: 'conversation/loaded', conversation })
+        },
+        (e) => {
+          if (fresh()) throw e
+        },
+      ),
+    )
+  }
   const onDelete = (id) => {
     setConfirming(null)
-    return run(deleteConversation(dispatch, id))
+    const wasCurrent = Boolean(current && current.id === id)
+    return run(
+      deleteConversation(dispatch, id).then(() => {
+        // The frozen loader only dispatches conversation/deleted, which the frozen slotConfig
+        // reducer (and the send / analyze slices) ignore: drop the selection explicitly so the
+        // deleted document's config and buffers do not linger — unless the user has already
+        // moved on to another conversation meanwhile.
+        const sel = selectedRef.current
+        if (wasCurrent && (sel === id || sel === null)) dispatch({ type: 'conversation/cleared' })
+      }),
+    )
   }
 
   const startRename = (c) => {
@@ -62,25 +112,29 @@ export default function Sidebar() {
     <div className={css.sidebar} data-testid="conversations">
       <div className={css.header}>
         <span className={css.brand}>Triplex</span>
-        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew}>
+        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew} disabled={busy}>
           + New conversation
         </button>
       </div>
+      {busy && (
+        <div className={css.hint} data-testid="conv-busy-hint">
+          a stream is running
+        </div>
+      )}
       {error && (
         <div className={css.error} role="alert" data-testid="conv-error">
           {error}
         </div>
       )}
-      {conversations.length === 0 ? (
-        <div className={css.empty} data-testid="conv-empty">
-          No conversations yet. Create one, or type a prompt and Send.
-        </div>
-      ) : (
+      {conversations.length > 0 ? (
         <ul className={css.list} data-testid="conv-list">
           {conversations.map((c) => {
             const selected = Boolean(current && current.id === c.id)
             const title = selected ? current.title : c.title
-            const n = c.turn_count ?? 0
+            // The selected conversation is refetched after every stream; the list summary only
+            // after the first Send, so the live document is the fresher source for its row.
+            const n = selected && Array.isArray(current.turns) ? current.turns.length : (c.turn_count ?? 0)
+            const when = selected && current.updated_at ? current.updated_at : c.updated_at
             const isEditing = editing && editing.id === c.id
             const isConfirming = confirming === c.id
             return (
@@ -108,7 +162,7 @@ export default function Sidebar() {
                 ) : isConfirming ? (
                   <div className={css.confirm} data-testid="conv-delete-prompt">
                     <span>Delete?</span>
-                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)}>
+                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)} disabled={busy}>
                       Delete
                     </button>
                     <button type="button" data-testid="conv-delete-cancel" onClick={() => setConfirming(null)}>
@@ -116,12 +170,12 @@ export default function Sidebar() {
                     </button>
                   </div>
                 ) : (
-                  <button type="button" className={css.select} data-testid="conv-select" onClick={() => onSelect(c.id)} title={title}>
+                  <button type="button" className={css.select} data-testid="conv-select" onClick={() => onSelect(c.id)} title={title} disabled={busy}>
                     <span className={css.title} data-testid="conv-title">
                       {title}
                     </span>
                     <span className={css.meta} data-testid="conv-meta">
-                      {fmtWhen(c.updated_at)} · {n} {n === 1 ? 'turn' : 'turns'}
+                      {fmtWhen(when)} · {n} {n === 1 ? 'turn' : 'turns'}
                     </span>
                   </button>
                 )}
@@ -130,7 +184,7 @@ export default function Sidebar() {
                     <button type="button" data-testid="conv-rename" onClick={() => startRename(c)}>
                       Rename
                     </button>
-                    <button type="button" data-testid="conv-delete" onClick={() => setConfirming(c.id)}>
+                    <button type="button" data-testid="conv-delete" onClick={() => setConfirming(c.id)} disabled={busy}>
                       Delete
                     </button>
                   </div>
@@ -139,6 +193,14 @@ export default function Sidebar() {
             )
           })}
         </ul>
+      ) : listLoaded ? (
+        <div className={css.empty} data-testid="conv-empty">
+          No conversations yet. Create one, or type a prompt and Send.
+        </div>
+      ) : (
+        <div className={css.empty} data-testid="conv-loading" aria-busy="true">
+          loading…
+        </div>
       )}
     </div>
   )
