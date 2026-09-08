@@ -1,0 +1,7 @@
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
+.field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.label { color: var(--fg-muted); }
+.bar select { padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); max-width: 260px; }
+.bar select:disabled { background: var(--bg-muted); }
+.hint { color: var(--fg-muted); font-style: italic; }
+.error { color: var(--err); background: var(--err-soft); border: 1px solid var(--err); border-radius: 4px; padding: 1px 6px; }

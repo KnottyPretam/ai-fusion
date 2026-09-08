@@ -1,0 +1,15 @@
+.meter { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg); }
+.warn { padding: 4px 8px; border: 1px solid var(--warn); background: var(--warn-soft); color: var(--warn); border-radius: 4px; font-weight: 600; }
+.table { border-collapse: collapse; width: auto; font-variant-numeric: tabular-nums; }
+.table th, .table td { padding: 1px 14px 1px 0; text-align: right; white-space: nowrap; }
+.table th { font-weight: 500; color: var(--fg-muted); }
+.table th:first-child, .table td:first-child { text-align: left; }
+.feature { font-weight: 600; }
+.send { color: var(--primary); }
+.analyze { color: var(--fg); }
+.fusion { color: var(--fusion); }
+.total td { border-top: 1px solid var(--border); font-weight: 600; }
+.muted { color: var(--fg-muted); font-weight: 400; }
+.mult { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; background: var(--fusion-soft); color: var(--fusion); font-weight: 700; }
+.foot { display: flex; gap: 12px; color: var(--fg-muted); }
+.trunc { color: var(--warn); font-weight: 600; }
