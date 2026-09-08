@@ -17,7 +17,7 @@ export default defineConfig({
   use: { baseURL: `http://localhost:${VITE_PORT}`, channel: 'chrome', headless: true, trace: 'retain-on-failure' },
   webServer: [
     {
-      command: `cd .. && PATH=${HOME}/.local/bin:$PATH MOCK_OPENROUTER=1 MOCK_SCENARIO=${SCENARIO} MOCK_DELAY_MS=${DELAY} PORT=${BACKEND_PORT} DATA_DIR=./data/e2e-${BACKEND_PORT} LOG_LEVEL=WARNING uv run python -m backend.main`,
+      command: `cd .. && PATH="${HOME}/.local/bin:$PATH" MOCK_OPENROUTER=1 MOCK_SCENARIO=${SCENARIO} MOCK_DELAY_MS=${DELAY} PORT=${BACKEND_PORT} DATA_DIR=./data/e2e-${BACKEND_PORT} LOG_LEVEL=WARNING uv run python -m backend.main`,
       url: `http://127.0.0.1:${BACKEND_PORT}/`,
       reuseExistingServer: false,
       timeout: 60_000,

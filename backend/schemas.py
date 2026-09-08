@@ -21,6 +21,9 @@ SCHEMA_VERSION = 1
 # --------------------------------------------------------------------------- vocabularies
 SlotId = Literal["claude", "chatgpt", "grok"]
 SLOT_IDS: tuple[SlotId, ...] = ("claude", "chatgpt", "grok")
+# Slot -> OpenRouter slug vendor prefix (the part before the first "/"). Frozen; the frontend
+# duplicates it inside features/send because state/* is frozen.
+SLOT_VENDORS: dict[SlotId, str] = {"claude": "anthropic", "chatgpt": "openai", "grok": "x-ai"}
 Label = Literal["R1", "R2", "R3"]
 LABELS: tuple[Label, ...] = ("R1", "R2", "R3")
 Effort = Literal["off", "low", "medium", "high"]
@@ -217,6 +220,12 @@ class SendTurn(_TurnBase):
     responses: dict[SlotId, str | None]
     errors: dict[SlotId, str] = Field(default_factory=dict)
     partial: dict[SlotId, str] = Field(default_factory=dict)
+    # Persisted per slot on the turn (never in threads): live reasoning text, raw citation
+    # annotations, truncation flag and the effort actually applied.
+    reasoning: dict[SlotId, str] = Field(default_factory=dict)
+    citations: dict[SlotId, list[dict[str, Any]]] = Field(default_factory=dict)
+    truncated: dict[SlotId, bool] = Field(default_factory=dict)
+    effort_applied: dict[SlotId, Effort] = Field(default_factory=dict)
 
 
 class ContinueTurn(_TurnBase):
@@ -225,6 +234,10 @@ class ContinueTurn(_TurnBase):
     prompt: str
     response: str | None = None
     error: str | None = None
+    reasoning: str | None = None
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+    effort_applied: Effort | None = None
 
 
 class AnalyzeTurn(_TurnBase):
@@ -350,18 +363,42 @@ def efforts_from_reasoning_meta(reasoning: dict[str, Any] | None) -> tuple[list[
 
 
 # --------------------------------------------------------------------------- helpers
+_STRICT_DROP = (
+    "default",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
+    "minItems",
+    "maxItems",
+)
+
+
 def strict_json_schema(model_cls: type[BaseModel]) -> dict[str, Any]:
     """JSON Schema acceptable to OpenRouter/OpenAI strict mode: every object gets
-    additionalProperties:false and lists every property as required; $defs are kept."""
+    additionalProperties:false and lists every property as required; $defs are kept; keywords
+    strict mode rejects (default, numeric/string/array bounds, format) are removed -- pydantic
+    still enforces them locally after parsing. The `properties` map itself is never treated as
+    a schema node (a field could legitimately be named `pattern` or `format`)."""
     schema = model_cls.model_json_schema()
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
-            if node.get("type") == "object" and "properties" in node:
+            for k in _STRICT_DROP:
+                node.pop(k, None)
+            props = node.get("properties")
+            if node.get("type") == "object" and isinstance(props, dict):
                 node["additionalProperties"] = False
-                node["required"] = list(node["properties"].keys())
-            for v in node.values():
-                walk(v)
+                node["required"] = list(props)
+                for v in props.values():
+                    walk(v)
+            for k, v in node.items():
+                if k != "properties":
+                    walk(v)
         elif isinstance(node, list):
             for v in node:
                 walk(v)

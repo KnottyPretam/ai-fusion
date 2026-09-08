@@ -3,6 +3,11 @@
 Everything is read at CALL time via settings() (never at import) so tests and worktrees can set
 environment variables before the app is created. Feature-private constants live in the feature
 module, not here. Cross-feature additions go through the integrator (frozen_change_requests).
+
+DEFAULT_SLOT_CONFIG is a module singleton and pydantic keeps instances by identity: never hand it
+out. store.create uses settings().default_slot_config (a fresh deep copy built from env
+overrides), update_slot_config REPLACES the object, and every turn stamps
+conv.slot_config.model_copy(deep=True).
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ MAX_TOKENS_STAGE: dict[str, int] = {
     "defense": 2000,
     "convergence": 1000,
 }
-# Matched case-insensitively on word boundaries in Triplex-authored prompts (see semantics.md).
+# Matched case-insensitively on WORD boundaries in Triplex-authored prompts (semantics.md).
 FORBIDDEN_IDENTITY_STRINGS: tuple[str, ...] = (
     "claude",
     "chatgpt",
@@ -52,10 +57,10 @@ FORBIDDEN_IDENTITY_STRINGS: tuple[str, ...] = (
     "opus",
     "sonnet",
     "fable",
-    "astra",
-    "luna",
-    "sol",
 )
+# Model code names that collide with ordinary vocabulary ("Luna 9", "per sol", "ad astra"):
+# matched only in slug context, i.e. preceded by "-" (gpt-5.6-luna, gpt-6-astra).
+FORBIDDEN_MODEL_CODENAMES: tuple[str, ...] = ("luna", "sol", "astra")
 
 
 def _load_env_once() -> None:
@@ -99,6 +104,27 @@ class Settings:
     )
 
 
+def _slot_config_from_env(e: os._Environ[str]) -> SlotConfig:
+    """DEFAULT_SLOT_CONFIG with optional .env overrides (spec R2: settable from the config file):
+    SLOT_<CLAUDE|CHATGPT|GROK>_MODEL / _EFFORT, ANALYST_MODEL, FUSION_MAX_ITERATIONS,
+    MATERIALITY_MIN, GROUNDED_DEFAULT. Always returns a fresh object."""
+    base = DEFAULT_SLOT_CONFIG.model_copy(deep=True)
+    slots = {}
+    for slot, spec in base.slots.items():
+        key = slot.upper()
+        slots[slot] = SlotSpec(
+            model=e.get(f"SLOT_{key}_MODEL", spec.model),
+            effort=e.get(f"SLOT_{key}_EFFORT", spec.effort),  # type: ignore[arg-type]
+        )
+    return SlotConfig(
+        slots=slots,
+        analyst_model=e.get("ANALYST_MODEL", base.analyst_model),
+        max_iterations=int(e.get("FUSION_MAX_ITERATIONS", base.max_iterations)),
+        materiality_min=e.get("MATERIALITY_MIN", base.materiality_min),  # type: ignore[arg-type]
+        grounded=_bool("GROUNDED_DEFAULT", base.grounded),
+    )
+
+
 def settings() -> Settings:
     """Read the environment now. Cheap; call it inside handlers, never cache at import."""
     _load_env_once()
@@ -131,4 +157,5 @@ def settings() -> Settings:
         grounded_engine=e.get("GROUNDED_ENGINE") or None,
         grounded_max_results=int(e.get("GROUNDED_MAX_RESULTS", "5")),
         log_level=e.get("LOG_LEVEL", "INFO").upper(),
+        default_slot_config=_slot_config_from_env(e),
     )

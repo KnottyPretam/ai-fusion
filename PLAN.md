@@ -408,7 +408,7 @@ otherwise "standing". Return ONLY valid JSON:
 | Fusion auto-runs Analyze if missing | yes vs. require explicit Analyze | start: yes |
 | `max_iterations` default / hard cap | 2 / 5 | start: 2 / 5 |
 | Convergence check | analyst call vs. embedding-similarity rule | start: analyst; revisit in Phase 6 |
-| Analyst = a slot model? | reuse strongest vs. dedicated 4th model | open (start: reuse) |
+| Analyst = a slot model? | reuse strongest vs. dedicated 4th model | superseded 2026-09-07 → see "Analyst model" row |
 | Materiality threshold for Fusion | medium vs. high-only | start: medium |
 | Storage upgrade | JSON-on-disk vs. SQLite | JSON until it hurts |
 | Auth | none (localhost only) | none |
@@ -428,3 +428,7 @@ otherwise "standing". Return ONLY valid JSON:
 | Structured output | prompt-only vs. `response_format` | **strict `json_schema`** when the model lists `structured_outputs`, always followed by lenient parse + pydantic + one retry |
 | Live cost cap | none vs. cap | **`SESSION_COST_CAP_USD=10`** enforced in the client |
 | Build venue | local vs. Claude Code cloud | **local** (cloud needs a GitHub repo + environment secret; see docs/decisions.md) |
+| Turn references | list index vs turn id | **uuid4 turn ids** (`of_turn`, `of_analyze`); indexes break under forced re-analysis and deletion |
+| Reasoning / citations persistence | live only vs on the turn | **on the turn per slot** (never in threads, never replayed to models) |
+| Error envelope | flat `{error}` vs FastAPI `{detail:{error}}` | **FastAPI envelope** via `backend/api_errors.py`; pre-stream checks run before the first SSE yield (`sse_response` primes the generator) |
+| Anon map in mock mode | random vs fixed | **fixed R1=claude, R2=chatgpt, R3=grok** in mock mode so replay is deterministic; random live |

@@ -16,6 +16,8 @@ export function abortStream(feature) {
 }
 
 export async function runStream(dispatch, feature, url, body, { onEvent } = {}) {
+  const prev = controllers.get(feature)
+  if (prev) prev.superseded = true // a replaced stream must not report sse/abort over the new one
   abortStream(feature)
   const controller = new AbortController()
   controllers.set(feature, controller)
@@ -45,7 +47,7 @@ export async function runStream(dispatch, feature, url, body, { onEvent } = {}) 
     return events
   } catch (e) {
     if (e && e.name === 'AbortError') {
-      dispatch({ type: 'sse/abort', feature })
+      if (!controller.superseded) dispatch({ type: 'sse/abort', feature })
       return events
     }
     if (!(e instanceof ApiError)) dispatch({ type: 'sse/end', feature, ok: false, error: e.message })

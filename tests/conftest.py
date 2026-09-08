@@ -10,7 +10,7 @@ import tempfile
 
 os.environ.setdefault("MOCK_OPENROUTER", "1")
 os.environ.setdefault("MOCK_SCENARIO", "planted_factual")
-os.environ.setdefault("OPENROUTER_API_KEY", "")  # tests must never see a real key
+os.environ.setdefault("MOCK_DELAY_MS", "0")
 os.environ.setdefault("SESSION_COST_CAP_USD", "10")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="triplex-tests-"))
@@ -66,6 +66,18 @@ def _block_outbound_http(request):
         yield router
 
 
+@pytest.fixture(autouse=True)
+def _no_real_key(request, monkeypatch):
+    """Non-live tests never see a real key and always run in mock mode, even if the shell exports
+    one. Live tests (-m live) take OPENROUTER_API_KEY from the shell or .env (config loads .env
+    lazily with override=False); tests/live/conftest.py sets MOCK_OPENROUTER=0 and skips when the
+    key is absent."""
+    if "live" not in request.keywords:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "")
+        monkeypatch.setenv("MOCK_OPENROUTER", "1")
+    yield
+
+
 @pytest.fixture
 def anon_map() -> dict[Label, SlotId]:
     return dict(DEFAULT_ANON)
@@ -113,7 +125,7 @@ async def persisted_conversation(make_conversation):
     from backend.store import conversations as store
 
     src = make_conversation()
-    conv = await store.create(slot_config=src.slot_config, title=src.title)
+    conv = await store.create(slot_config=src.slot_config, title=src.title, anon_map=src.anon_map)
     for slot, msgs in src.threads.items():
         if msgs:
             await store.append_to_thread(conv.id, slot, msgs)

@@ -45,7 +45,7 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 - The mapping never appears in prompts, API responses, or the UI
 
 **`features/{send,analyze,fusion}.py`** + **`routers/*.py`** + **`prompts/*.py`**
-- One module per feature; each yields the SSE event dicts defined in `docs/api-contract.md`; the router wraps the generator with `sse.sse_response()`
+- One module per feature; each yields the SSE event dicts defined in `docs/api-contract.md`; the router does `return await sse.sse_response(gen)`, which awaits the first event so pre-stream checks (404/409/422 raised via `api_errors`) stay plain JSON errors in FastAPI's `{detail:{error}}` envelope
 - Normative behaviour (thread append rules, idempotency, the Fusion loop, exit reasons) is in `docs/semantics.md`
 
 ### Frontend Structure (`frontend/src/`)
@@ -88,7 +88,7 @@ A `revise` is flagged unjustified by `schemas.is_unjustified()` (short justifica
 ### Error Handling Philosophy
 - Continue with the slots that succeed; never fail the whole Send because one model failed (carried over from llm-council)
 - A slot that errors mid-stream gets nothing appended to its thread (no orphan user message); partial text is kept on the turn
-- Pre-stream failures are plain JSON with an HTTP status; mid-stream failures are `slot_error` / `error` events
+- Pre-stream failures are plain JSON `{detail:{error:<code>}}` with an HTTP status (raised before the first yield); mid-stream failures are `slot_error` / `error` events
 
 ### UI/UX Transparency
 - Every raw model output is visible in its column; the Analyze report shows per-label positions and materiality; the Fusion timeline shows each stance, flagged revisions, and the exit reason

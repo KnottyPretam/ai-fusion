@@ -5,15 +5,17 @@ export const BASE = (import.meta.env && import.meta.env.VITE_API_BASE) || ''
 export class ApiError extends Error {
   constructor(status, body) {
     const detail = body && (body.detail ?? body.error)
-    const msg =
-      (detail && typeof detail === 'object' && (detail.error || detail.message)) ||
-      (typeof detail === 'string' && detail) ||
-      `HTTP ${status}`
-    super(msg)
+    let msg
+    if (Array.isArray(detail)) {
+      // FastAPI request-validation errors: {detail: [{loc, msg, type}, ...]}
+      msg = detail.map((d) => (d && d.msg ? `${(d.loc || []).slice(1).join('.') || 'body'}: ${d.msg}` : String(d))).join('; ')
+    } else if (detail && typeof detail === 'object') msg = detail.error || detail.message
+    else if (typeof detail === 'string') msg = detail
+    super(msg || `HTTP ${status}`)
     this.name = 'ApiError'
     this.status = status
     this.body = body
-    this.code = detail && typeof detail === 'object' ? detail.error : undefined
+    this.code = Array.isArray(detail) ? 'validation_error' : detail && typeof detail === 'object' ? detail.error : undefined
   }
 }
 

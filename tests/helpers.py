@@ -6,12 +6,17 @@ import json
 import re
 from collections.abc import Iterable
 
-from backend.config import FORBIDDEN_IDENTITY_STRINGS
+from backend.config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES
 
 _FORBIDDEN_RE = re.compile(
     r"(?<![A-Za-z0-9])("
     + "|".join(re.escape(s) for s in FORBIDDEN_IDENTITY_STRINGS)
     + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+# Code names only count in slug context: "gpt-5.6-luna", "gpt-6-astra".
+_CODENAME_RE = re.compile(
+    r"-(" + "|".join(re.escape(s) for s in FORBIDDEN_MODEL_CODENAMES) + r")(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 
@@ -32,7 +37,9 @@ def find_identity_leaks(text: str, allow: Iterable[str] = ()) -> list[str]:
     for a in allow:
         if a:
             text = text.replace(a, " ")
-    return sorted({m.group(1).lower() for m in _FORBIDDEN_RE.finditer(text)})
+    found = {m.group(1).lower() for m in _FORBIDDEN_RE.finditer(text)}
+    found |= {"-" + m.group(1).lower() for m in _CODENAME_RE.finditer(text)}
+    return sorted(found)
 
 
 def assert_no_identity_leak(

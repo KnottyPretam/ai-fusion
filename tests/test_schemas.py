@@ -180,10 +180,60 @@ def _every_object_is_strict(node) -> bool:
     return True
 
 
+def _keys(node, acc):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k != "properties":
+                acc.add(k)
+            _keys(v, acc)
+    elif isinstance(node, list):
+        for v in node:
+            _keys(v, acc)
+    return acc
+
+
 @pytest.mark.parametrize("cls", [Extraction, DefenseReply, ConvergenceCheck])
 def test_strict_json_schema(cls):
     schema = strict_json_schema(cls)
     assert schema["type"] == "object" and _every_object_is_strict(schema)
+    banned = {"default", "minimum", "maximum", "format", "pattern", "minLength", "maxLength"}
+    assert not (banned & _keys(schema, set()))
+    # Nullable optionals survive as anyOf [type, null] and the model still validates them.
+    assert DefenseReply.model_validate(
+        {
+            "stance": "defend",
+            "justification": "x",
+            "revised_claim": None,
+            "confidence": 0.5,
+            "persuaded_by": None,
+        }
+    )
+
+
+def test_slot_vendors_and_turn_extras():
+    from backend.schemas import SLOT_VENDORS, ContinueTurn
+
+    assert SLOT_VENDORS == {"claude": "anthropic", "chatgpt": "openai", "grok": "x-ai"}
+    t = SendTurn(
+        prompt="q",
+        responses={"claude": "a", "chatgpt": "b", "grok": "c"},
+        slot_config=DEFAULT_SLOT_CONFIG,
+        reasoning={"claude": "hmm"},
+        citations={"claude": [{"type": "url_citation", "url_citation": {"url": "u"}}]},
+        truncated={"chatgpt": True},
+        effort_applied={"grok": "low"},
+    )
+    back = TurnAdapter.validate_python(t.model_dump())
+    assert back.reasoning["claude"] == "hmm" and back.truncated["chatgpt"] is True
+    c = ContinueTurn(
+        slot="grok",
+        prompt="p",
+        response="r",
+        slot_config=DEFAULT_SLOT_CONFIG,
+        truncated=True,
+        effort_applied="medium",
+    )
+    assert TurnAdapter.validate_python(c.model_dump()).effort_applied == "medium"
 
 
 PEERS = ["The BMI088 gyroscope full-scale range is selectable up to 2000 deg/s per the datasheet."]

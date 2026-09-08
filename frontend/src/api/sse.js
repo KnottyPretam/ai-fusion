@@ -46,6 +46,11 @@ export async function* readSSE(response) {
     }
   } finally {
     try {
+      await reader.cancel() // early exit must close the HTTP body, not just drop the lock
+    } catch {
+      /* already closed */
+    }
+    try {
       reader.releaseLock()
     } catch {
       /* already released */

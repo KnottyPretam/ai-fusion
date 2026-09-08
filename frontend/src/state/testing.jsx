@@ -7,9 +7,10 @@ import { initialState, rootReducer } from './registry.js'
 export function applyEvents(feature, events, { state, preloaded } = {}) {
   let s = state || initialState(preloaded)
   for (const ev of events) {
-    const action = ev && ev.type && ev.event === undefined && ev.feature === undefined
-      ? { type: 'sse', feature, event: ev }
-      : ev
+    // Frozen action names are 'sse', contain '/', or start with '@@'; SSE event types never do,
+    // so an event that happens to carry a `feature` field (turn_start) is still wrapped.
+    const isAction = ev && typeof ev.type === 'string' && (ev.type === 'sse' || ev.type.includes('/') || ev.type.startsWith('@@'))
+    const action = isAction ? ev : { type: 'sse', feature, event: ev }
     s = rootReducer(s, action)
   }
   return s

@@ -7,15 +7,48 @@ The wire format (HTTP + SSE), the shared types in `backend/schemas.py`, the conf
 ### `docs/api-contract.md` — HTTP + SSE
 
 All feature endpoints stream SSE over POST (`text/event-stream`, one JSON object per `data:`
-line, `type` inside, `X-Accel-Buffering: no`). Pre-stream failures are plain JSON with HTTP
-status (`404`, `409 {error, ...}`, `422`). `error{message}` is always the last event when
-emitted; exactly one of `slot_done`/`slot_error` per slot per turn. Clients refetch
-`GET /api/conversations/{id}` after `turn_done`, `analyze_done`, `fusion_done`.
+line, `type` inside, `X-Accel-Buffering: no`).
 
-- `GET/POST /api/conversations`, `GET/DELETE /api/conversations/{id}`, `PATCH …/title`,
-  `GET/PUT …/slot_config` (422 when `effort ∉ get_meta(model).efforts` and meta known),
-  `GET /api/models` → `list[ModelMeta]`.
-- `POST …/send {prompt}`, `POST …/slots/{slot}/continue {prompt}` →
+**Pre-stream failures** are plain JSON with an HTTP status in FastAPI's envelope
+`{"detail": {"error": "<code>", ...extra}}`, always raised through `backend/api_errors.py`:
+`not_found()` (404, `what`), `conflict("busy")`, `conflict("incomplete_send_turn", missing=[...])`,
+`conflict("nothing_to_fuse")`, `conflict("analyze_degraded")`, `conflict("no_send_turn")`,
+`unprocessable("<code>", ...)` (422). Tests assert `r.status_code` and
+`r.json()["detail"]["error"]`; FastAPI's own request-body validation keeps its default
+`{"detail": [...]}` list (the frontend renders it as `code: "validation_error"`).
+
+**Rule:** a feature generator performs EVERY pre-check (store.load → 404, entering `busy_guard`
+→ 409 busy, argument checks → 409/422) BEFORE its first `yield`; routers
+`return await sse.sse_response(gen)`, which awaits that first event so those HTTPExceptions
+become the JSON errors above. After the first event nothing can change the HTTP status: a
+failure is emitted as the terminal `error{message}` event and the generator returns.
+`error{message}` is always the last event when emitted; exactly one of `slot_done`/`slot_error`
+per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_done`,
+`analyze_done`, `fusion_done`.
+
+- `GET /api/conversations` → 200 `list[ConversationSummary]`, newest `updated_at` first.
+- `POST /api/conversations` body `{title?: str, slot_config?: SlotConfig}` (empty `{}` allowed:
+  title "New conversation", `settings().default_slot_config`) → 201 `ConversationPublic`.
+- `GET /api/conversations/{id}` → 200 `ConversationPublic`. Ids are uuid4 strings; a non-uuid
+  or unknown id → 404 `{detail:{error:"not_found", what:"conversation"}}` (never a path).
+- `DELETE /api/conversations/{id}` → 204 empty (404 if missing).
+- `PATCH /api/conversations/{id}/title` body `{title: str}` (1..200 chars, else 422) → 200
+  `ConversationPublic`.
+- `GET /api/conversations/{id}/slot_config` → 200 `SlotConfig`. `PUT …/slot_config` body = a
+  full `SlotConfig` → 200 the stored `SlotConfig` (NOT the conversation). 422
+  `{detail:{error:"unsupported_effort", slot, model, effort, supported:[...]}}` only when
+  `catalog.get_meta(model)` is not None and `effort ∉ meta.efforts`; W2 imports lazily
+  (`from ..llm import catalog` inside the handler) so tests can
+  `monkeypatch.setattr("backend.llm.catalog.get_meta", ...)`.
+- `GET /api/models` → 200 bare JSON array of `ModelMeta` (offline fixture in mock mode).
+- Request bodies: `POST …/send {prompt: str}` (blank → 422 `{error:"empty_prompt"}`);
+  `POST …/slots/{slot}/continue {prompt}` (unknown slot → 404);
+  `POST …/analyze {of_turn?: str, force?: bool=false}`;
+  `POST …/fusion {of_analyze?: str, max_iterations: int}` (required, 1..5; pydantic 422 otherwise).
+- `POST …/send {prompt}`, `POST …/slots/{slot}/continue {prompt}` (`turn_start.feature` is
+  `"send"` or `"continue"`; `slots` is `["claude","chatgpt","grok"]` for send and `[<slot>]` for
+  continue; the client uses the `runStream` feature key `"send"` for both and the meter books
+  continue calls under the Send row) →
   `turn_start{turn_id, feature, slots}`, `slot_start{slot, model, effort, effort_coerced}`,
   `slot_delta{slot, text}`, `slot_reasoning{slot, text}`, `slot_citations{slot, items}`,
   `slot_done{slot, usage, finish_reason, truncated}`, `slot_error{slot, code, error_type, message,
@@ -135,24 +168,121 @@ async def run_fusion(conv_id, *, of_analyze: str | None, max_iterations: int) ->
 Feature generators yield the SSE event dicts below; routers wrap them in `StreamingResponse`.
 
 
-### Frontend contract (`src/state`, `src/api`, W8 = Stage 0)
+### Frontend contract (`src/state`, `src/api` — frozen W8 code; this text matches it verbatim)
 
-Slices (keys frozen): `conversation, conversations, slotConfig, models, slots, analyze, fusion,
-meter`. `registerSlice(key, reducer, initial)`; every slice receives every action. Actions
-(frozen names): `sse/start{feature}`, `sse{feature, event}`, `sse/end{feature}`,
-`sse/abort{feature}`, `conversation/loaded{conversation}`, `conversations/list{items}`,
-`slotConfig/loaded`, `slotConfig/update{patch}`, `models/loaded{items}`. `runStream(feature,
-url, body)` checks `response.ok` (surfaces JSON `detail`/`error`), reads the buffered SSE
-stream (`{stream:true}` decode, `\n\n` framing, skip `:` lines, AbortController) and dispatches
-every event verbatim; `analyze_*` events route to the `analyze` slice regardless of which
-feature opened the stream. `slots.<slot>` holds `{buffer, reasoning, citations, status, usage,
-truncated, error}`; the column renders the persisted thread (kind-styled) plus the live buffer.
-Each feature ships `features/<x>/{index.jsx, slice.js}`; `index.jsx` registers its slice at
-module scope and exports the pane. Test helper `dispatchEvents(events)` for synthetic streams.
+**Core slices** (`state/reducers.js`): `conversation` (ConversationPublic exactly as GET returns
+it, or null), `conversations` (list of ConversationSummary), `slotConfig`, `models`
+(`{items, byId, loaded, error}`), `streams` (`streams.<feature> = {status: 'idle'|'streaming'|
+'done'|'error'|'aborted', error, httpStatus}` for `send`, `analyze`, `fusion` — disable buttons on
+`streaming`). **Feature slices** registered from `features/<x>/index.jsx` at module scope via
+`registerSlice(key, reducer, initial)`: `slots` (W9), `analyze` (W10), `fusion` (W11), `meter`
+(W12). Every slice receives every action (combineReducers semantics); untouched slices keep
+identity.
+
+**Actions** (frozen names): `sse/start{feature}`, `sse{feature, event}`,
+`sse/end{feature, ok, error?, status?, body?}`, `sse/abort{feature}`,
+`conversation/loaded{conversation}`, `conversation/cleared`, `conversation/created{summary}`,
+`conversation/deleted{id}`, `conversation/renamed{id, title}`, `conversations/list{items}`,
+`slotConfig/loaded{conversationId?, slotConfig}`, `slotConfig/update{patch}`,
+`models/loaded{items}`, `models/error{error}`, `@@slice/registered`.
+
+**Streams** (`api/runStream.js`): `runStream(dispatch, feature, url, body, {onEvent?})` or
+`const run = useRunStream(); run(feature, url, body, opts)`; `abortStream(feature)`. It checks
+`response.ok` first (non-ok → `sse/end{ok:false, status, body}` + throws `ApiError{status, code,
+message}`), reads the buffered SSE stream (`decode(value,{stream:true})`, `\n\n` framing, `:`
+comment lines skipped, `[DONE]` swallowed, AbortController) and dispatches every event verbatim
+as `{type:'sse', feature, event}`; a terminal `error` event ends with `sse/end{ok:false}`.
+`analyze_*` events are routed to the `analyze` slice regardless of which feature opened the
+stream (Fusion's auto-run). Continue streams use `feature: 'send'`.
+
+**HTTP** (`api/http.js`): `api.*` primitives plus dispatching loaders — `loadConversations(dispatch)`,
+`loadConversation(dispatch, id)`, `createConversation(dispatch, body?)`, `deleteConversation(dispatch,
+id)`, `renameConversation(dispatch, id, title)`, `loadModels(dispatch)`, `saveSlotConfig(dispatch,
+conversationId, patch, current)` (optimistic `slotConfig/update`, PUT of the merged full config,
+`slotConfig/loaded` with the server copy; reloads on failure). `ApiError.code` is `detail.error`
+or `'validation_error'` for FastAPI validation arrays. Panes that load on mount must swallow
+rejections (`loadModels(dispatch).catch(() => {})`) — the frozen smoke test renders `<App/>`
+under Node's fetch, where a relative URL rejects. The pane that opened a stream calls
+`loadConversation(dispatch, id)` once after `runStream` resolves.
+
+**Derived rules for panes:** latest send turn = last element of `conversation.turns` with
+`type === 'send'`; it is complete when every slot in `responses` is non-null (Analyze button
+rule). Fusion button enabled when an `analyze` turn with `status === 'ok'` exists for that send
+turn and its `standing` set (materiality rank ≥ `slot_config.materiality_min`, `RANK = {low:0,
+medium:1, high:2}` duplicated locally) is non-empty; iterations stepper default =
+`slotConfig.max_iterations`, range 1..5. Per-column model dropdown = `models.items.filter(m =>
+m.vendor === SLOT_VENDORS[slot])` plus the currently configured slug if absent, with
+`SLOT_VENDORS = {claude:'anthropic', chatgpt:'openai', grok:'x-ai'}` duplicated inside
+`features/send`; effort options = `models.byId[model]?.efforts ?? ['off','low','medium','high']`
+(a mandatory-reasoning model simply lacks `'off'`). Main composer with no conversation:
+`await createConversation(dispatch, {})` then send. `slots.<slot>` (W9) holds `{buffer,
+reasoning, citations, status, usage, truncated, error}` and the column renders the persisted
+thread (kind-styled) plus the live buffer; after refetch it shows the persisted per-slot
+`reasoning/citations/truncated/effort_applied` from the turn.
+
+**Test helpers** (`state/testing.jsx`): `applyEvents(feature, events, {state?, preloaded?})`
+(events without a frozen action name are wrapped as `{type:'sse', feature, event}`),
+`renderWithStore(ui, {preloaded?})`, `sample.{turnStart, slotStart, slotDelta, slotDone,
+slotError, turnDone}`. Pane tests stub `fetch` with `vi.stubGlobal` or preload the store.
 `package.json`: `"test": "vitest run --passWithNoTests"`, `"test:e2e": "playwright test"`;
-vitest `environment: jsdom`, `setupFiles: src/test-setup.js`, deps `@testing-library/{react,
+vitest `environment: jsdom`, `setupFiles: src/test-setup.js`; deps `@testing-library/{react,
 jest-dom,user-event}`, `jsdom`, `@playwright/test`, `react-markdown`, `remark-gfm`.
 
----
 
+## Addendum (contract-v1 review)
 
+### LLM layer (`backend/llm`, W1)
+
+- `stream_completion` **never raises**. Order: zero or more `text | reasoning | citations`
+  deltas, then exactly one terminal delta and nothing after it — `done` (always with
+  `usage: Usage`, synthesised from catalog price × tokens with `cost_usd` when the usage chunk is
+  missing; `finish_reason`; `truncated = finish_reason == "length"`; `generation_id`) or
+  `error{code, message, error_type}` (HTTP-level failures, httpx/timeout errors, mock_miss and
+  the cost cap all take this form; `usage` is None). `reasoning` deltas are incremental
+  fragments. `citations` deltas carry `items` = the OpenRouter annotation objects passed through
+  VERBATIM (`[{"type":"url_citation","url_citation":{"url","title","content"?,"start_index"?,
+  "end_index"?}}]`), de-duplicated by `url_citation.url`, emitted once per chunk that carries
+  annotations; the UI reads `item.url_citation.url/title`.
+- Cost cap: when `settings().mock_openrouter` is false and the session total would exceed
+  `SESSION_COST_CAP_USD`, the transport yields a single `Delta(kind="error",
+  code="cost_cap_exceeded", error_type="triplex", message=…)`; Send/continue map it to
+  `slot_error{code:"cost_cap_exceeded"}`, `complete_json` returns `error="cost_cap_exceeded"`;
+  the UI shows a persistent warning when any event carries that code.
+- `complete_json(retries=N)` makes at most N+1 attempts; a retry happens only on
+  lenient-parse/pydantic failure — never on a transport/`error` delta, which returns immediately
+  as `(None, "", usage, message)` — and appends `{"role":"assistant","content":<raw>}` +
+  `{"role":"user","content":"Your previous output failed validation: <error>. Return only the
+  corrected JSON."}`. Returns `parsed` (schema_model instance or None), `raw_text` (last
+  attempt's concatenated text), `usage` (one `Usage` per attempt), `error` (`str(ValidationError)`,
+  parse message or transport message; None on success). `retries=0` disables the internal retry.
+- `effort=None` → omit `reasoning`, applied `"off"`, coerced False; features always pass the
+  configured Effort. `reasoning.build`: if no lower supported effort exists, use the lowest
+  supported one (`coerced=True`); for a mandatory-reasoning model asked for `off`, applied = the
+  lowest name in `meta.efforts`, `coerced=True`, reasoning omitted so the provider default runs;
+  `slot_start.effort` reports the applied value.
+- Create the `httpx.AsyncClient` per call (or lazily per running loop): pytest-asyncio gives
+  every test a fresh event loop, so a module-level client raises "Event loop is closed".
+- `ModelMeta.vendor` = the slug prefix before the first `/` (`anthropic`, `openai`, `x-ai`, …),
+  never OpenRouter's display name; `name` = OpenRouter `name`. `schemas.SLOT_VENDORS` maps
+  slots to vendors. `llm/fixtures/models.json` must contain at least the ten slugs in
+  `docs/decisions.md` with their verified `reasoning` blocks and `supported_parameters`.
+
+### Store (`backend/store`, W2)
+
+- `create(slot_config=None, title=None, *, anon_map=None)`: `anon_map` (tests only) is validated
+  as a permutation of SLOT_IDS and stamped verbatim; otherwise `MOCK_ANON_MAP =
+  {"R1":"claude","R2":"chatgpt","R3":"grok"}` when `settings().mock_openrouter`, else
+  `new_anon_map()`. `delete -> bool` (False when missing); `rename` / `update_slot_config ->
+  Conversation` (raise `api_errors.not_found()` when missing). `update_slot_config` replaces the
+  object; nothing mutates a SlotConfig in place; every turn stamps
+  `conv.slot_config.model_copy(deep=True)`.
+- No process-level cache of documents or the index; every call resolves `settings().data_dir`
+  afresh. `busy_guard` semantics are in its docstring (feature enters before first yield,
+  producer task releases in `finally`, re-entrant per task via a ContextVar).
+
+### Mock capture (`backend/llm/mock.py`)
+
+`mock.calls` records every transport call in order (`{role, purpose, model, messages, reasoning,
+response_format, plugins, max_tokens, fixture}`); `mock.reset()` clears counters and calls.
+`MOCK_SCENARIO` and `MOCK_FIXTURES_DIR` are read from `settings()` on every lookup; tests switch
+scenario with `monkeypatch.setenv("MOCK_SCENARIO", "stalemate")`.
