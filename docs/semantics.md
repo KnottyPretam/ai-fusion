@@ -169,3 +169,9 @@ object, every turn stamps `conv.slot_config.model_copy(deep=True)`.
 
 **Live tests.** `tests/live/conftest.py` sets `MOCK_OPENROUTER=0` and skips every test when
 `settings().openrouter_api_key` is None; the shared conftest blanks the key for non-live tests.
+
+**Delimiter breakout.** `backend/prompts.delimited(label, text)` neutralises every `<<<` inside
+the quoted text (`<<<` → `<< <`) so a model- or web-authored string can never close its own block;
+quoted blocks are verbatim except for this one substitution. Any other place that interpolates
+model-authored text into a prompt (e.g. a divergence `topic`) must go through `delimited` (and
+`anon.scrub`) as well.

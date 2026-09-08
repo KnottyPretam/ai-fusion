@@ -15,5 +15,18 @@ QUOTED_DATA_NOTICE = (
 )
 
 
+# A quoted text that itself contains the delimiter marker could otherwise "close" its block and
+# smuggle instructions into the un-quoted zone. Blocks are verbatim except for this substitution.
+_MARKER = "<<<"
+_NEUTRALISED = "<< <"
+
+
+def neutralise(text: str) -> str:
+    """Break every `<<<` sequence inside quoted text so it can never form a delimiter."""
+    return text.replace(_MARKER, _NEUTRALISED)
+
+
 def delimited(label: str, text: str) -> str:
-    return f"{DELIM_OPEN.format(label=label)}\n{text}\n{DELIM_CLOSE.format(label=label)}"
+    return (
+        f"{DELIM_OPEN.format(label=label)}\n{neutralise(text)}\n{DELIM_CLOSE.format(label=label)}"
+    )
