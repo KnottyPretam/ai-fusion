@@ -1,0 +1,12 @@
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The ACC_CON"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"F register's odr field accepts 0x05 through "},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0x0C, and the datasheet map"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s 0x0C to 1600 Hz; the accelerometer"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" specification table also lists"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 1600 Hz as the top"},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" output data rate. 800 Hz is code 0x0B, one "},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"step below the maximum.\", \""},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"revised_claim\": null, \"confidence\": "},"finish_reason":null}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0.95, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-59097fd0eebbc694","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":574,"completion_tokens":86,"total_tokens":660,"cost":0.00502,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

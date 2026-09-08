@@ -1,0 +1,19 @@
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Given the p"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"eers' consistent statement that the range is"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" selectable up to 2000 deg/"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s through the gyroscope range regist"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"er, I now frame the 2000 deg/s "},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"setting as availabl"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e but not what I would call the rated full s"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cale, which I continue to p"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ut at 1000 deg/s for linearity reaso"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ns.\", \"revised_claim\": \"2000 de"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"g/s is a selectable"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" setting, but the rated full-scale range for"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" specified linearity is 100"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 deg/s.\", \"confidence\": 0.58, \"pers"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"uaded_by\": \"the selectable 2000"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" deg/s register set"},"finish_reason":null}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ting cited by both peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-f41811c118e2ac1e","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":582,"completion_tokens":137,"total_tokens":719,"cost":0.002534,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

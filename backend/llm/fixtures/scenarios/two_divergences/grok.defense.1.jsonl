@@ -1,0 +1,10 @@
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The gyrosco"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"pe's range register offers 125 through 2000 "},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"deg/s and the datasheet spe"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cification table gives 2000 deg/s as"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" the maximum; 1000 deg/s is mid"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"-scale.\", \"revised_"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"claim\": null, \"confidence\": 0.93, \"persuaded"},"finish_reason":null}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-66192a7e364d18bd","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":583,"completion_tokens":66,"total_tokens":649,"cost":0.001562,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,12 @@
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Zero-rate offset for the "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"BMI088 gyro is +/-1 deg/s typical "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at room temperature, "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with a temperature coefficient of "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"about 0.015 deg/s per kelvin. It is "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"listed in "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the gyroscope section of the "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"datasheet's electrical characteristics; look "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"for the row labelled zero-rate offset "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"in the current "},"finish_reason":null}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"datasheet revision."},"finish_reason":"stop"}]}
+{"id":"gen-2e8ecc3e149f774a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":48,"completion_tokens":77,"total_tokens":125,"cost":0.000866,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,10 @@
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"10 MHz is t"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he maximum SPI clock for both dies per the i"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nterface timing specificati"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on (100 ns minimum SCK period); ther"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e is no 8 MHz limit anywhere in"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" the datasheet.\", \""},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"revised_claim\": null, \"confidence\": 0.92, \"p"},"finish_reason":null}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ersuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-404a64dcb081c38c","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":567,"completion_tokens":68,"total_tokens":635,"cost":0.001542,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

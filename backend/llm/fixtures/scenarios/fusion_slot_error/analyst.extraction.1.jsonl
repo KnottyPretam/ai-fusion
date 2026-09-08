@@ -1,0 +1,21 @@
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"Gyro"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"scope rate\", \"state"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ment\": \"The gyroscope's maximum output data "},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rate is 2000 Hz.\", \"models\""},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": [\"R1\", \"R2\", \"R3\"]}], \"divergences"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": [{\"id\": \"d1\", \"topic\": \"Maxi"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"mum accelerometer o"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"utput data rate\", \"positions\": [{\"model\": \"R"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1\", \"claim\": \"The accelerom"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"eter's maximum output data rate is 1"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"600 Hz.\", \"evidence_cited\": \"AC"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"C_CONF odr field = "},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0x0C\"}, {\"model\": \"R2\", \"claim\": \"The accele"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rometer's maximum output da"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ta rate is 800 Hz.\", \"evidence_cited"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\": null}, {\"model\": \"R3\", \"clai"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"m\": \"The accelerome"},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ter's highest output data rate is 1600 Hz.\","},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"evidence_cited\": null}], "},"finish_reason":null}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"materiality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-be3aa0bf2da2313d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":675,"completion_tokens":154,"total_tokens":829,"cost":0.0003198,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

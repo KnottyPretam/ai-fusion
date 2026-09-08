@@ -1,0 +1,18 @@
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The complem"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"entary filter's accelerometer gating is exac"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tly the hand-tuned heuristi"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"c that the EKF replaces with a princ"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ipled innovation test, and the "},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"covariance also car"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ries the gyro-bias uncertainty through the q"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"uaternion states. At under "},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"50 microseconds per update the EKF c"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"osts nothing meaningful on this"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" processor, and it "},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"keeps the estimator extensible when a barome"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ter or optical flow is adde"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"d.\", \"revised_claim\": null, \"confide"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nce\": 0.78, \"persuaded_by\": nul"},"finish_reason":null}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"l}"},"finish_reason":"stop"}]}
+{"id":"gen-4804db8230f13fb0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":561,"completion_tokens":126,"total_tokens":687,"cost":0.002382,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,18 @@
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-679b3d13-0","index":0,"text":"Accel ODR table: 12.5 ... 1600 Hz. Oversample at 1600 Hz and average to 400 Hz.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Select 1600 Hz ODR "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with the normal (non-OSR4) filter, giving "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"roughly 280 Hz "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"of bandwidth, and decimate or "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"average four samples per 400 Hz control "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"step. Running "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the accelerometer at exactly the "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"loop rate is not "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"possible in a useful way (the "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ODR table is "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"12.5 Hz times powers of "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"two up to 1600 Hz), and the "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"oversampling reduces "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"vibration aliasing more than picking "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the nearest 400 Hz "},"finish_reason":null}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"setting would."},"finish_reason":"stop"}]}
+{"id":"gen-679b3d139f3140ec","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":64,"completion_tokens":119,"total_tokens":183,"cost":0.003295,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":20}}}

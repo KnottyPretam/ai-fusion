@@ -1,0 +1,5 @@
+{"id":"gen-c3171a997b606daa","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"The gyroscope maxes out "},"finish_reason":null}]}
+{"id":"gen-c3171a997b606daa","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at 1000 deg/s full scale, and "},"finish_reason":null}]}
+{"id":"gen-c3171a997b606daa","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the SPI bus "},"finish_reason":null}]}
+{"id":"gen-c3171a997b606daa","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is limited to 8 MHz."},"finish_reason":"stop"}]}
+{"id":"gen-c3171a997b606daa","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":59,"completion_tokens":22,"total_tokens":81,"cost":0.000338,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

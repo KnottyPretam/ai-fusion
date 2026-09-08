@@ -1,0 +1,19 @@
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"```json\n{\n  \"agreements\": [\n   "},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" {\n      \"topic\": \""},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Default output data rate\",\n      \"statement\""},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"The gyroscope powers on "},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at a 2000 Hz output data rate.\",\n   "},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"   \"models\": [\"R1\", \"R2\", \"R3\"]"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\n    }\n  ],\n  \"dive"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rgences\": [\n    {\n      \"id\": \"d1\",\n      \"t"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"opic\": \"Default filter band"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"width and GYRO_BANDWIDTH reset value"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\",\n      \"positions\": [\n       "},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" {\"model\": \"R1\", \"c"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"laim\": \"Default bandwidth is 532 Hz (GYRO_BA"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"NDWIDTH reset value 0x80).\""},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", \"evidence_cited\": null},\n        {"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\"model\": \"R2\", \"claim\": \"Defaul"},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"t bandwidth is 230 "},"finish_reason":null}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Hz (reset val"},"finish_reason":"length"}]}
+{"id":"gen-77815d0194f98aed","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":651,"completion_tokens":134,"total_tokens":785,"cost":0.000291,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,8 @@
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"The accelerometer tops out "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at 800 Hz ODR. If you "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"need faster updates "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the gyroscope side runs to "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"2000 Hz, but the accelerometer die is "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"limited to "},"finish_reason":null}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"800 Hz."},"finish_reason":"stop"}]}
+{"id":"gen-e002f638e154f6ff","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":49,"completion_tokens":38,"total_tokens":87,"cost":0.000478,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

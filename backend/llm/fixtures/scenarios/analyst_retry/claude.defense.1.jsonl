@@ -1,0 +1,11 @@
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The registe"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"r map lists GYRO_BANDWIDTH (0x10) with reset"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" value 0x80, and the bandwi"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"dth table maps 0x80 to ODR 2000 Hz w"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ith a 532 Hz filter; 0x81 is th"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e 2000 Hz / 230 Hz "},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"setting that must be written explicitly.\", \""},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"revised_claim\": null, \"conf"},"finish_reason":null}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"idence\": 0.94, \"persuaded_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-8760d07472874b02","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":582,"completion_tokens":79,"total_tokens":661,"cost":0.004885,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

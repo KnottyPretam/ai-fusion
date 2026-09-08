@@ -1,0 +1,20 @@
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Here is my comparison of the th"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ree reviewers.\n\nAll"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" three agree on the same architecture:\n- the"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" gyroscope's 1000 Hz data-r"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"eady interrupt clocks the estimator;"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\n- the accelerometer runs at 16"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"00 Hz on its own in"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"terrupt;\n- the newest accelerometer sample i"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s timestamped and consumed "},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"in the gyro-driven step;\n- the two d"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ies have independent clocks, so"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" alignment is handl"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ed by timestamps rather than phase locking.\n"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\nI did not find a substanti"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ve divergence. R1 quantifies the off"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"set as sub-millisecond and R3 a"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s under 625 microse"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"conds, which are compatible statements of th"},"finish_reason":null}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e same bound."},"finish_reason":"stop"}]}
+{"id":"gen-9478e2503b8bbdd7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":676,"completion_tokens":145,"total_tokens":821,"cost":0.0003092,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

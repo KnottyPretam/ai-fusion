@@ -1,0 +1,16 @@
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"defend\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Adaptive tr"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ust in the EKF depends on process and measur"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ement noise values that are"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" still chosen by hand, so on a small"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" quadrotor it does not remove t"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"uning, it relocates"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" it. The complementary filter has no lineari"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sation, cannot diverge from"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" a bad covariance, and matches the E"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"KF within the vibration-limited"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" accuracy floor of "},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"a 250 g airframe.\", \"revised_claim\": null, \""},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"confidence\": 0.82, \"persuad"},"finish_reason":null}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ed_by\": null}"},"finish_reason":"stop"}]}
+{"id":"gen-ea1f40befc57cc9d","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":588,"completion_tokens":112,"total_tokens":700,"cost":0.001848,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

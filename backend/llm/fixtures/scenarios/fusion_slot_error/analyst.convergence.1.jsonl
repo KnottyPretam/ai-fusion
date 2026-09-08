@@ -1,0 +1,4 @@
+{"id":"gen-eeb07b2bcbbb0fef","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"statuses\": [{\"divergence_id\":"},"finish_reason":null}]}
+{"id":"gen-eeb07b2bcbbb0fef","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"d1\", \"status\": \"s"},"finish_reason":null}]}
+{"id":"gen-eeb07b2bcbbb0fef","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tanding\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-eeb07b2bcbbb0fef","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":262,"completion_tokens":16,"total_tokens":278,"cost":7.16e-05,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

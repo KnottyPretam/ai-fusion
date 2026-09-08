@@ -1,0 +1,9 @@
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"The gyro comes up "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at 2000 Hz ODR with a "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"230 Hz bandwidth "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by default (GYRO_BANDWIDTH register reset "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"value 0x81). Most flight stacks reconfigure it "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to 1000 "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Hz / 116 Hz right "},"finish_reason":null}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"after reset."},"finish_reason":"stop"}]}
+{"id":"gen-b7f1fcddc127b127","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":45,"completion_tokens":46,"total_tokens":91,"cost":0.00055,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

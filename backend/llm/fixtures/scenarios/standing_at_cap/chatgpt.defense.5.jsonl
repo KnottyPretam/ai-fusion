@@ -1,0 +1,18 @@
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The peers' "},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"description of the gyroscope range as select"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"able up to 2000 deg/s is ac"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"curate as far as the register goes; "},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"I revise once more to say the m"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"aximum usable range"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" is 2000 deg/s with a caveat, while keeping "},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1000 deg/s as the range I w"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ould recommend designing to.\", \"revi"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sed_claim\": \"Up to 2000 deg/s i"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s selectable, but 1"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"000 deg/s is the recommended design full-sca"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"le range.\", \"confidence\": 0"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".55, \"persuaded_by\": \"the selectable"},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" range up to 2000 deg/s stated "},"finish_reason":null}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by the two peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-4a39387722713edb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":569,"completion_tokens":130,"total_tokens":699,"cost":0.002438,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

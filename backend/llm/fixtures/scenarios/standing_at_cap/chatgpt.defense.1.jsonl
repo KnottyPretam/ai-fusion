@@ -1,0 +1,20 @@
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Both peers "},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"describe the gyroscope range as selectable u"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"p to 2000 deg/s and the GYR"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"O_RANGE register does expose a 2000 "},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"deg/s code, but the specificati"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on table I am readi"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ng rates only 1000 deg/s across the full tem"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"perature range, so I revise"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" to a qualified figure rather than t"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he unqualified maximum.\", \"revi"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sed_claim\": \"The gy"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"roscope offers a 2000 deg/s range code, but "},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the guaranteed full-scale r"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ange over temperature is 1000 deg/s."},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\", \"confidence\": 0.62, \"persuad"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ed_by\": \"the GYRO_R"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ANGE register codes and the selectable range"},"finish_reason":null}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" described by the peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-d3d6bbca63dd5133","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":591,"completion_tokens":148,"total_tokens":739,"cost":0.002662,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

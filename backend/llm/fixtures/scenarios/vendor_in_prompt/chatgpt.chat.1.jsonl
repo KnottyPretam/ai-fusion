@@ -1,0 +1,7 @@
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"The maximum SPI clock "},"finish_reason":null}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is 8 MHz for the BMI088. "},"finish_reason":null}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Use SPI mode "},"finish_reason":null}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 or 3 and remember "},"finish_reason":null}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the accelerometer's read transactions include a leading "},"finish_reason":null}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"dummy byte."},"finish_reason":"stop"}]}
+{"id":"gen-c30f518c6982b495","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":65,"completion_tokens":37,"total_tokens":102,"cost":0.0005,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

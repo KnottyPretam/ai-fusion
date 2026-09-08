@@ -1,0 +1,9 @@
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-34c204f2-0","index":0,"text":"1600 Hz accel, 2000 Hz gyro.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1600 Hz is the "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"accelerometer's highest ODR on the BMI088; "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"2000 Hz belongs "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to the gyroscope. Below that "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the table is 800, 400, 200, 100, "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"50, 25 "},"finish_reason":null}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and 12.5 Hz."},"finish_reason":"stop"}]}
+{"id":"gen-34c204f24293abde","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":52,"completion_tokens":46,"total_tokens":98,"cost":0.00038,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":7}}}

@@ -1,0 +1,13 @@
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-55800a07-0","index":0,"text":"Operating conditions table: -40 C to +85 C, both dies.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"The BMI088 is rated "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"for an operating temperature range of "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"-40 C to "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"+85 C for both the "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"accelerometer and the gyroscope. The specifications in "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the datasheet "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"are given at 25 C "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with drift coefficients over "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"that range; there is no extended "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"automotive grade of "},"finish_reason":null}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"this part."},"finish_reason":"stop"}]}
+{"id":"gen-55800a076ae395f5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":43,"completion_tokens":81,"total_tokens":124,"cost":0.00224,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":14}}}

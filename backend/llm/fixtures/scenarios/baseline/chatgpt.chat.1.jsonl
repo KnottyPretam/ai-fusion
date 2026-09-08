@@ -1,0 +1,24 @@
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.summary","id":"rs-963cbb45-0","index":0,"summary":"Comparing the failure modes of gyro integration and accelerometer tilt sensing."}]},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Each sensor alone has "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"a failure mode the other covers. "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Integrating gyroscope rates "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"gives smooth attitude over short "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"intervals but drifts without bound because bias "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"errors integrate. "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"An accelerometer provides an absolute "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"gravity reference for roll "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and pitch that does not drift, "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"yet it is "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"noisy and biased by any "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"linear acceleration of the vehicle. A complementary "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"or Kalman "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"filter blends the two: high-pass "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the gyro integral, low-pass "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the accelerometer tilt, and the result "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is both smooth "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and drift-bounded. Yaw is unobservable "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"from gravity alone, so a magnetometer or "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"GNSS heading "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is added for full 3-axis "},"finish_reason":null}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"attitude."},"finish_reason":"stop"}]}
+{"id":"gen-963cbb4550fb09b3","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":38,"completion_tokens":174,"total_tokens":212,"cost":0.001816,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":20}}}

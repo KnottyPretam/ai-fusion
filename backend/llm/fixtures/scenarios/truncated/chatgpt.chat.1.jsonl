@@ -1,0 +1,25 @@
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.summary","id":"rs-a4507457-0","index":0,"summary":"Setting up the continuous model and integrating."}]},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Start from the continuous-time "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model: position p and velocity v, "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with v-dot equal "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to white noise w(t) of "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"spectral density q. The state transition over "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"one period "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"T is Phi = [[1, "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"T], [0, 1]]. The "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"discrete process noise is the integral "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"of Phi(tau) G "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"q G^T Phi(tau)^T over tau "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"from 0 to T, where G = "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"[0, 1]^T. "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Writing out Phi(tau) G = "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"[tau, 1]^T, the integrand "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"becomes q * [[tau^2, tau], [tau, "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1]]. Integrating term "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"by term: the (1,1) entry "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is q * T^3 / 3, the "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"(1,2) and "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"(2,1) entries are q * "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"T^2 / 2, and "},"finish_reason":null}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the (2,2) entry"},"finish_reason":"length"}]}
+{"id":"gen-a4507457008e9cf1","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":54,"completion_tokens":142,"total_tokens":196,"cost":0.001528,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":12}}}

@@ -1,0 +1,19 @@
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Both peers "},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"give 1600 Hz as the accelerometer's maximum "},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"output data rate and the AC"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"C_CONF odr code 0x0C does select it;"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" I had stopped at the 800 Hz en"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"try. I still read 1"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"600 Hz as available only with the OSR4 overs"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ampling filter disabled, so"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" I revise to a conditional figure.\","},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"revised_claim\": \"The accelero"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"meter reaches a 160"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 Hz output data rate only with oversampling"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" disabled; otherwise 800 Hz"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":".\", \"confidence\": 0.66, \"persuaded_b"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"y\": \"the ACC_CONF odr code 0x0C"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" and the 1600 Hz ma"},"finish_reason":null}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ximum cited by both peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-d93510aa95b1b2a7","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":596,"completion_tokens":137,"total_tokens":733,"cost":0.002562,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

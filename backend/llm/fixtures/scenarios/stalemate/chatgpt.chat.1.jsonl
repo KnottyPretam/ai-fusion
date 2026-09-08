@@ -1,0 +1,24 @@
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"An EKF is the "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"better choice, and the Cortex-M4 has "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"plenty of headroom "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"for it. A multiplicative quaternion "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"EKF with gyro-bias states runs comfortably at "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"500 Hz "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to 1 kHz with hardware "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"floating point; a well-written "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"implementation takes under 50 microseconds per "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"update. The advantage "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"over a complementary filter is "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"that measurement trust adapts through the covariance: "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"during aggressive "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"maneuvers the accelerometer innovation grows "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and the filter automatically "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"leans on the gyro, whereas a "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"fixed-gain filter needs "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"hand-tuned heuristics for the same "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"behaviour. It also makes adding a magnetometer, "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"barometer, or "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"optical flow later a matter "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"of adding a measurement "},"finish_reason":null}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model rather than redesigning the estimator."},"finish_reason":"stop"}]}
+{"id":"gen-508fbafbc9fc58e5","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":43,"completion_tokens":177,"total_tokens":220,"cost":0.001856,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

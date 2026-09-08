@@ -1,0 +1,18 @@
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Both peers "},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"state the gyroscope range is selectable up t"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"o 2000 deg/s, and the datas"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"heet's GYRO_RANGE register (0x0F) co"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nfirms codes 0x00 through 0x04 "},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"for 2000, 1000, 500"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", 250 and 125 deg/s. I had quoted the 1000 d"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"eg/s intermediate setting a"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s the maximum, which is incorrect.\","},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"revised_claim\": \"The gyroscop"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e full-scale range "},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is selectable up to 2000 deg/s.\", \"confidenc"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e\": 0.9, \"persuaded_by\": \"t"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he specific GYRO_RANGE register code"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s and the 2000 deg/s maximum ci"},"finish_reason":null}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ted by both peers\"}"},"finish_reason":"stop"}]}
+{"id":"gen-4916388224fe2a7a","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":570,"completion_tokens":131,"total_tokens":701,"cost":0.00245,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

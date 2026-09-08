@@ -1,0 +1,17 @@
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Use the gyro data-ready "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"interrupt as the master clock at "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"1000 Hz and "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"poll the accelerometer at 1600 "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Hz from its own interrupt into a "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ring buffer. "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"In the gyro ISR, read "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the latest accel sample "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and its timestamp. Do not try "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"to phase-lock the "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"two ODRs; the BMI088 has "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"independent clocks for the two dies, so "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"a small "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"drift between them is unavoidable "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and harmless when you "},"finish_reason":null}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"timestamp."},"finish_reason":"stop"}]}
+{"id":"gen-b3a67874c918f7fb","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":44,"completion_tokens":95,"total_tokens":139,"cost":0.001038,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

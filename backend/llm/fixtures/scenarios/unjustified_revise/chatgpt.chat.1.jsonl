@@ -1,0 +1,9 @@
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"The accelerometer sits at "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0x68 by default, or 0x69 if "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"you pull SDO "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"high. Note that the gyro "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"and accel have independent address pins, so "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"make sure "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the two do not collide "},"finish_reason":null}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on the bus."},"finish_reason":"stop"}]}
+{"id":"gen-25275c68de5c1824","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":46,"completion_tokens":45,"total_tokens":91,"cost":0.000542,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}
