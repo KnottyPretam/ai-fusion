@@ -75,6 +75,33 @@ def test_aggregate_and_session_cost():
     assert metering.session_cost_usd() == pytest.approx(0.25)
 
 
+def test_session_cost_status_snapshot(monkeypatch):
+    """The one-call readout for a footer / CLI: mirrors the client's refusal rule exactly."""
+    metering.reset_session_cost()
+    monkeypatch.setenv("SESSION_COST_CAP_USD", "0.5")
+    s = metering.session_cost_status()
+    assert s == {
+        "spent_usd": 0.0,
+        "cap_usd": 0.5,
+        "remaining_usd": 0.5,
+        "exceeded": False,
+        "enforced": False,  # mock mode: nothing is ever refused
+    }
+    monkeypatch.setenv("MOCK_OPENROUTER", "0")
+    metering.add_session_cost(0.2)
+    s = metering.session_cost_status()
+    assert s["enforced"] is True and s["exceeded"] is False
+    assert s["spent_usd"] == pytest.approx(0.2) and s["remaining_usd"] == pytest.approx(0.3)
+    metering.add_session_cost(0.3)  # spent == cap: refused (the client checks spent >= cap)
+    s = metering.session_cost_status()
+    assert s["exceeded"] is True and s["remaining_usd"] == 0.0
+    metering.add_session_cost(1.0)
+    assert metering.session_cost_status()["remaining_usd"] == 0.0  # never negative
+    monkeypatch.setenv("SESSION_COST_CAP_USD", "0")
+    metering.reset_session_cost()
+    assert metering.session_cost_status()["exceeded"] is True  # cap 0 refuses the first call
+
+
 def test_format_log_line_is_feature_agnostic():
     u = Usage(
         prompt_tokens=10,

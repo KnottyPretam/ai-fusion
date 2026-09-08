@@ -662,6 +662,7 @@ async def complete_json(
     for attempt in range(attempts):
         parts: list[str] = []
         transport_error: Delta | None = None
+        truncated = False
         async for d in stream_completion(
             role=role,
             purpose=purpose,
@@ -674,10 +675,24 @@ async def complete_json(
             if d.kind == "text":
                 parts.append(d.text)
             elif d.kind == "done":
+                truncated = bool(d.truncated)
                 if d.usage is not None:
                     usage.add(d.usage)
             elif d.kind == "error":
                 transport_error = d
+        if truncated:
+            # The `truncated` flag has no field in this function's frozen return tuple: surface
+            # the cap hit where an operator sees it (the parse error below says so too).
+            log.warning(
+                "complete_json output truncated at max_tokens=%s (finish_reason=length) "
+                "role=%s purpose=%s model=%s attempt=%d/%d",
+                max_tokens,
+                role,
+                purpose,
+                model,
+                attempt + 1,
+                attempts,
+            )
         if transport_error is not None:
             usage.set_wall_clock(int((time.monotonic() - started) * 1000))
             te = transport_error

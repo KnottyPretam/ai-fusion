@@ -367,6 +367,41 @@ async def test_missing_api_key_keeps_its_reason(live_transport, respx_router, mo
     assert respx_router.calls.call_count == 0
 
 
+async def test_truncated_attempt_is_logged_and_named_in_the_error(
+    live_transport, respx_router, caplog
+):
+    """`complete_json` cannot return the `truncated` flag (frozen 4-tuple): the cap hit is
+    logged as a WARNING per attempt, and the parse error tells the model its output was cut."""
+    caplog.set_level("WARNING", logger="triplex.llm.client")
+    cut = '{"stance": "defend", "justification": "the datasheet table lists'
+    route = respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body(
+                chunk(content=cut, finish="length"),
+                chunk(content="", finish="length", usage=usage_obj()),
+            ),
+        )
+    )
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, **DEFENSE
+    )
+    assert parsed is None and raw == cut and route.call_count == 2
+    assert usage.totals.calls == 2
+    assert error and error.startswith("parse_error") and "truncated" in error
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "triplex.llm.client" and r.levelname == "WARNING"
+    ]
+    assert len(warnings) == 2  # one per truncated attempt
+    assert "truncated at max_tokens=2000" in warnings[0]
+    assert "role=claude purpose=defense model=anthropic/claude-opus-5 attempt=1/2" in warnings[0]
+    assert "attempt=2/2" in warnings[1]
+    sent = json.loads(route.calls[1].request.content)["messages"]
+    assert sent[-1]["content"] == RETRY_USER_MESSAGE.format(error=error)
+
+
 async def test_empty_first_attempt_retries_without_an_empty_assistant_message(
     live_transport, respx_router
 ):

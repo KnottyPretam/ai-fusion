@@ -1,0 +1,2 @@
+{"id":"gen-dupes-k1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"Up to 2000 deg/s."},"finish_reason":"stop"}]}
+{"id":"gen-dupes-k1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18,"cost":0.00005,"completion_tokens_details":{"reasoning_tokens":0}}}
