@@ -1,0 +1,4 @@
+{"id":"gen-mini-c1","object":"chat.completion.chunk","model":"anthropic/claude-opus-5","choices":[{"index":0,"delta":{"role":"assistant","content":"The BMI088 gyroscope "},"finish_reason":null}]}
+{"id":"gen-mini-c1","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Recall the datasheet table."}]},"finish_reason":null}]}
+{"id":"gen-mini-c1","choices":[{"index":0,"delta":{"content":"full-scale range is selectable up to 2000 deg/s."},"finish_reason":"stop"}]}
+{"id":"gen-mini-c1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":20,"completion_tokens":12,"total_tokens":32,"cost":0.0004,"completion_tokens_details":{"reasoning_tokens":3}}}

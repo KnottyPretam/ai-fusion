@@ -1,0 +1,2 @@
+{"id":"gen-mini-v1","object":"chat.completion.chunk","model":"openai/gpt-5.6-luna","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"statuses\": [{\"divergence_id\": \"d1\", \"status\": \"resolved\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-mini-v1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":80,"completion_tokens":14,"total_tokens":94,"cost":0.00003,"completion_tokens_details":{"reasoning_tokens":0}}}

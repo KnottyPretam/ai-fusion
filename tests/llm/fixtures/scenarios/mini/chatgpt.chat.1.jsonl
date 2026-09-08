@@ -1,0 +1,2 @@
+{"id":"gen-mini-g1","object":"chat.completion.chunk","model":"openai/gpt-5.6-sol","choices":[{"index":0,"delta":{"role":"assistant","content":"Its gyroscope tops out at 1000 deg/s full scale and the answer keeps going and"},"finish_reason":"length"}]}
+{"id":"gen-mini-g1","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":20,"completion_tokens":16,"total_tokens":36,"cost":0.0001,"completion_tokens_details":{"reasoning_tokens":0}}}

@@ -1,0 +1,2 @@
+{"id":"gen-mini-c2","object":"chat.completion.chunk","model":"anthropic/claude-opus-5","choices":[{"index":0,"delta":{"role":"assistant","content":"Second reply from the first slot."},"finish_reason":"stop"}]}
+{"id":"gen-mini-c2","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":30,"completion_tokens":8,"total_tokens":38,"cost":0.0002,"completion_tokens_details":{"reasoning_tokens":0}}}
