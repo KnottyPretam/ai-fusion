@@ -14,6 +14,15 @@ export const ITERATION_OPTIONS = [1, 2, 3, 4, 5]
 export const MATERIALITY_OPTIONS = ['low', 'medium', 'high']
 const EMPTY_MODELS = { items: [], byId: {}, loaded: false, error: null }
 
+// PLAN §2 R6 / §8 Phase 5. Pricing wording follows docs/openrouter-notes.md "Web search": a
+// per-request search fee (engine-dependent, roughly $0.001-$0.015; native search is billed by
+// the provider) plus the prompt tokens of the injected results, on every grounded call.
+export const GROUNDED_LABEL = 'Grounded (web search on Send)'
+export const GROUNDED_TITLE =
+  'Adds the OpenRouter web-search plugin to every Send (three calls) and every solo continue; never to Analyze or Fusion. ' +
+  'Costs extra: each grounded call pays a per-request search fee (engine-dependent, roughly $0.001-$0.015; native search is billed by the provider) ' +
+  'plus the prompt tokens of the injected results, on top of the model\'s own usage. Replies carry url citations.'
+
 const byName = (a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id))
 
 // The analyst answers in strict JSON, so models advertising structured outputs come first (the
@@ -131,7 +140,7 @@ export default function SlotConfigBar() {
           ))}
         </select>
       </label>
-      <label className={css.field}>
+      <label className={css.field} title={GROUNDED_TITLE} data-testid="config-grounded-label">
         <input
           type="checkbox"
           data-testid="config-grounded"
@@ -139,7 +148,7 @@ export default function SlotConfigBar() {
           disabled={disabled}
           onChange={(e) => save({ grounded: e.target.checked })}
         />
-        <span>Grounded (web search on Send)</span>
+        <span>{GROUNDED_LABEL}</span>
       </label>
       {disabled && (
         <span className={css.hint} data-testid="config-hint">

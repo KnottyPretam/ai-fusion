@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import './index.jsx' // registers the `slots` slice
+import '../meter/index.jsx' // registers the `meter` slice: the columns mirror its session cost-cap flag
 import SlotColumn from './SlotColumn.jsx'
-import { domainOf, fmtCost, fmtTokens } from './SlotColumn.jsx'
+import { COST_CAP_TEXT, domainOf, fmtCost, fmtTokens } from './SlotColumn.jsx'
 import { useDispatch } from '../../state/store.jsx'
 import { applyEvents, renderWithStore, sample } from '../../state/testing.jsx'
 
@@ -449,5 +450,204 @@ describe('formatting helpers', () => {
     expect(fmtCost(undefined)).toBe('-')
     expect(domainOf('https://www.example.com/x?y=1')).toBe('example.com')
     expect(domainOf('not a url')).toBe('not a url')
+  })
+})
+
+describe('SlotColumn: Phase 5 — grounded badge, citations, cost cap', () => {
+  // The exact wording backend/llm/client.py puts in slot_error.message (no code inside it).
+  const CAP_MSG = 'session cost cap reached: spent $10.0412 of SESSION_COST_CAP_USD=$10.00; live calls refused'
+  const capError = (slot) => ({ type: 'slot_error', slot, code: 'cost_cap_exceeded', error_type: 'triplex', message: CAP_MSG, partial: '' })
+  const cite = (url, title) => ({ type: 'url_citation', url_citation: { url, title } })
+  const noUsage = { calls: [], totals: {} }
+  const cappedTurn = () => ({
+    id: 't1',
+    type: 'send',
+    prompt: 'q',
+    slot_config: CFG,
+    responses: { claude: null, chatgpt: 'b', grok: 'c' },
+    errors: { claude: CAP_MSG },
+    partial: { claude: '' },
+    effort_applied: { claude: 'medium', chatgpt: 'medium', grok: 'medium' },
+    usage: noUsage,
+  })
+  const cappedConv = () =>
+    conv({ threads: { claude: [], chatgpt: [msg('user', 'q'), msg('assistant', 'b')], grok: [msg('user', 'q'), msg('assistant', 'c')] }, turns: [cappedTurn()] })
+
+  test('the grounded badge on the header follows slotConfig.grounded, live', () => {
+    let dispatch
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <SlotColumn slot="grok" onContinue={() => {}} />
+        <DispatchProbe onReady={(d) => (dispatch = d)} />
+      </>,
+      { preloaded: preloadedWith(conv()) },
+    )
+    expect(screen.queryByTestId('slot-claude-grounded')).toBeNull()
+    expect(screen.queryByTestId('slot-grok-grounded')).toBeNull()
+    act(() => dispatch({ type: 'slotConfig/update', patch: { grounded: true } }))
+    for (const slot of ['claude', 'grok']) {
+      const badge = screen.getByTestId(`slot-${slot}-grounded`)
+      expect(badge).toHaveTextContent('grounded')
+      expect(badge).toHaveAttribute('title', expect.stringMatching(/web-search plugin/))
+      // It sits in the header's title row, next to the provider label.
+      expect(badge.parentElement).toBe(screen.getByTestId(`slot-${slot}-label`).parentElement)
+    }
+    act(() => dispatch({ type: 'slotConfig/update', patch: { grounded: false } }))
+    expect(screen.queryByTestId('slot-claude-grounded')).toBeNull()
+    // A loaded conversation with grounded on shows it straight away.
+    act(() => dispatch({ type: 'conversation/loaded', conversation: conv({ id: 'c2', slot_config: { ...CFG, grounded: true } }) }))
+    expect(screen.getByTestId('slot-claude-grounded')).toBeInTheDocument()
+  })
+
+  test('persisted citations of send and continue turns are de-duplicated domain links that open in a new tab', () => {
+    const sendTurn = {
+      id: 't1',
+      type: 'send',
+      prompt: 'q',
+      slot_config: CFG,
+      responses: { claude: 'a', chatgpt: 'b', grok: 'c' },
+      citations: {
+        claude: [
+          cite('https://www.bosch-sensortec.com/media/bst-bmi088-ds001.pdf', 'BMI088 Datasheet'),
+          cite('https://www.bosch-sensortec.com/media/bst-bmi088-ds001.pdf', 'BMI088 Datasheet (again)'), // same url twice
+          cite('javascript:alert(1)', 'evil'),
+        ],
+      },
+      effort_applied: { claude: 'medium', chatgpt: 'medium', grok: 'medium' },
+      usage: noUsage,
+    }
+    const contTurn = {
+      id: 't2',
+      type: 'continue',
+      slot: 'claude',
+      prompt: 'more',
+      response: 'r',
+      citations: [cite('https://example.org/x', 'Ex'), cite('http://example.org/y', 'Ex plain http'), cite('https://example.org/x', 'dup')],
+      truncated: false,
+      effort_applied: 'medium',
+      slot_config: CFG,
+      usage: noUsage,
+    }
+    const c = conv({
+      threads: { claude: [msg('user', 'q'), msg('assistant', 'a'), msg('user', 'more', { turn_id: 't2' }), msg('assistant', 'r', { turn_id: 't2' })], chatgpt: [], grok: [] },
+      turns: [sendTurn, contTurn],
+    })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const messages = screen.getAllByTestId('slot-claude-message')
+    expect(messages).toHaveLength(4)
+    // SendTurn.citations[claude] under t1's reply (an older turn: no test id, so query the DOM).
+    const older = messages[1]
+    expect(older.querySelectorAll('ol li')).toHaveLength(2) // the duplicate url was dropped, the javascript: item kept as text
+    const olderLinks = older.querySelectorAll('a')
+    expect(olderLinks).toHaveLength(1)
+    expect(olderLinks[0]).toHaveTextContent('bosch-sensortec.com') // hostname text, www. stripped
+    expect(olderLinks[0]).toHaveAttribute('href', 'https://www.bosch-sensortec.com/media/bst-bmi088-ds001.pdf')
+    expect(olderLinks[0]).toHaveAttribute('target', '_blank')
+    expect(olderLinks[0].getAttribute('rel')).toMatch(/\bnoopener\b/)
+    expect(older).toHaveTextContent('BMI088 Datasheet')
+    expect(older).not.toHaveTextContent('(again)')
+    expect(older).toHaveTextContent('javascript:alert(1)')
+    expect(older.querySelector('a[href^="javascript"]')).toBeNull()
+    // ContinueTurn.citations under t2's reply (the newest turn carries the test id).
+    const cites = screen.getByTestId('slot-claude-citations')
+    expect(cites.querySelectorAll('li')).toHaveLength(2)
+    const links = within(cites).getAllByRole('link')
+    expect(links.map((l) => l.textContent)).toEqual(['example.org', 'example.org'])
+    expect(links.map((l) => l.getAttribute('href'))).toEqual(['https://example.org/x', 'http://example.org/y'])
+    for (const l of links) {
+      expect(l).toHaveAttribute('target', '_blank')
+      expect(l.getAttribute('rel')).toMatch(/\bnoopener\b/)
+    }
+    expect(cites).not.toHaveTextContent('dup')
+  })
+
+  test('a live cost_cap_exceeded slot_error explains the cap in the error box and pins the notice on every column', () => {
+    const state = applyEvents('send', [sample.turnStart(), sample.slotStart('claude'), sample.slotStart('chatgpt'), sample.slotStart('grok'), capError('claude')], {
+      preloaded: preloadedWith(conv()),
+    })
+    expect(state.meter.costCapExceeded).toBe(true) // the meter flagged it (W12)
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <SlotColumn slot="grok" onContinue={() => {}} />
+      </>,
+      { preloaded: state },
+    )
+    const box = screen.getByTestId('slot-claude-error')
+    expect(box).toHaveTextContent('[cost_cap_exceeded]')
+    expect(box).toHaveTextContent(CAP_MSG)
+    expect(box).toHaveAttribute('data-cost-cap', 'true')
+    expect(within(box).getByTestId('cost-cap-note')).toHaveTextContent(COST_CAP_TEXT)
+    expect(box.querySelector('a')).toBeNull() // plain text, link-free
+    for (const slot of ['claude', 'grok']) {
+      const notice = screen.getByTestId(`slot-${slot}-cost-cap`)
+      expect(notice).toHaveTextContent(/session cost cap reached/i)
+      expect(notice).toHaveTextContent(/SESSION_COST_CAP_USD/)
+      expect(notice).toHaveAttribute('role', 'status')
+      expect(notice.querySelector('a')).toBeNull()
+    }
+    expect(COST_CAP_TEXT).not.toMatch(/https?:|<a/i)
+    // grok itself was not refused: still streaming, no error box of its own.
+    expect(screen.getByTestId('slot-grok')).toHaveAttribute('data-status', 'streaming')
+    expect(screen.queryByTestId('slot-grok-error')).toBeNull()
+  })
+
+  test('the notice persists across the post-stream refetch and the persisted cost-cap error explains itself', () => {
+    const state = applyEvents(
+      'send',
+      [sample.turnStart(), sample.slotStart('claude'), sample.slotStart('chatgpt'), sample.slotStart('grok'), capError('claude'), { type: 'conversation/loaded', conversation: cappedConv() }],
+      { preloaded: preloadedWith(conv()) },
+    )
+    expect(state.slots.claude.status).toBe('idle') // live buffers dropped by the refetch
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <SlotColumn slot="chatgpt" onContinue={() => {}} />
+      </>,
+      { preloaded: state },
+    )
+    expect(screen.getByTestId('slot-claude-cost-cap')).toHaveTextContent(COST_CAP_TEXT)
+    expect(screen.getByTestId('slot-chatgpt-cost-cap')).toHaveTextContent(COST_CAP_TEXT)
+    const box = screen.getByTestId('slot-claude-error') // PersistedError: nothing was appended to the thread
+    expect(box).toHaveTextContent(CAP_MSG)
+    expect(box).toHaveAttribute('data-cost-cap', 'true')
+    expect(within(box).getByTestId('cost-cap-note')).toBeInTheDocument()
+    expect(screen.queryAllByTestId('slot-claude-message')).toHaveLength(0)
+    // Switching conversation does not clear it: the backend cap is per session.
+    const switched = applyEvents('send', [{ type: 'conversation/loaded', conversation: conv({ id: 'c2' }) }], { state })
+    expect(switched.meter.costCapExceeded).toBe(true)
+  })
+
+  test('a fresh page load (no session flag yet) still derives the notice from the persisted turn, on that column only', () => {
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <SlotColumn slot="chatgpt" onContinue={() => {}} />
+      </>,
+      { preloaded: preloadedWith(cappedConv()) },
+    )
+    expect(screen.getByTestId('slot-claude-cost-cap')).toBeInTheDocument()
+    expect(within(screen.getByTestId('slot-claude-error')).getByTestId('cost-cap-note')).toBeInTheDocument()
+    expect(screen.queryByTestId('slot-chatgpt-cost-cap')).toBeNull()
+  })
+
+  test('a plain slot error shows neither the notice nor the explanation', () => {
+    const state = applyEvents('send', [sample.turnStart(), sample.slotStart('grok'), { ...sample.slotError('grok', 'Provider disconnected'), code: 502 }], { preloaded: preloadedWith(conv()) })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: state })
+    expect(screen.getByTestId('slot-grok-error')).toHaveAttribute('data-cost-cap', 'false')
+    expect(screen.queryByTestId('cost-cap-note')).toBeNull()
+    expect(screen.queryByTestId('slot-grok-cost-cap')).toBeNull()
+  })
+
+  test('a cost-cap error surfaced by an Analyze or Fusion stream (complete_json) pins the notice on the send columns too', () => {
+    const viaFusion = applyEvents('fusion', [{ type: 'exchange', round: 1, divergence_id: 'd1', model: 'R3', stance: 'unavailable', error: 'cost_cap_exceeded' }], { preloaded: preloadedWith(conv()) })
+    const { unmount } = renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: viaFusion })
+    expect(screen.getByTestId('slot-claude-cost-cap')).toHaveTextContent(/cost cap/i)
+    unmount()
+    const viaAnalyze = applyEvents('analyze', [{ type: 'analyze_retry', error: 'cost_cap_exceeded' }], { preloaded: preloadedWith(conv()) })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: viaAnalyze })
+    expect(screen.getByTestId('slot-grok-cost-cap')).toBeInTheDocument()
+    expect(screen.queryByTestId('slot-grok-error')).toBeNull() // no slot of its own failed
   })
 })

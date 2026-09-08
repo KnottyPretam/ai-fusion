@@ -57,6 +57,18 @@ export function citationUrl(item) {
   return item && item.url_citation && typeof item.url_citation.url === 'string' ? item.url_citation.url : null
 }
 
+// The LLM layer's session cost-cap code (docs/api-contract.md addendum): `slot_error{code}` live,
+// `complete_json` errors for Analyze / Fusion. The backend's message ("session cost cap reached:
+// spent $… of SESSION_COST_CAP_USD=$…; live calls refused") does not repeat the code, and that
+// message is what a SendTurn.errors[slot] / ContinueTurn.error persists, so the wording is matched
+// too. The meter slice keeps the session-wide flag; this is the per-slot / per-turn view.
+export const COST_CAP_CODE = 'cost_cap_exceeded'
+
+export function isCostCapError(code, message) {
+  if (code === COST_CAP_CODE) return true
+  return typeof message === 'string' && (message.includes(COST_CAP_CODE) || /\bcost cap\b/i.test(message))
+}
+
 // Annotations are third-party data (web-search results): only an absolute http(s) url may become
 // an <a href>; anything else (javascript:, data:, relative, garbage) is shown as text.
 export function safeCitationHref(url) {

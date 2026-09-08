@@ -1,15 +1,26 @@
-// W9 (send-ui). One provider column: header (label, model dropdown, effort selector, status
-// chip), the persisted thread (fusion messages marked), the live stream, and the solo composer.
+// W9 (send-ui). One provider column: header (label, grounded badge, model dropdown, effort
+// selector, status chip), the persisted thread (fusion messages marked), the live stream, and the
+// solo composer. Phase 5 (PLAN §8): citations as domain-named links, the truncation warning and
+// the session cost-cap notice — live and after refetch. The cost-cap notice mirrors the meter
+// slice's session-wide `costCapExceeded` flag (read-only, optional: the column also derives it
+// from its own slot_error / persisted error, so it renders without the meter registered).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { saveSlotConfig } from '../../api/http.js'
-import { SLOT_LABELS, citationUrl, effortsFor, emptySlot, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, vendorModels } from './slice.js'
+import { SLOT_LABELS, citationUrl, effortsFor, emptySlot, isCostCapError, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, vendorModels } from './slice.js'
 import styles from './send.module.css'
 
 const STREAM_KEYS = ['send', 'analyze', 'fusion']
 const EMPTY_THREAD = [] // stable identity: the scroll effect keys on the thread object
+
+// Plain text, link-free (docs/api-contract.md addendum: "the UI shows a persistent warning when
+// any event carries that code"). Shown on every column while the cap is hit.
+export const COST_CAP_TEXT =
+  'Session cost cap reached: the backend refuses every live model call once this session has spent SESSION_COST_CAP_USD. Raise the cap in .env and restart the backend to continue. Mock mode is not affected.'
+export const GROUNDED_TITLE =
+  "Grounded mode is on: this slot's Send and solo continue calls carry the OpenRouter web-search plugin (never Analyze or Fusion); citations appear under the reply."
 
 export function fmtTokens(n) {
   if (n == null || Number.isNaN(n)) return '-'
@@ -101,12 +112,17 @@ function Truncated({ testId }) {
   )
 }
 
-function ErrorBox({ message, code, testId, partial }) {
+function ErrorBox({ message, code, testId, partial, costCap = false }) {
   return (
-    <div className={styles.error} data-testid={testId} role="alert">
+    <div className={styles.error} data-testid={testId} role="alert" data-cost-cap={costCap ? 'true' : 'false'}>
       <div>
         Slot error{code != null ? <span className={styles.errorCode}> [{String(code)}]</span> : null}: {message}
       </div>
+      {costCap ? (
+        <div className={styles.capNote} data-testid="cost-cap-note">
+          {COST_CAP_TEXT}
+        </div>
+      ) : null}
       {partial ? <div className={styles.notAppended}>Partial output above was kept; nothing was appended to this thread.</div> : null}
     </div>
   )
@@ -158,7 +174,7 @@ function PersistedError({ slot, extras, isLatest }) {
       <div className={`${styles.msg} ${styles.assistant}`} data-role="assistant" data-kind="chat">
         {extras.partial ? <Markdown text={extras.partial} /> : null}
         <div className={styles.extras}>
-          <ErrorBox message={extras.error} testId={isLatest ? `slot-${slot}-error` : undefined} partial={!!extras.partial} />
+          <ErrorBox message={extras.error} testId={isLatest ? `slot-${slot}-error` : undefined} partial={!!extras.partial} costCap={isCostCapError(null, extras.error)} />
         </div>
       </div>
     </div>
@@ -202,6 +218,7 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
   const models = useSlice('models') || { items: [], byId: {} }
   const slots = useSlice('slots')
   const streams = useSlice('streams') || {}
+  const meter = useSlice('meter') // optional (see header): the session-wide cost-cap flag
   const live = (slots && slots[slot]) || emptySlot()
   const spec = slotConfig && slotConfig.slots ? slotConfig.slots[slot] : null
   const model = spec ? spec.model : ''
@@ -217,6 +234,10 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
   const scrollRef = useRef(null)
 
   const isLive = live.status !== 'idle'
+  const grounded = !!(slotConfig && slotConfig.grounded)
+  // Persistent notice: the meter's session flag (any feature, any conversation), this slot's live
+  // cost-cap error, or the newest persisted turn where this slot was refused by the cap.
+  const costCapHit = !!(meter && meter.costCapExceeded) || isCostCapError(live.code, live.error) || !!(latest && isCostCapError(null, latest.error))
 
   // Newest message in view: when the thread (re)loads — a conversation selected in the sidebar,
   // the refetch after a turn — the column must not open scrolled to the oldest message.
@@ -291,6 +312,11 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
         <div className={styles.titleRow}>
           <span className={styles.dot} aria-hidden="true" />
           <span data-testid={`slot-${slot}-label`}>{SLOT_LABELS[slot]}</span>
+          {grounded ? (
+            <span className={styles.groundedBadge} data-testid={`slot-${slot}-grounded`} title={GROUNDED_TITLE}>
+              grounded
+            </span>
+          ) : null}
         </div>
         <div className={styles.controls}>
           <select
@@ -331,6 +357,11 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
           </select>
         </div>
         <Chip slot={slot} {...chip} />
+        {costCapHit ? (
+          <div className={`${styles.warn} ${styles.headerWarn}`} data-testid={`slot-${slot}-cost-cap`} role="status">
+            {COST_CAP_TEXT}
+          </div>
+        ) : null}
         {configError ? (
           <div className={styles.configError} data-testid={`slot-${slot}-config-error`}>
             {configError}
@@ -376,7 +407,9 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
                   <Reasoning text={live.reasoning} testId={`slot-${slot}-reasoning`} />
                   <Citations items={live.citations} testId={`slot-${slot}-citations`} />
                   {live.truncated ? <Truncated testId={`slot-${slot}-truncated`} /> : null}
-                  {live.status === 'error' ? <ErrorBox message={live.error} code={live.code} testId={`slot-${slot}-error`} partial={!!live.buffer} /> : null}
+                  {live.status === 'error' ? (
+                    <ErrorBox message={live.error} code={live.code} testId={`slot-${slot}-error`} partial={!!live.buffer} costCap={isCostCapError(live.code, live.error)} />
+                  ) : null}
                 </div>
               </div>
             ) : null}
