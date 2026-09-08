@@ -124,6 +124,7 @@ async def create(
         threads=empty_threads(),
         anon_map=amap,
     )
+    conv.updated_at = conv.created_at  # one timestamp at creation (never two now_iso() calls)
     async with locking.lock_for(conv.id):
         await _persist(conv)
     log.info("conversation created: %s", conv.id)

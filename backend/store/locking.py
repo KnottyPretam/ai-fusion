@@ -39,10 +39,17 @@ def lock_for(key: str) -> asyncio.Lock:
 
 
 # --------------------------------------------------------------------------- busy guard
-_busy: set[str] = set()
-_held: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
-    "triplex_busy_held", default=frozenset()
+# conv_id -> acquisition token. Re-entrancy is bound to the SPECIFIC acquisition, not the id:
+# a context that once held an id keeps a stale entry after a producer task (a context copy)
+# released it, and that stale entry must not let it bypass a later acquisition by another task.
+_busy: dict[str, object] = {}
+_held: contextvars.ContextVar[dict[str, object] | None] = contextvars.ContextVar(
+    "triplex_busy_held", default=None
 )
+
+
+def _held_map() -> dict[str, object]:
+    return _held.get() or {}
 
 
 def is_busy(conv_id: str) -> bool:
@@ -52,16 +59,19 @@ def is_busy(conv_id: str) -> bool:
 class BusyGuard(AbstractAsyncContextManager[None]):
     """Async context manager returned by ``conversations.busy_guard``.
 
-    ``__aenter__`` raises ``api_errors.conflict("busy")`` when another task holds the id. When the
-    current task (or one it was created from) already holds it, entering is a no-op and so is the
-    matching exit: only the object that actually acquired the id releases it.
+    ``__aenter__`` raises ``api_errors.conflict("busy")`` when another acquisition holds the id.
+    When the current task (or one it was created from) holds the CURRENT acquisition, entering is
+    a no-op and so is the matching exit: only the object that actually acquired the id releases
+    it. A stale entry left in a context by an acquisition that was released elsewhere (the
+    producer-task pattern) never counts as re-entrant.
     """
 
-    __slots__ = ("_acquired", "conv_id")
+    __slots__ = ("_acquired", "_token", "conv_id")
 
     def __init__(self, conv_id: str) -> None:
         self.conv_id = conv_id
         self._acquired = False
+        self._token: object | None = None
 
     @property
     def acquired(self) -> bool:
@@ -70,12 +80,15 @@ class BusyGuard(AbstractAsyncContextManager[None]):
 
     async def __aenter__(self) -> None:
         cid = self.conv_id
-        if cid in _busy:
-            if cid in _held.get():
-                return None  # re-entrant: held by this task or an ancestor -> no-op
+        current = _busy.get(cid)
+        if current is not None:
+            if _held_map().get(cid) is current:
+                return None  # re-entrant: this task (or an ancestor) holds the live acquisition
             raise api_errors.conflict("busy")
-        _busy.add(cid)
-        _held.set(_held.get() | {cid})
+        token = object()
+        _busy[cid] = token
+        _held.set({**_held_map(), cid: token})
+        self._token = token
         self._acquired = True
         return None
 
@@ -88,9 +101,13 @@ class BusyGuard(AbstractAsyncContextManager[None]):
         if not self._acquired:
             return None  # entered as a re-entrant no-op (or never entered): exit is a no-op
         self._acquired = False
-        _busy.discard(self.conv_id)
-        # Set-difference rather than ContextVar.reset(): the release usually happens in a
-        # producer task whose context is a COPY of the acquiring one, where a reset token would
-        # be invalid, and a reset could also clobber ids acquired later in the same context.
-        _held.set(_held.get() - {self.conv_id})
+        if _busy.get(self.conv_id) is self._token:
+            del _busy[self.conv_id]
+        # Rebuild rather than ContextVar.reset(): the release usually happens in a producer task
+        # whose context is a COPY of the acquiring one, where a reset token would be invalid.
+        held = dict(_held_map())
+        if held.get(self.conv_id) is self._token:
+            del held[self.conv_id]
+        _held.set(held)
+        self._token = None
         return None

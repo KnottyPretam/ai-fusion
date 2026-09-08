@@ -158,3 +158,50 @@ async def test_busy_is_a_plain_json_409_through_sse_response(run_foreign):
     finally:
         await holder.__aexit__(None, None, None)
     assert not store.is_busy(CID)
+
+
+async def test_stale_context_entry_never_bypasses_a_later_acquisition():
+    """Regression (S1 review + W5): acquire in context A, release from a producer task (a context
+    COPY), then let a foreign task acquire and hold the id. A's stale `_held` entry must NOT count
+    as re-entrant: A gets 409 busy, while the foreign holder's own children stay re-entrant."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from backend.store import locking
+    from backend.store.conversations import busy_guard
+
+    cid = "00000000-0000-4000-8000-00000000abcd"
+    g = busy_guard(cid)
+    await g.__aenter__()
+    await asyncio.create_task(g.__aexit__(None, None, None))  # released from a context copy
+    assert not locking.is_busy(cid)
+
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+    nested_ok: list[bool] = []
+
+    async def holder() -> None:
+        foreign = busy_guard(cid)
+        await foreign.__aenter__()
+        acquired.set()
+        await release.wait()
+
+        async def _nested() -> None:  # child of the holder: re-entrant no-op enter/exit
+            inner = busy_guard(cid)
+            await inner.__aenter__()
+            await inner.__aexit__(None, None, None)
+            nested_ok.append(locking.is_busy(cid))
+
+        await asyncio.create_task(_nested())
+        await foreign.__aexit__(None, None, None)
+
+    task = asyncio.create_task(holder())
+    await acquired.wait()
+    assert locking.is_busy(cid)
+    with pytest.raises(HTTPException) as exc:  # stale entry in THIS context must not bypass
+        await busy_guard(cid).__aenter__()
+    assert exc.value.status_code == 409 and exc.value.detail["error"] == "busy"
+    release.set()
+    await task
+    assert nested_ok == [True] and not locking.is_busy(cid)
