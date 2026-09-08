@@ -89,8 +89,32 @@ describe('FusionPane: iterations stepper', () => {
     expect(input).toHaveValue(1)
     fireEvent.change(input, { target: { value: '3' } })
     expect(input).toHaveValue(3)
+  })
+
+  test('clearing the field to type a new count works; an abandoned empty field restores the last value', async () => {
+    const user = userEvent.setup()
+    renderWithStore(<FusionPane />, { preloaded: loaded() })
+    const input = screen.getByTestId('fusion-iterations')
+    expect(input).toHaveValue(2)
+    // clear, then type: the field stays empty until a digit arrives (no '1' + '4' -> 14 -> 5 snap)
     fireEvent.change(input, { target: { value: '' } })
-    expect(input).toHaveValue(1)
+    expect(input).toHaveValue(null)
+    fireEvent.change(input, { target: { value: '4' } })
+    expect(input).toHaveValue(4)
+    // the same through real keystrokes
+    await user.clear(input)
+    expect(input).toHaveValue(null)
+    await user.type(input, '3')
+    expect(input).toHaveValue(3)
+    // leaving the field empty restores the last committed value
+    await user.clear(input)
+    expect(input).toHaveValue(null)
+    fireEvent.blur(input)
+    expect(input).toHaveValue(3)
+    // the stepper buttons operate on the committed value and drop an empty draft
+    fireEvent.change(input, { target: { value: '' } })
+    await user.click(screen.getByTestId('fusion-iterations-inc'))
+    expect(input).toHaveValue(4)
   })
 
   test('re-syncs to the persisted default when slotConfig changes', async () => {
@@ -230,6 +254,126 @@ describe('FusionPane: timeline and final report', () => {
     expect(screen.getByTestId('fusion-error')).toHaveTextContent('Fusion failed: cost_cap_exceeded')
     expect(screen.getByTestId('fusion-status')).toHaveTextContent('failed')
   })
+
+  test('the refetch after a run that failed mid-stream keeps the error box and the partial timeline', async () => {
+    const user = userEvent.setup()
+    const s = loaded(conversation(), [start, fusionStart(), ...ROUND1, { type: 'error', message: 'boom' }, { type: 'sse/end', feature: 'fusion', ok: false, error: 'boom' }])
+    renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="refetch" action={{ type: 'conversation/loaded', conversation: conversation() }} />
+      </>,
+      { preloaded: s },
+    )
+    expect(screen.getByTestId('fusion-error')).toHaveTextContent('Fusion failed: boom')
+    expect(screen.getByTestId('fusion-row-d1')).toBeInTheDocument()
+    await user.click(screen.getByTestId('dispatch-refetch'))
+    expect(screen.getByTestId('fusion-error')).toHaveTextContent('Fusion failed: boom')
+    expect(screen.getByTestId('fusion-row-d1')).toBeInTheDocument()
+    expect(screen.getByTestId('fusion-status-d1-1')).toHaveTextContent('resolved')
+    expect(screen.queryByTestId('fusion-final')).toBeNull()
+    expect(screen.getByTestId('fusion-status')).toHaveTextContent('failed')
+  })
+
+  test('stalemate and error exit reasons are labelled', () => {
+    const body = [fusionStart({ max_iterations: 1, standing: ['d1'] }), { type: 'round_start', round: 1 }, exchange(1, 'd1', 'R1', 'defend'), exchange(1, 'd1', 'R2', 'defend'), exchange(1, 'd1', 'R3', 'defend'), roundDone(1, { d1: 'standing' }, false)]
+    const stalemate = fusionTurnFromEvents(body, { max_iterations: 1, exit_reason: 'stalemate' })
+    const { unmount } = renderWithStore(<FusionPane />, { preloaded: loaded(conversation([sendTurn(), analyzeTurn(), stalemate])) })
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveAttribute('data-exit-reason', 'stalemate')
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveTextContent('exit: stalemate')
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveClass('exit_stalemate')
+    expect(screen.getByTestId('fusion-final-d1')).toHaveAttribute('data-status', 'standing')
+    unmount()
+    const errBody = [fusionStart({ max_iterations: 1, standing: ['d1'] }), { type: 'round_start', round: 1 }, exchange(1, 'd1', 'R1', 'unavailable'), exchange(1, 'd1', 'R2', 'unavailable'), exchange(1, 'd1', 'R3', 'unavailable'), roundDone(1, { d1: 'standing' }, false)]
+    const errored = fusionTurnFromEvents(errBody, { max_iterations: 1, exit_reason: 'error' })
+    renderWithStore(<FusionPane />, { preloaded: loaded(conversation([sendTurn(), analyzeTurn(), errored])) })
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveAttribute('data-exit-reason', 'error')
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveTextContent('exit: error')
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveClass('exit_error')
+    expect(screen.getByTestId('fusion-status')).toHaveTextContent('done') // a persisted turn, not a crash
+    expect(screen.queryByTestId('fusion-error')).toBeNull()
+  })
+
+  test('the "not fused" list follows the current slotConfig.materiality_min, not the as-run standing set', async () => {
+    const user = userEvent.setup()
+    const turn = fullRun().at(-1).turn // ran with materiality_min medium: standing d1, d2
+    renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="high" action={{ type: 'slotConfig/update', patch: { materiality_min: 'high' } }} />
+        <Dispatcher label="low" action={{ type: 'slotConfig/update', patch: { materiality_min: 'low' } }} />
+      </>,
+      { preloaded: loaded(conversation([sendTurn(), analyzeTurn(), turn])) },
+    )
+    expect(screen.getByTestId('fusion-not-fused')).toHaveTextContent('not fused (below materiality "medium"): d3 (low) package marking')
+    expect(screen.getByTestId('fusion-not-fused')).not.toHaveTextContent('d2')
+    await user.click(screen.getByTestId('dispatch-high'))
+    expect(screen.getByTestId('fusion-not-fused')).toHaveTextContent('below materiality "high"')
+    expect(screen.getByTestId('fusion-not-fused')).toHaveTextContent('d2 (medium) accelerometer bandwidth')
+    expect(screen.getByTestId('fusion-not-fused')).toHaveTextContent('d3 (low) package marking')
+    expect(screen.getByTestId('fusion-gate-hint')).toHaveTextContent('1 standing divergence')
+    // the timeline still shows the as-run standing set
+    expect(screen.getAllByTestId(/^fusion-row-/)).toHaveLength(2)
+    await user.click(screen.getByTestId('dispatch-low'))
+    expect(screen.queryByTestId('fusion-not-fused')).toBeNull()
+    expect(screen.getByTestId('fusion-gate-hint')).toHaveTextContent('3 standing divergences')
+  })
+
+  test('a report or notice for an earlier send turn is captioned as such', async () => {
+    const user = userEvent.setup()
+    const turn = fullRun().at(-1).turn
+    const conv = conversation([sendTurn(), analyzeTurn(), turn])
+    const { unmount } = renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="send" action={{ type: 'conversation/loaded', conversation: conversation([...conv.turns, sendTurn('s2')]) }} />
+      </>,
+      { preloaded: loaded(conv) },
+    )
+    expect(screen.queryByTestId('fusion-stale')).toBeNull()
+    await user.click(screen.getByTestId('dispatch-send'))
+    expect(screen.getByTestId('fusion-final')).toBeInTheDocument() // the last report is still shown
+    expect(screen.getByTestId('fusion-stale')).toHaveTextContent('for an earlier send turn (s1)')
+    expect(screen.getByTestId('fusion-gate-hint')).toHaveTextContent('will run Analyze first')
+    unmount()
+    // the same for a "nothing to fuse" notice kept across the refetch
+    const notice = loaded(conversation([sendTurn()]), [start, ...ANALYZE_PREFIX, { type: 'error', message: 'nothing_to_fuse' }, { type: 'sse/end', feature: 'fusion', ok: false, error: 'nothing_to_fuse' }])
+    renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="send2" action={{ type: 'conversation/loaded', conversation: conversation([sendTurn(), ANALYZE_PREFIX[1].turn, sendTurn('s2')]) }} />
+      </>,
+      { preloaded: notice },
+    )
+    expect(screen.queryByTestId('fusion-stale')).toBeNull()
+    await user.click(screen.getByTestId('dispatch-send2'))
+    expect(screen.getByTestId('fusion-notice')).toBeInTheDocument()
+    expect(screen.getByTestId('fusion-stale')).toHaveTextContent('for an earlier send turn (s1)')
+  })
+
+  test("a conversation switch mid-stream keeps the live timeline; the run's own refetch settles it", async () => {
+    const user = userEvent.setup()
+    const turn = fullRun().at(-1).turn
+    const s = loaded(conversation(), [start, fusionStart(), ...ROUND1])
+    renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="switch" action={{ type: 'conversation/loaded', conversation: conversation([sendTurn()], 'c2') }} />
+        <Dispatcher label="back" action={{ type: 'conversation/loaded', conversation: conversation([sendTurn(), analyzeTurn(), turn]) }} />
+      </>,
+      { preloaded: s },
+    )
+    expect(screen.getByTestId('fusion-progress')).toHaveTextContent('round 1 of 2 done')
+    await user.click(screen.getByTestId('dispatch-switch'))
+    expect(screen.getByTestId('fusion-progress')).toHaveTextContent('round 1 of 2 done')
+    expect(screen.getByTestId('fusion-row-d1')).toBeInTheDocument()
+    expect(screen.getByTestId('fusion-run')).toBeDisabled()
+    expect(screen.getByTestId('fusion-topic-d1')).toHaveTextContent('(topic pending)') // c2 has no analyze turn
+    await user.click(screen.getByTestId('dispatch-back'))
+    // still running: the refetch of c1 does not clobber the live timeline either
+    expect(screen.getByTestId('fusion-progress')).toHaveTextContent('round 1 of 2 done')
+    expect(screen.getByTestId('fusion-topic-d1')).toHaveTextContent('gyroscope full-scale range')
+  })
 })
 
 describe('FusionPane: running a stream', () => {
@@ -311,6 +455,34 @@ describe('FusionPane: running a stream', () => {
     await user.click(screen.getByTestId('fusion-run'))
     await screen.findByTestId('fusion-error')
     expect(screen.getByTestId('fusion-error')).toHaveTextContent('busy')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('after an HTTP 409 the next refetch brings the persisted report back with the failure still visible', async () => {
+    const user = userEvent.setup()
+    const turn = fullRun().at(-1).turn
+    const conv = conversation([sendTurn(), analyzeTurn(), turn])
+    const fetchMock = vi.fn(async () => fakeResponse('{"detail":{"error":"busy"}}', { ok: false, status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithStore(
+      <>
+        <FusionPane />
+        <Dispatcher label="refetch" action={{ type: 'conversation/loaded', conversation: conv }} />
+      </>,
+      { preloaded: loaded(conv) },
+    )
+    expect(screen.getByTestId('fusion-final')).toBeInTheDocument()
+    await user.click(screen.getByTestId('fusion-run'))
+    await screen.findByTestId('fusion-error')
+    expect(screen.getByTestId('fusion-error')).toHaveTextContent('Fusion failed: busy')
+    expect(screen.queryByTestId('fusion-final')).toBeNull() // sse/start reset the slice
+    // a later refetch (after a Send, an Analyze, a rename, ...) re-hydrates the persisted report
+    await user.click(screen.getByTestId('dispatch-refetch'))
+    expect(screen.getByTestId('fusion-final')).toBeInTheDocument()
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveAttribute('data-exit-reason', 'max_iterations')
+    expect(screen.getAllByTestId(/^fusion-row-/)).toHaveLength(2)
+    expect(screen.getByTestId('fusion-error')).toHaveTextContent('Fusion failed: busy — showing the last persisted report')
+    expect(screen.getByTestId('fusion-status')).toHaveTextContent('done')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
