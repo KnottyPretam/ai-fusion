@@ -1,5 +1,8 @@
-// PLACEHOLDER (Stage 0). The owning workstream replaces this file with the real pane and
-// registers its slice here at module scope: registerSlice('<key>', reducer, initialState).
-export default function Placeholder() {
-  return <div data-testid="placeholder-analyze" style={{ padding: 8, color: 'var(--fg-muted)' }}>analyze pane pending</div>
-}
+// Analyze feature entry (W10). App.jsx imports the pane from here by convention; the slice is
+// registered at module scope so it exists before the first render.
+import { registerSlice } from '../../state/registry.js'
+import { initial, reducer } from './slice.js'
+
+registerSlice('analyze', reducer, initial)
+
+export { default } from './AnalyzePane.jsx'
