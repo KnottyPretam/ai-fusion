@@ -101,3 +101,53 @@ PLAN.md Appendix B is the decisions log of record (one row per decision). This f
 6. **`CLAUDE.md` is based on karpathy's** llm-council CLAUDE.md (same structure and voice;
    original kept verbatim under `docs/reference/`).
 
+
+
+## Build log (2026-09-08)
+
+Gates at every tag: `uv run pytest -q` (1102 passed, 9 live deselected at S3), `cd frontend &&
+npm test` (255 vitest tests at S3) and `npm run build`; from S3 on, the Playwright matrix (11
+scenario runs: `smoke`, `flow`, `settings`, `persistence`, `guard` on the default scenario plus
+`stalemate`, `cap`, `degrade`, `truncated`, `grounded` and the paced `guard` on their own ports).
+
+| Tag | Commit | What merged |
+|---|---|---|
+| `contract-v1` | `6cb5041` (2026-09-07) | Stage 0: frozen contracts (`docs/{api-contract,semantics,fixtures}.md`, `backend/{schemas,config,main,sse,api_errors}.py`, `frontend/src/{state,api}`, `tests/conftest.py`), stub modules raising `NotImplementedError`, the app shell, `start.sh`, `check_freeze.sh`; W0 verification fixes (signature block, busy-guard lifecycle, fixture sequences) |
+| `S1` | `09beaaa` (2026-09-07) | Stage 1: W1 llm (client, SSE parser, reasoning, catalog, mock, metering, `GET /api/models`), W2 store (JSON on disk, busy guard, conversation/config routers), W3 anon, W-fix fixtures (14 scenarios, 98 JSONL files, corpus validator), W9 send-ui, W10 analyze-ui, W11 fusion-ui, W12 chrome-ui; frozen change requests applied on `main` |
+| `S2` | `d4f0962` (2026-09-08) | Stage 2: W4 send-be (Send + solo continue, producer model), W5 analyze-be (extraction, cache rule, single retry, degraded path), W6 fusion-be (the loop, auto-run Analyze, exit reasons); 422 codes documented |
+| `S3` | `0099d84` (2026-09-08) | Stage 3: e2e-offline (`tests/e2e`: full flows over every scenario, syrupy goldens, hypothesis fuzz of malformed model output, leak sweep, cost-meter truth), Playwright scenario matrix, phase5-backend (grounded/cost-cap hardening, `GET /api/session/cost`, `scripts/live_smoke.py`, `scripts/record_fixtures.py`, `tests/live`), phase5-frontend (grounded badge and composer hint, per-column cost-cap notices, citation/truncation audits); the S1 review fixes (W1/W9/W11/W12) and the delimiter-neutralisation fix landed via `S3-wire`. After S3: W5 review fixes on `main` (`2db166d`, `21783ed`: retry parity, nested guard release) |
+
+Notable integrator decisions during the build:
+
+- **Token-based busy guard.** Re-entrancy of `store.busy_guard` is bound to the specific
+  acquisition (a token in a module dict plus a `ContextVar` of held tokens), not to the
+  conversation id: a context that once held the id keeps a stale entry after the producer task
+  (a context copy) released it, and that entry must not let it bypass a later acquisition by
+  another task. Only the object that acquired releases; release rebuilds the `ContextVar`
+  instead of `reset()` because it happens in the producer's copied context.
+- **Fixed anonymization map in mock mode.** `store.create` stamps R1=claude, R2=chatgpt,
+  R3=grok whenever `MOCK_OPENROUTER=1` (random permutation live), so slot-keyed scenario
+  fixtures, goldens, Playwright and the `start.sh` demo are deterministic; `record_fixtures.py`
+  records with the same map so live recordings replay under the same labels.
+- **Delimiter neutralisation.** `prompts.delimited` rewrites every `<<<` inside quoted text to
+  `<< <`, so a model- or web-authored string can never close its own `<<<LABEL>>>` block and
+  spill instructions into the un-quoted zone (S2 review finding; frozen test).
+- **`sse_response` primes the generator.** The router awaits the feature's first event before
+  building the `StreamingResponse`, which is what lets every pre-check (404/409/422) stay a
+  plain JSON error in FastAPI's `{detail:{error}}` envelope; after the first event only the
+  terminal `error{message}` event is possible.
+- **Per-invocation meter rows.** The footer shows the LAST invocation of each feature (spec §7)
+  next to the conversation's cumulative rows, and Fusion's multiplier is the last Fusion's cost
+  over the cost of the Send it actually fused (resolved through `of_analyze` → `of_turn`), so it
+  never shrinks as the conversation grows.
+- **Sidebar streaming guard.** New / select / delete are disabled while any feature stream is
+  running: the pane that opened the stream refetches the conversation it captured when the
+  stream ends, so a switch mid-stream would snap back and book the in-flight usage into the
+  wrong conversation. The Send pane additionally scopes its pending prompt, refetch and error
+  banner to the conversation the turn started in, and the `slots` slice ignores events for a
+  slot that is no longer `streaming`.
+- **Empty-reply rule.** A blank model reply is never echoed back as an `assistant` turn on a
+  retry (providers reject empty assistant content, which would turn the single retry into a
+  guaranteed 400): `complete_json` and Analyze's own retry both send the correction message
+  alone, and Analyze re-sends the identical request when there was no output at all (a
+  transport error or an empty stream).
