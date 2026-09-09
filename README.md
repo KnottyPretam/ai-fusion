@@ -62,3 +62,9 @@ strict-JSON extraction and one grounded call (exit 0/1/2/3 = ok / check failed /
 hit). `record_fixtures.py` records a real Send → Analyze → Fusion into
 `data/recordings/scenarios/<name>` with the fixed anonymization map and writes a README skeleton;
 replay it with `MOCK_OPENROUTER=1 MOCK_FIXTURES_DIR=data/recordings MOCK_SCENARIO=<name> ./start.sh`.
+
+## Stage 4 (live validation)
+
+With `OPENROUTER_API_KEY` in `.env`: `scripts/stage4.sh` runs the live smoke test, the budgeted
+`tests/live` suite and records a replayable real scenario under `data/recordings/<stamp>/`, all
+under `SESSION_COST_CAP_USD`. It refuses to run without the key or with `MOCK_OPENROUTER=1`.
