@@ -10,6 +10,16 @@
 // clears every live buffer, so after the pane refetches the column renders the stored history and
 // the per-slot extras stamped on the turn.
 //
+// Switch vs refetch: the slice remembers the loaded conversation id (`conversationId`, null until
+// the first load). A `conversation/loaded` with ANOTHER id is a switch and always resets the
+// columns. A load with the SAME id while a slot is still `streaming` is a refetch, not a switch —
+// the Analyze / Fusion pane's post-stream GET resolving after the user started a new Send (their
+// stream ended, the composer unlocked, nothing locks the other pane's in-flight GET) — and keeps
+// the live columns, otherwise every later delta of the open send stream would be discarded by the
+// stale-stream rule below and the columns would stay blank until the send's own refetch. The
+// send's own post-stream refetch still resets because by then no slot is `streaming`: turn_done,
+// a terminal `error`, sse/end (ok or not) and sse/abort all settle stragglers first.
+//
 // Stale-stream rule: `slot_start` precedes every other per-slot event of a turn (docs/semantics.md
 // addendum; backend/features/send.py emits it before the first delta) and is the ONLY event that
 // takes a slot from `idle` to `streaming`. So a `slot_delta / slot_reasoning / slot_citations /
@@ -43,8 +53,10 @@ export function emptySlot() {
   }
 }
 
+// { claude, chatgpt, grok: Slot, conversationId: the id of the loaded conversation (null before
+//   the first conversation/loaded and after conversation/cleared) }
 export function initialSlots() {
-  const s = {}
+  const s = { conversationId: null }
   for (const k of SLOT_IDS) s[k] = emptySlot()
   return s
 }
@@ -194,19 +206,40 @@ function reduceEvent(s, ev) {
   }
 }
 
+function anyStreaming(s) {
+  return SLOT_IDS.some((k) => s[k] && s[k].status === 'streaming')
+}
+
+function allEmpty(s) {
+  return SLOT_IDS.every((k) => isEmptySlot(s[k]))
+}
+
 export function slotsReducer(s = initialSlots(), a) {
   switch (a.type) {
     case 'sse':
       if (a.feature !== 'send' || !a.event) return s
       return reduceEvent(s, a.event)
     case 'sse/end':
-      return a.feature === 'send' && !a.ok ? settleStreaming(s, 'error', a.error || 'stream failed') : s
+      if (a.feature !== 'send') return s
+      if (!a.ok) return settleStreaming(s, 'error', a.error || 'stream failed')
+      // A clean close without the slot's terminal event (exactly one slot_done / slot_error per
+      // slot precedes turn_done): the client never got it, so the slot did not finish here. Settling
+      // it also keeps the invariant the switch-vs-refetch rule relies on — no slot is `streaming`
+      // once runStream has resolved.
+      return settleStreaming(s, 'error', 'stream ended before this slot finished')
     case 'sse/abort':
       return a.feature === 'send' ? settleStreaming(s, 'error', 'aborted') : s
-    case 'conversation/loaded':
-    case 'conversation/cleared':
+    case 'conversation/loaded': {
+      const id = a.conversation && a.conversation.id != null ? a.conversation.id : null
+      const same = id !== null && id === s.conversationId
+      // Same conversation, a slot still streaming: another pane's refetch, not a switch (header).
+      if (same && anyStreaming(s)) return s
       // The persisted document is now the source of truth; drop live buffers.
-      return SLOT_IDS.every((k) => isEmptySlot(s[k])) ? s : initialSlots()
+      if (same && allEmpty(s)) return s
+      return { ...initialSlots(), conversationId: id }
+    }
+    case 'conversation/cleared':
+      return s.conversationId === null && allEmpty(s) ? s : initialSlots()
     default:
       return s
   }

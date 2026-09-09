@@ -60,6 +60,34 @@ function preloadedWith(c, extra = {}) {
 
 const msg = (role, content, over = {}) => ({ role, content, kind: 'chat', turn_id: 't1', ts: '2026-09-07T00:00:00.000Z', meta: null, ...over })
 
+// Slot-config fetch stub (modelled on config.test.jsx): PUT echoes the merged config back like the
+// backend does; `deferPut` = 1-based indexes of PUTs that stay pending until `fetchFn.release[i]()`
+// is called. GET slot_config answers the base config (the reload-on-failure path).
+function stubFetch({ deferPut = [] } = {}) {
+  const release = {}
+  let puts = 0
+  const fn = vi.fn(async (url, init = {}) => {
+    const method = init.method || 'GET'
+    const body = init.body ? JSON.parse(init.body) : undefined
+    if (method === 'PUT' && /\/api\/conversations\/[^/]+\/slot_config$/.test(url)) {
+      puts += 1
+      const reply = () => ({ ok: true, status: 200, json: async () => body })
+      if (!deferPut.includes(puts)) return reply()
+      const i = puts
+      return new Promise((res) => {
+        release[i] = () => res(reply())
+      })
+    }
+    if (method === 'GET' && /\/api\/conversations\/[^/]+\/slot_config$/.test(url)) return { ok: true, status: 200, json: async () => CFG }
+    throw new Error(`unhandled ${method} ${url}`)
+  })
+  vi.stubGlobal('fetch', fn)
+  fn.release = release
+  return fn
+}
+
+const putBodies = (fn) => fn.mock.calls.filter(([, init]) => init && init.method === 'PUT').map(([, init]) => JSON.parse(init.body))
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe('SlotColumn: persisted thread', () => {
@@ -149,8 +177,45 @@ describe('SlotColumn: persisted thread', () => {
     expect(screen.getByTestId('slot-grok-error')).toHaveTextContent('Provider disconnected')
     expect(screen.getByTestId('slot-grok-persisted-error')).toHaveTextContent('partial grok text')
     expect(screen.queryAllByTestId('slot-grok-message')).toHaveLength(0)
+    expect(screen.queryByTestId('slot-grok-truncated')).toBeNull() // a plain provider error: not truncated
     // No coerced marker when applied == configured.
     expect(screen.getByTestId('slot-grok-effort-badge')).toHaveAttribute('data-coerced', 'false')
+  })
+
+  test('a persisted empty_reply error at the token cap shows the truncation warning next to the error box (docs/semantics.md: truncated[slot] still reflects finish_reason=length)', () => {
+    const turn = {
+      id: 't1',
+      type: 'send',
+      prompt: 'q',
+      slot_config: CFG,
+      responses: { claude: 'a', chatgpt: 'b', grok: null },
+      errors: { grok: 'model returned no text (finish_reason=length)' },
+      partial: { grok: '' },
+      truncated: { claude: false, chatgpt: false, grok: true },
+      effort_applied: { claude: 'medium', chatgpt: 'medium', grok: 'medium' },
+      usage: { calls: [], totals: {} },
+    }
+    const c = conv({ threads: { claude: [msg('user', 'q'), msg('assistant', 'a')], chatgpt: [], grok: [] }, turns: [turn] })
+    const { unmount } = renderWithStore(
+      <>
+        <SlotColumn slot="grok" onContinue={() => {}} />
+        <SlotColumn slot="claude" onContinue={() => {}} />
+      </>,
+      { preloaded: preloadedWith(c) },
+    )
+    const block = screen.getByTestId('slot-grok-persisted-error')
+    expect(within(block).getByTestId('slot-grok-truncated')).toHaveTextContent(/truncated/i)
+    expect(screen.getByTestId('slot-grok-truncated')).toHaveAttribute('role', 'status')
+    expect(screen.getByTestId('slot-grok-error')).toHaveTextContent('finish_reason=length')
+    expect(screen.queryByTestId('slot-claude-truncated')).toBeNull() // claude's reply was not truncated
+    unmount()
+    // The same turn, once older than a later successful continue, keeps the warning without the test id.
+    const later = { id: 't2', type: 'continue', slot: 'grok', prompt: 'again', response: 'r', truncated: false, effort_applied: 'medium', slot_config: CFG, usage: { calls: [], totals: {} } }
+    const c2 = conv({ id: 'c2', threads: { claude: [], chatgpt: [], grok: [msg('user', 'again', { turn_id: 't2' }), msg('assistant', 'r', { turn_id: 't2' })] }, turns: [turn, later] })
+    renderWithStore(<SlotColumn slot="grok" onContinue={() => {}} />, { preloaded: preloadedWith(c2) })
+    const older = screen.getByTestId('slot-grok-persisted-error')
+    expect(older).toHaveTextContent(/output truncated/i)
+    expect(screen.queryByTestId('slot-grok-truncated')).toBeNull()
   })
 
   test('every errored turn stays in the history at its place, not only the newest one', () => {
@@ -407,6 +472,69 @@ describe('SlotColumn: header controls', () => {
     await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high')
     await waitFor(() => expect(screen.getByTestId('slot-claude-config-error')).toHaveTextContent('unsupported_effort'))
     expect(screen.getByTestId('slot-claude-effort')).toHaveValue('medium')
+  })
+
+  test('a slow earlier save cannot revert a later change in the same column', async () => {
+    const fetchFn = stubFetch({ deferPut: [1] })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(conv()) })
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high') // PUT #1 pending: {opus, high}
+    await user.selectOptions(screen.getByTestId('slot-claude-model'), 'anthropic/claude-sonnet-5') // PUT #2 answers at once: {sonnet, high}
+    await waitFor(() => expect(putBodies(fetchFn)).toHaveLength(2))
+    expect(putBodies(fetchFn)[0].slots.claude).toEqual({ model: 'anthropic/claude-opus-5', effort: 'high' })
+    expect(putBodies(fetchFn)[1].slots.claude).toEqual({ model: 'anthropic/claude-sonnet-5', effort: 'high' })
+    expect(screen.getByTestId('slot-claude-model')).toHaveValue('anthropic/claude-sonnet-5')
+    await act(async () => fetchFn.release[1]()) // PUT #1's copy {opus, high} arrives last
+    await act(async () => {})
+    expect(screen.getByTestId('slot-claude-model')).toHaveValue('anthropic/claude-sonnet-5')
+    expect(screen.getByTestId('slot-claude-effort')).toHaveValue('high')
+    expect(screen.queryByTestId('slot-claude-config-error')).toBeNull()
+  })
+
+  test('a slow save from one column cannot revert a later save from another column (every PUT carries the full config)', async () => {
+    const fetchFn = stubFetch({ deferPut: [1] })
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <SlotColumn slot="grok" onContinue={() => {}} />
+      </>,
+      { preloaded: preloadedWith(conv()) },
+    )
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high') // claude's PUT #1 pending: {claude: high, grok: medium}
+    await user.selectOptions(screen.getByTestId('slot-grok-effort'), 'low') // grok's PUT #2 at once: {claude: high, grok: low}
+    await waitFor(() => expect(putBodies(fetchFn)).toHaveLength(2))
+    expect(putBodies(fetchFn)[1].slots).toMatchObject({ claude: { effort: 'high' }, grok: { effort: 'low' } })
+    await act(async () => fetchFn.release[1]()) // claude's copy {grok: medium} arrives last
+    await act(async () => {})
+    expect(screen.getByTestId('slot-grok-effort')).toHaveValue('low')
+    expect(screen.getByTestId('slot-claude-effort')).toHaveValue('high')
+    expect(screen.queryByTestId('slot-claude-config-error')).toBeNull()
+    expect(screen.queryByTestId('slot-grok-config-error')).toBeNull()
+  })
+
+  test('a save response for a conversation that is no longer selected is dropped', async () => {
+    const fetchFn = stubFetch({ deferPut: [1] })
+    let dispatch
+    const c2 = conv({ id: 'c2', slot_config: { ...CFG, slots: { ...CFG.slots, claude: { model: 'anthropic/claude-sonnet-5', effort: 'low' } } } })
+    renderWithStore(
+      <>
+        <SlotColumn slot="claude" onContinue={() => {}} />
+        <DispatchProbe onReady={(d) => (dispatch = d)} />
+      </>,
+      { preloaded: preloadedWith(conv()) },
+    )
+    const user = userEvent.setup()
+    await user.selectOptions(screen.getByTestId('slot-claude-effort'), 'high') // PUT for c1 pending
+    act(() => dispatch({ type: 'conversation/loaded', conversation: c2 }))
+    expect(screen.getByTestId('slot-claude-model')).toHaveValue('anthropic/claude-sonnet-5')
+    await waitFor(() => expect(fetchFn.release[1]).toBeDefined())
+    await act(async () => fetchFn.release[1]())
+    await act(async () => {})
+    expect(screen.getByTestId('slot-claude-model')).toHaveValue('anthropic/claude-sonnet-5') // c2's config untouched
+    expect(screen.getByTestId('slot-claude-effort')).toHaveValue('low')
+    expect(putBodies(fetchFn)).toHaveLength(1)
+    expect(putBodies(fetchFn)[0].slots.claude).toEqual({ model: 'anthropic/claude-opus-5', effort: 'high' })
   })
 })
 

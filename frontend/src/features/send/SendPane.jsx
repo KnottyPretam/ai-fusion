@@ -9,9 +9,11 @@
 // user switches / clears / deletes the conversation while its stream is open, the `slots` slice
 // has already dropped the live columns (conversation/loaded|cleared) and ignores the stale
 // stream's later events; here the pending prompt bubble is scoped to that conversation id, the
-// post-stream refetch of `id` is skipped (it would navigate the user back), and the error banner
-// is retired. The composer stays locked from submit until the refetch settles, so a second turn
-// cannot start in the sse/end -> conversation/loaded gap.
+// post-stream refetch of `id` is skipped before the GET and its response dropped after a switch
+// (the sidebar unfreezes at sse/end, before the refetch resolves, and a late conversation/loaded
+// of `id` would snap the whole UI back), and the error banner is retired. The composer stays
+// locked from submit — including the create round-trip of a first send — until the refetch
+// settles, so a second turn cannot start in the POST -> sse/end -> conversation/loaded gaps.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useRunStream } from '../../api/runStream.js'
@@ -63,15 +65,20 @@ export default function SendPane() {
     async ({ slot = null, prompt: raw }) => {
       const text = (raw || '').trim()
       if (!text) return false
+      if (!conversation && slot) return false // solo continue needs an existing conversation
       setLocalError(null)
       setBannerFor(conversation ? conversation.id : null)
+      // Lock first: the create round-trip below is part of the turn. Unlocked, a second Enter
+      // during POST /api/conversations would run with the same `conversation === null` closure
+      // and create a second conversation plus a second three-model Send for one intended turn.
+      setInFlight(true)
       let conv = conversation
       if (!conv) {
-        if (slot) return false // solo continue needs an existing conversation
         try {
           conv = await createConversation(dispatch, {})
         } catch (e) {
           setLocalError(e && e.message ? e.message : 'could not create conversation')
+          setInFlight(false)
           return false
         }
         // createConversation dispatched conversation/loaded; the render that mirrors it into the
@@ -83,7 +90,6 @@ export default function SendPane() {
       const firstSend = !slot && !(conv.turns || []).length
       const url = slot ? `/api/conversations/${id}/slots/${slot}/continue` : `/api/conversations/${id}/send`
       setPending({ prompt: text, slots: slot ? [slot] : SLOT_IDS, convId: id })
-      setInFlight(true)
       let ok = true
       try {
         await run('send', url, { prompt: text })
@@ -97,7 +103,10 @@ export default function SendPane() {
           setPending(null)
         } else {
           try {
-            await loadConversation(dispatch, id)
+            // The refetch is skipped before the GET (above) AND its response dropped after a
+            // switch: the sidebar re-enables select/new/delete the moment streams.send leaves
+            // 'streaming', which is before this GET resolves (`inFlight` only locks this pane).
+            await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
             setPending(null)
           } catch {
             if (!ok) setPending(null) // else keep the prompt bubble next to the live reply

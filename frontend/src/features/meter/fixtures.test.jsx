@@ -3,8 +3,10 @@
 // the offline e2e suite checks server-side — and are fed through the meter slice as the
 // slot_done / turn_done / analyze_done / fusion_done events the backend derives from them. The
 // rows and the Fusion multiplier must match the fixture costs; a reload of the persisted turns
-// must show the same numbers. Nothing here is hard-coded: change a fixture and the expected
-// values move with it.
+// must show the same numbers. Tokens, costs and call counts are derived from the loaded fixture
+// files (add a chat.2 or defense.2 file and the expected values move with it); only the first
+// test pins the README's exact file set. Wall-clock latency is test-supplied (WALL below): the
+// fixtures carry no latency, the backend measures it live, and the meter only reports it.
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -19,7 +21,7 @@ const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..
 const SLOT_ORDER = ['claude', 'chatgpt', 'grok']
 // docs/fixtures.md: every call carries role + purpose; the meter books purposes by feature.
 const ROW_OF_PURPOSE = { chat: 'send', extraction: 'analyze', defense: 'fusion', convergence: 'fusion' }
-const WALL = { send: 800, analyze: 1200, fusion: 9000 } // wall clocks are measured live, not in the files
+const WALL = { send: 800, analyze: 1200, fusion: 9000 } // test-supplied: wall clocks are measured live, the files carry none
 
 const round8 = (v) => Math.round(v * 1e8) / 1e8
 const cents = (v) => Math.round(v * 100)
@@ -138,7 +140,7 @@ describe(`meter vs backend/llm/fixtures/scenarios/${SCENARIO}`, () => {
   })
 
   test('live events: Send / Analyze / Fusion rows, the last-invocation rows and the total equal the fixture usage sums', () => {
-    const { usage, events } = loadScenario()
+    const { files, usage, events } = loadScenario()
     let s = applyEvents('send', events.send)
     s = applyEvents('analyze', events.analyze, { state: s })
     s = applyEvents('fusion', events.fusion, { state: s })
@@ -149,7 +151,7 @@ describe(`meter vs backend/llm/fixtures/scenarios/${SCENARIO}`, () => {
     const all = round8(usage.send.totals.cost_usd + usage.analyze.totals.cost_usd + usage.fusion.totals.cost_usd)
     expect(s.meter.total.cost_usd).toBeCloseTo(all, 8)
     expect(cents(s.meter.total.cost_usd)).toBe(cents(all)) // to the cent
-    expect(s.meter.total.calls).toBe(8)
+    expect(s.meter.total.calls).toBe(files.length) // one call per fixture file
     expect(s.meter.total.prompt_tokens).toBe(usage.send.totals.prompt_tokens + usage.analyze.totals.prompt_tokens + usage.fusion.totals.prompt_tokens)
     expect(s.meter.total.completion_tokens).toBe(usage.send.totals.completion_tokens + usage.analyze.totals.completion_tokens + usage.fusion.totals.completion_tokens)
     expect(s.meter.total.reasoning_tokens).toBe(usage.send.totals.reasoning_tokens + usage.analyze.totals.reasoning_tokens + usage.fusion.totals.reasoning_tokens)
@@ -161,7 +163,7 @@ describe(`meter vs backend/llm/fixtures/scenarios/${SCENARIO}`, () => {
   })
 
   test('the footer renders those numbers and a Fusion multiplier = fusion cost / send cost (> 1: one round is 3 defenses + a convergence check)', () => {
-    const { usage, events } = loadScenario()
+    const { files, rows, usage, events } = loadScenario()
     let s = applyEvents('send', events.send)
     s = applyEvents('analyze', events.analyze, { state: s })
     s = applyEvents('fusion', events.fusion, { state: s })
@@ -173,18 +175,17 @@ describe(`meter vs backend/llm/fixtures/scenarios/${SCENARIO}`, () => {
       expect(screen.getByTestId(`meter-${row}-cost`)).toHaveTextContent(fmtUsd(t.cost_usd))
       expect(screen.getByTestId(`meter-${row}-conv-cost`)).toHaveTextContent(fmtUsd(t.cost_usd))
       expect(screen.getByTestId(`meter-${row}-tokens`)).toHaveTextContent(`${fmtInt(t.prompt_tokens)} / ${fmtInt(t.completion_tokens)}`)
-      expect(screen.getByTestId(`meter-${row}-calls`)).toHaveTextContent(String(t.calls))
+      // One call per fixture file booked under that row (ROW_OF_PURPOSE).
+      expect(screen.getByTestId(`meter-${row}-calls`)).toHaveTextContent(String(rows[row].length))
+      expect(screen.getByTestId(`meter-${row}-conv-calls`)).toHaveTextContent(String(rows[row].length))
     }
-    expect(screen.getByTestId('meter-send-calls')).toHaveTextContent('3')
-    expect(screen.getByTestId('meter-analyze-calls')).toHaveTextContent('1')
-    expect(screen.getByTestId('meter-fusion-calls')).toHaveTextContent('4')
     const mult = fusionCost / sendCost
     expect(mult).toBeGreaterThan(1)
     expect(screen.getByTestId('meter-fusion-multiplier')).toHaveTextContent(`×${mult.toFixed(1)} vs Send`)
     expect(screen.getByTestId('meter-fusion-multiplier')).toHaveAttribute('title', expect.stringContaining(fmtUsd(sendCost)))
     const all = round8(sendCost + usage.analyze.totals.cost_usd + fusionCost)
     expect(screen.getByTestId('meter-total-conv-cost')).toHaveTextContent(fmtUsd(all))
-    expect(screen.getByTestId('meter-total-conv-calls')).toHaveTextContent('8')
+    expect(screen.getByTestId('meter-total-conv-calls')).toHaveTextContent(String(files.length))
     expect(screen.getByTestId('meter-truncated')).toHaveTextContent('truncated replies: 0')
     expect(screen.queryByTestId('meter-cost-cap')).toBeNull()
   })
