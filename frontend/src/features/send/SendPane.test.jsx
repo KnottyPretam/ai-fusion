@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SendPane from './index.jsx' // registers the `slots` slice and exports the pane
 import { useDispatch } from '../../state/store.jsx'
@@ -425,6 +425,108 @@ describe('SendPane', () => {
     expect(screen.getByTestId('slot-claude')).toHaveAttribute('data-status', 'idle')
     expect(screen.queryByTestId('slot-claude-pending')).toBeNull()
     expect(screen.getByTestId('slot-claude-composer')).not.toBeDisabled()
+  })
+
+  test('a post-stream refetch that resolves after a conversation switch is dropped (the sidebar unfreezes at sse/end, before the refetch)', async () => {
+    const existing = withTurn()
+    const after = conv({
+      ...existing,
+      threads: {
+        claude: [...existing.threads.claude, msg('user', 'q'), msg('assistant', 'A')],
+        chatgpt: [...existing.threads.chatgpt, msg('user', 'q'), msg('assistant', 'B')],
+        grok: [...existing.threads.grok, msg('user', 'q'), msg('assistant', 'C')],
+      },
+      turns: [...existing.turns, { id: 't1', type: 'send', prompt: 'q', slot_config: CFG, responses: { claude: 'A', chatgpt: 'B', grok: 'C' }, usage: { calls: [], totals: {} } }],
+    })
+    let resolveRefetch
+    const calls = stubFetch([
+      { method: 'GET', url: '/api/models', respond: json(MODELS) },
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sse(fullSendStream('t1', { claude: 'A', chatgpt: 'B', grok: 'C' })) },
+      { method: 'GET', url: '/api/conversations/c1', respond: () => new Promise((r) => (resolveRefetch = () => r(json(after)))) },
+    ])
+    let dispatch
+    renderWithStore(
+      <>
+        <SendPane />
+        <DispatchProbe onReady={(d) => (dispatch = d)} />
+      </>,
+      { preloaded: { conversation: existing, slotConfig: CFG } },
+    )
+    const user = userEvent.setup()
+    await user.type(screen.getByTestId('send-composer'), 'q{Enter}')
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1']))
+    // streams.send is 'done' (the sidebar is live again) while c1's refetch is still pending.
+    await waitFor(() => expect(screen.getByTestId('send-button')).toHaveTextContent('Send'))
+    expect(screen.getByTestId('slot-claude-pending')).toHaveTextContent('q')
+    const c2 = conv({ id: 'c2', title: 'Other', threads: { claude: [msg('user', 'old q', 'x1'), msg('assistant', 'old answer', 'x1')], chatgpt: [], grok: [] }, turns: [] })
+    act(() => dispatch({ type: 'conversation/loaded', conversation: c2 }))
+    expect(screen.getByText('old answer')).toBeInTheDocument()
+    expect(screen.queryByTestId('slot-claude-pending')).toBeNull()
+
+    await act(async () => resolveRefetch())
+    await act(async () => {})
+    // c1's late copy never lands: the UI stays on c2 (conversation, slotConfig, columns).
+    expect(screen.getByText('old answer')).toBeInTheDocument()
+    expect(screen.queryAllByText('a0')).toHaveLength(0)
+    expect(screen.getAllByTestId('slot-claude-message')).toHaveLength(2)
+    expect(screen.queryAllByTestId('slot-chatgpt-message')).toHaveLength(0)
+    expect(screen.queryByTestId('slot-claude-pending')).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('send-composer')).not.toBeDisabled())
+    expect(screen.queryByTestId('send-error')).toBeNull()
+    expect(seqOf(calls)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1'])
+  })
+
+  test('the composer is locked through the create round-trip of a first send: one intended turn never creates two conversations', async () => {
+    const created = conv()
+    const after = conv({
+      title: 'hello',
+      threads: { claude: [msg('user', 'hello'), msg('assistant', 'Hi')], chatgpt: [msg('user', 'hello'), msg('assistant', 'Hi')], grok: [msg('user', 'hello'), msg('assistant', 'Hi')] },
+      turns: [{ id: 't1', type: 'send', prompt: 'hello', slot_config: CFG, responses: { claude: 'Hi', chatgpt: 'Hi', grok: 'Hi' }, usage: { calls: [], totals: {} } }],
+    })
+    let resolveCreate
+    const calls = stubFetch([
+      { method: 'GET', url: '/api/models', respond: json(MODELS) },
+      { method: 'POST', url: '/api/conversations', respond: () => new Promise((r) => (resolveCreate = () => r(json(created, 201)))) },
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sse(fullSendStream('t1', { claude: 'Hi', chatgpt: 'Hi', grok: 'Hi' })) },
+      { method: 'GET', url: '/api/conversations/c1', respond: json(after) },
+      { method: 'GET', url: '/api/conversations', respond: json([{ id: 'c1', title: 'hello', created_at: '', updated_at: '', turn_count: 1 }]) },
+    ])
+    renderWithStore(<SendPane />)
+    const user = userEvent.setup()
+    const ta = screen.getByTestId('send-composer')
+    await user.type(ta, 'hello{Enter}')
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations']))
+    // POST /api/conversations is pending: the prompt is already cleared and the composer locked.
+    expect(ta).toHaveValue('')
+    expect(ta).toBeDisabled()
+    expect(screen.getByTestId('send-button')).toBeDisabled()
+    // Even a synthetic Enter with a new prompt (a browser never delivers one to a disabled
+    // textarea) is ignored by submit() while the turn is in flight.
+    fireEvent.change(ta, { target: { value: 'again' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    await tick()
+    expect(seqOf(calls)).toEqual(['POST /api/conversations'])
+
+    await act(async () => resolveCreate())
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    await waitFor(() => expect(ta).not.toBeDisabled())
+    expect(calls.filter((c) => c.method === 'POST' && c.url === '/api/conversations')).toHaveLength(1)
+    expect(calls.filter((c) => c.url === '/api/conversations/c1/send')).toHaveLength(1)
+    expect(screen.getByTestId('slot-grok-model')).toHaveValue('x-ai/grok-4.6')
+  })
+
+  test('a failed create unlocks the composer and shows the error', async () => {
+    stubFetch([
+      { method: 'GET', url: '/api/models', respond: json(MODELS) },
+      { method: 'POST', url: '/api/conversations', respond: json({ detail: { error: 'boom' } }, 500) },
+    ])
+    renderWithStore(<SendPane />)
+    const user = userEvent.setup()
+    await user.type(screen.getByTestId('send-composer'), 'hello{Enter}')
+    await waitFor(() => expect(screen.getByTestId('send-error')).toHaveTextContent('boom'))
+    expect(screen.getByTestId('send-composer')).not.toBeDisabled()
+    expect(screen.queryByTestId('slot-claude-pending')).toBeNull()
+    for (const slot of ['claude', 'chatgpt', 'grok']) expect(screen.getByTestId(`slot-${slot}`)).toHaveAttribute('data-status', 'idle')
   })
 
   test('the error banner is scoped to the conversation it belongs to and is retired on a switch', async () => {

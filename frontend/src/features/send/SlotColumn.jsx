@@ -14,6 +14,9 @@ import styles from './send.module.css'
 
 const STREAM_KEYS = ['send', 'analyze', 'fusion']
 const EMPTY_THREAD = [] // stable identity: the scroll effect keys on the thread object
+// The latest per-column config save, shared by the three columns: every PUT carries the full
+// merged SlotConfig, so a slow PUT from one column must not revert a later PUT from another.
+let saveSeq = 0
 
 // Plain text, link-free (docs/api-contract.md addendum: "the UI shows a persistent warning when
 // any event carries that code"). Shown on every column while the cap is hit.
@@ -164,7 +167,10 @@ function Message({ slot, msg, extras, isLatest }) {
 
 // A send/continue turn where this slot ended in slot_error: nothing was appended to the thread
 // (docs/semantics.md), so the prompt, the partial text and the error are rendered from the turn.
-// Test ids on the error box follow the Extras rule: only for the newest turn of the slot.
+// `truncated[slot]` is still stamped on an errored slot (the empty_reply path with
+// finish_reason=length: a reasoning model that spent the whole token cap on reasoning), so the
+// truncation warning is shown here too, as the meter counts that turn under truncated replies.
+// Test ids follow the Extras rule: only for the newest turn of the slot.
 function PersistedError({ slot, extras, isLatest }) {
   return (
     <div data-testid={`slot-${slot}-persisted-error`} data-turn-id={extras.turnId}>
@@ -174,6 +180,7 @@ function PersistedError({ slot, extras, isLatest }) {
       <div className={`${styles.msg} ${styles.assistant}`} data-role="assistant" data-kind="chat">
         {extras.partial ? <Markdown text={extras.partial} /> : null}
         <div className={styles.extras}>
+          {extras.truncated ? <Truncated testId={isLatest ? `slot-${slot}-truncated` : undefined} /> : null}
           <ErrorBox message={extras.error} testId={isLatest ? `slot-${slot}-error` : undefined} partial={!!extras.partial} costCap={isCostCapError(null, extras.error)} />
         </div>
       </div>
@@ -232,6 +239,8 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
   const [configError, setConfigError] = useState(null)
   const [draft, setDraft] = useState('')
   const scrollRef = useRef(null)
+  const convRef = useRef(null) // latest rendered conversation id, readable after the await in save()
+  convRef.current = conversation ? conversation.id : null
 
   const isLive = live.status !== 'idle'
   const grounded = !!(slotConfig && slotConfig.grounded)
@@ -255,9 +264,17 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
   async function save(patchSpec) {
     if (!conversation || !slotConfig) return
     setConfigError(null)
+    const n = ++saveSeq
+    const id = conversation.id
+    // Two quick changes are two in-flight PUTs: without the sequence check the earlier response
+    // arriving last would revert the later change. A response for a conversation that is no
+    // longer selected is dropped too (the frozen slotConfig reducer takes any slotConfig/loaded).
+    // The frozen loader applies isCurrent to both the success copy and the reload-on-failure copy.
+    const isCurrent = (cid) => convRef.current === cid && saveSeq === n
     try {
-      await saveSlotConfig(dispatch, conversation.id, { slots: { [slot]: patchSpec } }, slotConfig)
+      await saveSlotConfig(dispatch, id, { slots: { [slot]: patchSpec } }, slotConfig, { isCurrent })
     } catch (e) {
+      if (saveSeq !== n) return // a later save carries this change too; its outcome wins
       setConfigError(e && e.message ? e.message : 'could not save slot config')
     }
   }

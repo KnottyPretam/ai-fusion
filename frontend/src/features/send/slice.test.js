@@ -62,7 +62,7 @@ describe('slots slice: three synthetic streams isolate', () => {
     expect(s1.slots).toBe(s0.slots)
     const s2 = applyEvents('send', [sample.slotDelta('analyst', 'nope'), { type: 'unknown_event' }], { state: s0 })
     expect(s2.slots).toBe(s0.slots)
-    expect(Object.keys(s2.slots).sort()).toEqual(['chatgpt', 'claude', 'grok'])
+    expect(Object.keys(s2.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'grok'])
   })
 })
 
@@ -187,11 +187,66 @@ describe('slots slice: turn lifecycle', () => {
     expect(early.slots.claude).toMatchObject({ status: 'idle', buffer: '' })
   })
 
-  test('initial state has exactly the three slots with the documented shape', () => {
+  test('initial state has exactly the three slots with the documented shape (plus the loaded conversation id)', () => {
     const s = initialState()
-    expect(Object.keys(s.slots).sort()).toEqual(['chatgpt', 'claude', 'grok'])
+    expect(Object.keys(s.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'grok'])
+    expect(s.slots.conversationId).toBeNull()
     expect(s.slots.claude).toMatchObject({ buffer: '', reasoning: '', citations: [], status: 'idle', usage: null, truncated: false, error: null, effort: null, effortCoerced: false, model: null })
     expect(initialState().slots).not.toBe(s.slots)
+  })
+
+  test('a same-conversation load during an open send stream is a refetch and keeps the live columns; another id is a switch and resets', () => {
+    const c1 = { id: 'c1', title: 'A', slot_config: CFG, threads: { claude: [], chatgpt: [], grok: [] }, turns: [] }
+    const loaded = rootReducer(initialState(), { type: 'conversation/loaded', conversation: c1 })
+    expect(loaded.slots.conversationId).toBe('c1')
+    const live = applyEvents('send', [...allStarted(), sample.slotDelta('claude', 'A')], { state: loaded })
+    // The Analyze / Fusion pane's post-stream GET of c1 resolves after a new Send started.
+    const refetched = rootReducer(live, { type: 'conversation/loaded', conversation: { ...c1, turns: [{ id: 'a1', type: 'analyze', of_turn: 't0', status: 'ok' }] } })
+    expect(refetched.slots).toBe(live.slots)
+    expect(refetched.conversation.turns).toHaveLength(1) // the core slice still took the document
+    // Later deltas of the open stream keep landing.
+    const more = applyEvents('send', [sample.slotDelta('claude', 'B'), sample.slotDelta('grok', 'G')], { state: refetched })
+    expect(more.slots.claude.buffer).toBe('AB')
+    expect(more.slots.grok.buffer).toBe('G')
+    // A different conversation is a switch: reset now, and the stale stream is ignored from then on.
+    const c2 = { ...c1, id: 'c2' }
+    const switched = rootReducer(more, { type: 'conversation/loaded', conversation: c2 })
+    expect(switched.slots.conversationId).toBe('c2')
+    for (const k of SLOT_IDS) expect(switched.slots[k]).toMatchObject({ status: 'idle', buffer: '' })
+    const stale = applyEvents('send', [sample.slotDelta('claude', 'C'), sample.slotDone('claude')], { state: switched })
+    expect(stale.slots).toBe(switched.slots)
+    // Once the stream has settled (turn_done), the send's own same-id refetch resets as before.
+    const done = applyEvents('send', [...allStarted(), sample.slotDelta('grok', 'G2'), sample.slotDone('claude'), sample.slotDone('chatgpt'), sample.slotDone('grok'), sample.turnDone()], { state: switched })
+    expect(done.slots.grok).toMatchObject({ status: 'done', buffer: 'G2' })
+    const after = rootReducer(done, { type: 'conversation/loaded', conversation: c2 })
+    expect(after.slots.grok).toMatchObject({ status: 'idle', buffer: '' })
+    expect(after.slots.conversationId).toBe('c2')
+    // A redundant same-id load of settled columns keeps identity; conversation/cleared forgets the id.
+    expect(rootReducer(after, { type: 'conversation/loaded', conversation: c2 }).slots).toBe(after.slots)
+    const cleared = rootReducer(after, { type: 'conversation/cleared' })
+    expect(cleared.slots.conversationId).toBeNull()
+    expect(rootReducer(cleared, { type: 'conversation/cleared' }).slots).toBe(cleared.slots)
+    // Before any load the id is unknown, so every load is a switch (the pre-existing behaviour).
+    const unknown = applyEvents('send', [...allStarted(), sample.slotDelta('claude', 'A')])
+    expect(rootReducer(unknown, { type: 'conversation/loaded', conversation: c1 }).slots.claude.status).toBe('idle')
+  })
+
+  test('sse/end{ok:true} without the terminal events settles the stragglers, so the post-stream same-id refetch still resets', () => {
+    const c1 = { id: 'c1', title: 'A', slot_config: CFG, threads: { claude: [], chatgpt: [], grok: [] }, turns: [] }
+    const loaded = rootReducer(initialState(), { type: 'conversation/loaded', conversation: c1 })
+    // The server closed the stream after claude's slot_done, with no slot_done / turn_done for the others.
+    const ended = applyEvents('send', [...allStarted(), sample.slotDelta('claude', 'A'), sample.slotDone('claude'), sample.slotDelta('grok', 'half'), { type: 'sse/end', feature: 'send', ok: true }], { state: loaded })
+    expect(ended.slots.claude.status).toBe('done')
+    expect(ended.slots.chatgpt).toMatchObject({ status: 'error', error: expect.stringMatching(/ended before/) })
+    expect(ended.slots.grok).toMatchObject({ status: 'error', buffer: 'half' })
+    const refetched = rootReducer(ended, { type: 'conversation/loaded', conversation: c1 })
+    for (const k of SLOT_IDS) expect(refetched.slots[k]).toMatchObject({ status: 'idle', buffer: '' })
+    // No straggler: sse/end{ok:true} after turn_done leaves the slice untouched.
+    const settled = applyEvents('send', [...allStarted(), sample.slotDone('claude'), sample.slotDone('chatgpt'), sample.slotDone('grok'), sample.turnDone()], { state: loaded })
+    expect(rootReducer(settled, { type: 'sse/end', feature: 'send', ok: true }).slots).toBe(settled.slots)
+    // Another feature's clean end never touches the columns.
+    const live = applyEvents('send', [...allStarted()], { state: loaded })
+    expect(rootReducer(live, { type: 'sse/end', feature: 'analyze', ok: true }).slots).toBe(live.slots)
   })
 })
 
