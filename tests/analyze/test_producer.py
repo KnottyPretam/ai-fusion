@@ -4,8 +4,10 @@ client disconnects; the generator only drains its queue. Also the frozen signatu
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 
+import pytest
 from fastapi import HTTPException
 
 from backend.features import analyze as feature
@@ -96,6 +98,46 @@ async def test_a_disconnected_run_is_then_served_from_cache(persisted_conversati
     assert [e["type"] for e in events] == ["analyze_start", "analyze_done"]
     assert events[0]["turn_id"] == first["turn_id"] and events[-1]["cached"] is True
     assert len(extraction_calls()) == 1
+
+
+async def test_final_event_and_sentinel_survive_a_failing_guard_release(
+    persisted_conversation, monkeypatch
+):
+    """send/fusion parity: the guard release runs in a nested `finally`, so even a raising
+    `__aexit__` cannot leave the consumer blocked forever on an HTTP 200 stream with no
+    terminal event — the final event and the queue sentinel are still enqueued."""
+    monkeypatch.setenv("MOCK_DELAY_MS", "3")  # keep the producer in flight after analyze_start
+    conv = persisted_conversation
+    real_busy_guard = store.busy_guard
+
+    class ExplodingGuard:
+        def __init__(self, conv_id: str) -> None:
+            self.inner = real_busy_guard(conv_id)
+
+        async def __aenter__(self) -> None:
+            return await self.inner.__aenter__()
+
+        async def __aexit__(self, *exc) -> None:
+            await self.inner.__aexit__(*exc)  # the id IS released...
+            raise RuntimeError("release exploded")  # ...but the release reports a failure
+
+    monkeypatch.setattr(feature.store, "busy_guard", ExplodingGuard)
+    gen = run_analyze(conv.id)
+    first = await asyncio.wait_for(gen.__anext__(), 5)
+    assert first["type"] == "analyze_start" and store.is_busy(conv.id)
+    (task,) = feature._tasks
+
+    async def drain() -> list[dict]:
+        return [e async for e in gen]
+
+    rest = await asyncio.wait_for(drain(), 5)  # would hang without the nested finally
+    assert [e["type"] for e in rest] == ["analyze_done"]
+    assert rest[0]["turn"]["id"] == first["turn_id"] and rest[0]["cached"] is False
+    assert not store.is_busy(conv.id)
+    loaded = await store.load(conv.id)
+    assert [t.type for t in loaded.turns] == ["send", "analyze"]  # persisted before the release
+    with pytest.raises(RuntimeError, match="release exploded"):
+        await task  # the failure is not swallowed either
 
 
 async def test_nested_call_inside_a_guard_holder_is_reentrant(persisted_conversation):

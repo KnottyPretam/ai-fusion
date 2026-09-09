@@ -13,11 +13,16 @@ busy guard -> 409 busy.
 
 A fresh run mints the turn id, enters the guard, and spawns ONE producer task that emits
 `analyze_start{turn_id, of_turn}`, calls the analyst once (`complete_json(..., retries=0)`), on
-failure emits `analyze_retry{error}` and calls once more carrying the validation error, persists
-the AnalyzeTurn (`ok` or `degraded`) and only then emits `analyze_done{turn, cached:false}` or
-`analyze_degraded{turn}` — the last event either way (no `error` follows a degrade). The task
-releases the guard in its `finally` after the persistence write and runs to completion even when
-the client disconnects; the generator only drains the task's queue.
+ANY failure emits `analyze_retry{error}` and calls once more (`retry_follow_up` decides what the
+retry carries: the correction message plus the bad output echoed as the assistant turn, the
+message alone when that output is blank, or the identical request when there was no output at
+all — a transport error or an empty stream), persists the AnalyzeTurn (`ok` or `degraded`) and
+only then emits `analyze_done{turn, cached:false}` or `analyze_degraded{turn}` — the last event
+either way (no `error` follows a degrade). An unexpected exception after the first event becomes
+the terminal `error{message}` event and nothing is persisted. The task releases the guard in its
+`finally` after the persistence write (nested so the final event and the queue sentinel are
+enqueued even if the release itself raised) and runs to completion even when the client
+disconnects; the generator only drains the task's queue.
 """
 
 from __future__ import annotations
@@ -108,6 +113,23 @@ async def _attempt(
     return extraction, raw, usage, error
 
 
+def retry_follow_up(raw: str, error: str | None) -> list[dict[str, str]]:
+    """The messages appended to the first attempt's request before the retry.
+
+    docs/semantics.md "Analyze" + "Analyze on a transport error": no output at all (a transport
+    error delta, or a stream that carried no text) leaves nothing to correct, so the identical
+    request is re-sent. Any output that failed lenient parsing / validation gets the correction
+    message; it is echoed back as the assistant turn only when it is not blank — providers
+    reject empty assistant content (the client applies the same `raw.strip()` rule to its own
+    internal retry), so whitespace-only output is never echoed."""
+    if not raw:
+        return []
+    follow_up = [{"role": "user", "content": prompts.retry_message(error or "unknown error")}]
+    if raw.strip():
+        follow_up.insert(0, {"role": "assistant", "content": raw})
+    return follow_up
+
+
 async def _produce(
     conv: Conversation,
     send_turn: SendTurn,
@@ -132,14 +154,7 @@ async def _produce(
             if extraction is not None:
                 break
             queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
-            if raw:
-                # Parse / validation failure: carry the bad output and the error back.
-                messages = [
-                    *messages,
-                    {"role": "assistant", "content": raw},
-                    {"role": "user", "content": prompts.retry_message(error or "unknown error")},
-                ]
-            # A transport error produced no output to correct: retry the same request.
+            messages = [*messages, *retry_follow_up(raw, error)]
             extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
             usage.merge(attempt_usage)
             raw_attempts.append(raw)
@@ -165,11 +180,15 @@ async def _produce(
         final = {"type": "error", "message": f"{type(e).__name__}: {e}"}
     finally:
         # Release after the last persistence write and BEFORE the client sees the final event,
-        # so a Fusion fired on analyze_done never trips over a guard that is still held.
-        await guard.__aexit__(None, None, None)
-        if final is not None:
-            queue.put_nowait(final)
-        queue.put_nowait(_END)
+        # so a Fusion fired on analyze_done never trips over a guard that is still held. The
+        # final event and the sentinel are enqueued even if the release raised (send/fusion
+        # parity): a consumer must never block forever on an HTTP 200 stream.
+        try:
+            await guard.__aexit__(None, None, None)
+        finally:
+            if final is not None:
+                queue.put_nowait(final)
+            queue.put_nowait(_END)
 
 
 # --------------------------------------------------------------------------- public API (frozen)
@@ -215,5 +234,6 @@ __all__ = [
     "missing_responses",
     "resolve_send_turn",
     "responses_by_label",
+    "retry_follow_up",
     "run_analyze",
 ]
