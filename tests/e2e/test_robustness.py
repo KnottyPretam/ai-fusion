@@ -1,13 +1,14 @@
 """Robustness of the Analyze / Fusion JSON path end to end (PLAN.md §9 "Robustness": fuzz the
 parsers with truncated and fenced output; docs/semantics.md "Structured output").
 
-Malformed model outputs -- truncated, fenced, chatty, prose-only, schema-violating, empty and
-mid-stream error chunks -- are planted as mock fixtures (`tests/e2e/malformed.py`) and the REAL
-HTTP flow runs against them: the committed deterministic scenarios under `tests/e2e/fixtures`
-first, then hypothesis-generated combinations written into a temporary fixtures root
-(`MOCK_FIXTURES_DIR` monkeypatched). The oracle is the frozen contract: a valid attempt (plain,
-fenced or chatty) is recovered; Analyze retries once on ANY failure and otherwise degrades;
-`complete_json` retries once on a parse / validation failure but never on a transport error, so
+Malformed model outputs -- truncated, fenced, chatty, prose-only, schema-violating,
+whitespace-only, empty and mid-stream error chunks -- are planted as mock fixtures
+(`tests/e2e/malformed.py`) and the REAL HTTP flow runs against them: the committed deterministic
+scenarios under `tests/e2e/fixtures` first, then hypothesis-generated combinations written into a
+temporary fixtures root (`MOCK_FIXTURES_DIR` monkeypatched). The oracle is the frozen contract: a
+valid attempt (plain, fenced or chatty) is recovered; Analyze retries once on ANY failure and
+otherwise degrades, echoing the bad output back only when it is not blank; `complete_json`
+retries once on a parse / validation failure (same echo rule) but never on a transport error, so
 a slot whose attempts all fail is `unavailable`, a failed convergence check leaves ids
 `standing`. Never a 500, never an `error` event, never a hung stream (every request is bounded
 by `TIMEOUT_S`)."""
@@ -164,13 +165,21 @@ def assert_analyze_outcome(out: dict[str, Any], first: Reply, second: Reply) -> 
             assert retry_error.startswith("parse_error") or "validation error" in retry_error
         assert len(extraction_calls) == 2
         c1, c2 = extraction_calls
-        if first.text:
+        # docs/semantics.md retry rule, all three cases: output that failed parsing is echoed
+        # back and corrected; whitespace-only output gets the correction WITHOUT the echo
+        # (providers reject empty assistant content); no output at all is simply re-sent.
+        correction = {"role": "user", "content": analyze_prompts.retry_message(retry_error)}
+        if first.echoed_on_retry:
             assert c2["messages"] == [
                 *c1["messages"],
                 {"role": "assistant", "content": first.text},
-                {"role": "user", "content": analyze_prompts.retry_message(retry_error)},
+                correction,
             ]
             assert "failed validation" in c2["messages"][-1]["content"]
+        elif first.text:
+            assert first.kind == "blank"
+            assert c2["messages"] == [*c1["messages"], correction]
+            assert all(m["content"].strip() for m in c2["messages"] if m["role"] == "assistant")
         else:  # nothing to correct: the same request is simply retried
             assert c2["messages"] == c1["messages"]
         assert turn.raw_attempts == [first.text, second.text]
@@ -218,11 +227,14 @@ def assert_fusion_outcome(
         assert len(served) == len(attempts), f"{slot}: {len(served)} calls for {attempts}"
         metered += sum(1 for a in attempts if a.metered)
         if len(served) == 2:
-            # The internal retry carries the bad output (when there was any) and the error.
+            # The internal retry carries the bad output (only when it is not blank) and the
+            # error: same three-case rule as Analyze, applied by `complete_json` itself.
             c1, c2 = served
             assert challenge_of(c1) == c2["messages"][len(c1["messages"]) - 1]["content"]
             assert c2["messages"][-1]["content"].startswith(RETRY_PREFIX)
-            assert len(c2["messages"]) == len(c1["messages"]) + (2 if first.text.strip() else 1)
+            assert len(c2["messages"]) == len(c1["messages"]) + (2 if first.echoed_on_retry else 1)
+            if first.echoed_on_retry:
+                assert c2["messages"][-2] == {"role": "assistant", "content": first.text}
         reply = attempts[-1] if attempts[-1].valid else None
         ex = exchanges[label]
         thread = out["conv"]["threads"][slot]
@@ -306,6 +318,7 @@ ANALYST_CASES = {
     "analyst_truncated_twice": ("degraded", ["analyze_start", "analyze_retry", "analyze_degraded"]),
     "analyst_prose_then_fenced": ("ok", ["analyze_start", "analyze_retry", "analyze_done"]),
     "analyst_chatty_first": ("ok", ["analyze_start", "analyze_done"]),
+    "analyst_blank_then_valid": ("ok", ["analyze_start", "analyze_retry", "analyze_done"]),
 }
 
 

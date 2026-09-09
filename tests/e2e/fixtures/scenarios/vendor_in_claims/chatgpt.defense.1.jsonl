@@ -1,0 +1,23 @@
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"stance\": \"revise\", \"ju"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "stification\": \"Both peer"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "s state the gyroscope ra"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "nge is selectable up to "}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "2000 deg/s, and the data"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "sheet's GYRO_RANGE regis"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "ter (0x0F) confirms code"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "s 0x00 through 0x04 for "}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "2000, 1000, 500, 250 and"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " 125 deg/s. I had quoted"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " the 1000 deg/s intermed"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "iate setting as the maxi"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "mum, which is incorrect."}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "\", \"revised_claim\": \"The"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " gyroscope full-scale ra"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "nge is selectable up to "}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "2000 deg/s.\", \"confidenc"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "e\": 0.9, \"persuaded_by\":"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " \"the specific GYRO_RANG"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "E register codes and the"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": " 2000 deg/s maximum cite"}, "finish_reason": null}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"content": "d by both peers\"}"}, "finish_reason": "stop"}]}
+{"id": "gen-54b122bbf57c407f", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 536, "completion_tokens": 131, "total_tokens": 667, "cost": 0.0002382, "completion_tokens_details": {"reasoning_tokens": 0}}}

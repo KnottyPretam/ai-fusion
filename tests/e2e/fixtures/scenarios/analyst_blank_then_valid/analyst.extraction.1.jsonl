@@ -1,0 +1,2 @@
+{"id": "gen-970fc695e2212115", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": " \n\t"}, "finish_reason": "stop"}]}
+{"id": "gen-970fc695e2212115", "object": "chat.completion.chunk", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 506, "completion_tokens": 1, "total_tokens": 507, "cost": 0.0001022, "completion_tokens_details": {"reasoning_tokens": 0}}}

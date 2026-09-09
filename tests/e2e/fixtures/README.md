@@ -1,7 +1,8 @@
 # tests/e2e local fixtures (owner: e2e-offline)
 
-Malformed-output scenarios for the Analyze / Fusion JSON path (PLAN.md §9 "Robustness"), served
-by pointing `MOCK_FIXTURES_DIR` at this directory (`tests/e2e/test_robustness.py`). Same JSONL
+Malformed-output scenarios for the Analyze / Fusion JSON path (PLAN.md §9 "Robustness"), plus
+one leak scenario (`vendor_in_claims`, `tests/e2e/test_leaks.py`), served by pointing
+`MOCK_FIXTURES_DIR` at this directory (`tests/e2e/test_robustness.py`). Same JSONL
 format as `backend/llm/fixtures/scenarios` (docs/fixtures.md): one raw OpenRouter chunk per
 line, a success ends with the usage chunk, an error fixture is the error chunk alone.
 
@@ -16,6 +17,8 @@ scenarios of the same shapes into a temporary fixtures root and never touches th
 | `analyst_truncated_twice` | `extraction.1` cut mid-object, `.2` fenced AND cut | `analyze_retry` then `analyze_degraded`; both raw texts in `raw_attempts`; Fusion 409 `analyze_degraded` |
 | `analyst_prose_then_fenced` | `.1` prose without any JSON, `.2` fenced valid JSON | `analyze_retry` then `analyze_done` (ok) with the fenced extraction recovered |
 | `analyst_chatty_first` | `.1` valid JSON wrapped in chatter | ok on the first attempt, no retry |
+| `analyst_blank_then_valid` | `.1` whitespace-only text (one content chunk `" \n\t"`, usage chunk present), `.2` valid | `analyze_retry` then `analyze_done`; the retry carries the correction message but NO assistant echo (docs/semantics.md: whitespace-only output is never echoed); `raw_attempts[0]` is the blank text verbatim |
+| `vendor_in_claims` | not malformed: its own extraction names `Claude`, `gpt-5.6-luna` in d1's topic and `OpenAI` in R2's claim; valid defenses (R2 revises, justified) and a `resolved` convergence | every challenge quotes the topic scrubbed to `[model]`, R1/R3 see R2's claim scrubbed in the `<<<R2>>>` peer block, the convergence payload is scrubbed; only R2's OWN claim reaches R2 verbatim (`YOUR CLAIM`) -- `test_leaks.py` proves `anon.scrub` is applied (mutation-sensitive) |
 | `defense_malformed` | claude `.1` truncated + `.2` prose; chatgpt fenced revise; grok chatty defend; convergence `.1` truncated + `.2` fenced standing | R1 `unavailable` (nothing appended), R2/R3 available; analyst retried once; exit `max_iterations` (cap 1), d1 `standing` |
 | `defense_all_malformed` | every slot fails both attempts (truncated / schema / empty / prose / error chunk) | every exchange `unavailable`; exit `error`; no convergence call; threads untouched |
 | `convergence_malformed_twice` | valid defenses (R2 revises); convergence `.1` prose, `.2` schema violation | analyst called twice, d1 stays `standing`; exit `max_iterations` |
