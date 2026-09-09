@@ -725,7 +725,7 @@ The OpenRouter TypeScript SDK (`@openrouter/sdk`) takes these as constructor opt
 - https://openrouter.ai/docs/llms.txt (documentation index; every docs page is fetchable verbatim by appending .md to its URL)
 - https://openrouter.ai/docs/llms-full.txt (3.9 MB full-corpus dump, used to grep for delta.reasoning / delta.annotations)
 
-## Observed live (2026-09-08, Stage 4 smoke; transcripts in backend/llm/fixtures/recorded/)
+## Observed live (2026-09-08, Stage 4 smoke; transcripts in backend/llm/fixtures/recordings/2026-09-08-smoke/)
 
 - **Web-search citations in streaming**: with `plugins:[{"id":"web","max_results":5}]` on
   `anthropic/claude-opus-5`, the `url_citation` annotation arrived as `choices[0].delta.annotations`

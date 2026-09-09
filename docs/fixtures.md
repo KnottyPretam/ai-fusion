@@ -124,3 +124,7 @@ Sticky-last never advances beyond the last existing file.
   round == cap → exit `max_iterations`, final [d1 resolved, d2 standing]. 11 files (3 chat + 1 extraction + 6 defense + 1 convergence).
 - `analyst_retry` — `analyst.extraction.1` fenced + truncated, `.2` valid; `mock.calls[-1]`'s
   last user message contains "failed validation".
+
+Real transcripts captured in Stage 4 live under `backend/llm/fixtures/recordings/<date-name>/recorded/`
+(a sibling of the default root, so they never shadow the scenario corpus); replay one set with
+`MOCK_FIXTURES_DIR=backend/llm/fixtures/recordings/<date-name>`.

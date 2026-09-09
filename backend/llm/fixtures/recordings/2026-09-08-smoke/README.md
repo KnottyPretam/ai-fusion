@@ -4,8 +4,12 @@ Captured 2026-09-08 by `scripts/live_smoke.py --record` against the real OpenRou
 Stage 4 live smoke: one prompt per slot at the configured effort, an analyst Extraction, one
 grounded call). Each file is the raw `data:` chunk stream keyed by `schemas.canonical_request_key`
 of the request, so the mock replays it whenever the identical request is made
-(`docs/fixtures.md`, lookup step 1). No secrets: request payloads live only in the
-gitignored `data/recordings/` directory.
+(`docs/fixtures.md`, lookup step 1) — but ONLY when `MOCK_FIXTURES_DIR` points here:
+`MOCK_OPENROUTER=1 MOCK_FIXTURES_DIR=backend/llm/fixtures/recordings/2026-09-08-smoke`.
+They are deliberately kept out of the default fixtures root, where the content-keyed lookup
+would override the scenario corpus for identical requests (the smoke's analyst call reuses the
+corpus' canned answers). No secrets: request payloads live only in the gitignored
+`data/recordings/` directory.
 
 | role | purpose | model | file |
 |---|---|---|---|

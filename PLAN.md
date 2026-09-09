@@ -263,7 +263,7 @@ with tests written from the acceptance criteria before implementation.
       verify the current unified-reasoning parameter shape and which slots honor it.
 - [x] Run `/init`; trim `CLAUDE.md` (run commands, structure notes, "update PLAN.md  ✅ S0: CLAUDE.md in karpathy's structure (docs/reference/llm-council-CLAUDE.md kept verbatim)
       checkboxes as you go").
-- [x] Capture 2–3 full raw API transcripts as `fixtures/` for replay.  ✅ Stage 4 smoke: 5 real transcripts recorded → backend/llm/fixtures/recorded/ (was 🔶) hand-authored scenario corpus (S1); real transcripts recorded in Stage 4 (MOCK_RECORD_DIR)
+- [x] Capture 2–3 full raw API transcripts as `fixtures/` for replay.  ✅ Stage 4 smoke: 5 real transcripts recorded → backend/llm/fixtures/recordings/2026-09-08-smoke/ (was 🔶) hand-authored scenario corpus (S1); real transcripts recorded in Stage 4 (MOCK_RECORD_DIR)
 - **AC:** stock flow completes with all three target models; costs visible in logs.  ✅ Stage 4 smoke: all three slots answered with their configured models; per-call INFO cost lines + summary $0.079
 
 ### Phase 1 — Test scaffolding & schemas
