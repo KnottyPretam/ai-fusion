@@ -35,3 +35,7 @@ class LLMError(Exception):
         self.code = code
         self.message = message
         self.error_type = error_type
+
+
+# Codes minted by features
+EMPTY_REPLY = "empty_reply"  # Send/continue: a done delta with empty/whitespace text

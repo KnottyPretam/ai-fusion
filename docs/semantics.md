@@ -10,7 +10,11 @@ with that slot's model/effort (`reasoning.build`), `max_tokens=MAX_TOKENS_STAGE[
 `asyncio.Queue` → one SSE consumer. **The user message and the assistant reply for a slot are
 appended together, atomically, when that slot ends with `slot_done`; on `slot_error` nothing is
 appended** (partial text is kept on the turn only). Truncation (`finish_reason=="length"`) →
-`truncated:true`, reply still appended. On client disconnect, producers run to completion and
+`truncated:true`, reply still appended — but only when the text is non-empty: a `done` whose
+accumulated text is empty/whitespace is a slot failure `slot_error{code:"empty_reply",
+error_type:"triplex", message:"model returned no text (finish_reason=<fr>)", partial:""}`;
+nothing is appended, `responses[slot]=None`, `errors[slot]=message`, `truncated[slot]` still
+reflects `finish_reason=="length"`, and the slot's `Usage` is still folded into `turn_done.usage`. On client disconnect, producers run to completion and
 persist (v1); `busy_guard` makes a concurrent feature call on the same conversation `409 busy`.
 Title = first prompt truncated to 60 chars (no LLM titling); renamable.
 
@@ -84,9 +88,13 @@ object per standing divergence with ≥1 revise this round: `{"divergence_id", "
 resolved id keeps its status). `FusionTurn.usage` covers fusion calls only; an auto-run AnalyzeTurn carries its
 own. Fusion thread messages carry `turn_id` = the FusionTurn id and `meta={"divergence_id": d,
 "round": n}`; `fusion_reply.content` = `raw_text` verbatim; defense and convergence calls use
-`complete_json(retries=1)` (silent internal retry). The challenge prompt wraps `{your_claim}`,
-`latest_justification` and the peer block in the shared delimiters (`backend/prompts.delimited`)
-preceded by `QUOTED_DATA_NOTICE`; `render_peer_block` emits one delimited section per peer.
+`complete_json(retries=1)` (silent internal retry). The challenge prompt wraps the divergence `topic` (scrubbed, in its own `<<<TOPIC>>>` block after
+the lead "On the question above, regarding this topic:", followed by "Your current position is:"),
+`{your_claim}`, `latest_justification` and the peer block in the shared delimiters
+(`backend/prompts.delimited`) preceded by `QUOTED_DATA_NOTICE`; `render_peer_block` emits one
+delimited section per peer. An analyst-returned `resolved_unjustified` (admitted by the strict
+ConvergenceCheck schema) counts as `resolved`; the deterministic flag rule alone decides whether
+the id becomes `resolved` or `resolved_unjustified`.
 `current_claim(d, L)` = `revised_claim` of L's most recent `revise` exchange on d, else the
 Extraction position; `latest_justification(d, L)` = justification of L's most recent exchange,
 else `evidence_cited` or "(none given)". The challenge prompt contains Appendix A's
@@ -128,8 +136,11 @@ assert that Triplex-authored messages (analyst prompts, challenge prompts, conve
 never contain `FORBIDDEN_IDENTITY_STRINGS` (word-bounded), `FORBIDDEN_MODEL_CODENAMES` in slug
 context (`-luna`, `-sol`, `-astra`), or `anon_map` values (`scrub` handles both lists) — checked on vendor-name-free
 fixtures plus a negative fixture whose *user prompt* says "Claude" and must still pass (user
-prompts and a slot's own prior replies are out of scope). `scrub` is applied only inside
-`render_peer_block` to claims/justifications; runtime `find_leaks` logs a warning, never blocks.
+prompts and a slot's own prior replies are out of scope). `scrub` is applied inside `render_peer_block`
+(claims/justifications), to the challenge topic and the convergence payload (topic + current
+claims), to every `Exchange.error`, and to Fusion's terminal `error{message}` (including a forwarded
+auto-run Analyze error) — so an error text may read `[model]`; runtime `find_leaks` logs a warning,
+never blocks.
 
 **Metering/logging.** One INFO log line per LLM call (feature, role, purpose, model, tokens,
 `cost_usd`, latency, generation_id). `cost_usd` = `usage.cost` (credits taken as USD). Missing

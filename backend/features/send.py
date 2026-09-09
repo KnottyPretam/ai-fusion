@@ -55,6 +55,7 @@ from ..config import MAX_TOKENS_STAGE, settings
 from ..llm import catalog
 from ..llm import client as llm_client
 from ..llm import reasoning as reasoning_mod
+from ..llm.errors import EMPTY_REPLY
 from ..prompts.send import PURPOSE, title_from_prompt, user_message, web_plugins
 from ..schemas import (
     SLOT_IDS,
@@ -81,7 +82,6 @@ Feature = Literal["send", "continue"]
 INTERNAL_ERROR = "internal_error"
 # A `done` delta whose accumulated text is empty/whitespace (reasoning ate the whole budget, or the
 # provider returned no content). Local until backend/llm/errors.py (W1) carries EMPTY_REPLY.
-EMPTY_REPLY = "empty_reply"
 ERROR_TYPE_TRIPLEX = "triplex"
 
 _END = object()  # queue sentinel: the coordinator has finished (guard released)

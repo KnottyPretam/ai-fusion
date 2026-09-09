@@ -77,6 +77,12 @@ value (in `truncated`, `chatgpt.chat.1`'s last text chunk AND its usage chunk ca
 has `choices[0].delta` or top-level `error`; a non-error fixture ends with a chunk carrying
 `usage.cost`; the last non-null `finish_reason` equals the last content chunk's `finish_reason`.
 
+Test-local scenarios (under `tests/<area>/fixtures/scenarios/`, served via `MOCK_FIXTURES_DIR`) are
+not part of the shipped corpus and are not listed in the table above; e.g. `tests/send/.../empty_reply`
+(a usage-only chunk → `slot_error{empty_reply}`), the analyst transport/whitespace/empty retry
+scenarios under tests/analyze, and the fusion retry/unjustified/convergence-miss scenarios under
+tests/fusion.
+
 ### Capture and lookup
 
 `mock.calls` (see api-contract.md) records every call; `mock.calls[i]["fixture"]` names the file

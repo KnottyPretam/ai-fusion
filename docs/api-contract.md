@@ -269,6 +269,10 @@ jest-dom,user-event}`, `jsdom`, `@playwright/test`, `react-markdown`, `remark-gf
   VERBATIM (`[{"type":"url_citation","url_citation":{"url","title","content"?,"start_index"?,
   "end_index"?}}]`), de-duplicated by `url_citation.url`, emitted once per chunk that carries
   annotations; the UI reads `item.url_citation.url/title`.
+- Slot error codes minted by Send/continue themselves: `empty_reply` (error_type `triplex`; a
+  `done` with empty/whitespace text — nothing appended) and `internal_error`; transport codes
+  (`cost_cap_exceeded`, `mock_miss`, HTTP codes) pass through. Fusion's `exchange{…error}` and
+  its terminal `error{message}` are scrubbed (`[model]`) before they are emitted or persisted.
 - Cost cap: when `settings().mock_openrouter` is false and the session total would exceed
   `SESSION_COST_CAP_USD`, the transport yields a single `Delta(kind="error",
   code="cost_cap_exceeded", error_type="triplex", message=…)`; Send/continue map it to

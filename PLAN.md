@@ -432,3 +432,5 @@ otherwise "standing". Return ONLY valid JSON:
 | Reasoning / citations persistence | live only vs on the turn | **on the turn per slot** (never in threads, never replayed to models) |
 | Error envelope | flat `{error}` vs FastAPI `{detail:{error}}` | **FastAPI envelope** via `backend/api_errors.py`; pre-stream checks run before the first SSE yield (`sse_response` primes the generator) |
 | Anon map in mock mode | random vs fixed | **fixed R1=claude, R2=chatgpt, R3=grok** in mock mode so replay is deterministic; random live |
+| Challenge prompt shape | Appendix A verbatim vs delimited topic | **topic scrubbed and quoted in its own `<<<TOPIC>>>` block** before "Your current position is:" (delimiter-breakout rule); every error text Fusion emits is scrubbed |
+| Empty model reply | append "" vs fail the slot | **`slot_error{empty_reply}`**, nothing appended (an empty assistant turn is rejected by providers and would poison the thread) |
