@@ -8,9 +8,11 @@ the exact fixture sequence captured in `backend.llm.mock.calls`.
 
 from __future__ import annotations
 
+import json
+
 from backend import anon
 from backend.config import DEFAULT_SLOT_CONFIG, MAX_TOKENS_STAGE
-from backend.llm import mock
+from backend.llm import client, mock
 from backend.llm.client import structured_response_format
 from backend.prompts import delimited
 from backend.prompts import fusion as prompts
@@ -34,11 +36,14 @@ from tests.fusion.conftest import (
     extraction_of,
     fixture_cost,
     fixture_text,
+    local_defense,
+    local_fixture_text,
     one,
     served,
     served_all,
     types_of,
 )
+from tests.helpers import find_identity_leaks
 
 CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in SLOT_IDS]
 EXTRACTION = "analyst.extraction.1.jsonl"
@@ -181,9 +186,23 @@ async def test_challenge_and_reply_land_in_the_right_slot_thread_with_meta(prepa
         assert call["role"] == slot
 
 
-async def test_defense_and_convergence_payloads_carry_model_effort_schema_and_caps(prepare, fusion):
+async def test_defense_and_convergence_payloads_carry_model_effort_schema_and_caps(
+    prepare, fusion, monkeypatch
+):
     p = await prepare("planted_factual")
+    # docs/semantics.md: defense and convergence calls use `complete_json(retries=1)`. The
+    # transport cannot see `retries`, so spy on the client entry point fusion.py resolves at
+    # call time (`client.complete_json`), installed AFTER Send/Analyze ran.
+    real_complete_json = client.complete_json
+    seen: list[tuple[str, int]] = []
+
+    async def spy(**kw):
+        seen.append((kw["purpose"], kw["retries"]))
+        return await real_complete_json(**kw)
+
+    monkeypatch.setattr(client, "complete_json", spy)
     await fusion(p.cid, {"max_iterations": 1})
+    assert sorted(seen) == [("convergence", 1), ("defense", 1), ("defense", 1), ("defense", 1)]
     for slot in SLOT_IDS:
         c = calls("defense", slot)[0]
         spec = p.conv.slot_config.slots[slot]
@@ -650,7 +669,9 @@ async def test_all_unavailable_round_exits_with_error_and_a_persisted_turn(
     turn_doc = assert_fusion_stream_invariants(events)
     for e in by_type(events, "exchange"):
         assert e["stance"] == "unavailable" and e["error"] and e["confidence"] is None
-        assert e["error"].startswith("no fixture baseline/")  # the mock_miss message
+        # The mock_miss message ("no fixture baseline/<slot>.defense.1") reaches the event
+        # scrubbed: the slot id behind the R-label is never paired with it.
+        assert e["error"] == "no fixture baseline/[model].defense.1"
     rd = one(events, "round_done")
     assert rd["changed"] is False
     assert rd["post_round_status"] == [{"divergence_id": "d1", "status": "standing"}]
@@ -667,3 +688,215 @@ async def test_all_unavailable_round_exits_with_error_and_a_persisted_turn(
     assert after.turns[-1].type == "fusion" and after.turns[-1].id == turn.id
     assert after.threads == p.conv.threads, "nothing appended when every slot failed"
     assert not store.is_busy(p.cid)
+
+
+# --------------------------------------------------------------------------- (n) scrubbed errors
+async def test_unavailable_exchange_error_is_scrubbed_in_the_event_and_the_persisted_turn(
+    prepare, local_fixtures, fusion
+):
+    """`Exchange.error` is emitted, persisted and shown by the fusion pane. The mock's mock_miss
+    text pairs the R-label with the slot id ("no fixture <scenario>/grok.defense.1") and a live
+    transport message can name the model slug, so every error text goes through `anon.scrub`
+    before it leaves the feature; the loop itself continues without R3."""
+    p = await prepare("planted_factual")
+    local_fixtures("r3_defense_missing")  # claude + chatgpt defenses, NO grok file
+    _, events = await fusion(p.cid, {"max_iterations": 2})
+    turn_doc = assert_fusion_stream_invariants(events)
+    ex = exchanges_of(events, 1)
+    assert set(ex) == {("d1", "R1"), ("d1", "R2"), ("d1", "R3")}
+    r3 = ex[("d1", "R3")]
+    assert r3["stance"] == "unavailable" and r3["confidence"] is None
+    assert r3["error"] == "no fixture r3_defense_missing/[model].defense.1"
+    assert calls("defense", "grok")[0]["fixture"] is None  # it really was a mock_miss
+    event_text = json.dumps(r3).lower()
+    for slot in SLOT_IDS:
+        assert slot not in event_text
+    assert find_identity_leaks(json.dumps(r3)) == []
+    assert ex[("d1", "R1")]["stance"] == "defend" and ex[("d1", "R2")]["stance"] == "revise"
+    assert one(events, "round_done")["post_round_status"] == [
+        {"divergence_id": "d1", "status": "resolved"}
+    ]
+    assert events[-1]["exit_reason"] == "converged"
+
+    turn = FusionTurn.model_validate(turn_doc)
+    after = await store.load(p.cid)
+    assert after is not None
+    stored = after.turns[-1]
+    assert stored.type == "fusion" and stored.id == turn.id
+    persisted_r3 = stored.rounds[0].exchanges[2]
+    assert persisted_r3.model == "R3" and persisted_r3.stance == "unavailable"
+    assert persisted_r3.error == r3["error"]
+    for e in stored.rounds[0].exchanges:
+        if e.error is not None:
+            assert "[model]" in e.error and find_identity_leaks(e.error) == []
+            for slot in SLOT_IDS:
+                assert slot not in e.error.lower()
+    assert after.threads["grok"] == p.conv.threads["grok"], "nothing appended on error"
+    assert all(u.role != "grok" for u in turn.usage.calls)
+    assert turn.usage.totals.calls == 3  # two defenses + one convergence
+    assert not store.is_busy(p.cid)
+
+
+# --------------------------------------------------------------------------- (o) local scenarios
+# tests/fusion/fixtures/README.md: Send + Analyze come from the planted_factual corpus, the
+# Fusion phase from a scenario under tests/fusion/fixtures (MOCK_FIXTURES_DIR monkeypatched).
+async def test_a_flagged_revise_followed_by_a_justified_one_resolves_cleanly(
+    prepare, local_fixtures, fusion
+):
+    """`resolved_unjustified` only if EVERY revise on the divergence across ALL rounds of the
+    turn is flagged: round 1 flagged revise + standing, round 2 justified revise + resolved ->
+    `resolved` (the flags accumulate across rounds; a per-round reset would say unjustified)."""
+    p = await prepare("planted_factual")
+    local_fixtures("unjustified_then_justified")
+    _, events = await fusion(p.cid, {"max_iterations": 3})
+    turn_doc = assert_fusion_stream_invariants(events)
+    rd1, rd2 = by_type(events, "round_done")
+    r2_round1 = exchanges_of(events, 1)[("d1", "R2")]
+    r2_round2 = exchanges_of(events, 2)[("d1", "R2")]
+    assert r2_round1["stance"] == "revise" and r2_round1["flagged_unjustified"] is True
+    assert r2_round1["justification"] == "You are right, I revise."
+    assert r2_round2["stance"] == "revise" and r2_round2["flagged_unjustified"] is False
+    assert rd1["post_round_status"] == [{"divergence_id": "d1", "status": "standing"}]
+    assert rd1["changed"] is True and rd2["changed"] is True
+    assert rd2["post_round_status"] == [{"divergence_id": "d1", "status": "resolved"}]
+    assert events[-1]["exit_reason"] == "converged"
+    turn = FusionTurn.model_validate(turn_doc)
+    assert len(turn.rounds) == 2 and [s.status for s in turn.final] == ["resolved"]
+    assert served("chatgpt", "defense") == ["chatgpt.defense.1.jsonl", "chatgpt.defense.2.jsonl"]
+    assert served("claude", "defense") == ["claude.defense.1.jsonl"] * 2  # sticky-last
+    assert served("analyst", "convergence") == [
+        "analyst.convergence.1.jsonl",
+        "analyst.convergence.2.jsonl",
+    ]
+    _defense_calls_precede_convergence(3)
+    # Round 2's convergence payload carries R2's round-2 revised claim, the challenge its round-1
+    # (flagged) revised claim as the current position.
+    r2_1 = local_defense("unjustified_then_justified", "chatgpt", 1)
+    r2_2 = local_defense("unjustified_then_justified", "chatgpt", 2)
+    assert r2_2.revised_claim in calls("convergence")[1]["messages"][1]["content"]
+    assert delimited(prompts.CLAIM_LABEL, r2_1.revised_claim) in challenge_of(
+        calls("defense", "chatgpt")[1]
+    )
+
+
+async def test_two_flagged_revises_across_rounds_resolve_as_resolved_unjustified(
+    prepare, local_fixtures, fusion
+):
+    p = await prepare("planted_factual")
+    local_fixtures("unjustified_twice")
+    _, events = await fusion(p.cid, {"max_iterations": 3})
+    turn_doc = assert_fusion_stream_invariants(events)
+    rd1, rd2 = by_type(events, "round_done")
+    r2_1, r2_2 = (exchanges_of(events, n)[("d1", "R2")] for n in (1, 2))
+    for r2 in (r2_1, r2_2):
+        assert r2["stance"] == "revise" and r2["flagged_unjustified"] is True
+    assert r2_1["justification"] != r2_2["justification"]  # two distinct flagged revises
+    assert rd1["post_round_status"] == [{"divergence_id": "d1", "status": "standing"}]
+    assert rd2["post_round_status"] == [{"divergence_id": "d1", "status": "resolved_unjustified"}]
+    assert events[-1]["exit_reason"] == "converged"
+    turn = FusionTurn.model_validate(turn_doc)
+    assert len(turn.rounds) == 2
+    assert [s.status for s in turn.final] == ["resolved_unjustified"]
+    assert served("chatgpt", "defense") == ["chatgpt.defense.1.jsonl", "chatgpt.defense.2.jsonl"]
+    assert served("analyst", "convergence") == [
+        "analyst.convergence.1.jsonl",
+        "analyst.convergence.2.jsonl",
+    ]
+
+
+async def test_analyst_returned_resolved_unjustified_counts_as_resolved_under_the_flag_rule(
+    prepare, local_fixtures, fusion
+):
+    """The analyst is instructed to answer resolved|standing only, but the strict schema admits
+    `resolved_unjustified`: it counts as resolved and the deterministic flag rule alone decides
+    the kind -- a justified revise resolves as `resolved`, never as sycophantic convergence."""
+    p = await prepare("planted_factual")
+    local_fixtures("analyst_says_unjustified")
+    assert "resolved_unjustified" in local_fixture_text(
+        "analyst_says_unjustified", "analyst.convergence.1.jsonl"
+    )
+    _, events = await fusion(p.cid, {"max_iterations": 2})
+    turn_doc = assert_fusion_stream_invariants(events)
+    r2 = exchanges_of(events, 1)[("d1", "R2")]
+    assert r2["stance"] == "revise" and r2["flagged_unjustified"] is False
+    assert one(events, "round_done")["post_round_status"] == [
+        {"divergence_id": "d1", "status": "resolved"}
+    ]
+    assert events[-1]["exit_reason"] == "converged"
+    turn = FusionTurn.model_validate(turn_doc)
+    assert len(turn.rounds) == 1 and [s.status for s in turn.final] == ["resolved"]
+    assert served("analyst", "convergence") == ["analyst.convergence.1.jsonl"]
+
+
+async def test_failed_convergence_call_keeps_every_id_standing_and_the_loop_running(
+    prepare, local_fixtures, fusion
+):
+    """A convergence call that fails (here a mock_miss: the local scenario has no convergence
+    file) is logged, every id sent stays standing, the loop continues to the cap, and the failed
+    call books no usage."""
+    p = await prepare("planted_factual")
+    local_fixtures("revise_without_convergence")
+    _, events = await fusion(p.cid, {"max_iterations": 2})
+    turn_doc = assert_fusion_stream_invariants(events)
+    rds = by_type(events, "round_done")
+    assert [rd["changed"] for rd in rds] == [True, True]
+    assert all(
+        rd["post_round_status"] == [{"divergence_id": "d1", "status": "standing"}] for rd in rds
+    )
+    for rnd in (1, 2):
+        ex = exchanges_of(events, rnd)
+        assert set(ex) == {("d1", "R1"), ("d1", "R2"), ("d1", "R3")}
+        assert ex[("d1", "R2")]["stance"] == "revise" and ex[("d1", "R2")]["error"] is None
+    assert events[-1]["exit_reason"] == "max_iterations"
+    turn = FusionTurn.model_validate(turn_doc)
+    assert len(turn.rounds) == 2 and [s.status for s in turn.final] == ["standing"]
+    conv_calls = calls("convergence")
+    assert len(conv_calls) == 2 and [c["fixture"] for c in conv_calls] == [None, None]
+    assert served("chatgpt", "defense") == ["chatgpt.defense.1.jsonl"] * 2
+    _defense_calls_precede_convergence(3)
+    # A transport error carries no usage: only the six defense calls are booked.
+    assert all(u.role != "analyst" for u in turn.usage.calls)
+    assert turn.usage.totals.calls == 6
+    assert not store.is_busy(p.cid)
+    after = await store.load(p.cid)
+    assert after is not None and after.turns[-1].id == turn.id
+    assert len(after.threads["chatgpt"]) == 2 + 2 * 2
+
+
+async def test_defense_retry_is_silent_and_books_both_attempts(prepare, local_fixtures, fusion):
+    """`complete_json(retries=1)` end to end: chatgpt.defense.1 is prose (no JSON object), .2 is
+    valid -> two transport calls for R2 (the second carrying the assistant echo + the correction
+    message), ONE exchange, and the thread's fusion_reply is attempt 2's raw text."""
+    p = await prepare("planted_factual")
+    local_fixtures("defense_retry")
+    _, events = await fusion(p.cid, {"max_iterations": 2})
+    turn_doc = assert_fusion_stream_invariants(events)
+    assert served("chatgpt", "defense") == ["chatgpt.defense.1.jsonl", "chatgpt.defense.2.jsonl"]
+    assert served("claude", "defense") == ["claude.defense.1.jsonl"]
+    assert served("grok", "defense") == ["grok.defense.1.jsonl"]
+    first, second = calls("defense", "chatgpt")
+    prose = local_fixture_text("defense_retry", "chatgpt.defense.1.jsonl")
+    valid = local_fixture_text("defense_retry", "chatgpt.defense.2.jsonl")
+    assert second["messages"][: len(first["messages"])] == first["messages"]
+    assert len(second["messages"]) == len(first["messages"]) + 2
+    assert second["messages"][-2] == {"role": "assistant", "content": prose}
+    assert second["messages"][-1]["role"] == "user"
+    assert "failed validation" in second["messages"][-1]["content"]
+    ex = exchanges_of(events, 1)
+    assert set(ex) == {("d1", "R1"), ("d1", "R2"), ("d1", "R3")}
+    assert ex[("d1", "R2")]["stance"] == "revise" and ex[("d1", "R2")]["error"] is None
+    assert (
+        ex[("d1", "R2")]["revised_claim"] == DefenseReply.model_validate_json(valid).revised_claim
+    )
+    assert types_of(events).count("exchange") == 3  # the retry is invisible to the stream
+    assert events[-1]["exit_reason"] == "converged"
+    turn = FusionTurn.model_validate(turn_doc)
+    assert len(turn.rounds[0].exchanges) == 3
+    assert turn.usage.totals.calls == 5  # 1 + 2 + 1 defense attempts, 1 convergence
+    assert [u.role for u in turn.usage.calls].count("chatgpt") == 2
+    after = await store.load(p.cid)
+    assert after is not None
+    thread = after.threads["chatgpt"]
+    assert [m.kind for m in thread] == ["chat", "chat", "fusion_challenge", "fusion_reply"]
+    assert thread[-1].content == valid
+    assert prose not in [m.content for m in thread]

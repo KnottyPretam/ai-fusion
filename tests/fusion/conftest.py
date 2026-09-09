@@ -29,6 +29,10 @@ from tests.helpers import parse_sse_text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS_DIR = REPO_ROOT / "backend" / "llm" / "fixtures" / "scenarios"
+# W6's own Fusion-phase scenarios (tests/fusion/fixtures/README.md), served by pointing
+# MOCK_FIXTURES_DIR at LOCAL_FIXTURES_DIR (the mock resolves `<dir>/scenarios/<name>/`).
+LOCAL_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+LOCAL_SCENARIOS_DIR = LOCAL_FIXTURES_DIR / "scenarios"
 
 CONV_URL = "/api/conversations/{cid}"
 SEND_URL = "/api/conversations/{cid}/send"
@@ -42,15 +46,15 @@ _DELIMITED_RE = re.compile(r"<<<([^>]+)>>>\n(.*?)\n<<<END \1>>>", re.S)
 
 
 # --------------------------------------------------------------------------- fixture readers
-def fixture_chunks(scenario: str, name: str) -> list[dict[str, Any]]:
-    path = SCENARIOS_DIR / scenario / name
+def fixture_chunks(scenario: str, name: str, root: Path = SCENARIOS_DIR) -> list[dict[str, Any]]:
+    path = root / scenario / name
     return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
-def fixture_text(scenario: str, name: str) -> str:
+def fixture_text(scenario: str, name: str, root: Path = SCENARIOS_DIR) -> str:
     """Concatenated `choices[0].delta.content` (exactly what the mock yields as text)."""
     parts: list[str] = []
-    for chunk in fixture_chunks(scenario, name):
+    for chunk in fixture_chunks(scenario, name, root):
         choices = chunk.get("choices") or []
         if choices and isinstance(choices[0].get("delta"), dict):
             text = choices[0]["delta"].get("content")
@@ -59,10 +63,21 @@ def fixture_text(scenario: str, name: str) -> str:
     return "".join(parts)
 
 
-def fixture_cost(scenario: str, name: str) -> float:
-    last = fixture_chunks(scenario, name)[-1]
+def fixture_cost(scenario: str, name: str, root: Path = SCENARIOS_DIR) -> float:
+    last = fixture_chunks(scenario, name, root)[-1]
     usage = last.get("usage") or {}
     return float(usage.get("cost") or 0.0)
+
+
+def local_fixture_text(scenario: str, name: str) -> str:
+    """`fixture_text` over tests/fusion/fixtures/scenarios."""
+    return fixture_text(scenario, name, root=LOCAL_SCENARIOS_DIR)
+
+
+def local_defense(scenario: str, slot: str, n: int = 1) -> DefenseReply:
+    return DefenseReply.model_validate_json(
+        local_fixture_text(scenario, f"{slot}.defense.{n}.jsonl")
+    )
 
 
 def scenario_expectations(scenario: str) -> dict[str, Any]:
@@ -226,6 +241,22 @@ def scenario(monkeypatch) -> Callable[[str], str]:
         return name
 
     return _set
+
+
+@pytest.fixture
+def local_fixtures(monkeypatch) -> Callable[[str], str]:
+    """`local_fixtures("defense_retry")`: serve the scenarios under tests/fusion/fixtures for the
+    rest of the test (MOCK_FIXTURES_DIR + MOCK_SCENARIO) and reset the mock, so `mock.calls`
+    holds only the calls made from here on (the Fusion phase). Send and Analyze are driven from
+    the packaged corpus first (`prepare`), so the local scenario needs no chat/extraction files."""
+
+    def _use(name: str) -> str:
+        monkeypatch.setenv("MOCK_FIXTURES_DIR", str(LOCAL_FIXTURES_DIR))
+        monkeypatch.setenv("MOCK_SCENARIO", name)
+        mock.reset()
+        return name
+
+    return _use
 
 
 @pytest.fixture
