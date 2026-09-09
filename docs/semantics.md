@@ -181,7 +181,12 @@ raw text empty) also triggers Analyze's single retry: the retry re-sends the IDE
 `assistant: <raw>` + `user: failed validation` pair, since there is no output to correct),
 `analyze_retry.error` carries the transport message, and `raw_attempts` records `""` for that
 attempt. (`complete_json`'s own internal retry never fires on a transport delta; this rule is
-Analyze's.)
+Analyze's.) The full retry rule: the retry carries NOTHING (identical request) when the first
+attempt produced no output at all (a transport error delta or a stream with no text); the
+correction user message `Your previous output failed validation: <error>. Return only the
+corrected JSON.` for any output that failed lenient parsing/validation; and that output echoed as
+the assistant turn only when it is not blank (whitespace-only output is never echoed — providers
+reject empty assistant content — the same rule `complete_json` applies to its own internal retry).
 
 **Truncated analyst / defense / convergence output.** A `complete_json` attempt whose stream ends
 with `finish_reason == "length"` logs one WARNING (`complete_json output truncated at max_tokens=…
