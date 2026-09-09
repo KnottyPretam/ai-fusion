@@ -17,7 +17,7 @@
 //   analyze-divergences          <table>; analyze-divergence-<id> rows (data-fused="yes|no"),
 //                                analyze-cell-<id>-<label>, analyze-materiality-<id>,
 //                                analyze-not-fused-<id>
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { loadConversation } from '../../api/http.js'
 import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -28,6 +28,10 @@ export default function AnalyzePane() {
   const dispatch = useDispatch()
   const run = useRunStream()
   const conversation = useSlice('conversation')
+  // Mirror of the displayed conversation id: a post-stream refetch that lands after the user
+  // switched conversations is dropped (isCurrent) instead of snapping the UI back.
+  const convIdRef = useRef(null)
+  convIdRef.current = conversation ? conversation.id : null
   const slotConfig = useSlice('slotConfig')
   const streams = useSlice('streams') || {}
   const analyze = useSlice('analyze') || initial()
@@ -43,7 +47,7 @@ export default function AnalyzePane() {
       const id = conversation.id
       try {
         await run('analyze', `/api/conversations/${id}/analyze`, body)
-        await loadConversation(dispatch, id)
+        if (convIdRef.current === id) await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
       } catch {
         // Surfaced through the streams / analyze slices (sse/end{ok:false} -> error box).
       }

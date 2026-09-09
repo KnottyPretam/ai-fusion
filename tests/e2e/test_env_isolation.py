@@ -56,10 +56,10 @@ async def test_a_new_conversation_gets_the_module_default_slot_config(api):
 
 def test_dotenv_is_loaded_when_the_e2e_conftest_is_imported(tmp_path):
     """Regression for the once-only leak. A fresh interpreter points `config.REPO_ROOT` at a
-    temporary directory holding a `.env`, imports the root conftest (which must NOT load it:
-    nothing there calls settings()) and then `tests.e2e.conftest` -- exactly what collecting
-    any tests/e2e module does -- and prints the override keys: they must already be in
-    `os.environ`, where the per-test `delenv` in tests/conftest.py will find and remove them."""
+    temporary directory holding a `.env` and imports the ROOT conftest, which now loads it at
+    import time (settings() is called once at collection so the per-test `delenv` in
+    tests/conftest.py always sees the keys); importing `tests.e2e.conftest` afterwards changes
+    nothing. The override keys must be in `os.environ` at both points."""
     (tmp_path / ".env").write_text("FUSION_MAX_ITERATIONS=5\nMATERIALITY_MIN=low\n")
     script = "\n".join(
         [
@@ -84,4 +84,4 @@ def test_dotenv_is_loaded_when_the_e2e_conftest_is_imported(tmp_path):
         timeout=120,
     )
     assert p.returncode == 0, p.stderr
-    assert p.stdout.strip() == "[None, None] ['5', 'low']"
+    assert p.stdout.strip() == "['5', 'low'] ['5', 'low']"

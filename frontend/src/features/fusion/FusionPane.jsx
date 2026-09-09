@@ -1,7 +1,7 @@
 // W11: the Fusion pane. Fusion button + iterations stepper, live per-divergence timeline derived
 // from `fusion.rounds`, final report (exit reason, standing items with both sides' latest
 // justifications) and the usage summary. Bench instrument, not a product demo.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -198,6 +198,10 @@ function FinalPanel({ fusion, divs }) {
 
 export default function FusionPane() {
   const conversation = useSlice('conversation')
+  // Mirror of the displayed conversation id: a post-stream refetch that lands after the user
+  // switched conversations is dropped (isCurrent) instead of snapping the UI back.
+  const convIdRef = useRef(null)
+  convIdRef.current = conversation ? conversation.id : null
   const slotConfig = useSlice('slotConfig')
   const streams = useSlice('streams')
   const fusion = useSlice('fusion')
@@ -249,7 +253,7 @@ export default function FusionPane() {
     }
     if (resolved) {
       try {
-        await loadConversation(dispatch, id)
+        if (convIdRef.current === id) await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
       } catch {
         /* the timeline is already in the slice; a failed refetch only delays the button rule */
       }

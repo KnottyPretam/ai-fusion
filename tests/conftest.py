@@ -15,6 +15,13 @@ os.environ.setdefault("SESSION_COST_CAP_USD", "10")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="triplex-tests-"))
 
+from backend.config import settings as _settings  # noqa: E402
+
+# Load a developer .env NOW (import/collection time) so the per-test delenv in `_no_real_key`
+# always sees its keys. settings() loads .env lazily (override=False) on its first call, which
+# otherwise happens inside the first test's create_app(), AFTER that test's delenv.
+_settings()
+
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 import respx  # noqa: E402
@@ -91,6 +98,8 @@ def _no_real_key(request, monkeypatch):
             "GROUNDED_DEFAULT",
             "MOCK_FIXTURES_DIR",
             "MOCK_RECORD_DIR",
+            "GROUNDED_ENGINE",
+            "GROUNDED_MAX_RESULTS",
         ):
             monkeypatch.delenv(k, raising=False)
     yield
