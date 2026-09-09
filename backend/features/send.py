@@ -18,7 +18,19 @@ that slot's own model and configured effort (`slot_start.effort / effort_coerced
 MAX_TOKENS_STAGE["send"|"continue"]`, `plugins=[{"id":"web", ...}]` iff `slot_config.grounded`.
 The user message and the assistant reply are appended TOGETHER (atomically) when the slot ends
 with `slot_done`; on `slot_error` nothing is appended (partial text is kept on the turn only). A
-truncated reply (`finish_reason == "length"`) is still appended, flagged `truncated:true`.
+truncated reply (`finish_reason == "length"`) is still appended, flagged `truncated:true` -- but
+only when it carries text: a `done` whose accumulated text is empty or whitespace is the slot
+failure `slot_error{code:"empty_reply", error_type:"triplex", message:"model returned no text
+(finish_reason=<fr>)", partial:""}` (an empty assistant message replayed on every later request
+is rejected by providers, and Analyze must never run over nothing); `truncated` still reflects
+the finish reason and the call's usage is still folded into `turn_done.usage`.
+
+Every slot task is total: whatever fails inside it (the transport never raises; persistence and
+this module's own bookkeeping can) becomes THAT slot's `slot_error{code:"internal_error"}` while
+the other slots finish normally, and the coordinator gathers with `return_exceptions=True` so the
+busy guard can never be released while a sibling is still writing. A slot's transport is closed
+deterministically (`contextlib.aclosing`) once its terminal delta arrived -- before the pair is
+persisted and before the client hears the slot's terminal event.
 
 Event order: `turn_start{turn_id, feature, slots}` first; each slot's `slot_start` before its
 `slot_delta | slot_reasoning | slot_citations`; exactly one `slot_done | slot_error` per slot;
@@ -31,6 +43,7 @@ turns yet) auto-titles it with `prompt[:60]`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -47,6 +60,7 @@ from ..schemas import (
     SLOT_IDS,
     ContinueTurn,
     Conversation,
+    Delta,
     Effort,
     FeatureUsage,
     SendTurn,
@@ -65,6 +79,9 @@ Feature = Literal["send", "continue"]
 
 # Codes minted here (never by the LLM layer) for failures inside a slot's own bookkeeping.
 INTERNAL_ERROR = "internal_error"
+# A `done` delta whose accumulated text is empty/whitespace (reasoning ate the whole budget, or the
+# provider returned no content). Local until backend/llm/errors.py (W1) carries EMPTY_REPLY.
+EMPTY_REPLY = "empty_reply"
 ERROR_TYPE_TRIPLEX = "triplex"
 
 _END = object()  # queue sentinel: the coordinator has finished (guard released)
@@ -172,9 +189,17 @@ async def _coordinate(
             {"type": "turn_start", "turn_id": turn_id, "feature": feature, "slots": list(slots)}
         )
         stage = "send" if feature == "send" else "continue"
-        outcomes = await asyncio.gather(
-            *(_run_slot(conv, slot, prompt, turn_id, stage, queue) for slot in slots)
+        results = await asyncio.gather(
+            *(_run_slot(conv, slot, prompt, turn_id, stage, queue) for slot in slots),
+            return_exceptions=True,  # wait for EVERY slot, then fail as a whole (as fusion does)
         )
+        outcomes: list[SlotOutcome] = []
+        for result in results:
+            if isinstance(result, BaseException):
+                # `_run_slot` is total, so only a cancellation can land here -- and only after
+                # every sibling finished its last persistence write.
+                raise result
+            outcomes.append(result)
 
         usage = FeatureUsage()
         for o in outcomes:
@@ -231,95 +256,128 @@ async def _run_slot(
     stage: str,
     queue: asyncio.Queue[Any],
 ) -> SlotOutcome:
-    spec = conv.slot_config.slots[slot]
-    _param, applied, coerced = reasoning_mod.build(spec.effort, catalog.get_meta(spec.model))
-    out = SlotOutcome(slot=slot, model=spec.model, effort_applied=applied, effort_coerced=coerced)
-    # Exactly the slot's own history plus the verbatim prompt: nothing Triplex-authored.
-    messages = [to_openai(m) for m in conv.threads[slot]] + [user_message(prompt)]
-
-    await queue.put(
-        {
-            "type": "slot_start",
-            "slot": slot,
-            "model": spec.model,
-            "effort": applied,
-            "effort_coerced": coerced,
-        }
-    )
+    """One slot's whole life: request, stream, persistence, terminal event. Never raises."""
+    spec = conv.slot_config.slots[slot]  # every slot is present (SlotConfig validator)
+    out = SlotOutcome(slot=slot, model=spec.model, effort_applied=spec.effort, effort_coerced=False)
+    started = False  # slot_start emitted (it must precede the slot's terminal event)
     try:
-        stream = llm_client.stream_completion(
-            role=slot,
-            purpose=PURPOSE,
-            model=spec.model,
-            messages=messages,
-            effort=spec.effort,
-            max_tokens=MAX_TOKENS_STAGE[stage],
-            plugins=web_plugins(conv.slot_config.grounded, settings()),
+        _param, applied, coerced = reasoning_mod.build(spec.effort, catalog.get_meta(spec.model))
+        out.effort_applied, out.effort_coerced = applied, coerced
+        await queue.put(_slot_start(out))
+        started = True
+        # Exactly the slot's own history plus the verbatim prompt: nothing Triplex-authored.
+        # `.get`: a document missing this thread key must not take the whole turn down (the
+        # append below then fails for THIS slot only).
+        messages = [to_openai(m) for m in conv.threads.get(slot, [])] + [user_message(prompt)]
+
+        terminal: Delta | None = None
+        # `aclosing`: the transport (httpx response/client, record tee) is torn down HERE, when
+        # the terminal delta has arrived -- before the pair is persisted and before the client
+        # hears slot_done/slot_error -- not whenever the garbage collector finalises it.
+        async with contextlib.aclosing(
+            llm_client.stream_completion(
+                role=slot,
+                purpose=PURPOSE,
+                model=spec.model,
+                messages=messages,
+                effort=spec.effort,
+                max_tokens=MAX_TOKENS_STAGE[stage],
+                plugins=web_plugins(conv.slot_config.grounded, settings()),
+            )
+        ) as stream:
+            async for d in stream:
+                if d.kind == "text":
+                    out.text += d.text
+                    await queue.put({"type": "slot_delta", "slot": slot, "text": d.text})
+                elif d.kind == "reasoning":
+                    out.reasoning += d.text
+                    await queue.put({"type": "slot_reasoning", "slot": slot, "text": d.text})
+                elif d.kind == "citations":
+                    out.citations.extend(d.items)
+                    await queue.put(
+                        {"type": "slot_citations", "slot": slot, "items": list(d.items)}
+                    )
+                else:  # done | error: the terminal delta, nothing follows it
+                    terminal = d
+                    break
+        if terminal is None:  # the client contract makes this impossible; never a silent success
+            raise RuntimeError("stream ended without a terminal delta")
+
+        if terminal.kind == "error":
+            out.error = terminal.message or (
+                str(terminal.code) if terminal.code is not None else "error"
+            )
+            await queue.put(
+                _slot_error(slot, terminal.code, terminal.error_type, out.error, out.text)
+            )
+            return out
+
+        out.finish_reason = terminal.finish_reason
+        out.truncated = bool(terminal.truncated)
+        # The call is billed whatever it produced: usage is set BEFORE the empty-reply check so
+        # the coordinator still folds it into turn_done.usage.
+        out.usage = terminal.usage or Usage(model=spec.model, role=slot, purpose=PURPOSE)
+        if not out.text.strip():
+            # An empty reply is a slot failure, not a reply: nothing is appended (an empty
+            # assistant message replayed later is rejected by providers), responses[slot] stays
+            # None (Analyze must not run over nothing), truncated still reflects finish_reason.
+            out.error = f"model returned no text (finish_reason={out.finish_reason})"
+            await queue.put(_slot_error(slot, EMPTY_REPLY, ERROR_TYPE_TRIPLEX, out.error, ""))
+            return out
+
+        # The pair goes in together, atomically, before the client hears slot_done.
+        await store.append_to_thread(
+            conv.id,
+            slot,
+            [
+                ThreadMessage(role="user", content=prompt, kind="chat", turn_id=turn_id),
+                ThreadMessage(role="assistant", content=out.text, kind="chat", turn_id=turn_id),
+            ],
         )
-        async for d in stream:
-            if d.kind == "text":
-                out.text += d.text
-                await queue.put({"type": "slot_delta", "slot": slot, "text": d.text})
-            elif d.kind == "reasoning":
-                out.reasoning += d.text
-                await queue.put({"type": "slot_reasoning", "slot": slot, "text": d.text})
-            elif d.kind == "citations":
-                out.citations.extend(d.items)
-                await queue.put({"type": "slot_citations", "slot": slot, "items": list(d.items)})
-            elif d.kind == "done":
-                out.finish_reason = d.finish_reason
-                out.truncated = bool(d.truncated)
-                out.usage = d.usage or Usage(model=spec.model, role=slot, purpose=PURPOSE)
-                # The pair goes in together, atomically, before the client hears slot_done.
-                await store.append_to_thread(
-                    conv.id,
-                    slot,
-                    [
-                        ThreadMessage(role="user", content=prompt, kind="chat", turn_id=turn_id),
-                        ThreadMessage(
-                            role="assistant", content=out.text, kind="chat", turn_id=turn_id
-                        ),
-                    ],
-                )
-                out.done = True
-                await queue.put(
-                    {
-                        "type": "slot_done",
-                        "slot": slot,
-                        "usage": out.usage.model_dump(mode="json"),
-                        "finish_reason": out.finish_reason,
-                        "truncated": out.truncated,
-                    }
-                )
-                break
-            elif d.kind == "error":
-                out.error = d.message or (str(d.code) if d.code is not None else "error")
-                await queue.put(
-                    {
-                        "type": "slot_error",
-                        "slot": slot,
-                        "code": d.code,
-                        "error_type": d.error_type,
-                        "message": out.error,
-                        "partial": out.text,
-                    }
-                )
-                break
+        out.done = True
+        await queue.put(_slot_done(out))
     except Exception as e:  # persistence or an unexpected failure: this slot fails, the turn lives
         log.exception("slot %s failed during turn %s", slot, turn_id)
         out.done = False
         out.error = f"{type(e).__name__}: {e}"
-        await queue.put(
-            {
-                "type": "slot_error",
-                "slot": slot,
-                "code": INTERNAL_ERROR,
-                "error_type": ERROR_TYPE_TRIPLEX,
-                "message": out.error,
-                "partial": out.text,
-            }
-        )
+        if not started:  # the consumer's invariant: slot_start before the terminal slot event
+            await queue.put(_slot_start(out))
+        await queue.put(_slot_error(slot, INTERNAL_ERROR, ERROR_TYPE_TRIPLEX, out.error, out.text))
     return out
+
+
+def _slot_start(out: SlotOutcome) -> dict[str, Any]:
+    return {
+        "type": "slot_start",
+        "slot": out.slot,
+        "model": out.model,
+        "effort": out.effort_applied,
+        "effort_coerced": out.effort_coerced,
+    }
+
+
+def _slot_done(out: SlotOutcome) -> dict[str, Any]:
+    assert out.usage is not None  # set from the terminal delta before the pair is persisted
+    return {
+        "type": "slot_done",
+        "slot": out.slot,
+        "usage": out.usage.model_dump(mode="json"),
+        "finish_reason": out.finish_reason,
+        "truncated": out.truncated,
+    }
+
+
+def _slot_error(
+    slot: SlotId, code: int | str | None, error_type: str | None, message: str, partial: str
+) -> dict[str, Any]:
+    return {
+        "type": "slot_error",
+        "slot": slot,
+        "code": code,
+        "error_type": error_type,
+        "message": message,
+        "partial": partial,
+    }
 
 
 # --------------------------------------------------------------------------- turn builders
@@ -367,4 +425,11 @@ def _build_continue_turn(
     )
 
 
-__all__ = ["SlotOutcome", "run_continue", "run_send", "wait_for_background"]
+__all__ = [
+    "EMPTY_REPLY",
+    "INTERNAL_ERROR",
+    "SlotOutcome",
+    "run_continue",
+    "run_send",
+    "wait_for_background",
+]

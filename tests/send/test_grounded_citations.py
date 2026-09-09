@@ -87,6 +87,8 @@ async def test_continue_persists_citations_on_the_continue_turn(
     assert mock.calls[-1]["plugins"] == [{"id": "web", "max_results": 5}]
     cites = [e for e in of_type(events, "slot_citations") if e["slot"] == "claude"]
     assert [_urls(e["items"]) for e in cites] == [[GROUNDED_URLS[0]], [GROUNDED_URLS[1]]]
+    kinds = [e["type"] for e in for_slot(events, "claude")]
+    assert kinds.index("slot_done") > max(i for i, k in enumerate(kinds) if k == "slot_citations")
     assert one(events, "slot_done", "claude")["usage"]["cost_usd"] > 0
 
     stored = await get_conv(conv["id"])
