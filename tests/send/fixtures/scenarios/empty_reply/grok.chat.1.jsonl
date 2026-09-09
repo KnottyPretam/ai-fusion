@@ -1,0 +1,1 @@
+{"id":"gen-empty-k1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":14,"completion_tokens":0,"total_tokens":14,"cost":0.00001,"completion_tokens_details":{"reasoning_tokens":0}}}
