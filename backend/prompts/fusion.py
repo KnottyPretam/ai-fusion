@@ -5,11 +5,14 @@ text that reaches a model, so it must stay free of vendor/product names and slot
 scan it); models are only ever named R1/R2/R3.
 
 - The challenge is a USER message appended to the challenged slot's own thread ("On the question
-  above ..."). The label's current claim, its latest justification and the anonymised peer block
-  are quoted material: each sits inside the shared `delimited()` markers, preceded by
-  `QUOTED_DATA_NOTICE`, so an instruction planted in a model response can only ever appear
-  between `<<<X>>>` and `<<<END X>>>`. The peer block comes from `anon.render_peer_block`
-  (already scrubbed, delimited per peer and prefixed with the notice) and is treated as opaque.
+  above ..."). The divergence topic, the label's current claim, its latest justification and the
+  anonymised peer block are quoted material: each sits inside the shared `delimited()` markers,
+  preceded by `QUOTED_DATA_NOTICE`, so an instruction planted in a model response can only ever
+  appear between `<<<X>>>` and `<<<END X>>>` (docs/semantics.md addendum "Delimiter breakout":
+  the topic is analyst-authored text derived from the responses, so it is never interpolated
+  into the instruction zone; the caller scrubs it with `anon.scrub` first -- this package cannot
+  import `anon`). The peer block comes from `anon.render_peer_block` (already scrubbed,
+  delimited per peer and prefixed with the notice) and is treated as opaque.
 - The anti-sycophancy clause is Appendix A verbatim and the JSON instruction asks for
   `persuaded_by`: a `revise` that names no specific peer point is flagged by
   `schemas.is_unjustified`.
@@ -28,8 +31,10 @@ from . import QUOTED_DATA_NOTICE, delimited
 CLAIM_LABEL = "YOUR CLAIM"
 JUSTIFICATION_LABEL = "YOUR JUSTIFICATION"
 DIVERGENCES_LABEL = "DIVERGENCES"
+TOPIC_LABEL = "TOPIC"
 
-POSITION_LEAD = 'On the question above, regarding "{topic}", your current position is:'
+TOPIC_LEAD = "On the question above, regarding this topic:"
+POSITION_LEAD = "Your current position is:"
 JUSTIFICATION_LEAD = "Your latest justification for it:"
 PEERS_LEAD = "Anonymous peer reviewers currently hold:"
 
@@ -81,11 +86,15 @@ def challenge_prompt(
     round: int,
     max_iterations: int,
 ) -> str:
-    """The user message that challenges one label on one divergence (Appendix A order)."""
+    """The user message that challenges one label on one divergence (Appendix A order).
+
+    `topic` is analyst-authored: pass it through `anon.scrub` first; it is quoted inside its own
+    delimited block here, never interpolated into the instruction text."""
     return "\n\n".join(
         [
             QUOTED_DATA_NOTICE,
-            POSITION_LEAD.format(topic=topic) + "\n" + delimited(CLAIM_LABEL, current_claim),
+            TOPIC_LEAD + "\n" + delimited(TOPIC_LABEL, topic),
+            POSITION_LEAD + "\n" + delimited(CLAIM_LABEL, current_claim),
             JUSTIFICATION_LEAD + "\n" + delimited(JUSTIFICATION_LABEL, latest_justification),
             PEERS_LEAD + "\n" + peer_block,
             ANTI_SYCOPHANCY_CLAUSE
@@ -130,6 +139,8 @@ __all__ = [
     "PEERS_LEAD",
     "POSITION_LEAD",
     "ROUND_COUNTER",
+    "TOPIC_LABEL",
+    "TOPIC_LEAD",
     "challenge_prompt",
     "convergence_messages",
     "convergence_payload",

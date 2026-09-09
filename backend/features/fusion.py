@@ -36,8 +36,17 @@ analyst call; otherwise ONE analyst convergence check runs over the standing div
 saw >= 1 revise this round. A divergence the analyst resolves becomes `resolved_unjustified` when
 every revise on it across all rounds of this turn was flagged; resolved ids keep their status and
 are never re-challenged; all resolved -> "converged"; round == max_iterations -> "max_iterations".
-`post_round_status` / `final` always list every standing id in standing order.
+`post_round_status` / `final` always list every standing id in standing order. The analyst is
+asked for `resolved|standing` only; a `resolved_unjustified` it returns anyway counts as
+`resolved` and the flag rule alone decides the kind.
 `FusionTurn.usage` covers fusion calls only (its wall clock is the fusion part).
+
+Anonymisation (docs/semantics.md "Anonymization / leaks" + the "Delimiter breakout" addendum):
+every model- or analyst-authored text Triplex puts into a prompt is scrubbed AND delimited -- the
+divergence `topic` of a challenge, and the topic + current claims of the convergence payload --
+and every error message that reaches an event or the persisted turn (`Exchange.error`, the
+terminal `error{message}`) goes through `anon.scrub`: a live transport message can name the model
+slug and the mock's `mock_miss` text pairs the R-label with the slot id.
 """
 
 from __future__ import annotations
@@ -222,7 +231,11 @@ class _FusionRun:
                 log.exception("fusion failed for conversation %s", self.conv_id)
             # Before the first event the generator re-raises it (a pre-stream JSON error);
             # after it only the terminal error event is possible.
-            final = e if not self.emitted else {"type": "error", "message": _error_message(e)}
+            final = (
+                e
+                if not self.emitted
+                else {"type": "error", "message": anon.scrub(_error_message(e))}
+            )
         finally:
             try:
                 await self.guard.__aexit__(None, None, None)  # after the last persistence write
@@ -243,8 +256,11 @@ class _FusionRun:
             if kind in ("analyze_done", "analyze_degraded", "error"):
                 last = event
                 if kind == "error":
+                    # error is always the last event: forward it and stop. Its message reaches
+                    # the client, so it is scrubbed like every other error text Fusion emits.
                     self.emitted = True
-                    return event  # error is always the last event: forward it and stop
+                    msg = event.get("message")
+                    return {**event, "message": anon.scrub(msg)} if isinstance(msg, str) else event
             await self._emit(event)
         if last is None:
             return {"type": "error", "message": ANALYZE_INCOMPLETE}
@@ -314,7 +330,7 @@ class _FusionRun:
         peer_claims_shown = [anon.scrub(claims[(d, peer)]) for peer in holders if peer != label]
         own_just = justs[(d, label)]
         prompt = prompts.challenge_prompt(
-            topic=div.topic,
+            topic=anon.scrub(div.topic),  # analyst-authored: scrubbed here, delimited there
             current_claim=claims[(d, label)],
             latest_justification=(
                 own_just.strip() if own_just and own_just.strip() else anon.NONE_GIVEN
@@ -339,12 +355,14 @@ class _FusionRun:
         )
         self.usage.merge(usage)
         if not isinstance(parsed, DefenseReply):
+            # The message is emitted, persisted and shown: a transport error can name the model
+            # slug, the mock's mock_miss text names the slot id.
             exchange = Exchange(
                 divergence_id=d,
                 model=label,
                 stance="unavailable",
                 confidence=None,
-                error=error or "defense call failed",
+                error=anon.scrub(error or "defense call failed"),
             )
         else:
             meta = {"divergence_id": d, "round": round_no}
@@ -399,14 +417,16 @@ class _FusionRun:
 
     # ------------------------------------------------------------------ convergence
     async def _convergence(self, to_check: list[str]) -> None:
-        """ONE analyst call over `to_check`; applies resolved / resolved_unjustified. Ids missing
-        from the reply, carrying an unknown status, or not sent this round stay as they are."""
+        """ONE analyst call over `to_check`; a `resolved` (or `resolved_unjustified`) answer
+        resolves the id and the flag rule decides the kind. Ids missing from the reply, carrying
+        an unknown status, or not sent this round stay as they are. Topic and claims are
+        model/analyst-authored: scrubbed here, delimited by `convergence_messages`."""
         items = [
             {
                 "divergence_id": d,
-                "topic": self.divs[d].topic,
+                "topic": anon.scrub(self.divs[d].topic),
                 "claims": {
-                    label: self.current_claim(d, label)
+                    label: anon.scrub(self.current_claim(d, label))
                     for label in labels_with_position(self.divs[d])
                 },
             }
@@ -439,12 +459,13 @@ class _FusionRun:
             d = rs.divergence_id
             if d not in sent or self.status.get(d) != "standing":
                 continue  # not sent this round (sticky fixture / stale id): ignored
-            if rs.status == "resolved":
+            if rs.status in ("resolved", "resolved_unjustified"):
+                # The analyst is instructed to answer resolved|standing; either resolved kind
+                # means "resolved" and the deterministic flag rule alone decides the kind
+                # (every revise on d across all rounds of this turn flagged -> unjustified).
                 flags = self.revise_flags[d]
                 self.status[d] = "resolved_unjustified" if flags and all(flags) else "resolved"
-            elif rs.status == "resolved_unjustified":
-                self.status[d] = "resolved_unjustified"
-            # "standing" (or anything else): stays standing
+            # "standing": stays standing
 
     # ------------------------------------------------------------------ the loop
     async def _fuse(self) -> dict[str, Any]:

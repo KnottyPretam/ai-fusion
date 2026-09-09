@@ -154,7 +154,10 @@ async def test_thread_append_failure_is_terminal_error_after_the_other_slots_fin
     assert r.status_code == 200
     kinds = types_of(events)
     assert kinds[:2] == ["fusion_start", "round_start"] and kinds[-1] == "error"
-    assert "cannot write chatgpt thread" in events[-1]["message"]
+    # Every error text Fusion emits goes through anon.scrub: the slot id the store named in its
+    # message reaches the client as "[model]" (the full message is in the server log).
+    assert "cannot write [model] thread" in events[-1]["message"]
+    assert "chatgpt" not in events[-1]["message"]
     assert "round_done" not in kinds and "fusion_done" not in kinds
     assert {e["model"] for e in by_type(events, "exchange")} == {"R1", "R3"}
     assert calls("convergence") == []  # the round never completed
