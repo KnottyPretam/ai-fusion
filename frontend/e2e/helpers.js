@@ -23,8 +23,10 @@ export const PROMPTS = {
   grounded: 'What is the zero-rate offset specification of the BMI088 gyroscope, and where is it documented?',
 }
 
-// A leak in the report / timeline would show a vendor or slot name instead of R1/R2/R3.
-export const IDENTITY_RE = /claude|chatgpt|grok|openai|anthropic|x-ai/i
+// A leak in the report / timeline would show a vendor or slot name instead of R1/R2/R3. Mirrors
+// backend/config.py: FORBIDDEN_IDENTITY_STRINGS on word boundaries (so "per sol" or "grokking"
+// do not trip it) and FORBIDDEN_MODEL_CODENAMES only in slug context (preceded by "-").
+export const IDENTITY_RE = /\b(claude|chatgpt|grok|openai|anthropic|xai|x-ai|spacexai|gpt|opus|sonnet|fable)\b|-(luna|sol|astra)\b/i
 
 // Screenshots land next to the ones the integrator flow already produces (docs/screenshots/).
 export const shot = (name) => ({ path: `../docs/screenshots/${name}.png`, fullPage: true })
@@ -66,14 +68,26 @@ export function nextSlotConfigSave(page) {
   return page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes('/slot_config') && r.ok())
 }
 
+// The PERSISTED messages rendered in a column, in thread order, optionally one role only. The
+// pending prompt bubble (`slot-<slot>-pending`) and the live stream block carry no message test
+// id, so this never matches in-flight content: a match here is the refetched thread.
+export function messagesOf(page, slot, role = null) {
+  const selector = `[data-testid="slot-${slot}-message"]${role ? `[data-role="${role}"]` : ''}`
+  return page.getByTestId(`slot-${slot}-thread`).locator(selector)
+}
+
 // Type into the main composer and Send. Waits until the turn is persisted and the page settled:
 // the Analyze button is enabled only once the refetched send turn has all three responses and no
 // stream is running; the composer unlocks once the post-stream refetch settled.
+// `expectText` is asserted on every slot's newest persisted ASSISTANT message, never on the whole
+// thread: the thread also holds the user's prompt (pending bubble, then the persisted user
+// message), so a token that occurs in the prompt would pass with no reply rendered at all — pick
+// a token that appears only in the planted replies.
 export async function sendPrompt(page, prompt, { expectText = null, timeout = 30_000 } = {}) {
   await page.getByTestId('send-composer').fill(prompt)
   await page.getByTestId('send-button').click()
   if (expectText) {
-    for (const slot of SLOTS) await expect(page.getByTestId(`slot-${slot}-thread`)).toContainText(expectText, { timeout })
+    for (const slot of SLOTS) await expect(messagesOf(page, slot, 'assistant').last()).toContainText(expectText, { timeout })
   }
   await expect(page.getByTestId('analyze-run')).toBeEnabled({ timeout })
   await expect(page.getByTestId('send-composer')).toBeEnabled({ timeout })
@@ -98,11 +112,19 @@ export async function runFusion(page, iterations, { timeout = 90_000 } = {}) {
   await expect(page.getByTestId('fusion-run')).toBeEnabled({ timeout: 15_000 })
 }
 
+// Contract rule (docs/api-contract.md, semantics.md "Anonymization / leaks"): `anon_map` lives
+// only in the persisted document and is stripped from EVERY API response. Applied to every public
+// document a spec fetches, so each browser spec is also a leak test.
+export function assertPublic(conv) {
+  expect(conv, 'anon_map must never reach the client').not.toHaveProperty('anon_map')
+  return conv
+}
+
 // The persisted document, through the Vite proxy (same base URL as the page).
 export async function getConversation(page, id) {
   const r = await page.request.get(`/api/conversations/${id}`)
   expect(r.ok(), `GET /api/conversations/${id} -> ${r.status()}`).toBeTruthy()
-  return r.json()
+  return assertPublic(await r.json())
 }
 
 export const turnsOf = (conv, type) => (conv.turns || []).filter((t) => t.type === type)

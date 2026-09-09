@@ -26,7 +26,8 @@ test('grounded mode sends with web search and shows citation links in the claude
   const cfg = await (await page.request.get(`/api/conversations/${id}/slot_config`)).json()
   expect(cfg.grounded).toBe(true)
 
-  await sendPrompt(page, PROMPTS.grounded, { expectText: 'zero-rate offset' })
+  // "zero-rate offset" is in the prompt itself; every planted reply quotes the spec in deg/s.
+  await sendPrompt(page, PROMPTS.grounded, { expectText: 'deg/s' })
 
   // Citation links, named by domain, in the claude column only.
   const cites = page.getByTestId('slot-claude-citations')
