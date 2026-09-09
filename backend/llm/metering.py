@@ -9,7 +9,9 @@
   `cost_usd` with the post-hoc `total_cost` when the lookup succeeds (docs/semantics.md).
 - `float_or_none` is the tolerant number parser both the parser and the client use for `cost`.
 - `aggregate` folds a list of `Usage` into a `FeatureUsage`.
-- `format_log_line` renders the one INFO line every LLM call logs (feature-agnostic).
+- `format_log_line` renders the one INFO line every LLM call logs (feature-agnostic); the live
+  client passes `cost_source=chunk|generation|catalog` so a log reader can tell a real
+  `usage.cost` from a fallback.
 - The process-level session cost total (`SESSION_COST_CAP_USD`) lives here; the client enforces it;
   `session_cost_status()` is the one-call snapshot a footer readout or a CLI prints.
 """
@@ -173,8 +175,17 @@ def aggregate(usages: list[Usage], *, wall_clock_ms: int | None = None) -> Featu
     return fu
 
 
-def format_log_line(usage: Usage, *, estimated: bool = False, mock: bool = False) -> str:
-    """One INFO line per LLM call. Feature-agnostic: role + purpose identify the call."""
+def format_log_line(
+    usage: Usage,
+    *,
+    estimated: bool = False,
+    mock: bool = False,
+    cost_source: str | None = None,
+) -> str:
+    """One INFO line per LLM call. Feature-agnostic: role + purpose identify the call.
+    `cost_source` (live transport only) says where `cost_usd` came from: `chunk` (the usage
+    chunk's own `cost`), `generation` (the `GET /generation` fallback) or `catalog` (price x
+    tokens, also for a synthesised usage)."""
     parts = [
         "llm call",
         f"role={usage.role}",
@@ -184,6 +195,10 @@ def format_log_line(usage: Usage, *, estimated: bool = False, mock: bool = False
         f"completion_tokens={usage.completion_tokens}",
         f"reasoning_tokens={usage.reasoning_tokens}",
         f"cost_usd={usage.cost_usd:.6f}",
+    ]
+    if cost_source:
+        parts.append(f"cost_source={cost_source}")
+    parts += [
         f"latency_ms={usage.latency_ms}",
         f"generation_id={usage.generation_id or '-'}",
     ]

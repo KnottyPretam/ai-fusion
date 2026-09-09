@@ -60,6 +60,12 @@ EXIT_BUDGET = 3
 
 DEFAULT_BUDGET_USD = 0.50
 DEFAULT_MAX_TOKENS = 256
+# OpenRouter floors an Anthropic reasoning budget at 1024 tokens and requires `max_tokens` to be
+# strictly higher than that budget (docs/openrouter-notes.md, "Reasoning Max Tokens for
+# Anthropic Models"). Whether adaptive-thinking Claude models ignore the floor is not verified,
+# so an anthropic-vendor call with reasoning on never sends less than this. It is a cap, not a
+# spend: a one-sentence answer stays a one-sentence answer.
+ANTHROPIC_MIN_MAX_TOKENS = 1100
 PREVIEW_CHARS = 80
 
 DEFAULT_PROMPT = "In one sentence: what does an inertial measurement unit measure?"
@@ -150,6 +156,16 @@ def apply_budget(budget_usd: float) -> float:
 
 
 # --------------------------------------------------------------------------- calls
+def reasoning_max_tokens(model: str, applied: str, max_tokens: int) -> int:
+    """`max_tokens` for a chat call: at least ANTHROPIC_MIN_MAX_TOKENS when the model's vendor
+    is `anthropic` and the applied effort is not `off` (see the constant), else unchanged."""
+    meta = catalog.get_meta(model)
+    vendor = meta.vendor if meta is not None else model.split("/", 1)[0]
+    if vendor == "anthropic" and applied != "off":
+        return max(max_tokens, ANTHROPIC_MIN_MAX_TOKENS)
+    return max_tokens
+
+
 async def call_chat(
     role: str,
     spec: SlotSpec,
@@ -170,7 +186,7 @@ async def call_chat(
         model=spec.model,
         messages=[{"role": "user", "content": prompt}],
         effort=spec.effort,
-        max_tokens=max_tokens,
+        max_tokens=reasoning_max_tokens(spec.model, applied, max_tokens),
         plugins=plugins,
     ):
         if d.kind == "text":
@@ -251,7 +267,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-tokens",
         type=int,
         default=DEFAULT_MAX_TOKENS,
-        help=f"max_tokens for the chat calls (default {DEFAULT_MAX_TOKENS})",
+        help=f"max_tokens for the chat calls (default {DEFAULT_MAX_TOKENS}; an anthropic-vendor "
+        f"call with reasoning on sends at least {ANTHROPIC_MIN_MAX_TOKENS}, the provider's "
+        "reasoning-budget floor)",
     )
     p.add_argument(
         "--skip-grounded", action="store_true", help="skip the grounded (web search) call"
@@ -309,7 +327,10 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     # 2. one prompt per slot, with the configured effort
-    print(f"\n== send: one prompt per slot (max_tokens={args.max_tokens}) ==")
+    print(
+        f"\n== send: one prompt per slot (max_tokens={args.max_tokens}; anthropic with "
+        f"reasoning on: >= {ANTHROPIC_MIN_MAX_TOKENS}) =="
+    )
     print(f"prompt: {args.prompt!r}")
     for slot, spec in cfg.slots.items():
         r = await call_chat(slot, spec, args.prompt, max_tokens=args.max_tokens)
