@@ -11,12 +11,17 @@ A `Reply` is what one model call streams back: a `kind` from `KINDS`, the exact 
 mock will yield (so tests can assert `raw_attempts` / thread contents verbatim) and, for the
 valid kinds, the `payload` object the lenient parser must recover. The three valid shapes
 (`plain`, `fenced`, `chatty`) exercise docs/semantics.md "Structured output" (strip fences,
-outermost braces); the invalid shapes (`truncated`, `prose`, `schema`, `empty`, `error`) must end
-in `degraded` (Analyze) or `unavailable` / `standing` (Fusion) -- never a 500, never a hang.
+outermost braces); the invalid shapes (`truncated`, `prose`, `schema`, `blank`, `empty`,
+`error`) must end in `degraded` (Analyze) or `unavailable` / `standing` (Fusion) -- never a
+500, never a hang. `blank` (whitespace-only text) is the retry rule's third case: a correction
+message WITHOUT the assistant echo (docs/semantics.md: "whitespace-only output is never
+echoed"); `empty` / `error` produce no output at all, so the identical request is re-sent.
 
 Every scenario reuses `planted_factual`'s chat fixtures (and its valid extraction for the
 Fusion cases) so Send and Analyze behave exactly as in the committed corpus; the wire format is
-docs/fixtures.md's canonical chunk lines.
+docs/fixtures.md's canonical chunk lines. The builder also hosts `vendor_in_claims`, which is
+not malformed at all: its extraction plants vendor names in the divergence topic and in R2's
+claim so `test_leaks.py` can prove `anon.scrub` is applied everywhere analyst text is quoted.
 """
 
 from __future__ import annotations
@@ -40,8 +45,9 @@ EXTRACTION_FILE = "analyst.extraction.1.jsonl"
 SLOTS = ("claude", "chatgpt", "grok")
 
 VALID_KINDS = ("plain", "fenced", "chatty")
-INVALID_KINDS = ("truncated", "prose", "schema", "empty", "error")
+INVALID_KINDS = ("truncated", "prose", "schema", "blank", "empty", "error")
 KINDS = VALID_KINDS + INVALID_KINDS
+BLANK_TEXT = " \n\t"  # non-empty on the wire, blank after strip(): never echoed on a retry
 
 RATE_LIMITED = {
     "code": 429,
@@ -71,6 +77,12 @@ class Reply:
     def metered(self) -> bool:
         """An error chunk carries no usage chunk, so the call is never booked."""
         return not self.transport_error
+
+    @property
+    def echoed_on_retry(self) -> bool:
+        """docs/semantics.md retry rule: the bad output is echoed back as the assistant turn
+        only when it is not blank (providers reject empty assistant content)."""
+        return bool(self.text.strip())
 
 
 def render(
@@ -104,6 +116,8 @@ def render(
     if kind == "schema":
         assert violation is not None, "schema kind needs a violation object"
         return Reply(kind, json.dumps(violation, ensure_ascii=False, indent=indent), None)
+    if kind == "blank":
+        return Reply(kind, BLANK_TEXT, None)
     if kind == "empty":
         return Reply(kind, "", None)
     if kind == "error":
@@ -152,6 +166,23 @@ REVISE_UNJUSTIFIED: dict[str, Any] = {
 def revise_justified_payload() -> dict[str, Any]:
     """`planted_factual`'s R2 revise: passes `schemas.is_unjustified` against the peer claims."""
     return json.loads(_fixture_text(BASE_SCENARIO, "chatgpt.defense.1.jsonl"))
+
+
+VENDOR_TOPIC = "Claude vs gpt-5.6-luna register map"
+VENDOR_CLAIM = "OpenAI's documentation says the gyroscope tops out at 1000 deg/s full scale."
+
+
+def vendor_extraction_payload() -> dict[str, Any]:
+    """`planted_factual`'s extraction with vendor names planted where only `anon.scrub` can
+    keep them out of later prompts: d1's topic (quoted in every challenge and in the
+    convergence payload) and R2's claim (quoted to R1/R3 in the peer block). R1/R3's claims are
+    unchanged, so `planted_factual`'s justified R2 revise still passes `is_unjustified`."""
+    ext = extraction_payload()
+    d1 = ext["divergences"][0]
+    assert d1["id"] == "d1" and d1["positions"][1]["model"] == "R2"
+    d1["topic"] = VENDOR_TOPIC
+    d1["positions"][1]["claim"] = VENDOR_CLAIM
+    return ext
 
 
 def defense_payloads() -> list[dict[str, Any]]:
@@ -307,6 +338,23 @@ def corpus() -> dict[str, tuple[bool, dict[str, Reply]]]:
                     prefix="Sure! Here is the JSON you asked for:\n\n",
                     suffix="\n\nHope that helps! Let me know if you need anything else.",
                 ),
+            },
+        ),
+        "analyst_blank_then_valid": (
+            False,
+            {
+                "analyst.extraction.1.jsonl": render("blank", ext),
+                "analyst.extraction.2.jsonl": render("plain", ext),
+            },
+        ),
+        "vendor_in_claims": (
+            False,  # its own extraction replaces planted_factual's
+            {
+                "analyst.extraction.1.jsonl": render("plain", vendor_extraction_payload()),
+                "claude.defense.1.jsonl": render("plain", DEFEND),
+                "chatgpt.defense.1.jsonl": render("plain", revise),
+                "grok.defense.1.jsonl": render("plain", DEFEND),
+                "analyst.convergence.1.jsonl": render("plain", CONVERGENCE_RESOLVED),
             },
         ),
         "defense_malformed": (

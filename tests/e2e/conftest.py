@@ -13,9 +13,14 @@ mock corpus (`backend/llm/fixtures/scenarios/<name>`, docs/fixtures.md), switchi
 - `run_flow`: `await run_flow("stalemate")` runs a scenario's whole flow and returns a `Flow`
   (events, responses, the final `GET` document and the README's machine-readable expectations).
 - Golden helpers: `normalise_turn` / `leaves` make persisted turns snapshot-stable (turn ids ->
-  placeholders, `ts` -> "<ts>", `latency_ms` -> 0, `generation_id` -> "<gen>").
+  placeholders, `ts` -> "<ts>", `latency_ms` -> 0, `generation_id` -> "<gen>", `usage.calls`
+  in `(role, purpose)` order -- parallel slots merge their usage in completion order).
 - `meter_rows` mirrors the frontend meter's `meterFromConversation` so the cost-meter tests can
-  assert the UI recomputes exactly the persisted totals.
+  assert the UI recomputes exactly the persisted totals (`test_cost_meter.py` also runs the real
+  slice under node against the same conversation).
+- Environment: the developer `.env` is loaded at import (collection) time so the root conftest's
+  per-test `delenv` always sees its keys; the `scenario` fixture pins `MOCK_DELAY_MS=0` and clears
+  `GROUNDED_ENGINE` / `GROUNDED_MAX_RESULTS`, which a shell export would otherwise override.
 """
 
 from __future__ import annotations
@@ -30,9 +35,19 @@ from typing import Any
 import httpx
 import pytest
 
+from backend.config import settings as _settings
 from backend.llm import mock
 from backend.schemas import SLOT_IDS
 from tests.helpers import find_identity_leaks, parse_sse_text
+
+# Load a developer .env NOW (collection time) so `_no_real_key` in tests/conftest.py sees and
+# deletes its override keys in every test. config.settings() loads .env lazily (override=False)
+# on its first call, which otherwise happens inside the first test's create_app(), AFTER that
+# test's delenv; only tests/e2e/test_robustness.py's module-level `backend.main` import made
+# the whole-directory run safe by accident. The result is discarded: only the one-time
+# load_dotenv side effect matters, and override=False cannot overwrite the setdefault keys
+# tests/conftest.py already set. `test_env_isolation.py` proves the load happens at import.
+_settings()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS_DIR = REPO_ROOT / "backend" / "llm" / "fixtures" / "scenarios"
@@ -333,25 +348,65 @@ def triplex_messages() -> list[AuthoredMessage]:
     return out
 
 
-def raw_replies_served(root: Path = SCENARIOS_DIR) -> list[str]:
-    """The raw text of every served chat / defense fixture: the slot replies that are out of
-    scope for leak checks (docs/semantics.md scope rule)."""
-    out: list[str] = []
+def served_reply_texts(root: Path = SCENARIOS_DIR) -> dict[tuple[str, str], list[str]]:
+    """`{(role, purpose): [raw text, ...]}` of every served chat / defense fixture, in call
+    order: the slot replies that are out of scope for leak checks (docs/semantics.md scope
+    rule), keyed so an allow list can be built PER payload (see `scope_allow`)."""
+    out: dict[tuple[str, str], list[str]] = {}
     for c in mock.calls:
         if c["purpose"] not in ("chat", "defense") or not isinstance(c["fixture"], str):
             continue
         scenario, name = c["fixture"].split("/", 1)
         if scenario == "recorded":
             continue
-        out.append(fixture_text(scenario, name, root))
-    return [t for t in out if t]
+        text = fixture_text(scenario, name, root)
+        if text:
+            out.setdefault((c["role"], c["purpose"]), []).append(text)
+    return out
 
 
-def leak_report(allow: list[str]) -> dict[tuple[int, int], list[str]]:
-    """`{(call, message): leaks}` over every Triplex-authored message; empty means clean."""
+AllowFn = Callable[[AuthoredMessage], list[str]]
+
+
+def scope_allow(
+    prompts: list[str],
+    texts: dict[tuple[str, str], list[str]],
+    *,
+    own_positions: dict[str, list[str]] | None = None,
+) -> AllowFn:
+    """The contract's scope rule as a per-payload allow list (docs/semantics.md: user prompts
+    and a slot's own prior replies are out of scope, nothing else is):
+
+    - extraction: the prompts + the three chat replies the analyst prompt quotes;
+    - defense for slot S: the prompts + S's OWN chat and defense replies (its thread) + S's own
+      extracted position when given in `own_positions` (fusion shows a label its own claim and
+      evidence verbatim as `YOUR CLAIM` / `YOUR JUSTIFICATION`; only peers are scrubbed);
+    - convergence: the prompts only.
+    """
+    chat_texts = [t for (_, purpose), ts in texts.items() if purpose == "chat" for t in ts]
+
+    def _allow(m: AuthoredMessage) -> list[str]:
+        if m.purpose == "extraction":
+            return [*prompts, *chat_texts]
+        if m.purpose == "defense":
+            return [
+                *prompts,
+                *texts.get((m.role, "chat"), []),
+                *texts.get((m.role, "defense"), []),
+                *(own_positions or {}).get(m.role, []),
+            ]
+        return list(prompts)
+
+    return _allow
+
+
+def leak_report(allow: list[str] | AllowFn) -> dict[tuple[int, int], list[str]]:
+    """`{(call, message): leaks}` over every Triplex-authored message; empty means clean.
+    `allow` is a flat list applied to every message or a per-message function (`scope_allow`)."""
     report: dict[tuple[int, int], list[str]] = {}
     for m in triplex_messages():
-        leaks = find_identity_leaks(m.content, allow)
+        allowed = allow(m) if callable(allow) else allow
+        leaks = find_identity_leaks(m.content, allowed)
         if leaks:
             report[(m.call_index, m.message_index)] = leaks
     return report
@@ -368,11 +423,24 @@ def turn_placeholders(conv: dict[str, Any]) -> dict[str, str]:
     return {t["id"]: f"<turn-{i}:{t['type']}>" for i, t in enumerate(conv["turns"], start=1)}
 
 
+def usage_call_key(call: dict[str, Any]) -> tuple[str, str]:
+    """Sort key of one `Usage` entry: `(role, purpose)`. A stable sort by this key keeps each
+    role's own (deterministic, sequential) call order and removes the cross-slot completion
+    order that `asyncio.gather` decides; `FeatureUsage.calls` specifies no order."""
+    return (str(call.get("role", "")), str(call.get("purpose", "")))
+
+
+def sort_usage_calls(calls_: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(calls_, key=usage_call_key)
+
+
 def normalise_turn(turn: dict[str, Any], ids: dict[str, str]) -> dict[str, Any]:
     """A snapshot-stable copy of a persisted turn: turn references (`id`, `of_turn`,
     `of_analyze`) -> placeholders, `ts` -> "<ts>", `latency_ms` -> 0, `generation_id` ->
-    "<gen>" (None stays None so an absent id is still visible). Everything else is untouched:
-    `leaves()` lets tests prove that."""
+    "<gen>" (None stays None so an absent id is still visible), and every `usage.calls` list
+    stably sorted by `usage_call_key` (parallel slots merge their `Usage` in completion order,
+    so the persisted order is volatile under pacing). Everything else is untouched: `leaves()`
+    lets tests prove that (comparing `usage.calls` as a multiset)."""
 
     def walk(node: Any) -> Any:
         if isinstance(node, dict):
@@ -386,6 +454,10 @@ def normalise_turn(turn: dict[str, Any], ids: dict[str, str]) -> dict[str, Any]:
                     out[k] = None if v is None else GEN_PLACEHOLDER
                 elif k == "latency_ms":
                     out[k] = 0
+                elif k == "usage" and isinstance(v, dict) and isinstance(v.get("calls"), list):
+                    usage = walk(v)
+                    usage["calls"] = sort_usage_calls(usage["calls"])
+                    out[k] = usage
                 else:
                     out[k] = walk(v)
             return out
@@ -544,6 +616,14 @@ def scenario(monkeypatch) -> Callable[[str], str]:
 
     def _set(name: str) -> str:
         monkeypatch.setenv("MOCK_SCENARIO", name)
+        # The goldens pin `usage.calls` in slot order, which only holds when the mock never
+        # suspends (mock.py sleeps only for delay > 0); pin it here because tests/conftest.py
+        # only setdefaults and a shell export would win. settings() re-reads env per call.
+        monkeypatch.setenv("MOCK_DELAY_MS", "0")
+        # The grounded flows pin the contract's `plugins=[{"id": "web", "max_results": 5}]`
+        # shape; neither key is in the root conftest's delenv list, so clear them here.
+        monkeypatch.delenv("GROUNDED_ENGINE", raising=False)
+        monkeypatch.delenv("GROUNDED_MAX_RESULTS", raising=False)
         mock.reset()
         return name
 

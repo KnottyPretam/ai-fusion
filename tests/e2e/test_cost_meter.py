@@ -2,15 +2,24 @@
 docs/semantics.md "Metering"): every persisted turn's `usage` is exactly the sum of the usage
 chunks of the fixtures the mock served for it, call counts match, and the per-feature rows the
 UI recomputes from the conversation (`meterFromConversation`, mirrored by `meter_rows`) equal
-those sums."""
+those sums. `meter_rows` is a hand transcription, so the last test runs the REAL slice
+(`frontend/src/features/meter/slice.js`, a dependency-free ES module) under node on the same
+conversation and the same SSE events and pins both sides to each other."""
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 from typing import Any
+
+import pytest
 
 from backend.llm import mock
 from backend.schemas import SLOT_IDS
 from tests.e2e.conftest import (
+    REPO_ROOT,
     Flow,
     calls,
     fixture_cost,
@@ -21,6 +30,45 @@ from tests.e2e.conftest import (
 )
 
 TOKEN_KEYS = ("prompt_tokens", "completion_tokens", "reasoning_tokens")
+METER_SLICE = REPO_ROOT / "frontend" / "src" / "features" / "meter" / "slice.js"
+# Runs the slice's reload path (`rowsFromConversation`) and its live path (`meterReducer` over
+# `{type:'sse', feature, event}` actions, exactly what `runStream` dispatches) on stdin JSON.
+NODE_SCRIPT = """
+import fs from 'node:fs';
+const slice = await import(process.env.METER_SLICE);
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const loaded = slice.rowsFromConversation(input.conversation);
+let s = slice.meterReducer(undefined, { type: '@@init' });
+for (const { feature, events } of input.streams) {
+  for (const event of events) s = slice.meterReducer(s, { type: 'sse', feature, event });
+}
+process.stdout.write(JSON.stringify({ loaded, live: { send: s.send, analyze: s.analyze, fusion: s.fusion } }));
+"""
+
+
+def frontend_meter_rows(
+    conversation: dict[str, Any], streams: list[tuple[str, list[dict[str, Any]]]]
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """`{"loaded": rows, "live": rows}` as the frontend meter slice computes them under node."""
+    node = shutil.which("node")
+    if node is None:  # pragma: no cover - the repo's frontend toolchain is node
+        pytest.skip("node is required to run the frontend meter slice")
+    assert METER_SLICE.is_file(), METER_SLICE
+    payload = {
+        "conversation": conversation,
+        "streams": [{"feature": f, "events": e} for f, e in streams],
+    }
+    p = subprocess.run(
+        [node, "--input-type=module", "-e", NODE_SCRIPT],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "METER_SLICE": METER_SLICE.as_uri()},
+        cwd=REPO_ROOT,
+    )
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)
 
 
 def _expected_usage(call: dict[str, Any]) -> dict[str, Any]:
@@ -176,3 +224,47 @@ async def test_truncated_and_failed_slots_are_metered_honestly(run_flow):
     assert send["usage"]["totals"]["calls"] == 2
     assert {u["role"] for u in send["usage"]["calls"]} == {"claude", "chatgpt"}
     assert meter_rows(g.conv)["send"]["truncated"] == 0
+
+
+async def test_python_meter_mirror_matches_the_frontend_slice(run_flow, api):
+    """`meter_rows` mirrors `meterFromConversation` by hand; nothing else ties the two. Run the
+    real slice on the very conversation (reload path) and on the very SSE events the flow
+    streamed (live path: `slot_done` per slot, `turn_done` wall clock, `analyze_done` cached or
+    not, `analyze_degraded`, `fusion_done.usage`) and require all three to agree exactly, so a
+    change to `turnDelta`, `round8` or the event booking on either side fails here."""
+    f = await run_flow("planted_factual")
+    streams = [("send", f.send_events), ("analyze", f.analyze_events), ("fusion", f.fusion_events)]
+    _, events = await api.cont(f.cid, "grok", "One more thing about the accelerometer.")
+    streams.append(("send", events))  # continue streams run under the feature key 'send'
+    _, events = await api.analyze(f.cid, {"force": True})
+    streams.append(("analyze", events))
+    _, events = await api.analyze(f.cid)
+    assert events[-1]["cached"] is True
+    streams.append(("analyze", events))  # books nothing on either side
+    conv = await api.get(f.cid)
+    assert [t["type"] for t in conv["turns"]] == [
+        "send",
+        "analyze",
+        "fusion",
+        "continue",
+        "analyze",
+    ]
+
+    expected = meter_rows(conv)
+    js = frontend_meter_rows(conv, streams)
+    assert js["loaded"] == expected
+    assert js["live"] == expected
+    assert [expected[k]["calls"] for k in ("send", "analyze", "fusion")] == [4, 2, 4]
+    assert all(expected[k]["latency_ms"] > 0 for k in ("send", "analyze", "fusion"))
+
+    # The truncated count and an errored slot go through the same two paths.
+    g = await run_flow("truncated", fusion=False)
+    rows = meter_rows(g.conv)
+    assert rows["send"]["truncated"] == 1
+    js = frontend_meter_rows(g.conv, [("send", g.send_events), ("analyze", g.analyze_events)])
+    assert js["loaded"] == rows and js["live"] == rows
+    h = await run_flow("slot_failure", analyze=False, fusion=False)
+    rows = meter_rows(h.conv)
+    assert rows["send"]["calls"] == 2
+    js = frontend_meter_rows(h.conv, [("send", h.send_events)])
+    assert js["loaded"] == rows and js["live"] == rows
