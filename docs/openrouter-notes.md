@@ -724,3 +724,27 @@ The OpenRouter TypeScript SDK (`@openrouter/sdk`) takes these as constructor opt
 - https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md
 - https://openrouter.ai/docs/llms.txt (documentation index; every docs page is fetchable verbatim by appending .md to its URL)
 - https://openrouter.ai/docs/llms-full.txt (3.9 MB full-corpus dump, used to grep for delta.reasoning / delta.annotations)
+
+## Observed live (2026-09-08, Stage 4 smoke; transcripts in backend/llm/fixtures/recorded/)
+
+- **Web-search citations in streaming**: with `plugins:[{"id":"web","max_results":5}]` on
+  `anthropic/claude-opus-5`, the `url_citation` annotation arrived as `choices[0].delta.annotations`
+  on a mid-stream content chunk (chunk 3 of 10); the usage chunk carried no annotations. The
+  parser's "read `delta.annotations` on any chunk" rule is the one that matters. The grounded call
+  billed 12,139 prompt tokens (the injected search results) → $0.075 for one question at Opus prices.
+- **Grok reasoning shape**: `x-ai/grok-4.6` at effort medium streamed 18 chunks of
+  `reasoning_details[{type:"reasoning.summary"}]`, each mirrored by an identical bare
+  `delta.reasoning` string (the parser de-duplicates them), then one `reasoning.encrypted` block,
+  then the answer; `usage.completion_tokens_details.reasoning_tokens = 241`.
+- **Opus 5 / GPT-5.6 Sol at medium on a one-sentence prompt**: no reasoning deltas and
+  `reasoning_tokens = 0` (adaptive thinking did not engage, or the count is not reported); the
+  live test that asserts `reasoning_tokens > 0` at effort high remains to be confirmed once credits
+  are available.
+- **Usage chunk**: present on every stream, carries `cost` (USD) and repeats the terminal
+  `finish_reason`; `X-Generation-Id` was returned on every call.
+- **Catalog**: live `GET /api/v1/models` returned 431 models; the eight default/alternative slugs
+  and their `reasoning` metadata matched the recon-time fixture.
+- **Credits**: OpenRouter reserves the request's maximum possible cost up front; on an account
+  with zero purchased credits the Opus 5 calls (max_tokens ≥ 1100 at $25/M) are refused with
+  402 "would exceed your available credits given your current in-flight requests" even though
+  cheaper calls succeed on the free allowance.

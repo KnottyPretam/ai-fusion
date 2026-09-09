@@ -53,7 +53,7 @@ disagreement is surfaced, never silently averaged.
 - [x] **R5 — Thread continuation:** post follow-ups into any single model's thread;  ✅ S2: tests/send rabbit-hole byte-identical threads; fusion messages in slot threads (tests/fusion)
       other threads untouched. Fusion exchanges live in the relevant model's history so
       later rabbit-holing carries that context.
-- [ ] **R6 — Grounded mode (later phase):** toggle to web-search-enabled variants for  🔶 toggle + plugin wired (S2); live citations verified in Stage 4
+- [x] **R6 — Grounded mode (later phase):** toggle to web-search-enabled variants for  ✅ Stage 4 smoke 2026-09-08: grounded Opus 5 answered a current-events question with a url_citation (was 🔶) toggle + plugin wired (S2); live citations verified in Stage 4
       questions needing current data (vendor parts, datasheets, pricing).
 
 ### Non-functional
@@ -263,8 +263,8 @@ with tests written from the acceptance criteria before implementation.
       verify the current unified-reasoning parameter shape and which slots honor it.
 - [x] Run `/init`; trim `CLAUDE.md` (run commands, structure notes, "update PLAN.md  ✅ S0: CLAUDE.md in karpathy's structure (docs/reference/llm-council-CLAUDE.md kept verbatim)
       checkboxes as you go").
-- [ ] Capture 2–3 full raw API transcripts as `fixtures/` for replay.  🔶 hand-authored scenario corpus (S1); real transcripts recorded in Stage 4 (MOCK_RECORD_DIR)
-- **AC:** stock flow completes with all three target models; costs visible in logs.
+- [x] Capture 2–3 full raw API transcripts as `fixtures/` for replay.  ✅ Stage 4 smoke: 5 real transcripts recorded → backend/llm/fixtures/recorded/ (was 🔶) hand-authored scenario corpus (S1); real transcripts recorded in Stage 4 (MOCK_RECORD_DIR)
+- **AC:** stock flow completes with all three target models; costs visible in logs.  ✅ Stage 4 smoke: all three slots answered with their configured models; per-call INFO cost lines + summary $0.079
 
 ### Phase 1 — Test scaffolding & schemas
 - [x] `MOCK_OPENROUTER=1` replay layer serving fixtures.  ✅ S1: backend/llm/mock.py (scenario counters, sticky-last, recorded lookup, calls capture)
@@ -297,7 +297,7 @@ with tests written from the acceptance criteria before implementation.
   with `standing` status and both justifications shown; unjustified `revise` is flagged.
 
 ### Phase 5 — Grounding & cost control
-- [ ] Grounded-mode toggle mapping slots to web-search-enabled variants (verify the  🔶 implemented via OpenRouter `plugins:[{id:web}]` (S2 tests/send grounded); live citation AC pending Stage 4
+- [x] Grounded-mode toggle mapping slots to web-search-enabled variants (verify the  ✅ Stage 4 smoke: live citation observed (delta.annotations) (was 🔶) implemented via OpenRouter `plugins:[{id:web}]` (S2 tests/send grounded); live citation AC pending Stage 4
       current OpenRouter mechanism during this phase — do not trust this doc).
 - [x] Per-call token caps enforced; footer cost meter from usage data, per feature.  ✅ S1/S2: MAX_TOKENS_STAGE per call, truncated flag + warning; meter from usage per feature
 - **AC:** a current-events question answers with citations in grounded mode; a
