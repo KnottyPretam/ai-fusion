@@ -16,7 +16,10 @@ fixtures therefore name the same labels on replay as they did live.
 Safety: refuses to run when `settings().openrouter_api_key` is None or `MOCK_OPENROUTER=1`,
 unless `--allow-mock` is given (then the flow replays `MOCK_SCENARIO` and, since the mock
 transport never tees, only the README is written). It also refuses a target directory that
-already holds `*.jsonl` fixtures (numbering would continue and the README would lie). The
+already holds any `*.jsonl` (numbered fixtures, `recorded/`, `requests.jsonl`): numbering would
+continue, an identical request would keep the earlier `recorded/` copy, and the README would
+lie. A pre-stream provider error (429, 402, ...) is recorded as an error fixture so the replay
+reproduces it; a timeout before the first byte records nothing and consumes no number. The
 session cost cap is enforced by the client; `--budget-usd` (default 2.00) lowers it for this
 process.
 
@@ -340,22 +343,52 @@ class Entry:
     info: dict[str, Any] = field(default_factory=dict)  # from describe_fixture
 
 
+def _raw_chunks(lines: list[str]) -> list[dict[str, Any]]:
+    """The fixture lines as raw chunk objects (unparsable lines skipped, as the parser does)."""
+    out: list[dict[str, Any]] = []
+    for ln in lines:
+        try:
+            doc = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(doc, dict):
+            out.append(doc)
+    return out
+
+
+def _chunk_delta(c: dict[str, Any]) -> dict[str, Any]:
+    ch = c.get("choices") or []
+    d = ch[0].get("delta") if ch and isinstance(ch[0], dict) else None
+    return d if isinstance(d, dict) else {}
+
+
 def describe_fixture(path: Path) -> dict[str, Any]:
-    """Parse one fixture through the real SSE parser: text, finish_reason, error, cost, …"""
+    """Parse one fixture through the real SSE parser (text, finish_reason, error, cost) and take
+    the README's `reasoning_blocks` / `citation_urls` from the RAW chunk objects exactly as the
+    corpus validator does (`tests/fixtures/test_scenarios.py`): every `reasoning_details` entry
+    on every chunk (encrypted blocks included) and every `delta.annotations` url in stream
+    order (repeats kept; `message.annotations` on the usage chunk excluded). The parser's view
+    (encrypted blocks dropped, urls de-duplicated, message annotations merged) would make a
+    README that the validator rejects once the recording is shipped."""
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     deltas = list(parse_sse_lines(f"data: {ln}" for ln in lines))
     text = "".join(d.text for d in deltas if d.kind == "text")
+    chunks = _raw_chunks(lines)
+    blocks = 0
     urls: list[str] = []
-    for d in deltas:
-        if d.kind == "citations":
-            for item in d.items:
-                uc = item.get("url_citation") if isinstance(item, dict) else None
-                if isinstance(uc, dict) and isinstance(uc.get("url"), str):
-                    urls.append(uc["url"])
+    for c in chunks:
+        delta = _chunk_delta(c)
+        rd = delta.get("reasoning_details")
+        blocks += len(rd) if isinstance(rd, list) else 0
+        anns = delta.get("annotations")
+        for a in anns if isinstance(anns, list) else []:
+            uc = a.get("url_citation") if isinstance(a, dict) else None
+            if isinstance(uc, dict) and isinstance(uc.get("url"), str):
+                urls.append(uc["url"])
     info: dict[str, Any] = {
         "text": text,
         "chunks": len(lines),
-        "reasoning_chunks": sum(1 for d in deltas if d.kind == "reasoning"),
+        "reasoning_blocks": blocks,
         "citation_urls": urls,
         "finish_reason": None,
         "error": None,
@@ -471,10 +504,10 @@ def build_expectations(
             exp["error"] = info["error"]
         else:
             exp["finish_reason"] = info.get("finish_reason") or "stop"
-        if info.get("reasoning_chunks"):
-            exp["reasoning_blocks"] = info["reasoning_chunks"]
+        if info.get("reasoning_blocks"):
+            exp["reasoning_blocks"] = info["reasoning_blocks"]
         if info.get("citation_urls"):
-            exp["citation_urls"] = list(dict.fromkeys(info["citation_urls"]))
+            exp["citation_urls"] = list(info["citation_urls"])  # validator order, repeats kept
         files[e.fixture] = exp
 
     # --- sequence
@@ -574,7 +607,7 @@ def _describe(fname: str, exp: dict[str, Any], chunks: int) -> str:
     else:
         bits.append(f"finish_reason {exp.get('finish_reason', 'stop')}")
     if exp.get("reasoning_blocks"):
-        bits.append(f"{exp['reasoning_blocks']} reasoning chunk(s)")
+        bits.append(f"{exp['reasoning_blocks']} reasoning block(s)")
     if exp.get("citation_urls"):
         bits.append(f"{len(exp['citation_urls'])} citation url(s)")
     bits.append(f"{chunks} chunks")
@@ -744,10 +777,15 @@ async def run(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     fixtures_dir = Path(args.fixtures_dir).expanduser().resolve()
     record_dir = fixtures_dir / "scenarios" / args.scenario
-    if record_dir.exists() and any(record_dir.glob("*.jsonl")):
+    if record_dir.exists() and any(record_dir.rglob("*.jsonl")):
+        # Anywhere below the directory, `recorded/<sha256>.jsonl` included: the tee never
+        # overwrites a content-keyed file, so a leftover `recorded/` would make content-keyed
+        # replay serve the OLD session's answers under this session's README.
         print(
-            f"REFUSED: {record_dir} already holds fixtures; numbering would continue from them "
-            "and the README would be wrong. Pick a fresh --scenario or --fixtures-dir."
+            f"REFUSED: {record_dir} already holds fixtures (`*.jsonl`, `recorded/` or "
+            "`requests.jsonl`); numbering would continue from them, identical requests would "
+            "keep the earlier `recorded/` transcript and the README would be wrong. Pick a "
+            "fresh --scenario or --fixtures-dir (or delete the directory)."
         )
         return EXIT_REFUSED
     os.environ["MOCK_RECORD_DIR"] = str(record_dir)
@@ -806,6 +844,17 @@ def _print_inventory(
             print(f"  {p.relative_to(record_dir)}  ({p.stat().st_size} bytes)")
         if not paths:
             print("  (none)")
+        unrecorded = [
+            f"{e.role}.{e.purpose}" for e in read_entries(record_dir) if e.fixture is None
+        ]
+        if unrecorded:
+            # A timeout / transport failure before the first byte: nothing of the provider's to
+            # replay, no number consumed (a pre-stream HTTP error IS recorded, as an error
+            # fixture). Replay will serve the next file (or mock_miss) for that call.
+            print(
+                f"  WARNING: {len(unrecorded)} call(s) produced no fixture "
+                f"(failed before the first chunk): {', '.join(unrecorded)}"
+            )
     else:
         print("  (directory not created: no call was recorded)")
     turn_cost = 0.0

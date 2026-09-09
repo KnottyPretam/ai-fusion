@@ -6,13 +6,22 @@ here runs in the default suite (deselected by `-m 'not live'`) and the directory
 without `OPENROUTER_API_KEY`.
 
 Checks: catalog fetch works; each slot answers with its configured model/effort with
-`usage.cost` present; reasoning_tokens > 0 at effort high; `off` is honoured where the catalog
-allows it; a mandatory-reasoning model (grok) is coerced; the analyst returns schema-valid JSON
-via response_format; a grounded question returns >= 1 citation; the cost cap refuses at
+`usage.cost` present in the usage chunk itself (the client's INFO line says
+`cost_source=chunk`; a `/generation` or catalog fallback would also make cost_usd > 0);
+reasoning evidence at effort high (reasoning_tokens > 0 OR reasoning deltas, judged per slot,
+failing once with the full picture); `off` is honoured where the catalog allows it; a
+mandatory-reasoning model (grok) is coerced; the analyst returns schema-valid JSON via
+response_format; a grounded question returns >= 1 citation; the cost cap refuses at
 `SESSION_COST_CAP_USD=0`.
+
+Anthropic calls with reasoning on send `max_tokens >= 1100`: OpenRouter floors the reasoning
+budget at 1024 and requires `max_tokens` strictly above it (docs/openrouter-notes.md); whether
+adaptive-thinking Claude models ignore that floor is unverified, so nothing here depends on it.
 """
 
 from __future__ import annotations
+
+import logging
 
 import pytest
 
@@ -43,6 +52,33 @@ CANNED_ANSWERS: dict[Label, str] = {
 }
 
 
+ANTHROPIC_MIN_MAX_TOKENS = 1100  # 1024-token reasoning budget floor + headroom (module doc)
+
+
+def _max_tokens(spec: SlotSpec, n: int) -> int:
+    """`n`, raised to ANTHROPIC_MIN_MAX_TOKENS for an anthropic-vendor call whose applied effort
+    is not `off`. A cap, not a spend: a one-sentence answer stays short."""
+    meta = catalog.get_meta(spec.model)
+    _param, applied, _coerced = reasoning_mod.build(spec.effort, meta)
+    vendor = meta.vendor if meta is not None else spec.model.split("/", 1)[0]
+    if vendor == "anthropic" and applied != "off":
+        return max(n, ANTHROPIC_MIN_MAX_TOKENS)
+    return n
+
+
+def _info_line(caplog: pytest.LogCaptureFixture, role: str) -> str:
+    """The client's latest INFO line for `role` (one per call, docs/semantics.md)."""
+    lines = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "triplex.llm.client"
+        and r.levelno == logging.INFO
+        and f" role={role} " in r.getMessage()
+    ]
+    assert lines, f"{role}: no INFO line from triplex.llm.client"
+    return lines[-1]
+
+
 async def _chat(
     role: str, spec: SlotSpec, prompt: str, *, max_tokens: int, plugins=None
 ) -> tuple[str, list[Delta], Delta]:
@@ -55,7 +91,7 @@ async def _chat(
         model=spec.model,
         messages=[{"role": "user", "content": prompt}],
         effort=spec.effort,
-        max_tokens=max_tokens,
+        max_tokens=_max_tokens(spec, max_tokens),
         plugins=plugins,
     ):
         deltas.append(d)
@@ -91,7 +127,8 @@ async def test_catalog_fetch_works(live_budget):
 
 
 # --------------------------------------------------------------------------- slots
-async def test_each_slot_answers_with_its_configured_model_and_effort(live_budget):
+async def test_each_slot_answers_with_its_configured_model_and_effort(live_budget, caplog):
+    caplog.set_level(logging.INFO, logger="triplex.llm.client")
     for slot, spec in _slots().items():
         _param, applied, coerced = reasoning_mod.build(spec.effort, catalog.get_meta(spec.model))
         text, _deltas, done = await _chat(slot, spec, SHORT_PROMPT, max_tokens=200)
@@ -99,10 +136,14 @@ async def test_each_slot_answers_with_its_configured_model_and_effort(live_budge
         assert text.strip(), f"{slot}: empty reply"
         u = done.usage
         assert u is not None and u.model == spec.model and u.role == slot
-        assert u.cost_usd > 0, f"{slot}: usage.cost missing"  # usage.cost present
+        assert u.cost_usd > 0, f"{slot}: no cost at all"
         assert u.prompt_tokens > 0 and u.completion_tokens > 0 and u.latency_ms > 0
         assert u.generation_id, f"{slot}: no generation id"
         assert not isinstance(u, metering.EstimatedUsage), f"{slot}: no usage chunk arrived"
+        # `usage.cost` PRESENT in the usage chunk: cost_usd > 0 alone cannot tell, the client
+        # fills a missing cost from /generation or the catalog price. The INFO line can.
+        line = _info_line(caplog, slot)
+        assert "cost_source=chunk" in line, f"{slot}: usage.cost missing from the chunk: {line}"
         print(
             f"{slot}: {spec.model} effort={spec.effort}->{applied}{' (coerced)' if coerced else ''} "
             f"cost=${u.cost_usd:.6f} reasoning_tokens={u.reasoning_tokens}"
@@ -110,15 +151,29 @@ async def test_each_slot_answers_with_its_configured_model_and_effort(live_budge
     _within_budget(live_budget)
 
 
-async def test_reasoning_tokens_are_reported_at_effort_high(live_budget):
+async def test_reasoning_is_evidenced_at_effort_high(live_budget):
+    """Per slot: `usage.reasoning_tokens > 0` OR at least one `reasoning` delta. Whether every
+    provider populates `completion_tokens_details.reasoning_tokens` through OpenRouter is not a
+    verified fact, so the evidence is collected for all slots and the test fails ONCE with the
+    full picture instead of on the first provider that reports 0."""
+    missing: list[str] = []
     for slot, spec in _slots().items():
         high = SlotSpec(model=spec.model, effort="high")
         meta = catalog.get_meta(spec.model)
         assert meta is not None and "high" in meta.efforts, f"{slot}: {spec.model} lacks high"
-        _text, _deltas, done = await _chat(slot, high, THINK_PROMPT, max_tokens=1500)
+        _text, deltas, done = await _chat(slot, high, THINK_PROMPT, max_tokens=1500)
         assert done.kind == "done", f"{slot}: {done.code} {done.message}"
         assert done.usage is not None
-        assert done.usage.reasoning_tokens > 0, f"{slot}: no reasoning tokens at effort high"
+        reasoning_deltas = sum(1 for d in deltas if d.kind == "reasoning")
+        print(
+            f"{slot}: {spec.model} reasoning_tokens={done.usage.reasoning_tokens} "
+            f"reasoning_deltas={reasoning_deltas}"
+        )
+        if not (done.usage.reasoning_tokens > 0 or reasoning_deltas):
+            missing.append(slot)
+    assert not missing, (
+        f"no reasoning evidence at effort high for {missing} (see the per-slot counts printed)"
+    )
     _within_budget(live_budget)
 
 

@@ -2,7 +2,11 @@
 `SESSION_COST_CAP_USD=0` refuses every slot with `slot_error{code:"cost_cap_exceeded"}` before
 any request leaves the process, nothing is appended to the threads, the turn is still persisted,
 and `metering.session_cost_status()` reports the refusal (PLAN.md Phase 5 cost control;
-docs/api-contract.md "Cost cap")."""
+docs/api-contract.md "Cost cap").
+
+The last two tests drive the same cap through Analyze and Fusion over the httpx path: the
+exact strings those features emit (`analyze_retry.error`, `AnalyzeTurn.error`, `Exchange.error`
+after `anon.scrub`) are what `scripts/record_fixtures.py::_cost_capped` keys its exit code 3 on."""
 
 from __future__ import annotations
 
@@ -13,7 +17,9 @@ import pytest
 
 from backend.llm import metering
 from backend.schemas import SLOT_IDS
-from tests.conftest import DEFAULT_PROMPT
+from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
+from tests.helpers import parse_sse_text
+from tests.llm import test_scripts as scripts_tests
 from tests.send.conftest import assert_stream_invariants, of_type, one
 
 BASE_URL = "https://openrouter.test/api/v1"
@@ -140,3 +146,76 @@ async def test_cap_is_not_enforced_in_mock_mode(cid, send, monkeypatch):
     assert_stream_invariants(events)
     assert len(of_type(events, "slot_done")) == 3
     assert metering.session_cost_status()["enforced"] is False
+
+
+# --------------------------------------------------------------------------- Analyze / Fusion
+def _cost_capped(events: list[dict]) -> bool:
+    return scripts_tests.load_script("record_fixtures")._cost_capped(events)
+
+
+async def test_analyze_with_cap_zero_degrades_with_cost_cap_exceeded(
+    client, persisted_conversation, live_capped
+):
+    """Both analyst attempts are refused before any request: the retry carries the stable key,
+    the persisted turn is degraded with the same key, and the recorder script recognises it."""
+    cid = persisted_conversation.id
+    r = await client.post(f"/api/conversations/{cid}/analyze", json={})
+    assert r.status_code == 200, r.text
+    events = parse_sse_text(r.text)
+    assert [e["type"] for e in events] == ["analyze_start", "analyze_retry", "analyze_degraded"]
+    assert events[1]["error"] == "cost_cap_exceeded"
+    turn = events[2]["turn"]
+    assert turn["status"] == "degraded" and turn["error"] == "cost_cap_exceeded"
+    assert turn["extraction"] is None and turn["raw_attempts"] == ["", ""]
+    assert turn["usage"]["totals"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_ms": turn["usage"]["totals"]["latency_ms"],
+        "calls": 0,
+    }
+    assert live_capped.call_count == 0  # refused before any request left the process
+    assert _cost_capped(events)
+    conv = (await client.get(f"/api/conversations/{cid}")).json()
+    assert [t["type"] for t in conv["turns"]] == ["send", "analyze"]
+    assert conv["turns"][1]["status"] == "degraded"
+
+
+async def test_fusion_with_cap_zero_marks_every_exchange_unavailable_and_exits_error(
+    client, persisted_conversation, live_capped, monkeypatch
+):
+    """An ok Analyze from the mock corpus first (planted_factual: d1 high), then Fusion over the
+    capped live transport: every defense call is refused, every exchange is `unavailable` with
+    the stable key as its (scrubbed) error, the round exits `error`, nothing is appended."""
+    cid = persisted_conversation.id
+    monkeypatch.setenv("MOCK_OPENROUTER", "1")
+    r = await client.post(f"/api/conversations/{cid}/analyze", json={})
+    assert r.status_code == 200, r.text
+    analyze = parse_sse_text(r.text)
+    assert analyze[-1]["type"] == "analyze_done" and analyze[-1]["turn"]["status"] == "ok"
+    monkeypatch.setenv("MOCK_OPENROUTER", "0")
+
+    r = await client.post(f"/api/conversations/{cid}/fusion", json={"max_iterations": 2})
+    assert r.status_code == 200, r.text
+    events = parse_sse_text(r.text)
+    assert events[0]["type"] == "fusion_start" and events[0]["standing"] == ["d1"]
+    exchanges = of_type(events, "exchange")
+    assert [e["model"] for e in exchanges] == ["R1", "R2", "R3"]
+    for e in exchanges:
+        assert e["stance"] == "unavailable" and e["error"] == "cost_cap_exceeded"
+        assert e["confidence"] is None and e["revised_claim"] is None
+    assert [e["type"] for e in events[-2:]] == ["round_done", "fusion_done"]
+    done = events[-1]
+    assert done["exit_reason"] == "error" and len(done["turn"]["rounds"]) == 1
+    assert done["turn"]["final"] == [{"divergence_id": "d1", "status": "standing"}]
+    assert done["usage"]["totals"]["calls"] == 0 and done["usage"]["totals"]["cost_usd"] == 0
+    assert live_capped.call_count == 0
+    assert _cost_capped(events)
+    conv = (await client.get(f"/api/conversations/{cid}")).json()
+    assert [t["type"] for t in conv["turns"]] == ["send", "analyze", "fusion"]
+    for slot in SLOT_IDS:  # no challenge/reply pair was appended
+        assert [m["content"] for m in conv["threads"][slot]] == [
+            DEFAULT_PROMPT,
+            DEFAULT_RESPONSES[slot],
+        ]

@@ -128,7 +128,10 @@ def test_format_log_line_is_feature_agnostic():
     ):
         assert needle in line
     assert "feature=" not in line
+    assert "cost_source=" not in line  # the mock transport passes none
     assert "estimated" in metering.format_log_line(u, estimated=True)
+    for source in ("chunk", "generation", "catalog"):
+        assert f"cost_source={source}" in metering.format_log_line(u, cost_source=source)
 
 
 def test_estimate_usage_is_marked_estimated_and_serialises_like_usage():

@@ -436,6 +436,123 @@ async def test_record_dir_writes_a_fixture_the_mock_replays_directly(
     assert respx_router.calls.call_count == 1  # only the live call touched the network
 
 
+RATE_LIMIT_BODY = {
+    "error": {
+        "code": 429,
+        "message": "Rate limit exceeded",
+        "metadata": {"error_type": "rate_limit_exceeded"},
+    }
+}
+
+
+def _ok_response(text: str = "ok") -> httpx.Response:
+    return httpx.Response(
+        200, content=sse_body(chunk(content=text, finish="stop"), chunk(usage=usage_obj()))
+    )
+
+
+async def test_pre_stream_http_error_is_recorded_as_an_error_fixture_and_replays(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    """A 429 before any chunk takes a fixture number only by WRITING the canonical error fixture
+    for it (docs/fixtures.md), so the next call is `.2` with a `.1` on disk (contiguous, as the
+    corpus validator and counter replay require), `recorded/` is reserved for the later success
+    (the content-keyed copy keeps the first recording), and counter replay reproduces the
+    failure then the success."""
+    rec = tmp_path / "scenarios" / "r"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    respx_router.post(CHAT_URL).mock(
+        side_effect=[httpx.Response(429, json=RATE_LIMIT_BODY), _ok_response()]
+    )
+    first = await collect(_call())
+    assert kinds(first) == ["error"] and first[0].code == 429
+    second = await collect(_call())
+    assert kinds(second) == ["text", "done"]
+
+    one = [json.loads(ln) for ln in (rec / "claude.chat.1.jsonl").read_text().splitlines()]
+    assert len(one) == 1
+    err = one[0]["error"]
+    assert err["code"] == 429 and err["message"] == "Rate limit exceeded"
+    assert err["metadata"]["error_type"] == "rate_limit_exceeded"
+    assert one[0]["choices"] == [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}]
+    assert isinstance(one[0]["id"], str) and one[0]["id"]  # the validator needs a chunk id
+    two = [json.loads(ln) for ln in (rec / "claude.chat.2.jsonl").read_text().splitlines()]
+    assert two[0]["choices"][0]["delta"]["content"] == "ok" and "usage" in two[-1]
+    reqs = [json.loads(ln) for ln in (rec / "requests.jsonl").read_text().splitlines()]
+    assert [r["fixture"] for r in reqs] == ["claude.chat.1.jsonl", "claude.chat.2.jsonl"]
+    key = canonical_request_key("anthropic/claude-opus-5", MSGS, None)
+    assert [r["recorded"] for r in reqs] == [None, f"recorded/{key}.jsonl"]
+    recorded = sorted((rec / "recorded").glob("*.jsonl"))
+    assert [p.name for p in recorded] == [f"{key}.jsonl"]
+    assert '"ok"' in recorded[0].read_text()  # the success, never masked by the 429
+    assert client_mod._record_counters[(str(rec.resolve()), "claude", "chat")] == 2
+
+    monkeypatch.setenv("MOCK_OPENROUTER", "1")
+    monkeypatch.setenv("MOCK_FIXTURES_DIR", str(tmp_path))
+    monkeypatch.setenv("MOCK_SCENARIO", "r")
+    monkeypatch.delenv("MOCK_RECORD_DIR")
+    r1 = await collect(_call())
+    assert kinds(r1) == ["error"]
+    assert (r1[0].code, r1[0].error_type, r1[0].message) == (
+        429,
+        "rate_limit_exceeded",
+        "Rate limit exceeded",
+    )
+    assert mock.calls[-1]["fixture"] == "r/claude.chat.1.jsonl"
+    r2 = await collect(_call())
+    assert kinds(r2) == ["text", "done"] and r2[0].text == "ok"
+    assert mock.calls[-1]["fixture"] == "r/claude.chat.2.jsonl"
+    assert respx_router.calls.call_count == 2  # nothing reached the network on replay
+
+
+async def test_pre_stream_transport_failure_consumes_no_fixture_number(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    """A timeout before the first byte has nothing of the provider's to replay: it is not
+    recorded and must not burn a number -- the following success is `.1`, not `.2`."""
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    respx_router.post(CHAT_URL).mock(side_effect=[httpx.ReadTimeout("slow"), _ok_response()])
+    failed = await collect(_call(role="chatgpt", model="openai/gpt-5.6-sol"))
+    assert kinds(failed) == ["error"] and failed[0].code == "timeout"
+    ok = await collect(_call(role="chatgpt", model="openai/gpt-5.6-sol"))
+    assert kinds(ok) == ["text", "done"]
+    assert sorted(p.name for p in rec.iterdir()) == [
+        "chatgpt.chat.1.jsonl",
+        "recorded",
+        "requests.jsonl",
+    ]
+    reqs = [json.loads(ln) for ln in (rec / "requests.jsonl").read_text().splitlines()]
+    assert [r["fixture"] for r in reqs] == [None, "chatgpt.chat.1.jsonl"]
+    assert [r["recorded"] is None for r in reqs] == [True, False]
+    assert client_mod._record_counters[(str(rec.resolve()), "chatgpt", "chat")] == 1
+
+
+async def test_provider_error_document_under_http_200_is_recorded_but_a_stray_body_is_not(
+    live_transport, respx_router, monkeypatch, tmp_path
+):
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("MOCK_RECORD_DIR", str(rec))
+    respx_router.post(CHAT_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=RATE_LIMIT_BODY),  # a proxy error under 200: replayable
+            httpx.Response(200, content=b"<html>proxy says hi</html>"),  # nothing to replay
+            _ok_response(),
+        ]
+    )
+    d1 = await collect(_call())
+    assert kinds(d1) == ["error"] and d1[0].code == 429
+    d2 = await collect(_call())
+    assert kinds(d2) == ["error"] and d2[0].code == "transport_error"
+    d3 = await collect(_call())
+    assert kinds(d3) == ["text", "done"]
+    reqs = [json.loads(ln) for ln in (rec / "requests.jsonl").read_text().splitlines()]
+    assert [r["fixture"] for r in reqs] == ["claude.chat.1.jsonl", None, "claude.chat.2.jsonl"]
+    one = json.loads((rec / "claude.chat.1.jsonl").read_text())
+    assert one["error"]["code"] == 429 and one["choices"][0]["finish_reason"] == "error"
+    assert len(list((rec / "recorded").glob("*.jsonl"))) == 1  # only the success
+
+
 async def test_early_close_releases_the_transport_immediately(
     live_transport, respx_router, monkeypatch, tmp_path
 ):
@@ -552,6 +669,43 @@ async def test_generation_lookup_skipped_without_any_generation_id(live_transpor
     )
     deltas = await collect(_call())
     assert deltas[-1].usage.cost_usd == pytest.approx(CATALOG_COST) and route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [("chunk", "chunk"), ("generation", "generation"), ("catalog", "catalog"), ("none", "catalog")],
+    ids=["usage-chunk-cost", "generation-lookup", "lookup-failed", "no-usage-chunk"],
+)
+async def test_info_line_reports_the_cost_source(
+    live_transport, respx_router, caplog, case, expected
+):
+    """The one INFO line says where cost_usd came from, so a live check can prove `usage.cost`
+    really arrived in the usage chunk (a fallback would also make cost_usd > 0)."""
+    caplog.set_level("INFO", logger="triplex.llm.client")
+    if case == "chunk":
+        _ok_route(respx_router, chunk(content="x", finish="stop"), chunk(usage=usage_obj()))
+    elif case == "none":
+        _ok_route(respx_router, chunk(content="x", finish="stop"))
+    else:
+        _no_cost_stream(respx_router)
+        route = respx_router.get(GENERATION_URL)
+        if case == "generation":
+            route.mock(return_value=httpx.Response(200, json={"data": {"total_cost": 0.5}}))
+        else:
+            route.mock(return_value=httpx.Response(500))
+    deltas = await collect(_call())
+    assert deltas[-1].kind == "done"
+    lines = [r.getMessage() for r in caplog.records if r.name == "triplex.llm.client"]
+    assert len(lines) == 1 and f"cost_source={expected}" in lines[0], lines
+    assert ("usage=estimated" in lines[0]) is (case == "none")
+
+
+async def test_info_line_has_no_cost_source_in_mock_mode(mini_fixtures, caplog):
+    caplog.set_level("INFO", logger="triplex.llm.client")
+    deltas = await collect(_call())
+    assert deltas[-1].kind == "done"
+    lines = [r.getMessage() for r in caplog.records if r.name == "triplex.llm.client"]
+    assert len(lines) == 1 and "cost_source=" not in lines[0] and "transport=mock" in lines[0]
 
 
 async def test_generation_lookup_never_runs_in_mock_mode(respx_router, monkeypatch, tmp_path):

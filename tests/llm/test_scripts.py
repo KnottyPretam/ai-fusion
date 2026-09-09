@@ -13,15 +13,18 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from types import ModuleType
 
 import httpx
 import pytest
 
-from backend.config import REPO_ROOT
+from backend.config import REPO_ROOT, settings
 from backend.llm import metering, mock
 from backend.store import conversations as store
+from tests.fixtures.conftest import annotations as raw_annotations
+from tests.fixtures.conftest import load_chunks
 from tests.llm.conftest import CHAT_URL, MODELS_URL, chunk, citation, sse_body, usage_obj
 
 SCRIPTS = REPO_ROOT / "scripts"
@@ -117,10 +120,19 @@ DEFENSE = {
 }
 CONVERGENCE = {"statuses": [{"divergence_id": "d1", "status": "resolved"}]}
 CITATION_URL = "https://example.com/bmi088-datasheet"
+# One text block and one encrypted block on the first chunk: the corpus validator counts BOTH
+# as reasoning blocks (the parser only surfaces the text one).
+REASONING_DETAILS = [
+    {"type": "reasoning.text", "text": "t"},
+    {"type": "reasoning.encrypted", "data": "[REDACTED]"},
+]
 
 
 def fake_openrouter(*, cost: float = 0.001, grok_error: bool = False):
-    """A respx side_effect that answers every Triplex request shape."""
+    """A respx side_effect that answers every Triplex request shape. Grounded requests carry the
+    SAME citation on both content chunks and again as `message.annotations` on the usage chunk
+    (the shapes docs/semantics.md accepts): the validator lists the two `delta.annotations`
+    urls verbatim, the parser de-duplicates them to one."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
@@ -149,9 +161,20 @@ def fake_openrouter(*, cost: float = 0.001, grok_error: bool = False):
             return httpx.Response(200, content=body)
         ann = [citation(CITATION_URL, "BMI088 datasheet")] if payload.get("plugins") else None
         payloads = [
-            chunk(content=text[:20], model=model, annotations=ann, role=True),
-            chunk(content=text[20:], finish="stop", model=model),
-            chunk(content="", model=model, usage=usage_obj(cost=cost, reasoning=7)),
+            chunk(
+                content=text[:20],
+                model=model,
+                annotations=ann,
+                role=True,
+                reasoning_details=REASONING_DETAILS,
+            ),
+            chunk(content=text[20:], finish="stop", model=model, annotations=ann),
+            chunk(
+                content="",
+                model=model,
+                usage=usage_obj(cost=cost, reasoning=7),
+                message_annotations=ann,
+            ),
         ]
         return httpx.Response(200, content=sse_body(*payloads))
 
@@ -218,10 +241,17 @@ async def test_live_smoke_allow_mock_replays_the_scenario(live_smoke, monkeypatc
     ]
     for c in mock.calls[:3]:
         assert c["plugins"] is None and c["reasoning"] == {"effort": "medium"}
-        assert c["max_tokens"] == live_smoke.DEFAULT_MAX_TOKENS
+    # The anthropic slot with reasoning on sends at least the provider's 1024-token reasoning
+    # budget floor (+ headroom); the others send the flag value.
+    assert [c["max_tokens"] for c in mock.calls[:3]] == [
+        live_smoke.ANTHROPIC_MIN_MAX_TOKENS,
+        live_smoke.DEFAULT_MAX_TOKENS,
+        live_smoke.DEFAULT_MAX_TOKENS,
+    ]
     assert mock.calls[3]["response_format"]["json_schema"]["name"] == "extraction"
     assert mock.calls[3]["max_tokens"] == 4000
     assert mock.calls[4]["plugins"] == [{"id": "web", "max_results": 5}]
+    assert mock.calls[4]["max_tokens"] == live_smoke.ANTHROPIC_MIN_MAX_TOKENS  # claude, grounded
 
 
 async def test_live_smoke_effort_coercion_is_reported(live_smoke, monkeypatch, capsys):
@@ -237,6 +267,12 @@ async def test_live_smoke_effort_coercion_is_reported(live_smoke, monkeypatch, c
     by_role = {c["role"]: c for c in mock.calls}
     assert by_role["grok"]["reasoning"] is None
     assert by_role["claude"]["reasoning"] == {"enabled": False}
+    # reasoning off: no budget floor applies, the flag value is sent as-is
+    assert by_role["claude"]["max_tokens"] == live_smoke.DEFAULT_MAX_TOKENS
+    assert live_smoke.reasoning_max_tokens("anthropic/claude-opus-5", "low", 10) == 1100
+    assert live_smoke.reasoning_max_tokens("anthropic/claude-opus-5", "low", 5000) == 5000
+    assert live_smoke.reasoning_max_tokens("anthropic/unknown-model", "high", 10) == 1100
+    assert live_smoke.reasoning_max_tokens("openai/gpt-5.6-sol", "high", 10) == 10
 
 
 async def test_live_smoke_live_path_records_fixtures(
@@ -329,6 +365,18 @@ def test_record_fixtures_refusals(record_fixtures, monkeypatch, tmp_path, capsys
     (target / "claude.chat.1.jsonl").write_text("{}\n")
     assert record_fixtures.main([*base, "--allow-mock"]) == record_fixtures.EXIT_REFUSED
     assert "already holds fixtures" in capsys.readouterr().out
+    # a directory whose only leftover is recorded/ (an operator deleted the numbered files to
+    # re-record): the tee would keep the OLD content-keyed transcripts under the new README
+    leftover = fx / "scenarios" / "demo2"
+    (leftover / "recorded").mkdir(parents=True)
+    (leftover / "recorded" / "x.jsonl").write_text("{}\n")
+    assert (
+        record_fixtures.main(["--scenario", "demo2", "--fixtures-dir", str(fx), "--allow-mock"])
+        == record_fixtures.EXIT_REFUSED
+    )
+    out = capsys.readouterr().out
+    assert "already holds fixtures" in out and "recorded/" in out
+    assert not (leftover / "README.md").exists()
     # bad arguments
     assert (
         record_fixtures.main([*base, "--allow-mock", "--max-iterations", "9"])
@@ -380,7 +428,15 @@ async def test_record_fixtures_live_path_records_a_scenario_that_replays(
     then the recording replays through the mock transport with identical results."""
     fx = tmp_path / "fx"
     args = record_fixtures.build_parser().parse_args(
-        ["--scenario", "demo_live", "--fixtures-dir", str(fx), "--max-iterations", "1"]
+        [
+            "--scenario",
+            "demo_live",
+            "--fixtures-dir",
+            str(fx),
+            "--max-iterations",
+            "1",
+            "--grounded",  # the Send calls carry the web plugin -> citations in the chat fixtures
+        ]
     )
     assert await record_fixtures.run(args) == record_fixtures.EXIT_OK
     out = capsys.readouterr().out
@@ -413,17 +469,20 @@ async def test_record_fixtures_live_path_records_a_scenario_that_replays(
     for name in fixtures:
         assert f"| `{name}` |" in readme
     assert (
-        "| `chatgpt.defense.1.jsonl` | R2 on d1: revise, justified; finish_reason stop; 3 chunks |"
-        in readme
-    )
-    assert "| `claude.chat.1.jsonl` | R1 chat reply; finish_reason stop; 3 chunks |" in readme
-    assert (
-        "| `analyst.extraction.1.jsonl` | Extraction, 1 agreement(s), divergences: d1 high; finish_reason stop; 3 chunks |"
-        in readme
+        "| `chatgpt.defense.1.jsonl` | R2 on d1: revise, justified; finish_reason stop; "
+        "2 reasoning block(s); 3 chunks |" in readme
     )
     assert (
-        "| `analyst.convergence.1.jsonl` | ConvergenceCheck: d1 resolved; finish_reason stop; 3 chunks |"
-        in readme
+        "| `claude.chat.1.jsonl` | R1 chat reply; finish_reason stop; 2 reasoning block(s); "
+        "2 citation url(s); 3 chunks |" in readme
+    )
+    assert (
+        "| `analyst.extraction.1.jsonl` | Extraction, 1 agreement(s), divergences: d1 high; "
+        "finish_reason stop; 2 reasoning block(s); 3 chunks |" in readme
+    )
+    assert (
+        "| `analyst.convergence.1.jsonl` | ConvergenceCheck: d1 resolved; finish_reason stop; "
+        "2 reasoning block(s); 3 chunks |" in readme
     )
     exp = json.loads(readme.split("```json\n")[-1].split("```")[0])
     assert exp["scenario"] == "demo_live" and exp["prompt"] == record_fixtures.DEFAULT_PROMPT
@@ -436,6 +495,8 @@ async def test_record_fixtures_live_path_records_a_scenario_that_replays(
         "label": "R1",
         "text": CHAT_TEXT["anthropic/claude-opus-5"],
         "finish_reason": "stop",
+        "reasoning_blocks": 2,  # encrypted block counted, as the validator counts it
+        "citation_urls": [CITATION_URL, CITATION_URL],  # repeats kept, message.annotations not
     }
     assert exp["files"]["chatgpt.defense.1.jsonl"] == {
         "kind": "defense",
@@ -445,9 +506,24 @@ async def test_record_fixtures_live_path_records_a_scenario_that_replays(
         "stance": "revise",
         "valid": True,
         "finish_reason": "stop",
+        "reasoning_blocks": 2,
     }
     assert exp["files"]["analyst.extraction.1.jsonl"]["divergences"] == {"d1": "high"}
     assert exp["files"]["analyst.convergence.1.jsonl"]["statuses"] == {"d1": "resolved"}
+    # The machine-readable block must satisfy the corpus validator's OWN formulas
+    # (tests/fixtures/test_scenarios.py::test_fixture_matches_readme_expectation) on the files as
+    # recorded, or a recording shipped per the README's instructions fails the validator.
+    for name, file_exp in exp["files"].items():
+        chunks = load_chunks(target / name)
+        blocks = sum(
+            len(c["choices"][0]["delta"].get("reasoning_details") or [])
+            for c in chunks
+            if c.get("choices")
+        )
+        assert file_exp.get("reasoning_blocks", 0) == blocks == 2, name
+        urls = [a["url_citation"]["url"] for a in raw_annotations(chunks)]
+        assert file_exp.get("citation_urls", []) == urls, name
+        assert urls == ([CITATION_URL, CITATION_URL] if file_exp["kind"] == "chat" else []), name
     phases = {p["phase"]: p for p in exp["sequence"]}
     assert set(phases["Send"]["files"]) == {
         "claude.chat.1.jsonl",
@@ -528,3 +604,98 @@ async def test_record_fixtures_live_path_records_a_scenario_that_replays(
     assert replay2.conversation is not None
     assert replay2.conversation["turns"][0]["responses"]["grok"] == CHAT_TEXT["x-ai/grok-4.6"]
     assert mock.calls[0]["fixture"].startswith("demo_live/")
+
+
+# =========================================================================== budget branches
+def test_apply_budget_never_raises_the_cap(live_smoke, record_fixtures, env_guard):
+    """`--budget-usd` is a safety flag: it can only LOWER SESSION_COST_CAP_USD, never raise it."""
+    for script in (live_smoke, record_fixtures):
+        os.environ["SESSION_COST_CAP_USD"] = "10"
+        assert script.apply_budget(100.0) == 10.0
+        assert os.environ["SESSION_COST_CAP_USD"] == "10"  # untouched
+        assert settings().session_cost_cap_usd == 10.0
+        assert script.apply_budget(0.25) == 0.25
+        assert settings().session_cost_cap_usd == 0.25
+
+
+async def test_live_smoke_exits_3_when_the_cap_trips_at_the_analyst_step(
+    live_smoke, live_transport, respx_router, env_guard, capsys
+):
+    """Three slots at $0.20 reach $0.60 >= the $0.50 cap: the analyst call is refused before any
+    request, the refusal is printed on the analyst line and the run exits 3 (no grounded step)."""
+    respx_router.get(MODELS_URL).mock(return_value=httpx.Response(500))
+    route = respx_router.post(CHAT_URL).mock(side_effect=fake_openrouter(cost=0.2))
+    args = live_smoke.build_parser().parse_args(["--budget-usd", "0.5"])
+    assert await live_smoke.run(args) == live_smoke.EXIT_BUDGET
+    out = capsys.readouterr().out
+    analyst = settings().default_slot_config.analyst_model
+    assert f"[analyst] model={analyst} ERROR code=cost_cap_exceeded" in out
+    assert "COST CAP HIT" in out and "== grounded" not in out
+    assert route.call_count == 3
+    assert metering.session_cost_usd() == pytest.approx(0.6)
+    assert metering.session_cost_status()["exceeded"] is True
+
+
+async def test_live_smoke_exits_3_when_the_cap_trips_at_the_grounded_step(
+    live_smoke, live_transport, respx_router, env_guard, capsys
+):
+    respx_router.get(MODELS_URL).mock(return_value=httpx.Response(500))
+    route = respx_router.post(CHAT_URL).mock(side_effect=fake_openrouter(cost=0.2))
+    args = live_smoke.build_parser().parse_args(["--budget-usd", "0.7"])
+    assert await live_smoke.run(args) == live_smoke.EXIT_BUDGET
+    out = capsys.readouterr().out
+    assert "valid=yes agreements=1 divergences=1" in out  # the analyst still ran (0.6 < 0.7)
+    assert (
+        "[claude/grounded] model=anthropic/claude-opus-5 effort=medium->medium "
+        "ERROR code=cost_cap_exceeded" in out
+    )
+    assert "COST CAP HIT: session cost cap reached" in out
+    assert route.call_count == 4
+    assert metering.session_cost_usd() == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize(
+    "cost,phase,calls",
+    [(0.9, "Analyze", 3), (0.5, "Fusion", 4)],
+    ids=["analyze-refused", "fusion-refused"],
+)
+async def test_record_fixtures_exits_3_when_the_cap_trips_after_send(
+    record_fixtures, live_transport, respx_router, env_guard, tmp_path, capsys, cost, phase, calls
+):
+    """`_cost_capped` recognises the refusal in Analyze (`analyze_retry.error` and the degraded
+    turn's `error`) and in Fusion (every `exchange.error`, scrubbed) and the script exits 3
+    naming the phase; the fixtures recorded before the refusal stay on disk, no README."""
+    respx_router.get(MODELS_URL).mock(return_value=httpx.Response(500))
+    route = respx_router.post(CHAT_URL).mock(side_effect=fake_openrouter(cost=cost))
+    fx = tmp_path / "fx"
+    args = record_fixtures.build_parser().parse_args(
+        [
+            "--scenario",
+            "capped",
+            "--fixtures-dir",
+            str(fx),
+            "--budget-usd",
+            "2",
+            "--max-iterations",
+            "1",
+        ]
+    )
+    assert await record_fixtures.run(args) == record_fixtures.EXIT_BUDGET
+    out = capsys.readouterr().out
+    assert f"FLOW FAILED: cost cap hit during {phase}" in out
+    if phase == "Analyze":
+        assert "analyze_retry error='cost_cap_exceeded'" in out
+        assert "analyze_degraded status=degraded error='cost_cap_exceeded'" in out
+    else:
+        assert "analyze_done status=ok" in out
+        assert out.count("unavailable error='cost_cap_exceeded'") == 3
+        assert "fusion_done exit=error" in out
+    assert route.call_count == calls
+    target = fx / "scenarios" / "capped"
+    expected = ["chatgpt.chat.1.jsonl", "claude.chat.1.jsonl", "grok.chat.1.jsonl"]
+    if phase == "Fusion":
+        expected = sorted([*expected, "analyst.extraction.1.jsonl"])
+    on_disk = sorted(p.name for p in target.glob("*.jsonl") if p.name != "requests.jsonl")
+    assert on_disk == expected
+    assert not (target / "README.md").exists()
+    assert metering.session_cost_status()["exceeded"] is True
