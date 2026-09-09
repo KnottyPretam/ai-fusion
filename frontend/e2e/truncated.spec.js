@@ -10,7 +10,9 @@ test.skip(SCENARIO !== 'truncated', 'needs MOCK_SCENARIO=truncated')
 
 test('a length-capped reply is appended with a visible warning and counted by the meter', async ({ page }) => {
   await page.goto('/')
-  const id = await sendPrompt(page, PROMPTS.truncated, { expectText: 'process noise' })
+  // "process noise" is in the prompt itself; the state-transition matrix appears only in the
+  // three planted replies (sendPrompt checks the persisted assistant messages).
+  const id = await sendPrompt(page, PROMPTS.truncated, { expectText: 'Phi = [[1, T], [0, 1]]' })
 
   // The chatgpt column carries the truncation warning; the other two do not.
   const warn = page.getByTestId('slot-chatgpt-truncated')
