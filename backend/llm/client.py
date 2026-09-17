@@ -30,10 +30,16 @@ Transports (docs/desktop-contract.md section 6, bridge-backend S2): `transport_k
 never replayed from fixtures, and the root conftest's `MOCK_OPENROUTER=1` keeps the fixed
 R1/R2/R3 map for bridge tests); under `TRIPLEX_DESKTOP=1` every other model is refused with
 `transport_disabled` before the cost-cap / key checks so nothing can reach OpenRouter from the
-desktop. The `ollama:` branch is Stage 3 (desktop-catalog-and-ollama): until it lands an
-`ollama:` model is refused under the desktop like any non-web model and otherwise handed to the
-mock / OpenRouter path unchanged. `_live_stream` takes `base_url=`, `headers=`, `cost_lookup=`
-for that stage; the defaults reproduce today's behaviour byte for byte.
+desktop. The `ollama:` branch (Stage 3, desktop-catalog-and-ollama) reuses `_live_stream` with
+`base_url=ollama.base_url()` (`OLLAMA_BASE_URL`, default `http://127.0.0.1:11434/v1`),
+`headers=ollama.headers()` (no Authorization) and `cost_lookup=False`, sending
+`ollama.sanitize_payload(...)` (bare model name, `stream_options.include_usage`, no
+`reasoning`/`provider`/`plugins`/`response_format`); it precedes the desktop guard, the mock and
+the OpenRouter branch, so a local model is served under `TRIPLEX_DESKTOP=1`, is never replayed
+from fixtures, and consults neither the cost cap nor the key check. A usage chunk without `cost`
+prices at 0 (the bare name is unknown to the catalog), no usage chunk -> `EstimatedUsage`, a
+refused connection -> `transport_error`. `_live_stream`'s defaults reproduce the OpenRouter
+behaviour byte for byte.
 """
 
 from __future__ import annotations
@@ -54,7 +60,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..config import settings
 from ..schemas import Delta, Effort, FeatureUsage, canonical_request_key, strict_json_schema
-from . import bridge, catalog, metering, mock
+from . import bridge, catalog, metering, mock, ollama
 from . import reasoning as reasoning_mod
 from .errors import (
     COST_CAP_EXCEEDED,
@@ -540,13 +546,19 @@ async def stream_completion(
             gen = bridge.stream(
                 role=role, purpose=purpose, model=model, messages=messages, max_tokens=max_tokens
             )
-        # elif kind == "ollama":  # Stage 3 (desktop-catalog-and-ollama) -- placeholder:
-        #     gen = _live_stream(role=role, purpose=purpose, model=ollama.model_name(model),
-        #                        messages=messages, payload=ollama.sanitize_payload(payload, model),
-        #                        trace=trace, base_url=os.environ.get("OLLAMA_BASE_URL", ...),
-        #                        headers=ollama.headers(), cost_lookup=False)
-        #     Until then `ollama:` falls through: refused under the desktop (below), otherwise
-        #     the mock / OpenRouter path unchanged.
+        elif kind == "ollama":  # Stage 3 -- a local model: no key, no cap, no mock, no OpenRouter
+            is_mock = False  # a local server's (zero-cost) usage is real usage, not a replay
+            gen = _live_stream(
+                role=role,
+                purpose=purpose,
+                model=ollama.model_name(model),
+                messages=messages,
+                payload=ollama.sanitize_payload(payload, model),
+                trace=trace,
+                base_url=ollama.base_url(),
+                headers=ollama.headers(),
+                cost_lookup=False,
+            )
         elif desktop_mode():  # Stage 2 guard: never OpenRouter from the desktop
             terminal = True
             msg = (
