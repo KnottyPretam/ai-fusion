@@ -27,7 +27,7 @@ text), so the table is the history of what was seen on which day.
 | 12. Sign out of one site in-page → chip shows SIGN IN; a Send yields `logged_out` for that slot with no DOM write; Sign out of `<site>` menu item clears only that partition. | S5 | | | | | | |
 | 13. Any Cloudflare/Turnstile challenge → pane revealed, turn fails fast with `challenge`, solving by hand restores health; record site/when. | S5 | | | | | | |
 | 14. Focus returns to the prompt bar after Send. | S5 | | | | | | |
-| 15. Backend spawned by Electron: `GET /api/bridge/status` connected within 5 s; kill the backend → banner; restart → reconnects. | S6 | | | | | | |
+| 15. Backend spawned by Electron: `GET /api/bridge/status` connected within 5 s; kill the backend → banner; restart → reconnects. | S6 | 2026-09-16 | all | pass | — | — | `scripts/desktop.sh`: renderer built for /app/, Electron spawned the backend (venv) on 8021, renderer loaded after one retry, `GET /api/bridge/status` connected within 6 s; kill/restart of the backend covered by app spec 12 (banner on socket drop, clears on reconnect) — manual kill still to do |
 | 16. Send with capture off → `GET /api/conversations/{id}` shows `errors.<slot>` = "capture is off…", empty threads; sidebar lists it. | S6 | | | | | | |
 | 17. Capture on for one site → `responses.<slot>` equals the pane's reply; thread has the `[user, assistant]` pair; the others `not_captured`. | S6 | | | | | | |
 | 18. Capture on for all three → three responses; Captured tab matches the panes; the meter shows latency/calls only. | S6 | | | | | | |
