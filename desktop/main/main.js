@@ -1,39 +1,52 @@
-// desktop/main/main.js — Electron main process (Stage 0 stub; Stage 1 splits this into
-// views/layout/policy/permissions/chromium-flags/ipc/... per the plan's ownership table).
+// desktop/main/main.js — Electron main process wiring (Stage 1 electron-main).
 //
 // Run from desktop/: `npx electron .` (package.json "main"). ESM on purpose ("type":"module").
-// Never sets the user agent (`setUserAgent` / `app.userAgentFallback`): the stock Electron UA is
-// what passes Google SSO and Turnstile.
+// This is the ONLY module that imports 'electron'; every other file under main/ takes its
+// collaborators as arguments so `node --test` runs them without a binary. Never sets the user
+// agent (`setUserAgent` / `app.userAgentFallback`): the stock Electron UA is what passes Google SSO
+// and Turnstile.
+//
+// Before ready:  TRIPLEX_USER_DATA_DIR → app.setPath('userData'); TRIPLEX_CHROMIUM_FLAGS /
+//                TRIPLEX_DISABLE_GPU (allow-listed; anything else exits 2); TRIPLEX_SITES_JSON /
+//                TRIPLEX_GROK_SURFACE; TRIPLEX_E2E_APP=1 refuses non-loopback site URLs (exit 3);
+//                single-instance lock.
+// After ready:   settings.json (window bounds clamped to the matching display, zoom), selectors
+//                override, the renderer window (preload/renderer.cjs, sandbox), the three site views
+//                (views.js), the orchestrator, shortcuts (before-input-event everywhere + hidden
+//                menu), every IPC channel (ipc.js); global.__triplexTest under TRIPLEX_E2E_APP=1.
 
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, WebContentsView, session, shell, ipcMain } from 'electron'
-import { SLOTS, SSO_HOSTS, hostInList, resolveSites } from './sites.js'
+import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu } from 'electron'
+import { resolveSites, nonLoopbackSiteUrls } from './sites.js'
+import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
+import { applyPermissionPolicy } from './permissions.js'
+import { isExternalUrl } from './policy.js'
+import { createSettings } from './settings.js'
+import { createSelectorsLoader, timeoutsFor } from './selectors.js'
+import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
+import { createOrchestrator } from './orchestrator.js'
+import { registerIpc } from './ipc.js'
+import { createShortcuts } from './shortcuts.js'
+import { isMainFrameOf } from './adapter-client.js'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG = require('../package.json')
-// site.cjs boots only inside a page, so requiring it here just yields its pure exports.
-const { DEFAULT_SELECTORS } = require('../preload/site.cjs')
 
 const RENDERER_PRELOAD = path.join(__dirname, '..', 'preload', 'renderer.cjs')
 const SITE_PRELOAD = path.join(__dirname, '..', 'preload', 'site.cjs')
-const DEFAULT_RENDERER_URL = 'http://127.0.0.1:8021/app/'
-const LOAD_RETRY_MS = 1000
-const LOAD_RETRY_MAX = 30
-const SHELL_STRIP_PX = 120 // Stage-0 placeholder shell height (see layoutViews)
-const MAX_PROMPT_CHARS = 32768
-const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen'])
-const CHROMIUM_FLAG_ALLOW = /^--(ignore-gpu-blocklist|disable-gpu|disable-gpu-compositing)$|^--(use-gl|enable-features|disable-features)=.+$/
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost'])
-const E2E = process.env.TRIPLEX_E2E_APP === '1'
-const DEV = !app.isPackaged
+const DEFAULT_BACKEND_PORT = '8021'
+const SELECTORS_FILE = 'selectors.json'
+const DEFAULT_ACTIVE = 'chatgpt' // the renderer slice's initial active pane
 
 const env = process.env
+const E2E = env.TRIPLEX_E2E_APP === '1'
+const DEV = !app.isPackaged
 
 // ---------------------------------------------------------------------------------------------
-// Before ready: paths, flags, single instance, site table
+// Before ready
 // ---------------------------------------------------------------------------------------------
 
 function fail(code, message) {
@@ -44,20 +57,9 @@ function fail(code, message) {
 
 if (env.TRIPLEX_USER_DATA_DIR) app.setPath('userData', path.resolve(env.TRIPLEX_USER_DATA_DIR))
 
-/** Allow-listed Chromium switches from TRIPLEX_CHROMIUM_FLAGS (whitespace separated). */
-function parseChromiumFlags(raw) {
-  const flags = String(raw || '')
-    .split(/\s+/)
-    .filter(Boolean)
-  const out = []
-  for (const flag of flags) {
-    if (!CHROMIUM_FLAG_ALLOW.test(flag)) return { ok: false, rejected: flag, flags: out }
-    const eq = flag.indexOf('=')
-    const name = (eq === -1 ? flag : flag.slice(0, eq)).replace(/^--/, '')
-    const value = eq === -1 ? undefined : flag.slice(eq + 1)
-    out.push({ name, value })
-  }
-  return { ok: true, flags: out }
+function rendererUrl() {
+  if (env.TRIPLEX_RENDERER_URL) return env.TRIPLEX_RENDERER_URL
+  return `http://127.0.0.1:${env.TRIPLEX_BACKEND_PORT || DEFAULT_BACKEND_PORT}/app/`
 }
 
 /** @type {Record<string, {url:string,newChatUrl:string,partition:string,hosts:string[]}>|null} */
@@ -65,323 +67,176 @@ let sites = null
 
 /** Everything that must be decided before `ready`. Returns false after scheduling app.exit(). */
 function preflight() {
-  const parsed = parseChromiumFlags(env.TRIPLEX_CHROMIUM_FLAGS)
-  if (!parsed.ok) {
-    return fail(2, `TRIPLEX_CHROMIUM_FLAGS: "${parsed.rejected}" is not allow-listed (allowed: --ignore-gpu-blocklist --disable-gpu --disable-gpu-compositing --use-gl=* --enable-features=* --disable-features=*)`)
-  }
-  for (const { name, value } of parsed.flags) {
-    if (value === undefined) app.commandLine.appendSwitch(name)
-    else app.commandLine.appendSwitch(name, value)
-  }
-  if (env.TRIPLEX_DISABLE_GPU === '1') app.disableHardwareAcceleration()
-
+  const flags = flagsFromEnv(env)
+  if (!flags.ok) return fail(2, `TRIPLEX_CHROMIUM_FLAGS: "${flags.rejected}" is not allow-listed (allowed: ${ALLOWED_DESCRIPTION})`)
+  applyFlags(app.commandLine, flags.flags)
   try {
     sites = resolveSites(env)
   } catch (e) {
     return fail(2, e.message)
   }
-
   if (E2E) {
-    for (const slot of SLOTS) {
-      for (const key of ['url', 'newChatUrl']) {
-        let host = null
-        try {
-          host = new URL(sites[slot][key]).hostname
-        } catch (_e) {
-          /* reported below */
-        }
-        if (!LOOPBACK_HOSTS.has(host)) return fail(3, `TRIPLEX_E2E_APP=1 refuses the non-loopback site URL ${slot}.${key}=${sites[slot][key]}`)
-      }
-    }
+    const bad = nonLoopbackSiteUrls(sites)
+    if (bad.length) return fail(3, `TRIPLEX_E2E_APP=1 refuses the non-loopback site URL ${bad[0].slot}.${bad[0].key}=${bad[0].url}`)
   }
   return true
 }
 
 // ---------------------------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------------------------
-
-/** loadURL with a retry on did-fail-load every LOAD_RETRY_MS, up to LOAD_RETRY_MAX times. */
-function loadWithRetry(wc, url, tag) {
-  let tries = 0
-  const onFail = (_event, code, description, failedUrl, isMainFrame) => {
-    if (!isMainFrame || code === -3 /* ERR_ABORTED: superseded by a newer load */) return
-    tries += 1
-    if (tries > LOAD_RETRY_MAX) {
-      console.error(`[${tag}] giving up on ${url} after ${LOAD_RETRY_MAX} retries (${code} ${description})`)
-      wc.removeListener('did-fail-load', onFail)
-      return
-    }
-    console.warn(`[${tag}] load failed (${code} ${description}); retry ${tries}/${LOAD_RETRY_MAX} in ${LOAD_RETRY_MS} ms`)
-    setTimeout(() => {
-      if (!wc.isDestroyed()) wc.loadURL(url).catch(() => {})
-    }, LOAD_RETRY_MS)
-  }
-  wc.on('did-fail-load', onFail)
-  wc.once('did-finish-load', () => wc.removeListener('did-fail-load', onFail))
-  wc.loadURL(url).catch(() => {})
-}
-
-function parseUrl(url) {
-  try {
-    return new URL(String(url))
-  } catch (_e) {
-    return null
-  }
-}
-
-function openExternally(url) {
-  const u = parseUrl(url)
-  if (!u) return
-  if (u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:') shell.openExternal(u.href).catch(() => {})
-}
-
-/** Popup policy (contract §5): allow SSO/site hosts as child windows, deny javascript:/data:, else external. */
-function popupDecision(url, site) {
-  const u = parseUrl(url)
-  if (!u) return 'deny'
-  if (u.protocol === 'javascript:' || u.protocol === 'data:') return 'deny'
-  if ((u.protocol === 'http:' || u.protocol === 'https:') && (hostInList(u.hostname, SSO_HOSTS) || hostInList(u.hostname, site.hosts))) return 'allow'
-  return 'external'
-}
-
-function isAllowedNavigation(url, site) {
-  const u = parseUrl(url)
-  if (!u) return false
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
-  return hostInList(u.hostname, site.hosts) || hostInList(u.hostname, SSO_HOSTS)
-}
-
-function applyPermissionPolicy(ses) {
-  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(ALLOWED_PERMISSIONS.has(permission)))
-  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
-  ses.setDevicePermissionHandler(() => false)
-}
-
-// ---------------------------------------------------------------------------------------------
-// Window + views
+// State
 // ---------------------------------------------------------------------------------------------
 
 /** @type {BrowserWindow|null} */
 let win = null
-/** @type {Record<string, WebContentsView>} */
-const views = {}
+let settings = null
+let selectors = null
+let views = null
+let orchestrator = null
+let shortcuts = null
+let ipc = null
+/** {mode, active} as last reported by the renderer over 'panes:active' (shared with shortcuts). */
+const layoutState = { mode: null, active: null }
+
+function windowAlive() {
+  return !!(win && !win.isDestroyed() && !win.webContents.isDestroyed())
+}
+
+function isRenderer(event) {
+  return windowAlive() && isMainFrameOf(event, win.webContents)
+}
+
+function sendToRenderer(channel, ...args) {
+  if (windowAlive()) win.webContents.send(channel, ...args)
+}
+
+function focusRenderer() {
+  if (!windowAlive()) return
+  try {
+    win.webContents.focus()
+  } catch (_e) {
+    /* the window is going away */
+  }
+}
+
+function openExternal(url) {
+  if (!isExternalUrl(url)) return Promise.resolve()
+  return shell.openExternal(String(url)).catch((e) => console.warn(`[triplex] openExternal failed: ${(e && e.message) || e}`))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Window
+// ---------------------------------------------------------------------------------------------
 
 function createWindow() {
-  win = new BrowserWindow({
-    width: 1600,
-    height: 900,
-    title: 'Triplex',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: RENDERER_PRELOAD,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+  const bounds = settings.windowBoundsForLaunch()
+  win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: 'Triplex' }))
+  if (bounds.maximized) win.maximize()
+
+  // The renderer never opens windows itself; links go to the system browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details && details.reason === 'clean-exit') return
+    console.error(`[renderer] render process gone (${details && details.reason}); reloading`)
+    setTimeout(() => {
+      if (windowAlive()) win.webContents.reload()
+    }, LOAD_RETRY_MS)
+  })
+
+  const persistBounds = () => {
+    if (!win || win.isDestroyed()) return
+    settings.queueWindowBounds(win.getNormalBounds(), win.isMaximized())
+  }
+  for (const evt of ['resize', 'move', 'maximize', 'unmaximize']) win.on(evt, persistBounds)
+  win.on('close', () => {
+    persistBounds()
+    settings.flushWindowBounds()
   })
   win.on('closed', () => {
     win = null
   })
-  // The renderer never opens windows itself; links go to the system browser.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    openExternally(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('render-process-gone', (_event, details) => {
-    console.error(`[renderer] render process gone (${details.reason}); reloading`)
-    setTimeout(() => {
-      if (win && !win.isDestroyed()) win.webContents.reload()
-    }, LOAD_RETRY_MS)
-  })
-  loadWithRetry(win.webContents, env.TRIPLEX_RENDERER_URL || DEFAULT_RENDERER_URL, 'renderer')
-}
-
-function createView(slot) {
-  const site = sites[slot]
-  const ses = session.fromPartition(site.partition)
-  applyPermissionPolicy(ses)
-
-  const view = new WebContentsView({
-    webPreferences: {
-      partition: site.partition,
-      preload: SITE_PRELOAD,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-    },
-  })
-  const wc = view.webContents
-  const tag = `view ${slot}`
-
-  wc.setWindowOpenHandler(({ url }) => {
-    const decision = popupDecision(url, site)
-    if (decision === 'allow') {
-      // A child window created this way shares the opener's partition (and preload, which stays
-      // inert there because adapter:config resolves its sender to null).
-      return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true } }
-    }
-    if (decision === 'external') openExternally(url)
-    return { action: 'deny' }
-  })
-  wc.on('will-navigate', (event, url) => {
-    if (!isAllowedNavigation(url, site)) {
-      event.preventDefault()
-      openExternally(url)
-    }
-  })
-  wc.on('did-finish-load', () => {
-    console.log(`[${tag}] loaded ${wc.getURL()}`)
-  })
-  wc.on('render-process-gone', (_event, details) => {
-    console.error(`[${tag}] render process gone (${details.reason}); reloading`)
-    setTimeout(() => {
-      if (!wc.isDestroyed()) wc.reload()
-    }, LOAD_RETRY_MS)
-  })
-
-  win.contentView.addChildView(view)
-  views[slot] = view
-  loadWithRetry(wc, site.url, tag)
-  return view
-}
-
-/**
- * Stage-0 layout: the renderer's placeholder shell owns the top SHELL_STRIP_PX px, the three
- * views split the rest into equal thirds. Stage 1 replaces this with the rects the renderer
- * reports over 'panes:layout' (`triplex.setLayout`).
- */
-function layoutViews() {
-  if (!win || win.isDestroyed()) return
-  const { width, height } = win.getContentBounds()
-  const top = Math.min(SHELL_STRIP_PX, Math.max(0, height - 1))
-  const avail = Math.max(1, height - top)
-  const third = Math.floor(width / 3)
-  SLOTS.forEach((slot, i) => {
-    const view = views[slot]
-    if (!view) return
-    const x = i * third
-    const w = i === SLOTS.length - 1 ? width - x : third
-    view.setBounds({ x, y: top, width: Math.max(1, w), height: avail })
-  })
-}
-
-// ---------------------------------------------------------------------------------------------
-// IPC (contract §2) — Stage 0 stubs with full sender/payload validation
-// ---------------------------------------------------------------------------------------------
-
-function badRequest() {
-  return new Error('bad_request')
-}
-
-function isRendererSender(event) {
-  return !!(win && !win.isDestroyed() && event && event.sender === win.webContents)
-}
-
-function slotOfSender(event) {
-  if (!event || !event.sender) return null
-  for (const slot of SLOTS) {
-    const view = views[slot]
-    if (view && !view.webContents.isDestroyed() && view.webContents.id === event.sender.id) return slot
-  }
-  return null
-}
-
-function requireRenderer(event) {
-  if (!isRendererSender(event)) throw badRequest()
-}
-
-function requireSlot(slot) {
-  if (typeof slot !== 'string' || !SLOTS.includes(slot)) throw badRequest()
-  return slot
-}
-
-/** targets ⊆ SLOTS; de-duplicated and returned in SLOTS order. */
-function requireTargets(targets) {
-  if (!Array.isArray(targets)) throw badRequest()
-  const seen = new Set()
-  for (const t of targets) seen.add(requireSlot(t))
-  return SLOTS.filter((s) => seen.has(s))
-}
-
-function publicSites() {
-  const out = {}
-  for (const slot of SLOTS) {
-    const { url, newChatUrl, partition } = sites[slot]
-    out[slot] = { url, newChatUrl, partition }
-  }
-  return out
-}
-
-function registerIpc() {
-  // --- renderer → main -----------------------------------------------------------------------
-  ipcMain.handle('panes:getInfo', (event) => {
-    requireRenderer(event)
-    return { version: PKG.version, dev: DEV, sites: publicSites(), backend: null, layout: null }
-  })
-  ipcMain.on('panes:layout', (event, layout) => {
-    if (!isRendererSender(event)) return
-    if (layout === null || typeof layout !== 'object') return
-    // Stage 0: rects are validated but not applied (layoutViews owns the bounds until Stage 1).
-  })
-  ipcMain.on('panes:active', (event, state) => {
-    if (!isRendererSender(event)) return
-    if (state === null || typeof state !== 'object') return
-    // Stage 0: no tabs mode yet.
-  })
-  ipcMain.handle('panes:newChat', (event, targets) => {
-    requireRenderer(event)
-    requireTargets(targets)
-    // Stage 0 stub: no navigation.
-  })
-  for (const channel of ['panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus']) {
-    ipcMain.handle(channel, (event, slot) => {
-      requireRenderer(event)
-      requireSlot(slot)
-      // Stage 0 stub: harmless no-op.
-    })
-  }
-  ipcMain.handle('panes:zoom', (event, slot, direction) => {
-    requireRenderer(event)
-    requireSlot(slot)
-    if (direction !== 'in' && direction !== 'out' && direction !== 'reset') throw badRequest()
-    const view = views[slot]
-    const factor = view && !view.webContents.isDestroyed() ? view.webContents.getZoomFactor() : 1
-    // Stage 0 stub: reports the current factor without changing it.
-    return { factor }
-  })
-  ipcMain.handle('prompt:send', (event, req) => {
-    requireRenderer(event)
-    if (req === null || typeof req !== 'object') throw badRequest()
-    const targets = requireTargets(req.targets)
-    if (typeof req.text !== 'string' || req.text.length > MAX_PROMPT_CHARS) throw badRequest()
-    const results = {}
-    for (const slot of targets) results[slot] = { ok: false, code: 'composer_not_found', message: 'stage 0 stub', ms: 0 }
-    return { results }
-  })
-
-  // --- site preload → main -------------------------------------------------------------------
-  ipcMain.handle('adapter:config', (event) => {
-    // Resolved by sender id; an SSO popup or unknown page gets site:null and stays inert.
-    const site = slotOfSender(event)
-    return { site, selectors: DEFAULT_SELECTORS, dev: DEV }
-  })
-  ipcMain.on('triplex:adapter:result', (event, res) => {
-    const slot = slotOfSender(event)
-    if (slot === null || res === null || typeof res !== 'object') return
-    // Stage 0: no request is ever in flight; results are dropped.
-  })
-  ipcMain.on('triplex:adapter:health', (event, health) => {
-    const slot = slotOfSender(event)
-    if (slot === null || health === null || typeof health !== 'object') return
-    if (win && !win.isDestroyed()) win.webContents.send('panes:health', slot, health)
-  })
+  loadWithRetry(win.webContents, rendererUrl(), { tag: 'renderer' })
 }
 
 // ---------------------------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------------------------
+
+function start() {
+  const userData = app.getPath('userData')
+  applyPermissionPolicy(session.defaultSession) // the renderer's own session
+
+  settings = createSettings({ dir: userData, screen })
+  settings.load()
+
+  selectors = createSelectorsLoader({ filePath: env.TRIPLEX_SELECTORS_FILE || path.join(userData, SELECTORS_FILE) })
+  selectors.load()
+
+  createWindow()
+
+  views = createViewManager({
+    WebContentsView,
+    sessionFromPartition: (partition) => session.fromPartition(partition),
+    contentView: win.contentView,
+    sites,
+    preload: SITE_PRELOAD,
+    settings,
+    ipcMain,
+    openExternal,
+    onHealth: (slot, health) => sendToRenderer('panes:health', slot, health),
+    dev: DEV,
+  })
+
+  orchestrator = createOrchestrator({
+    adapterFor: (slot) => views.adapterFor(slot),
+    focusView: (slot) => views.focus(slot),
+    restoreRendererFocus: focusRenderer,
+    timeoutsFor: (slot) => timeoutsFor(selectors.current(), slot),
+  })
+
+  shortcuts = createShortcuts({
+    getActive: () => layoutState.active || DEFAULT_ACTIVE,
+    zoom: (slot, direction) => views.zoom(slot, direction),
+    reload: (slot) => {
+      selectors.reload()
+      views.reload(slot)
+    },
+    inspect: (slot) => views.inspect(slot),
+    focusRenderer,
+    sendToRenderer,
+    dev: DEV,
+  })
+  shortcuts.attach(win.webContents)
+  views.onCreated((_slot, wc) => shortcuts.attach(wc)) // before createAll: initial and recreated views alike
+  views.createAll()
+  try {
+    // The hidden menu is the accelerator fallback; before-input-event is the primary path, so a
+    // menu problem must never take the app down.
+    Menu.setApplicationMenu(Menu.buildFromTemplate(shortcuts.menuTemplate()))
+  } catch (e) {
+    console.warn(`[triplex] application menu not installed: ${(e && e.message) || e}`)
+  }
+
+  ipc = registerIpc({
+    ipcMain,
+    isRenderer,
+    views,
+    layoutState,
+    orchestrator,
+    selectors,
+    sites,
+    version: PKG.version,
+    dev: DEV,
+    openExternal,
+    sendToRenderer,
+  })
+
+  if (E2E) {
+    globalThis.__triplexTest = { views, orchestrator, settings, selectors, layoutState, ipc }
+  }
+}
 
 if (preflight()) {
   if (!app.requestSingleInstanceLock()) {
@@ -393,17 +248,13 @@ if (preflight()) {
         win.focus()
       }
     })
-    app.whenReady().then(() => {
-      applyPermissionPolicy(session.defaultSession)
-      registerIpc()
-      createWindow()
-      for (const slot of SLOTS) createView(slot)
-      layoutViews()
-      win.on('resize', layoutViews)
-      if (E2E) globalThis.__triplexTest = { views, settings: {} }
-    })
+    app.whenReady().then(start)
   }
 }
+
+app.on('before-quit', () => {
+  if (settings) settings.flushWindowBounds()
+})
 
 app.on('window-all-closed', () => {
   app.quit()
