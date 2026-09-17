@@ -1,16 +1,21 @@
-// DesktopShell (renderer-desktop, Stage 1). Registers the `panes` slice at module scope and
-// exports the shell that DesktopApp.jsx imports by convention: PaneDeck (deck bar + three panes,
-// the layout reporter) above PromptBar (the unified prompt). Test ids desktop-shell / pane-deck /
-// prompt-bar are the Stage 0 ones (contract §7; desktop-smoke.test.jsx mounts this with a stub).
+// DesktopShell (renderer-desktop Stage 1, renderer-desktop-2 Stage 2). Registers the `panes` slice
+// at module scope and exports the shell that DesktopApp.jsx imports by convention: PaneDeck (deck
+// bar + first-run capture notice + three panes, the layout reporter) above PromptBar (the unified
+// prompt, a Triplex Send from Stage 2). Test ids desktop-shell / pane-deck / prompt-bar are the
+// Stage 0 ones (contract §7; desktop-smoke.test.jsx mounts this with a stub).
 //
 // `window.triplex` is the contextBridge surface of desktop/preload/renderer.cjs. Every call is
 // optional-chained: the shell must render under a partial stub (tests) and under the web app,
 // where the object is absent altogether. `getInfo()` supplies the version line and `dev` (the
 // Inspect buttons). The renderer owns the persisted layout keys (`triplex.panes.mode|active|
 // targets`, contract §5): the slice starts from localStorage and every change is written back.
+// Stage 2: ONE ./chats.js instance per shell keeps the panes on the open conversation's chats
+// (`openChats(id)` on every id change) and implements "New chat everywhere", shared by the
+// prompt-bar button and the Ctrl+Shift+N shortcut handled in PaneDeck.
 import { useEffect, useRef, useState } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
+import { useOpenChats } from './chats.js'
 import PaneDeck, { desktopApi } from './PaneDeck.jsx'
 import PromptBar from './PromptBar.jsx'
 import { initialPanes, loadPersistedPanes, panesReducer, persistPanes } from './slice.js'
@@ -23,6 +28,7 @@ export default function DesktopShell() {
   const panes = useSlice('panes')
   const [info, setInfo] = useState(null)
   const promptRef = useRef(null)
+  const chats = useOpenChats(api)
 
   useEffect(() => {
     if (!api || typeof api.getInfo !== 'function') return undefined
@@ -55,8 +61,8 @@ export default function DesktopShell() {
 
   return (
     <div className={css.shell} data-testid="desktop-shell">
-      <PaneDeck api={api} info={info} version={version} promptRef={promptRef} />
-      <PromptBar api={api} composerRef={promptRef} />
+      <PaneDeck api={api} info={info} version={version} promptRef={promptRef} onNewChatAll={chats.newChatEverywhere} />
+      <PromptBar api={api} composerRef={promptRef} chats={chats} />
     </div>
   )
 }
