@@ -6,6 +6,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import './index.jsx' // registers the `panes` slice (and, through useSendTurn, `slots`)
 import PromptBar, { BRIDGE_BANNER_TEXT, formatResult, resultTitle } from './PromptBar.jsx'
+import { ANALYST_KEY, desktopSlotConfig } from './analyst.js'
 import { NOT_CAPTURED, initialPanes } from './slice.js'
 import { renderWithStore, sample } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -113,7 +114,7 @@ describe('PromptBar: Send through useSendTurn', () => {
     enter()
     expect(composer()).toHaveValue('') // cleared at submit; the text is the turn's prompt
     await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
-    expect(calls[0].body).toEqual({})
+    expect(calls[0].body).toEqual({ slot_config: desktopSlotConfig() }) // S3: the desktop create carries the chosen analyst
     expect(calls[1].body).toEqual({ prompt: 'hello `x` "y" ${z}\nline2' })
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:c1'))
     // the conversation id changed (null → c1) under panes.sending: it is this Send's own create, so
@@ -387,7 +388,7 @@ describe('PromptBar: New chat everywhere and the conversation ↔ chats link', (
     // the conversation/loaded the create dispatched did not open the same chats a second time
     expect(fake.openChats).toHaveBeenCalledTimes(1)
     expect(seqOf(calls)).toEqual(['POST /api/conversations'])
-    expect(calls[0].body).toEqual({})
+    expect(calls[0].body).toEqual({ slot_config: desktopSlotConfig() }) // S3: the desktop create carries the chosen analyst
     expect(fake.newChat).not.toHaveBeenCalled()
     expect(screen.getByTestId('prompt-newchat')).toBeEnabled()
   })
@@ -454,5 +455,119 @@ describe('PromptBar: bridge banner', () => {
     expect(fake.onBridge).toHaveBeenCalledTimes(1)
     unmount()
     expect(fake.unsubscribed.bridge).toBe(1)
+  })
+})
+
+describe('PromptBar: Stage 3 (bridge error text, the desktop create body)', () => {
+  const DESKTOP_SLOTS = {
+    claude: { model: 'web:claude', effort: 'off' },
+    chatgpt: { model: 'web:chatgpt', effort: 'off' },
+    grok: { model: 'web:grok', effort: 'off' },
+  }
+
+  test('the bridge banner shows the error main sends with a disconnected state, and drops it once connected', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    mount(fake)
+    expect(screen.getByTestId('bridge-banner')).toHaveTextContent(BRIDGE_BANNER_TEXT)
+    expect(screen.queryByTestId('bridge-banner-error')).toBeNull()
+    act(() => fake.emit.bridge({ connected: false, error: 'port_in_use' }))
+    expect(screen.getByTestId('bridge-banner')).toHaveTextContent('port_in_use')
+    expect(screen.getByTestId('bridge-banner-error')).toHaveTextContent('Backend: port_in_use')
+    act(() => fake.emit.bridge({ connected: true, since: 1 }))
+    expect(screen.queryByTestId('bridge-banner')).toBeNull()
+    act(() => fake.emit.bridge({ connected: false }))
+    expect(screen.getByTestId('bridge-banner')).toBeInTheDocument()
+    expect(screen.queryByTestId('bridge-banner-error')).toBeNull()
+  })
+
+  test('a first Send creates the conversation with the persisted analyst choice in slot_config (web:* panes at effort off), then streams into it', async () => {
+    localStorage.setItem(ANALYST_KEY, 'ollama:hermes3')
+    try {
+      const fake = fakeTriplex()
+      const calls = stubFetch([
+        { method: 'POST', url: '/api/conversations', respond: jsonResponse(conv(), 201) },
+        { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+        { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(conv()) },
+        { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+      ])
+      mount(fake)
+      type('hi')
+      enter()
+      expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'true')
+      expect(composer()).toHaveAttribute('readonly') // locked for the create round-trip too
+      await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+      expect(calls[0].body).toEqual({ slot_config: { slots: DESKTOP_SLOTS, analyst_model: 'ollama:hermes3', max_iterations: 2, materiality_min: 'medium', grounded: false } })
+      expect(calls[1].body).toEqual({ prompt: 'hi' })
+      await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
+      expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-locked', 'false')
+      expect(composer()).toHaveValue('')
+      for (const slot of ['claude', 'chatgpt', 'grok']) expect(result(slot)).toHaveTextContent('sent ✓ captured')
+      // the created id was this Send's own: the panes are adopted, never renavigated (Decision 12)
+      expect(fake.openChats).not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(ANALYST_KEY)
+    }
+  })
+
+  test('a second Enter during the create round-trip never creates a second conversation or a second turn', async () => {
+    let release
+    const created = new Promise((r) => {
+      release = r
+    })
+    const calls = stubFetch([
+      {
+        method: 'POST',
+        url: '/api/conversations',
+        respond: async () => {
+          await created
+          return jsonResponse(conv(), 201)
+        },
+      },
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(conv()) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    const fake = fakeTriplex()
+    mount(fake)
+    type('hi')
+    enter()
+    enter()
+    enter()
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
+    expect(calls.filter((c) => c.method === 'POST' && c.url === '/api/conversations')).toHaveLength(1)
+    expect(calls.filter((c) => c.url === '/api/conversations/c1/send')).toHaveLength(1)
+  })
+
+  test('a failed desktop create shows the banner, restores the text and unlocks; no turn is posted', async () => {
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse({ detail: { error: 'disk_full' } }, 500) }])
+    const fake = fakeTriplex()
+    mount(fake)
+    type('keep me')
+    enter()
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('disk_full'))
+    expect(composer()).toHaveValue('keep me')
+    expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false')
+    expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-locked', 'false')
+    expect(seqOf(calls)).toEqual(['POST /api/conversations'])
+    expect(screen.queryByTestId('prompt-result-claude')).toBeNull()
+  })
+
+  test('with a conversation selected the create path is skipped: the turn posts straight away', async () => {
+    const calls = stubFetch([
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(conv({ turns: [{ id: 't0', type: 'send', prompt: 'earlier', responses: {}, errors: {} }] })) },
+    ])
+    const fake = fakeTriplex()
+    mount(fake, {}, { conversation: conv({ turns: [{ id: 't0', type: 'send', prompt: 'earlier', responses: {}, errors: {} }] }), slotConfig: CFG })
+    type('more')
+    enter()
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1']))
+    await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
   })
 })

@@ -5,7 +5,7 @@ import PaneDeck from './PaneDeck.jsx'
 import { CAPTURE_LABEL, CAPTURE_NOTICE_KEY, CAPTURE_NOTICE_TEXT, initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { RECTS, conv, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
+import { ANALYST_RECT, RECTS, conv, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
 
 let ro
 beforeEach(() => {
@@ -125,7 +125,7 @@ describe('PaneDeck: layout reporting', () => {
     const { unmount } = mount(fake)
     unmount()
     expect(ro.instances.every((i) => !i.alive)).toBe(true)
-    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1 })
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1, analyst: 1 })
   })
 
   test('renders without any window.triplex and under a partial stub', () => {
@@ -505,5 +505,93 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
       expect(pane.firstElementChild.contains(screen.getByTestId(`pane-${slot}-phase`))).toBe(true)
       expect(pane.lastElementChild).toBe(screen.getByTestId(`pane-${slot}-viewport`))
     }
+  })
+})
+
+describe('PaneDeck: the analyst pane (Stage 3)', () => {
+  const observedIds = () => {
+    const observed = new Set()
+    for (const inst of ro.instances) if (inst.alive) for (const t of inst.targets) observed.add(t.getAttribute('data-testid'))
+    return observed
+  }
+
+  test('deck-tab-analyst and pane-analyst appear with onAnalyst({visible:true}); the rect is reported under analyst; hiding drops the key', () => {
+    vi.restoreAllMocks()
+    pinViewportRects({ ...RECTS, analyst: ANALYST_RECT })
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split', active: 'chatgpt' })
+    expect(fake.onAnalyst).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('deck-tab-analyst')).toBeNull()
+    expect(screen.queryByTestId('pane-analyst')).toBeNull()
+    expect(lastLayout(fake)).toEqual(RECTS)
+    expect(observedIds().has('pane-analyst-viewport')).toBe(false)
+
+    act(() => fake.emit.analyst({ slot: 'chatgpt', visible: true, health: health({ session: 'ok' }) }))
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst · ChatGPT')
+    expect(screen.getByTestId('pane-analyst')).toBeInTheDocument()
+    expect(screen.getByTestId('pane-analyst-health')).toHaveTextContent('composer ✓ send ✓ · signed in')
+    // the layout gains the analyst key with the viewport's rect; the three panes are unchanged
+    expect(lastLayout(fake)).toEqual({ ...RECTS, analyst: ANALYST_RECT })
+    // the analyst viewport is watched like the others, so a drawer opening below re-reports it too
+    expect(observedIds().has('pane-analyst-viewport')).toBe(true)
+    // header above the viewport, like every pane: chrome never overlaps a view rect
+    const pane = screen.getByTestId('pane-analyst')
+    expect(pane.firstElementChild.tagName).toBe('HEADER')
+    expect(pane.lastElementChild).toBe(screen.getByTestId('pane-analyst-viewport'))
+
+    // the session badge follows the analyst health (main auto-reveals on challenge)
+    act(() => fake.emit.analyst({ health: health({ session: 'challenge', composer: false }) }))
+    expect(screen.getByTestId('pane-analyst-session')).toHaveTextContent('CHALLENGE')
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveAttribute('data-session', 'challenge')
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst · ChatGPT') // slot kept: only the keys sent are merged
+
+    // the tab and the Hide button ask main to hide; the pane stays until main confirms over onAnalyst
+    fireEvent.click(screen.getByTestId('deck-tab-analyst'))
+    expect(fake.showAnalyst).toHaveBeenCalledWith(false)
+    fireEvent.click(screen.getByTestId('pane-analyst-hide'))
+    expect(fake.showAnalyst).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('pane-analyst')).toBeInTheDocument()
+    act(() => fake.emit.analyst({ visible: false }))
+    expect(screen.queryByTestId('deck-tab-analyst')).toBeNull()
+    expect(screen.queryByTestId('pane-analyst')).toBeNull()
+    expect(lastLayout(fake)).toEqual(RECTS) // no analyst key at all: hidden for main
+    expect(observedIds().has('pane-analyst-viewport')).toBe(false)
+  })
+
+  test('in tabs mode the analyst pane is an extra pane next to the active one', () => {
+    vi.restoreAllMocks()
+    pinViewportRects({ ...RECTS, analyst: ANALYST_RECT })
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'tabs', active: 'grok', analyst: { slot: 'claude', visible: true, health: null } })
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst · Claude')
+    expect(screen.getByTestId('pane-analyst')).toBeVisible()
+    expect(screen.getByTestId('pane-grok')).toBeVisible()
+    expect(screen.getByTestId('pane-claude')).not.toBeVisible()
+    expect(screen.getByTestId('pane-analyst-health')).toHaveTextContent('no health yet')
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, analyst: ANALYST_RECT })
+    // switching the active pane keeps the analyst reported
+    fireEvent.click(screen.getByTestId('deck-tab-chatgpt'))
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, analyst: ANALYST_RECT })
+  })
+
+  test('onAnalyst merges only the keys sent and ignores malformed payloads; a partial stub renders the pane and hides without throwing', () => {
+    const fake = fakeTriplex()
+    mount(fake, {})
+    act(() => fake.emit.analyst({ slot: 'grok' }))
+    expect(screen.queryByTestId('deck-tab-analyst')).toBeNull()
+    act(() => fake.emit.analyst(null))
+    act(() => fake.emit.analyst('visible'))
+    expect(screen.queryByTestId('deck-tab-analyst')).toBeNull()
+    act(() => fake.emit.analyst({ visible: true }))
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst · Grok')
+    act(() => fake.emit.analyst({ slot: 'gemini' }))
+    expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst') // unknown slot → null
+    expect(screen.getByTestId('deck-tab-analyst')).not.toHaveTextContent('·')
+    // a partial stub: no showAnalyst, no onAnalyst
+    vi.unstubAllGlobals()
+    const { unmount } = renderWithStore(<PaneDeck api={{}} />, { preloaded: { panes: panes({ analyst: { slot: 'chatgpt', visible: true, health: null } }) } })
+    expect(screen.getAllByTestId('pane-analyst')).toHaveLength(2)
+    expect(() => fireEvent.click(screen.getAllByTestId('pane-analyst-hide')[1])).not.toThrow()
+    unmount()
   })
 })

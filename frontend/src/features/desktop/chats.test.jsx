@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
 import './index.jsx' // registers the `panes` slice
+import { desktopSlotConfig } from './analyst.js'
 import { useOpenChats } from './chats.js'
 import { initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
@@ -147,7 +148,7 @@ describe("useOpenChats: a Send's own create is adopted, a switch is opened", () 
     expect(fake.openChats).toHaveBeenCalledWith('c9')
     expect(fake.openChats).toHaveBeenCalledTimes(1)
     expect(seqOf(calls)).toEqual(['POST /api/conversations'])
-    expect(calls[0].body).toEqual({})
+    expect(calls[0].body).toEqual({ slot_config: desktopSlotConfig() }) // S3: the desktop create carries the chosen analyst
     expect(store.chats.busy).toBe(false)
     expect(store.chats.error).toBeNull()
   })

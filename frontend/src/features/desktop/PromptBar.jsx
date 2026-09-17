@@ -28,16 +28,30 @@
 // `bridge-banner` mirrors `triplex.onBridge` (`panes/bridge`): shown until Electron reports its
 // WebSocket to the backend connected (the initial state is disconnected, contract §7), and again
 // whenever it drops — a Send then fails per slot with `bridge_unavailable`; Send stays enabled
-// because the bridge reconnects on its own. "New chat everywhere" = createConversation +
-// openChats(newId) through ./chats.js (the shell's instance when given, else one of our own);
-// disabled while any stream runs.
+// because the bridge reconnects on its own. Stage 3: the `error` main sends with a disconnected
+// state (why the backend could not be spawned, e.g. port_in_use) is shown in the banner verbatim.
+// "New chat everywhere" = createConversation + openChats(newId) through ./chats.js (the shell's
+// instance when given, else one of our own); disabled while any stream runs.
+//
+// Stage 3 — the desktop create path. A desktop conversation must be created with the chosen
+// analyst (`desktopSlotConfig()`, ./analyst.js), but useSendTurn's own create posts `{}` and
+// `startTurn` takes no create options (the hook is integrator-owned; the change is requested).
+// So when no conversation is selected this bar creates it itself — under `panes.sending`, which
+// it dispatched first, so the composer is locked for the round-trip and useOpenChats classifies
+// the new id as this Send's own create (adopted, Decision 12) — and QUEUES the turn: the hook's
+// `startTurn` closes over the `conversation` slice, so the turn is handed to it from an effect
+// that runs once the store shows the created id (the render in which the hook re-bound
+// `startTurn`), never from the stale closure of the click. A failed create shows `prompt-banner`
+// and restores the text like a failed turn.
 //
 // Enter sends, Shift+Enter inserts a newline, an IME composition (`isComposing` / keyCode 229) is
 // never treated as a send. Every `window.triplex` call is optional-chained: the bar renders and
 // sends under a partial stub (desktop-smoke.test.jsx) and under the web app.
 import { useEffect, useRef, useState } from 'react'
+import { createConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useSendTurn } from '../send/useSendTurn.js'
+import { desktopSlotConfig } from './analyst.js'
 import { useOpenChats } from './chats.js'
 import { desktopApi } from './PaneDeck.jsx'
 import { NOT_CAPTURED, SLOT_IDS, SLOT_LABELS, initialPanes, selectedTargets } from './slice.js'
@@ -69,12 +83,15 @@ export const BRIDGE_BANNER_TEXT = 'Not connected to the Triplex backend bridge �
 export default function PromptBar({ api = desktopApi(), composerRef = null, chats = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
+  const conversation = useSlice('conversation')
   const { targets: targetMap, sending, lastSend, bridge } = panes
   const { startTurn, locked, banner } = useSendTurn()
   const own = useOpenChats(api, { enabled: !chats })
   const { newChatEverywhere, busy: creating, error: chatError } = chats || own
   const [text, setText] = useState('')
   const [inFlight, setInFlight] = useState(null) // targets of the send this bar started, while it runs
+  const [queued, setQueued] = useState(null) // {prompt, slots, convId}: a turn waiting for its created conversation
+  const [createError, setCreateError] = useState(null)
   const ownRef = useRef(null)
   const ref = composerRef || ownRef
   const alive = useRef(true)
@@ -89,7 +106,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
 
   useEffect(() => {
     const off = api?.onBridge?.((msg) => {
-      if (msg && typeof msg === 'object') dispatch({ type: 'panes/bridge', connected: !!msg.connected, since: msg.since })
+      if (msg && typeof msg === 'object') dispatch({ type: 'panes/bridge', connected: !!msg.connected, since: msg.since, error: msg.error })
     })
     return () => {
       if (typeof off === 'function') off()
@@ -119,6 +136,26 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   const empty = text.trim() === ''
   const canSend = !busy && !empty && targets.length > 0
 
+  // The end of a send this bar started: unlock, and keep the text for a retry when the turn failed
+  // before / instead of streaming (the banner says why).
+  const finish = (ok, sent) => {
+    sendingRef.current = false
+    dispatch({ type: 'panes/sendResult', results: {} })
+    if (!alive.current) return
+    setInFlight(null)
+    if (!ok) setText((cur) => (cur === '' ? sent : cur))
+  }
+
+  const runTurn = async (sent, list) => {
+    let ok = false
+    try {
+      // `sendBody` posts {prompt} for all three and {prompt, slots} for a strict subset.
+      ok = await startTurn({ prompt: sent, slots: list })
+    } finally {
+      finish(ok, sent)
+    }
+  }
+
   const send = async () => {
     if (!canSend || sendingRef.current) return
     const sent = text
@@ -126,19 +163,32 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
     sendingRef.current = true
     setText('')
     setInFlight(list)
+    setCreateError(null)
     dispatch({ type: 'panes/sendStart', targets: list })
-    let ok = false
-    try {
-      // `sendBody` posts {prompt} for all three and {prompt, slots} for a strict subset.
-      ok = await startTurn({ prompt: sent, slots: list })
-    } finally {
-      sendingRef.current = false
-      dispatch({ type: 'panes/sendResult', results: {} })
-      if (alive.current) setInFlight(null)
+    if (!conversation) {
+      let conv = null
+      try {
+        conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
+      } catch (e) {
+        if (alive.current) setCreateError((e && e.message) || 'could not create conversation')
+        finish(false, sent)
+        return
+      }
+      if (alive.current) setQueued({ prompt: sent, slots: list, convId: conv.id })
+      return
     }
-    // Failed before / instead of streaming (the banner says why): keep the text for a retry.
-    if (!ok && alive.current) setText((cur) => (cur === '' ? sent : cur))
+    await runTurn(sent, list)
   }
+
+  // The queued turn starts once the store shows the conversation the create produced: this render's
+  // `startTurn` closes over it, so the hook's own create path is not taken.
+  useEffect(() => {
+    if (!queued || !conversation || conversation.id !== queued.convId) return
+    const q = queued
+    setQueued(null)
+    runTurn(q.prompt, q.slots)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the created conversation lands
+  }, [queued, conversation])
 
   const onKeyDown = (e) => {
     if (e.key !== 'Enter' || e.shiftKey) return
@@ -153,13 +203,14 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   }
 
   const sendTitle = sending ? 'a send is in flight' : locked ? 'a stream is running' : empty ? 'type a prompt first' : targets.length === 0 ? 'pick at least one target' : 'Send to every checked site (Enter)'
-  const message = banner || chatError || null
+  const message = banner || createError || chatError || null
 
   return (
     <div className={css.promptBar} data-testid="prompt-bar" data-sending={sending ? 'true' : 'false'} data-locked={busy ? 'true' : 'false'}>
       {!bridge.connected ? (
         <div className={css.bridgeBanner} data-testid="bridge-banner" role="status">
           {BRIDGE_BANNER_TEXT}
+          {bridge.error ? <span className={css.bridgeError} data-testid="bridge-banner-error">{` Backend: ${bridge.error}`}</span> : null}
         </div>
       ) : null}
       {message ? (

@@ -20,12 +20,19 @@
 // everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`. With an
 // `onNewChatAll` prop (DesktopShell passes the shared ./chats.js handler) the shortcut is a real
 // "New chat everywhere" (new conversation + openChats); without it, Stage 1's newChat(all).
+// Stage 3 (renderer-drawer): the hidden analyst page. `triplex.onAnalyst` → panes/analyst
+// ({slot, visible, health}: main auto-reveals on challenge | logged_out, the drawer's Settings
+// switch and the pane's Hide button call `showAnalyst`). While `analyst.visible` the deck shows
+// `deck-tab-analyst` (click = hide) and a fourth pane `pane-analyst` — header (site, session,
+// health, Hide) above `pane-analyst-viewport` — as an EXTRA pane in both modes (in tabs mode next
+// to the active pane; `panes.active` only ever names a slot), reported to main under the layout
+// key 'analyst' (contract §2) only while mounted: an absent key is "hidden" for main.
 // Every `window.triplex` call is optional-chained: the deck renders under a partial stub and
 // under the web app, where the object is absent. Renderer chrome never overlaps a viewport
-// (deck bar and notice above, header above, prompt bar below — see desktop.module.css).
+// (deck bar and notice above, header above, prompt bar / drawer below — see desktop.module.css).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { rectsFor, sameLayout } from './rects.js'
+import { LAYOUT_KEYS, rectsFor, sameLayout } from './rects.js'
 import {
   CAPTURE_LABEL,
   CAPTURE_NOTICE_TEXT,
@@ -72,17 +79,19 @@ function cancelFrame(h) {
 /**
  * Reports the viewport rects to main. One animation frame coalesces every trigger that fires
  * between two paints (three ResizeObserver entries for one window resize, a mode change and the
- * observer callbacks it causes); a map identical to the last one sent is skipped.
+ * observer callbacks it causes); a map identical to the last one sent is skipped. The analyst
+ * viewport (S3) is observed and reported only while its pane is mounted (`analystVisible`).
  */
-function useLayoutReporter(api, mode, active, viewports) {
+function useLayoutReporter(api, mode, active, viewports, analystVisible = false) {
   const pending = useRef(false)
   const handle = useRef(null)
-  const latest = useRef({ mode, active })
-  latest.current = { mode, active }
+  const latest = useRef({ mode, active, analystVisible })
+  latest.current = { mode, active, analystVisible }
   const lastSent = useRef(null)
 
   const report = useCallback(() => {
-    const layout = rectsFor(latest.current.mode, latest.current.active, viewports.current)
+    const { mode: m, active: a, analystVisible: shown } = latest.current
+    const layout = rectsFor(m, a, viewports.current, shown ? { analyst: viewports.current.analyst || null } : undefined)
     if (sameLayout(layout, lastSent.current)) return
     lastSent.current = layout
     api?.setLayout?.(layout)
@@ -102,7 +111,9 @@ function useLayoutReporter(api, mode, active, viewports) {
 
   useEffect(() => {
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
-    if (ro) for (const slot of SLOT_IDS) if (viewports.current[slot]) ro.observe(viewports.current[slot])
+    // The analyst viewport exists only while its pane is mounted (the ref callback ran before
+    // this effect), so re-running on `analystVisible` observes it as it appears.
+    if (ro) for (const key of LAYOUT_KEYS) if (viewports.current[key]) ro.observe(viewports.current[key])
     window.addEventListener('resize', schedule)
     return () => {
       if (ro) ro.disconnect()
@@ -111,11 +122,11 @@ function useLayoutReporter(api, mode, active, viewports) {
       handle.current = null
       pending.current = false
     }
-  }, [schedule, viewports])
+  }, [schedule, viewports, analystVisible])
 
   useEffect(() => {
     schedule()
-  }, [schedule, mode, active])
+  }, [schedule, mode, active, analystVisible])
 }
 
 function zoomPercent(factor) {
@@ -126,11 +137,13 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
   const { mode, active, health, lastSend, zoom, sending, capture, turn } = panes
+  const analyst = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
+  const analystVisible = !!analyst.visible
   const viewports = useRef({})
   const latest = useRef({ mode, active, sending, onNewChatAll })
   latest.current = { mode, active, sending, onNewChatAll }
 
-  useLayoutReporter(api, mode, active, viewports)
+  useLayoutReporter(api, mode, active, viewports, analystVisible)
 
   useEffect(() => {
     api?.setActive?.({ mode, active })
@@ -167,6 +180,21 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   useEffect(() => {
     const off = api?.onTurn?.((msg) => {
       if (msg && isSlotId(msg.slot) && typeof msg.phase === 'string') dispatch({ type: 'panes/turn', slot: msg.slot, phase: msg.phase })
+    })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [api, dispatch])
+
+  // Stage 3: the hidden analyst view's state (only the keys main sent are merged).
+  useEffect(() => {
+    const off = api?.onAnalyst?.((msg) => {
+      if (!msg || typeof msg !== 'object') return
+      const action = { type: 'panes/analyst' }
+      if ('slot' in msg) action.slot = msg.slot
+      if ('visible' in msg) action.visible = msg.visible
+      if ('health' in msg) action.health = msg.health
+      dispatch(action)
     })
     return () => {
       if (typeof off === 'function') off()
@@ -236,6 +264,10 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
 
   const setMode = (next) => dispatch({ type: 'panes/mode', mode: next })
   const dev = !!(info && info.dev)
+  const hideAnalyst = () => settle(api?.showAnalyst?.(false))
+  const analystName = analyst.slot && SLOT_LABELS[analyst.slot] ? `Analyst · ${SLOT_LABELS[analyst.slot]}` : 'Analyst'
+  const analystSession = sessionOf(analyst.health)
+  const analystBadge = SESSION_BADGES[analystSession]
 
   return (
     <div className={css.deck} data-testid="pane-deck" data-mode={mode}>
@@ -278,6 +310,26 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
             )
           })}
         </div>
+        {analystVisible ? (
+          <button
+            type="button"
+            className={css.tab}
+            data-testid="deck-tab-analyst"
+            data-slot="analyst"
+            data-session={analystSession}
+            aria-pressed="true"
+            title={`${analystName} — the hidden analyst page (click to hide)`}
+            onClick={hideAnalyst}
+          >
+            <span className={css.dot} data-level={healthLevel(analyst.health)} aria-hidden="true" />
+            <span>{analystName}</span>
+            {analystBadge ? (
+              <span className={css.badge} data-session={analystSession}>
+                {analystBadge}
+              </span>
+            ) : null}
+          </button>
+        ) : null}
         <div className={css.modes} role="group" aria-label="Layout">
           <button type="button" data-testid="deck-mode-tabs" aria-pressed={mode === 'tabs'} title="One site at a time (Ctrl+\\ toggles)" onClick={() => setMode('tabs')}>
             Tabs
@@ -365,6 +417,39 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
             </section>
           )
         })}
+        {analystVisible ? (
+          <section className={css.pane} data-testid="pane-analyst" data-slot="analyst" aria-label="Analyst pane">
+            <header className={css.paneHead}>
+              <div className={css.paneHeader}>
+                <span
+                  data-testid="pane-analyst-session"
+                  data-session={analystSession}
+                  data-level={healthLevel(analyst.health)}
+                  className={analystBadge ? css.badge : css.dot}
+                  title={analyst.health ? `session: ${sessionText(analystSession)}` : 'no health event from the analyst page yet'}
+                >
+                  {analystBadge || ''}
+                </span>
+                <span className={css.paneName}>{analystName}</span>
+                <span data-testid="pane-analyst-health" className={css.health} data-level={healthLevel(analyst.health)} title={healthTitle(analyst.health)}>
+                  {healthText(analyst.health)}
+                </span>
+                <span className={css.actions}>
+                  <button type="button" data-testid="pane-analyst-hide" title="Hide the analyst page (it keeps working hidden)" onClick={hideAnalyst}>
+                    Hide
+                  </button>
+                </span>
+              </div>
+            </header>
+            <div
+              className={css.viewport}
+              data-testid="pane-analyst-viewport"
+              ref={(el) => {
+                viewports.current.analyst = el
+              }}
+            />
+          </section>
+        ) : null}
       </div>
     </div>
   )

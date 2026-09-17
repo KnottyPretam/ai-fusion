@@ -1,8 +1,9 @@
-/* renderer-desktop (Stage 1) + renderer-desktop-2 (Stage 2). Desktop chrome around the native site
-   views. Palette tokens come from the frozen index.css. Nothing here may overlap a viewport: the
-   deck bar and the capture notice sit above the panes, every pane header (both rows) above its
-   viewport, the prompt bar below — no modals, no overlays. The viewport itself is an empty
-   placeholder; Electron paints the site view over that rect. */
+/* renderer-desktop (Stage 1) + renderer-desktop-2 (Stage 2) + renderer-drawer (Stage 3). Desktop
+   chrome around the native site views. Palette tokens come from the frozen index.css. Nothing here
+   may overlap a viewport: the deck bar and the capture notice sit above the panes, every pane
+   header (both rows) above its viewport, the prompt bar and the drawer below — no modals, no
+   overlays. The viewport itself is an empty placeholder; Electron paints the site view over that
+   rect. The drawer, when open, takes its own height in the flow; the deck (flex 1) shrinks. */
 
 .shell { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); color: var(--fg); }
 
@@ -78,6 +79,7 @@
 /* ---- prompt bar ------------------------------------------------------------------------- */
 .promptBar { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; padding: 6px 8px; border-top: 1px solid var(--border); background: var(--bg); }
 .bridgeBanner { padding: 3px 8px; border: 1px solid var(--warn); border-radius: 4px; background: var(--warn-soft); font-size: 12px; }
+.bridgeError { font-family: var(--mono); color: var(--err); }
 .banner { padding: 3px 8px; border: 1px solid var(--err); border-radius: 4px; background: var(--err-soft); color: var(--err); font-size: 12px; }
 .promptRow { display: flex; align-items: flex-end; gap: 8px; }
 .composer { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 160px; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
@@ -101,3 +103,29 @@
 .result[data-ok='false'] { color: var(--err); }
 .result[data-ok='pending'] { color: var(--fg-muted); font-style: italic; }
 .hint { font-size: 11px; color: var(--fg-muted); }
+
+/* ---- analyst pane (S3): a fourth pane while the hidden analyst page is revealed --------- */
+.pane[data-slot='analyst'] { border-top-color: var(--fusion); }
+.pane[data-slot='analyst'] .paneName { color: var(--fusion); }
+.tab[data-slot='analyst'] { border-bottom-color: var(--fusion); }
+.tab[aria-pressed='true'] { color: var(--fg); font-weight: 600; background: var(--fusion-soft); }
+
+/* ---- drawer (S3): below the prompt bar, in the flow --------------------------------------- */
+.drawer { display: flex; flex-direction: column; flex: 0 0 auto; min-height: 0; border-top: 1px solid var(--border); background: var(--bg); }
+.drawer[data-open='true'] { height: 44vh; min-height: 280px; }
+.drawerBar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 3px 8px; background: var(--bg-muted); border-bottom: 1px solid var(--border); font-size: 12px; }
+.drawerToggle { flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); font-size: 12px; }
+.drawerToggle:hover { color: var(--fg); }
+.drawerTabs { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.drawerTab { padding: 2px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); font-size: 12px; }
+.drawerTab:hover { color: var(--fg); }
+.drawerTab[aria-selected='true'] { color: var(--fg); font-weight: 600; background: var(--primary-soft); border-color: var(--primary); }
+.drawerHint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--warn); font-family: var(--mono); font-size: 11px; }
+.drawerBody { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.drawerPanel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
+.drawerPanel[hidden] { display: none; }
+.captured { overflow: hidden; }
+.captured > * { flex: 1 1 auto; min-height: 0; }
+.settings { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; font-size: 13px; }
+.settingsRow { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.drawerFoot { flex: 0 0 auto; padding: 3px 10px; border-top: 1px solid var(--border); background: var(--bg-muted); }

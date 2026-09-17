@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { rectOf, rectsFor, sameLayout } from './rects.js'
-import { RECTS } from './fakes.js'
+import { ANALYST_RECT, RECTS } from './fakes.js'
 
 const el = (rect) => ({ getBoundingClientRect: () => ({ ...rect, top: rect.y, left: rect.x }) })
 
@@ -62,5 +62,27 @@ describe('sameLayout', () => {
     expect(sameLayout(a, { ...b, grok: { ...RECTS.grok, width: 501 } })).toBe(false)
     expect(sameLayout(a, null)).toBe(false)
     expect(sameLayout(null, null)).toBe(true)
+  })
+})
+
+describe('rectsFor / sameLayout: the analyst view (Stage 3)', () => {
+  const viewports = { claude: el(RECTS.claude), chatgpt: el(RECTS.chatgpt), grok: el(RECTS.grok) }
+
+  test('the analyst key is emitted only through the option, in both modes; a zero-area viewport is null', () => {
+    expect(rectsFor('split', 'chatgpt', viewports, { analyst: el(ANALYST_RECT) })).toEqual({ ...RECTS, analyst: ANALYST_RECT })
+    expect(rectsFor('tabs', 'grok', viewports, { analyst: el(ANALYST_RECT) })).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, analyst: ANALYST_RECT })
+    expect(rectsFor('split', 'chatgpt', viewports, { analyst: null })).toEqual({ ...RECTS, analyst: null })
+    expect(rectsFor('split', 'chatgpt', viewports, { analyst: el({ x: 0, y: 0, width: 0, height: 0 }) })).toEqual({ ...RECTS, analyst: null })
+    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, {}))).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, undefined))).toEqual(['claude', 'chatgpt', 'grok'])
+  })
+
+  test('sameLayout: an absent analyst key equals null; a present rect is compared field by field', () => {
+    expect(sameLayout(RECTS, { ...RECTS, analyst: null })).toBe(true)
+    expect(sameLayout({ ...RECTS, analyst: null }, RECTS)).toBe(true)
+    expect(sameLayout(RECTS, { ...RECTS, analyst: ANALYST_RECT })).toBe(false)
+    expect(sameLayout({ ...RECTS, analyst: ANALYST_RECT }, RECTS)).toBe(false)
+    expect(sameLayout({ ...RECTS, analyst: ANALYST_RECT }, { ...RECTS, analyst: { ...ANALYST_RECT } })).toBe(true)
+    expect(sameLayout({ ...RECTS, analyst: ANALYST_RECT }, { ...RECTS, analyst: { ...ANALYST_RECT, height: 1 } })).toBe(false)
   })
 })

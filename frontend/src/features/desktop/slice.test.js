@@ -5,6 +5,7 @@ import {
   ATTENTION_SESSIONS,
   CAPTURE_NOTICE_KEY,
   NOT_CAPTURED,
+  NOT_CAPTURED_MESSAGE_PREFIX,
   PERSIST_KEYS,
   SLOT_IDS,
   allCaptureTouched,
@@ -15,6 +16,7 @@ import {
   loadCaptureTouched,
   loadPersistedPanes,
   needsAttention,
+  notCapturedSlots,
   panesReducer,
   persistCaptureTouched,
   persistPanes,
@@ -188,15 +190,16 @@ describe('panes slice: derivations', () => {
 })
 
 describe('panes slice: localStorage persistence', () => {
-  test('round-trips mode / active / targets through the three renderer-owned keys', () => {
+  test('round-trips mode / active / targets / drawerOpen through the four renderer-owned keys', () => {
     const storage = memoryStorage()
     persistPanes(storage, { ...initialPanes(), mode: 'tabs', active: 'grok', targets: { claude: false, chatgpt: true, grok: true } })
     expect(storage.dump()).toEqual({
       [PERSIST_KEYS.mode]: 'tabs',
       [PERSIST_KEYS.active]: 'grok',
       [PERSIST_KEYS.targets]: JSON.stringify({ claude: false, chatgpt: true, grok: true }),
+      [PERSIST_KEYS.drawerOpen]: 'false',
     })
-    expect(loadPersistedPanes(storage)).toEqual({ mode: 'tabs', active: 'grok', targets: { claude: false, chatgpt: true, grok: true } })
+    expect(loadPersistedPanes(storage)).toEqual({ mode: 'tabs', active: 'grok', targets: { claude: false, chatgpt: true, grok: true }, drawerOpen: false })
     expect(initialPanes(loadPersistedPanes(storage)).mode).toBe('tabs')
   })
 
@@ -312,7 +315,10 @@ describe('panes slice: send-stream outcomes (Stage 2)', () => {
     const state = initialState()
     const next = rootReducer(state, done('claude'))
     expect(next.panes.lastSend.claude).toEqual({ ok: true, ms: 1234 })
-    for (const key of Object.keys(state)) if (key !== 'panes') expect(next[key]).toBe(state[key])
+    expect(next.slots).toBe(state.slots)
+    // Stage 3: the drawer registers the meter slice in this graph, and the meter BOOKS a slot_done
+    // (usage / calls) by design; every other slice keeps identity.
+    for (const key of Object.keys(state)) if (key !== 'panes' && key !== 'meter') expect(next[key]).toBe(state[key])
   })
 
   test('phaseText', () => {
@@ -368,5 +374,51 @@ describe('panes slice: capture-notice persistence (Stage 2)', () => {
     persistCaptureTouched(undefined, { claude: true, chatgpt: true, grok: true })
     expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true })
     localStorage.clear()
+  })
+})
+
+describe('panes slice: Stage 3 (bridge error, drawerOpen persistence, notCapturedSlots)', () => {
+  test('panes/bridge keeps the error main sends only while disconnected', () => {
+    const s0 = initialPanes()
+    const s1 = panesReducer(s0, { type: 'panes/bridge', connected: false, error: 'port_in_use' })
+    expect(s1.bridge).toEqual({ connected: false, error: 'port_in_use' })
+    expect(panesReducer(s1, { type: 'panes/bridge', connected: false, error: 'port_in_use' })).toBe(s1)
+    const s2 = panesReducer(s1, { type: 'panes/bridge', connected: true, since: 5, error: 'stale' })
+    expect(s2.bridge).toEqual({ connected: true, since: 5 })
+    const s3 = panesReducer(s2, { type: 'panes/bridge', connected: false })
+    expect(s3.bridge).toEqual({ connected: false })
+    expect(panesReducer(s3, { type: 'panes/bridge', connected: false, error: '' })).toBe(s3)
+    expect(panesReducer(s3, { type: 'panes/bridge', connected: false, error: 42 })).toBe(s3)
+  })
+
+  test('drawerOpen: initialPanes honours the persisted boolean; load / persist round-trip through the renderer-owned key', () => {
+    expect(PERSIST_KEYS.drawerOpen).toBe('triplex.panes.drawerOpen')
+    expect(initialPanes().drawerOpen).toBe(false)
+    expect(initialPanes({ drawerOpen: true }).drawerOpen).toBe(true)
+    expect(initialPanes({ drawerOpen: 'true' }).drawerOpen).toBe(false)
+    expect(loadPersistedPanes(memoryStorage({ [PERSIST_KEYS.drawerOpen]: 'true' }))).toEqual({ drawerOpen: true })
+    expect(loadPersistedPanes(memoryStorage({ [PERSIST_KEYS.drawerOpen]: 'false' }))).toEqual({ drawerOpen: false })
+    expect(loadPersistedPanes(memoryStorage({ [PERSIST_KEYS.drawerOpen]: 'yes' }))).toEqual({})
+    const storage = memoryStorage()
+    persistPanes(storage, { ...initialPanes(), drawerOpen: true })
+    expect(storage.getItem(PERSIST_KEYS.drawerOpen)).toBe('true')
+    persistPanes(storage, initialPanes())
+    expect(storage.getItem(PERSIST_KEYS.drawerOpen)).toBe('false')
+    expect(panesReducer(initialPanes(), { type: 'panes/drawer' }).drawerOpen).toBe(true)
+    expect(panesReducer(initialPanes({ drawerOpen: true }), { type: 'panes/drawer', open: false }).drawerOpen).toBe(false)
+    expect(initialState().panes.drawerOpen).toBe(false)
+  })
+
+  test('notCapturedSlots reads the persisted not_captured messages of a send turn, in slot order', () => {
+    const msg = (slot) => `${NOT_CAPTURED_MESSAGE_PREFIX}${slot}; the reply is in the site pane`
+    const turn = { id: 't1', type: 'send', prompt: 'q', responses: { claude: null, chatgpt: 'B', grok: null }, errors: { grok: msg('grok'), claude: msg('claude') } }
+    expect(NOT_CAPTURED_MESSAGE_PREFIX).toBe('capture is off for ')
+    expect(notCapturedSlots(turn)).toEqual(['claude', 'grok'])
+    expect(notCapturedSlots({ ...turn, errors: { grok: 'grok is signed out; sign in from the pane' } })).toEqual([])
+    expect(notCapturedSlots({ ...turn, errors: {} })).toEqual([])
+    expect(notCapturedSlots({ ...turn, errors: undefined })).toEqual([])
+    expect(notCapturedSlots({ ...turn, type: 'analyze' })).toEqual([])
+    expect(notCapturedSlots(null)).toEqual([])
+    expect(notCapturedSlots({ ...turn, errors: { gemini: msg('gemini'), chatgpt: 42 } })).toEqual([])
   })
 })
