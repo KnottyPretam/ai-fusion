@@ -94,9 +94,28 @@ export function fakeIpcMain() {
   }
 }
 
-/** An IPC event from a given webContents' main frame (`senderFrame.parent === null`). */
-export function eventFrom(sender, { parent = null } = {}) {
-  return { sender, senderFrame: { parent } }
+/** An IPC event from a given webContents' main frame (`senderFrame.parent === null`; `url` = the frame's document when given). */
+export function eventFrom(sender, { parent = null, url } = {}) {
+  const senderFrame = { parent }
+  if (url !== undefined) senderFrame.url = url
+  return { sender, senderFrame }
+}
+
+/** A will-navigate / will-redirect event object: `prevented` flips on preventDefault(). */
+export function navEvent(url, extra = {}) {
+  return {
+    prevented: false,
+    url,
+    ...extra,
+    preventDefault() {
+      this.prevented = true
+    },
+  }
+}
+
+/** What `did-create-window` hands over: a BrowserWindow-like child owning a fresh fakeWebContents. */
+export function fakeChildWindow() {
+  return { webContents: fakeWebContents({ url: 'about:blank' }) }
 }
 
 /** A View-like object recording setBounds / setVisible. */

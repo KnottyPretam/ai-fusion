@@ -3,16 +3,17 @@
 // Every view: `WebContentsView` on `persist:<slot>` with `preload/site.cjs`, `sandbox:true`,
 // `contextIsolation:true`, `nodeIntegration:false`, `backgroundThrottling:false` (hidden views
 // keep running: tabs mode hides two of them and the Stage 3 analyst view is never shown);
-// popups + will-navigate through policy.js; permissions per partition through permissions.js;
+// popups + will-navigate / will-redirect (+ allowed child windows, recursively) through policy.js;
+// permissions per partition through permissions.js, the Bluetooth chooser cancelled per view;
 // zoom kept per view (`webContents.setZoomFactor`, re-applied on every navigation so a cross-host
 // hop inside one view never inherits Chromium's per-origin level; persisted in settings.json);
 // `render-process-gone` → the view is recreated and the renderer gets a health object whose
 // `matched.error` is `view_crashed`. No electron import: `WebContentsView`, the session lookup and
 // the window's `contentView` are injected, so node --test drives the manager with fakes.
 
-import { SLOTS } from './sites.js'
+import { SLOTS, SSO_HOSTS } from './sites.js'
 import { attachPolicy } from './policy.js'
-import { applyPermissionPolicy } from './permissions.js'
+import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
 import { stepZoom, clampZoom } from './settings.js'
 import { createAdapterClient, isMainFrameOf } from './adapter-client.js'
@@ -135,7 +136,8 @@ export function loadWithRetry(wc, url, { tag = 'view', log = console, setTimeout
  * createViewManager(deps) → manager
  *   deps: WebContentsView (class), sessionFromPartition(partition), contentView {addChildView, removeChildView},
  *         sites, preload, settings, ipcMain, openExternal(url), onHealth(slot, health), dev, log,
- *         setTimeout, clearTimeout, now, applyPermissions?, makeAdapterClient?, childWindowOptions?
+ *         setTimeout, clearTimeout, now, applyPermissions?, makeAdapterClient?, childWindowOptions?,
+ *         ssoHosts? (SSO_HOSTS; main passes [] under TRIPLEX_E2E_APP=1)
  *   manager.get(slot) → WebContentsView | null      manager.webContents(slot) → WebContents | null
  *   manager.adapterFor(slot) → adapter client | null (destroyed / recreating → null)
  *   manager.slotOfSender(event) → slot | null         (main-frame sender id; popups → null)
@@ -163,6 +165,7 @@ export function createViewManager({
   applyPermissions = applyPermissionPolicy,
   makeAdapterClient = createAdapterClient,
   childWindowOptions = { autoHideMenuBar: true },
+  ssoHosts = SSO_HOSTS,
 } = {}) {
   if (typeof WebContentsView !== 'function') throw new Error('createViewManager: WebContentsView is required')
   if (!contentView || typeof contentView.addChildView !== 'function') throw new Error('createViewManager: contentView is required')
@@ -211,7 +214,8 @@ export function createViewManager({
     const entry = { slot, view, wc, client: null, cancelLoad: null, disposed: false, crashes: entries[slot] ? entries[slot].crashes : [] }
     entries[slot] = entry
 
-    attachPolicy(wc, site, { openExternal, childWindowOptions, log })
+    attachPolicy(wc, site, { openExternal, childWindowOptions, log, ssoHosts })
+    attachDeviceChooserPolicy(wc)
     wc.on('did-navigate', () => applyZoom(entry, settings.getZoom(slot)))
     wc.on('did-finish-load', () => {
       applyZoom(entry, settings.getZoom(slot))

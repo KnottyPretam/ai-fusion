@@ -52,6 +52,7 @@
 .actions { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .actions button { padding: 0 6px; height: 20px; font-size: 11px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg-muted); line-height: 18px; }
 .actions button:hover { color: var(--fg); }
+.actions button:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.6; cursor: not-allowed; }
 .zoom { display: inline-flex; align-items: center; margin-left: 4px; }
 .zoom button { min-width: 22px; padding: 0 4px; }
 .zoom button:first-child { border-radius: 3px 0 0 3px; }
@@ -64,6 +65,7 @@
 .promptRow { display: flex; align-items: flex-end; gap: 8px; }
 .composer { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 160px; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .composer:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.composer[readonly] { background: var(--bg-muted); color: var(--fg-muted); cursor: default; }
 .sendBtn { flex: 0 0 auto; padding: 6px 14px; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; }
 .promptMeta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--fg-muted); }
 .targets { display: inline-flex; align-items: center; gap: 10px; }
@@ -73,6 +75,7 @@
 .target[data-slot='grok'] { color: var(--grok); }
 .newChat { padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); font-size: 12px; }
 .newChat:hover { color: var(--fg); }
+.newChat:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.6; cursor: not-allowed; }
 .results { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
 .result { color: var(--fg-muted); }
 .result[data-ok='true'] { color: var(--ok); }

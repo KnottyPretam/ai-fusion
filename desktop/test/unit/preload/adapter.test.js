@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS } = require('../../../preload/site.cjs')
+const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS } = require('../../../preload/site.cjs')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -153,12 +153,12 @@ test('findComposer reports the cascade entry that matched, not the first one', (
 
 test('sessionState(): loggedOutUrl → challengeTitle → challenge → loggedOut → errorText → ok/unknown', () => {
   const composer = fakeComposer()
-  const doc = fakeDocument({ match: { '#prompt-textarea': composer } })
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer }, bodyText: 'Something went wrong is mentioned in a reply' })
   const a = createAdapter({ document: doc, site: 'chatgpt' })
-  assert.equal(a.sessionState(), 'ok')
-  doc.body.innerText = 'Oops. You\'ve reached our limit of messages.'
+  assert.equal(a.sessionState(), 'ok') // body text is chat content, never a banner
+  doc.match["[role='alert']"] = { innerText: 'Oops. You\'ve reached our limit of messages.' }
   assert.equal(a.sessionState(), 'blocked')
-  doc.body.innerText = 'UNUSUAL ACTIVITY HAS BEEN DETECTED from your device' // case-insensitive
+  doc.match["[role='alert']"] = { innerText: 'UNUSUAL ACTIVITY HAS BEEN DETECTED from your device' } // case-insensitive
   assert.equal(a.sessionState(), 'blocked')
   doc.match["a[href*='/auth/login']"] = {}
   assert.equal(a.sessionState(), 'logged_out') // a login link outranks error text
@@ -173,18 +173,41 @@ test('sessionState(): loggedOutUrl → challengeTitle → challenge → loggedOu
   assert.equal(empty.sessionState(), 'unknown')
 })
 
-test('countAssistant(): distinct elements over the generic message selectors (+ a v2 assistant cascade), 0 when none', () => {
+test('countMessages(): distinct elements over the generic message selectors (+ a v2 assistant cascade), 0 when none', () => {
   const shared = {}
   const doc = fakeDocument({ match: {} })
   const a = createAdapter({ document: doc, site: 'claude' })
-  assert.equal(a.countAssistant(), 0)
+  assert.equal(a.countMessages(), 0)
   doc.match['[data-message-author-role]'] = [shared, {}]
   doc.match['.font-claude-response'] = [shared]
-  assert.equal(a.countAssistant(), 2)
+  assert.equal(a.countMessages(), 2)
   assert.ok(MESSAGE_SELECTORS.includes('[data-message-author-role]'))
   const b = createAdapter({ document: doc, site: 'claude', selectors: { ...DEFAULT_SELECTORS.claude, assistant: ['.custom-turn'] } })
   doc.match['.custom-turn'] = [{}, {}]
-  assert.equal(b.countAssistant(), 4)
+  assert.equal(b.countMessages(), 4)
+})
+
+test('countAssistant(): assistant-role containers only — a user turn is never counted (+ a v2 assistant cascade)', () => {
+  const userEl = { getAttribute: (n) => (n === 'data-message-author-role' ? 'user' : null) }
+  const doc = fakeDocument({ match: { '[data-message-author-role]': [userEl], '.message-bubble': [{}, {}], "[data-testid='user-message']": [{}] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt' })
+  assert.equal(a.countAssistant(), 0)
+  assert.equal(a.countMessages(), 4)
+  const assistantEl = { getAttribute: (n) => (n === 'data-message-author-role' ? 'assistant' : null) }
+  doc.match["[data-message-author-role='assistant']"] = [assistantEl]
+  doc.match['[data-message-author-role]'] = [userEl, assistantEl]
+  assert.equal(a.countAssistant(), 1)
+  assert.equal(a.countMessages(), 5)
+  const shared = {}
+  doc.match['.font-claude-response'] = [shared]
+  doc.match['.font-claude-message'] = [shared]
+  doc.match["div[id^='response-']"] = [{}]
+  assert.equal(a.countAssistant(), 3) // de-duplicated across the assistant selectors
+  assert.deepEqual([...ASSISTANT_SELECTORS], ["[data-message-author-role='assistant']", '.font-claude-response', '.font-claude-message', "div[id^='response-']"])
+  assert.ok(ASSISTANT_SELECTORS.every((s) => !MESSAGE_SELECTORS.includes(s) || s !== '[data-message-author-role]'))
+  const b = createAdapter({ document: doc, site: 'chatgpt', selectors: { ...DEFAULT_SELECTORS.chatgpt, assistant: ['.custom-turn'] } })
+  doc.match['.custom-turn'] = [{}, {}]
+  assert.equal(b.countAssistant(), 5)
 })
 
 test('waitForComposer resolves once the composer appears, rejects composer_not_found on timeout, cancelled on abort', async () => {
@@ -219,9 +242,9 @@ test('ready: rejects a wall state before polling, waits for the composer, times 
   const slow = fakeDocument({ match: {} })
   const b = createAdapter({ document: slow, site: 'grok', selectors: fastSelectors('grok') })
   setTimeout(() => {
-    slow.match['textarea'] = fakeTextarea()
+    slow.match["textarea[aria-label='Ask Grok anything']"] = fakeTextarea()
   }, 100)
-  assert.equal((await b.ready(1000)).selector, 'textarea')
+  assert.equal((await b.ready(1000)).selector, "textarea[aria-label='Ask Grok anything']")
   await rejects(createAdapter({ document: fakeDocument({ match: {} }), site: 'grok', selectors: fastSelectors('grok') }).ready(80), 'composer_not_found')
 
   const busy = fakeDocument({ match: { '#prompt-textarea': composer, 'button.stop': {} } })
@@ -233,12 +256,12 @@ test('ready: rejects a wall state before polling, waits for the composer, times 
 
 test('insertAndSubmit rejects empty text and every wall state without touching the composer', async () => {
   const composer = fakeComposer()
-  const doc = fakeDocument({ match: { '#prompt-textarea': composer }, bodyText: 'Something went wrong' })
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, "[role='alertdialog']": { innerText: 'Something went wrong' } } })
   const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
   await rejects(a.insertAndSubmit(''), 'site_error', /non-empty/)
   await rejects(a.insertAndSubmit(42), 'site_error')
   await rejects(a.insertAndSubmit('hello'), 'blocked', /unusual activity|error banner/)
-  doc.body.innerText = ''
+  delete doc.match["[role='alertdialog']"]
   doc.title = 'Just a moment...'
   await rejects(a.insertAndSubmit('hello'), 'challenge')
   doc.title = 'ChatGPT'
@@ -256,7 +279,7 @@ test('insertAndSubmit with no composer at all → composer_not_found after compo
 
 test('insertText on a text field: appends through the value setter, dispatches input, verifies (nativeValue)', async () => {
   const ta = fakeTextarea('draft ')
-  const doc = fakeDocument({ match: { textarea: ta } })
+  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta } })
   const a = createAdapter({ document: doc, site: 'grok', selectors: fastSelectors('grok') })
   assert.deepEqual(await a.insertText('hello `x` ${y}\nline 2 🚀'), { method: 'nativeValue' })
   assert.equal(ta.value, 'draft hello `x` ${y}\nline 2 🚀')
@@ -296,18 +319,21 @@ test('insertText succeeds through execCommand when the document supports it (fak
   assert.equal(el._text, 'typed text')
 })
 
-test('submit: click confirmed by a grown message count; assistantCount is the sample before the click', async () => {
+test('submit: click confirmed by a grown MESSAGE count (contract name assistant_count); assistantCount is the assistant-only sample before the click', async () => {
   const composer = fakeComposer({ text: 'ready to go' })
-  const doc = fakeDocument({ match: { '#prompt-textarea': composer, '[data-message-author-role]': [{}] } })
+  const assistantEl = {}
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, '[data-message-author-role]': [{}, assistantEl], "[data-message-author-role='assistant']": [assistantEl] } })
   const button = {
     click() {
-      doc.match['[data-message-author-role]'].push({})
+      doc.match['[data-message-author-role]'].push({}) // the user's own turn appears: that confirms the submission
     },
   }
   doc.match["button[data-testid='send-button']"] = button
   const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
   const r = await a.submit()
   assert.deepEqual(r, { method: 'click', sendSelector: "button[data-testid='send-button']", confirmedBy: 'assistant_count', assistantCount: 1 })
+  assert.equal(a.countMessages(), 3)
+  assert.equal(a.countAssistant(), 1) // the appended user turn is not an assistant turn
 })
 
 test('submit: a click that empties the composer is confirmed composer_cleared; a stop button wins over both', async () => {
@@ -418,7 +444,7 @@ test('submit honours an explicit timeoutMs and the abort signal', async () => {
 
 test('insertAndSubmit end to end over the fake document: integer ms, composerSelector and assistantCount from the samples', async () => {
   const ta = fakeTextarea('')
-  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta, '.message-bubble': [{}, {}] } })
+  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta, '.message-bubble': [{}, {}, {}], "div[id^='response-']": [{}, {}] } })
   doc.match["button[aria-label='Submit']"] = {
     click() {
       doc.match['.message-bubble'].push({})
@@ -468,4 +494,311 @@ test('an invalid selector string in a cascade is skipped, never thrown', async (
   assert.equal(a.findComposer().selector, '#prompt-textarea')
   assert.equal(a.health().session, 'ok')
   await sleep(0)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes (S5): session detection scoped to walls and banners, never chat content
+// ---------------------------------------------------------------------------------------------
+
+/** An element that reports itself inside a chat message container (MESSAGE_SELECTORS). */
+const inMessage = (el = {}) => Object.assign(el, { closest: (s) => (s.includes('[data-message-author-role]') ? {} : null) })
+
+test('session detection ignores chat content: rate-limit text in the thread/body and a /login link inside a message keep the session ok', async () => {
+  const composer = fakeComposer()
+  const doc = fakeDocument({
+    title: 'Claude',
+    href: 'https://claude.ai/chat/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b',
+    hostname: 'claude.ai',
+    bodyText: 'User: how do I handle an API rate limit?\nClaude: A rate limit is a cap on requests. Unusual activity would be a banner.',
+    match: {
+      "div[contenteditable='true'].ProseMirror": composer,
+      "a[href*='/login']": [inMessage({ href: 'https://github.com/login' })],
+      "[role='alert']": [inMessage({ innerText: 'a quoted banner: rate limit reached' })],
+      '[data-message-author-role]': [{}, {}],
+    },
+  })
+  const a = createAdapter({ document: doc, site: 'claude', selectors: fastSelectors('claude') })
+  assert.equal(a.sessionState(), 'ok')
+  assert.equal(a.health().session, 'ok')
+  assert.deepEqual(await a.ready(200), { el: composer, selector: "div[contenteditable='true'].ProseMirror" })
+  // the same link and banner OUTSIDE the thread are a wall / a banner
+  doc.match["[role='alert']"] = [{ innerText: 'You have hit the rate limit for this model.' }]
+  assert.equal(a.sessionState(), 'blocked')
+  await rejects(a.insertAndSubmit('hello'), 'blocked')
+  doc.match["a[href*='/login']"] = [inMessage({}), {}] // a second, wall-level link after the in-message one
+  assert.equal(a.sessionState(), 'logged_out')
+  assert.equal(composer.focused, 0)
+  assert.deepEqual(composer.events, [])
+})
+
+test('errorText is looked for in alert-like containers only; a region wrapping the thread or the composer is a layout region, not a banner', () => {
+  const composer = fakeComposer()
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer }, bodyText: 'Something went wrong' })
+  const a = createAdapter({ document: doc, site: 'chatgpt' })
+  assert.deepEqual([...ALERT_SELECTORS], ["[role='alert']", "[role='status']", "[role='dialog']", "[role='alertdialog']", '[aria-live]'])
+  assert.equal(a.sessionState(), 'ok')
+  // an aria-live app root that contains the thread: skipped
+  doc.match['[aria-live]'] = [{ innerText: 'Something went wrong', querySelector: () => ({}) }]
+  assert.equal(a.sessionState(), 'ok')
+  // a dialog that contains the composer (an edit dialog): skipped
+  doc.match["[role='dialog']"] = [{ innerText: 'Something went wrong', contains: (el) => el === composer }]
+  assert.equal(a.sessionState(), 'ok')
+  // a status region with the phrase, contains nothing of the chat: blocked
+  doc.match["[role='status']"] = [{ innerText: 'Something went wrong. Please try again.', querySelector: () => null, contains: () => false }]
+  assert.equal(a.sessionState(), 'blocked')
+  delete doc.match["[role='status']"]
+  // textContent is the fallback for containers without layout
+  doc.match["[role='alert']"] = [{ textContent: "You've reached the message limit" }]
+  assert.equal(a.sessionState(), 'blocked')
+  // the phrase list is per site: the chatgpt phrases do not block claude
+  const b = createAdapter({ document: fakeDocument({ match: { "div[contenteditable='true']": composer, "[role='alert']": [{ innerText: 'Something went wrong' }] } }), site: 'claude' })
+  assert.equal(b.sessionState(), 'ok')
+})
+
+test('loggedOut counts only when the match is visible and outside a message', () => {
+  const composer = fakeTextarea()
+  const doc = fakeDocument({ title: 'Grok', href: 'https://grok.com/', hostname: 'grok.com', match: { "textarea[aria-label='Ask Grok anything']": composer } })
+  const a = createAdapter({ document: doc, site: 'grok' })
+  doc.match["a[href*='accounts.x.ai']"] = [{ getClientRects: () => [] }] // hidden (a collapsed menu)
+  assert.equal(a.sessionState(), 'ok')
+  doc.match["a[href*='accounts.x.ai']"] = [{ getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 0, height: 0 }) }] // zero-size
+  assert.equal(a.sessionState(), 'ok')
+  doc.match["a[href*='accounts.x.ai']"] = [inMessage({ getClientRects: () => [{ width: 10, height: 10 }] })] // in a reply
+  assert.equal(a.sessionState(), 'ok')
+  doc.match["a[href*='/sign-in']"] = [{ getClientRects: () => [{ width: 10, height: 10 }], closest: () => null }] // the wall
+  assert.equal(a.sessionState(), 'logged_out')
+})
+
+test('challengeTitle: a substring hit in the tab title needs the exact Cloudflare title, no composer, or a challenge element', () => {
+  const composer = fakeComposer()
+  const doc = fakeDocument({ title: 'Just a moment of your time - Claude', match: { "div[contenteditable='true'].ProseMirror": composer } })
+  const a = createAdapter({ document: doc, site: 'claude' })
+  assert.equal(a.sessionState(), 'ok') // a conversation title, composer present
+  doc.match["iframe[src*='challenges.cloudflare.com']"] = {}
+  assert.equal(a.sessionState(), 'challenge') // corroborated by the challenge element
+  delete doc.match["iframe[src*='challenges.cloudflare.com']"]
+  delete doc.match["div[contenteditable='true'].ProseMirror"]
+  assert.equal(a.sessionState(), 'challenge') // corroborated by the missing composer
+  doc.match["div[contenteditable='true'].ProseMirror"] = composer
+  doc.title = 'Just a moment...'
+  assert.equal(a.sessionState(), 'challenge') // the exact interstitial title alone is enough
+  doc.title = '  Just a moment… '
+  assert.equal(a.sessionState(), 'challenge')
+  doc.title = 'Just a moment, a poem'
+  assert.equal(a.sessionState(), 'ok')
+})
+
+test('ready / waitForComposer / insertAndSubmit report a wall that appeared while polling, not composer_not_found', async () => {
+  const doc = fakeDocument({ match: {} })
+  const a = createAdapter({ document: doc, site: 'claude', selectors: fastSelectors('claude') })
+  setTimeout(() => {
+    doc.match["a[href*='/login']"] = {}
+  }, 50)
+  await rejects(a.ready(300), 'logged_out', /login wall/)
+
+  const doc2 = fakeDocument({ match: {} })
+  const b = createAdapter({ document: doc2, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
+  setTimeout(() => {
+    doc2.match["[role='alert']"] = [{ innerText: 'Unusual activity has been detected' }]
+  }, 50)
+  await rejects(b.waitForComposer(300), 'blocked')
+
+  const doc3 = fakeDocument({ match: {} })
+  const c = createAdapter({ document: doc3, site: 'grok', selectors: fastSelectors('grok') })
+  setTimeout(() => {
+    doc3.match["iframe[src*='challenges.cloudflare.com']"] = {}
+  }, 50)
+  await rejects(c.insertAndSubmit('hello'), 'challenge')
+
+  // a stop button that never goes away while a wall appears: the wall is the reason
+  const composer = fakeComposer()
+  const doc4 = fakeDocument({ match: { '#prompt-textarea': composer, 'button.stop': {} } })
+  const d = createAdapter({ document: doc4, site: 'chatgpt', selectors: fastSelectors('chatgpt', { stop: ['button.stop'] }) })
+  setTimeout(() => {
+    doc4.match["button[data-testid='login-button']"] = {}
+  }, 50)
+  await rejects(d.ready(300), 'logged_out')
+  // and a plain timeout still says composer_not_found
+  await rejects(createAdapter({ document: fakeDocument({ match: {} }), site: 'grok', selectors: fastSelectors('grok') }).ready(80), 'composer_not_found')
+})
+
+test('findComposer prefers a rendered match; a hidden or collapsed editor earlier in the DOM never wins; all hidden → presence still reported', () => {
+  const hidden = fakeComposer()
+  hidden.getClientRects = () => []
+  const collapsed = fakeComposer()
+  collapsed.getClientRects = () => [{}]
+  collapsed.getBoundingClientRect = () => ({ width: 0, height: 0 })
+  const visible = fakeComposer()
+  visible.getClientRects = () => [{ width: 300, height: 24 }]
+  visible.getBoundingClientRect = () => ({ width: 300, height: 24 })
+  const doc = fakeDocument({ match: { "div[contenteditable='true'].ProseMirror": [hidden, collapsed, visible] } })
+  const a = createAdapter({ document: doc, site: 'claude' })
+  assert.equal(a.findComposer().el, visible)
+  assert.equal(a.health().matched.composer, "div[contenteditable='true'].ProseMirror")
+  // a visible match of a LATER cascade entry beats a hidden match of an earlier one
+  doc.match["div[contenteditable='true'].ProseMirror"] = [hidden]
+  doc.match["div[contenteditable='true']"] = [visible]
+  assert.deepEqual(a.findComposer(), { el: visible, selector: "div[contenteditable='true']" })
+  // nothing rendered yet (mounting): the unfiltered fallback still reports presence
+  delete doc.match["div[contenteditable='true']"]
+  assert.deepEqual(a.findComposer(), { el: hidden, selector: "div[contenteditable='true'].ProseMirror" })
+  assert.equal(a.health().composer, true)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Review fixes (S5): idempotent insertion with full verification
+// ---------------------------------------------------------------------------------------------
+
+test('insertText is idempotent: a composer that already holds exactly the text is left alone (already_present), never doubled', async () => {
+  const ta = fakeTextarea('hello world')
+  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta } })
+  const a = createAdapter({ document: doc, site: 'grok', selectors: fastSelectors('grok') })
+  assert.deepEqual(await a.insertText('hello world'), { method: 'already_present' })
+  assert.equal(ta.value, 'hello world')
+  assert.equal(ta.focused, 0)
+  assert.deepEqual(ta.events, [])
+  // whitespace-insensitive, like the verification rule (editors re-render whitespace)
+  ta.value = 'hello  world\n'
+  assert.deepEqual(await a.insertText('hello world'), { method: 'already_present' })
+  assert.equal(ta.value, 'hello  world\n')
+  // a different draft is still appended to
+  ta.value = 'hello'
+  assert.deepEqual(await a.insertText(' world'), { method: 'nativeValue' })
+  assert.equal(ta.value, 'hello world')
+  assert.deepEqual(ta.events, ['input'])
+
+  const el = fakeComposer({ text: 'hello world' })
+  const doc2 = fakeDocument({ match: { '#prompt-textarea': el } })
+  doc2.execCommand = () => assert.fail('execCommand must not run when the text is already present')
+  const b = createAdapter({ document: doc2, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
+  assert.deepEqual(await b.insertText('hello world'), { method: 'already_present' })
+  assert.equal(el.focused, 0)
+  assert.deepEqual(el.events, [])
+})
+
+test('insertText verifies previous text + inserted text: a no-op execCommand on a leftover with the same tail fails over to paste and ends site_error', async () => {
+  const leftover = 'OLD PROMPT that shares the tail: the quick brown fox jumps'
+  const el = fakeComposer({ text: leftover })
+  const doc = fakeDocument({ match: { '#prompt-textarea': el } })
+  doc.createRange = () => ({ selectNodeContents() {}, collapse() {} })
+  doc.getSelection = () => ({ removeAllRanges() {}, addRange() {} })
+  let execCalls = 0
+  doc.execCommand = () => {
+    execCalls += 1
+    return false // ProseMirror rejected it: nothing inserted
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
+  const err = await rejects(a.insertText('NEW PROMPT that shares the tail: the quick brown fox jumps'), 'site_error', /insertText: execCommand: did not run/)
+  assert.match(err.message, /paste/)
+  assert.match(err.message, /previous text followed by the inserted text/)
+  assert.equal(execCalls, 1)
+  assert.equal(el._text, leftover) // untouched, never cleared
+  // an execCommand that reports success but inserts nothing is a failed attempt too
+  doc.execCommand = () => true
+  await rejects(a.insertText('NEW PROMPT that shares the tail: the quick brown fox jumps'), 'site_error', /execCommand: ran;/)
+  // an insertion that lands only partially is a failed attempt as well
+  doc.execCommand = (_cmd, _ui, text) => {
+    el._text += text.slice(0, 5)
+    return true
+  }
+  await rejects(a.insertText('NEW PROMPT that shares the tail: the quick brown fox jumps'), 'site_error')
+})
+
+test('insertText verification: a correct append after a draft still passes (whitespace re-rendered by the editor)', async () => {
+  const el = fakeComposer({ text: 'draft line' })
+  const doc = fakeDocument({ match: { '#prompt-textarea': el } })
+  doc.createRange = () => ({ selectNodeContents() {}, collapse() {} })
+  doc.getSelection = () => ({ removeAllRanges() {}, addRange() {} })
+  doc.execCommand = (_cmd, _ui, text) => {
+    el._text = el._text + '\n' + text.replace(/\n/g, '\n\n') // paragraphs re-rendered
+    return true
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt') })
+  assert.deepEqual(await a.insertText('line one\nline two'), { method: 'execCommand' })
+  assert.equal(el._text, 'draft line\nline one\n\nline two')
+})
+
+test('insertAndSubmit retry after a failed submit sends the prompt exactly once', async () => {
+  const ta = fakeTextarea('')
+  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta } })
+  const a = createAdapter({ document: doc, site: 'grok', selectors: fastSelectors('grok', { sendWaitMs: 100, submitVerifyMs: 50 }) })
+  await rejects(a.insertAndSubmit('hello world'), 'send_not_found') // no button yet
+  assert.equal(ta.value, 'hello world') // the leftover, never cleared
+  const received = []
+  doc.match["button[aria-label='Submit']"] = {
+    click() {
+      received.push(ta.value)
+      ta.value = ''
+    },
+  }
+  const r = await a.insertAndSubmit('hello world')
+  assert.equal(r.submitted, true)
+  assert.deepEqual(received, ['hello world']) // once, not 'hello worldhello world'
+  assert.equal(ta.value, '')
+})
+
+// ---------------------------------------------------------------------------------------------
+// Selector calibration (S4): grok.com measured live on 2026-09-16 — a TipTap editor in a form, a
+// hidden 14 px helper <textarea>, and a submit button that exists only once the editor holds text
+// ---------------------------------------------------------------------------------------------
+
+const GROK_TIPTAP = "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']"
+const grokDoc = (match) => fakeDocument({ title: 'Grok', href: 'https://grok.com/', hostname: 'grok.com', match })
+
+test('grok: the hidden helper <textarea> is never the composer — the TipTap editor wins, and without it a bare textarea is no fallback', async () => {
+  const helper = fakeTextarea('')
+  const editor = fakeComposer()
+  const doc = grokDoc({
+    textarea: helper, // what a bare `textarea` entry would pick
+    [GROK_TIPTAP]: editor,
+    "div[role='textbox'][aria-label='Ask Grok anything']": editor,
+    "div.ProseMirror[contenteditable='true']": editor,
+  })
+  const a = createAdapter({ document: doc, site: 'grok', selectors: fastSelectors('grok') })
+  assert.deepEqual(a.findComposer(), { el: editor, selector: GROK_TIPTAP })
+  assert.equal(a.health().matched.composer, GROK_TIPTAP)
+  assert.equal(a.health().session, 'ok')
+
+  // only the helper is on the page (the editor is not mounted yet): no composer, never the helper
+  const doc2 = grokDoc({ textarea: helper })
+  const b = createAdapter({ document: doc2, site: 'grok', selectors: fastSelectors('grok') })
+  assert.equal(b.findComposer(), null)
+  assert.equal(b.health().session, 'unknown')
+  await rejects(b.insertAndSubmit('hello'), 'composer_not_found', /tried:/)
+  assert.equal(helper.value, '') // nothing was typed into the helper
+  assert.equal(helper.focused, 0)
+  assert.ok(!doc2.queried.includes('textarea'), 'a bare `textarea` is never even queried')
+})
+
+test('grok: the submit button that exists only once the editor holds text is found — the send cascade is polled after the insertion, never before', async () => {
+  const editor = fakeComposer()
+  const submitButton = {
+    clicks: 0,
+    click() {
+      submitButton.clicks += 1
+      editor._text = '' // the site clears the editor (and the voice button comes back)
+    },
+  }
+  const voice = { click: () => assert.fail('the voice-mode button must never be clicked') }
+  const match = { [GROK_TIPTAP]: editor, "button[type='button'][aria-label='Enter voice mode']": voice }
+  // like grok.com: button[data-testid='chat-submit'] is rendered only while the editor holds text
+  Object.defineProperty(match, "button[data-testid='chat-submit']", { enumerable: true, get: () => (editor._text !== '' ? [submitButton] : undefined) })
+  const doc = grokDoc(match)
+  doc.createRange = () => ({ selectNodeContents() {}, collapse() {} })
+  doc.getSelection = () => ({ removeAllRanges() {}, addRange() {} })
+  doc.execCommand = (_cmd, _ui, text) => {
+    editor._text += text
+    return true
+  }
+  const a = createAdapter({ document: doc, site: 'grok', selectors: fastSelectors('grok') })
+  assert.equal(a.findSendButton(), null) // nothing to click before the insertion
+  assert.equal(a.health().send, false)
+  assert.equal(a.health().matched.send, null)
+  const r = await a.insertAndSubmit('hello grok')
+  assert.equal(r.submitted, true)
+  assert.equal(r.composerSelector, GROK_TIPTAP)
+  assert.equal(r.sendSelector, "button[data-testid='chat-submit']")
+  assert.equal(r.confirmedBy, 'composer_cleared')
+  assert.equal(submitButton.clicks, 1)
+  assert.equal(a.health().send, false) // the editor is empty again: the voice button holds the slot
 })

@@ -1,6 +1,7 @@
 // attachIpc over a fake IPC and a fake adapter (contract §2 "Main ↔ site preload"): inert on
 // site:null, health on boot / on change / 10 s heartbeat, op dispatch and result shapes, one op in
-// flight (busy), cancel, error-code mapping, config hot reload, dispose.
+// flight (busy), cancel, error-code mapping, config hot reload, dispose, and requests that land
+// before adapter:config settles (parked and replayed, dropped when inert).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -104,6 +105,10 @@ test('site:null (or a failed config) keeps the preload inert: ready false, no he
   for (const config of [{ site: null, selectors: {}, dev: false }, { selectors: {} }, null, undefined, 'nonsense']) {
     const inert = fakeIpc()
     inert.config = config // set explicitly: undefined must reach invoke() as-is
+    inert.on = ((on) => (channel, handler) => {
+      on.call(inert, channel, handler)
+      inert.emit('triplex:adapter', { reqId: 'pre-boot', op: 'health' }) // lands before the config: parked, then dropped
+    })(inert.on)
     const { ipc, timers, ready } = await boot({ ipc: inert })
     assert.equal(ready, false, `config ${JSON.stringify(config)} must stay inert`)
     assert.equal(ipc.handlers('triplex:adapter'), 1) // the listener is registered before the config arrives
@@ -324,4 +329,65 @@ test('dispose clears the poll timer, aborts the in-flight op and stops answering
   // the cancelled op may still report its own result; nothing else is sent after dispose
   assert.ok(ipc.sent.slice(n).every((s) => s.channel === 'triplex:adapter:result' && s.payload.reqId === 'r'))
   assert.equal(ipc.result('h'), null)
+})
+
+test('requests that arrive before adapter:config settles are parked and replayed in order once the adapter exists', async () => {
+  const ipc = fakeIpc()
+  let resolveConfig
+  ipc.invoke = (channel) => {
+    ipc.invoked.push({ channel, args: [] })
+    return new Promise((resolve) => (resolveConfig = resolve))
+  }
+  const fake = fakeAdapter()
+  fake.behaviours.ready = async ({ timeoutMs }) => ({ el: {}, selector: `#c-${timeoutMs}` })
+  const timers = { intervals: [] }
+  const attached = attachIpc(ipc, () => fake.adapter, { setInterval: (fn, ms) => timers.intervals.push({ fn, ms }), clearInterval: () => {} })
+  assert.equal(ipc.handlers('triplex:adapter'), 1)
+  ipc.emit('triplex:adapter', { reqId: 'h', op: 'health' })
+  ipc.emit('triplex:adapter', { reqId: 'r1', op: 'ready', timeoutMs: 100 })
+  ipc.emit('triplex:adapter', { reqId: 'r2', op: 'ready', timeoutMs: 200 })
+  ipc.emit('triplex:adapter', { op: 'config', selectors: { version: 1, chatgpt: { composer: ['#late'] } } })
+  ipc.emit('triplex:adapter', null)
+  ipc.emit('triplex:adapter', 'garbage')
+  await tick()
+  await tick()
+  assert.deepEqual(ipc.sent, []) // nothing answered yet — and nothing dropped
+  assert.deepEqual(fake.calls, [])
+  resolveConfig({ site: 'chatgpt', selectors: {}, dev: false })
+  assert.equal(await attached.ready, true)
+  // boot health first, then the backlog in arrival order: h answered, r1 started, r2 busy behind it, config applied
+  assert.equal(ipc.sent[0].channel, 'triplex:adapter:health')
+  assert.deepEqual(ipc.result('h'), { reqId: 'h', ok: true, op: 'health', health: fake.adapter.health() })
+  assert.deepEqual(ipc.result('r2'), { reqId: 'r2', ok: false, op: 'ready', code: 'busy', message: 'op ready (r1) in flight' })
+  assert.deepEqual(await until(() => ipc.result('r1')), { reqId: 'r1', ok: true, op: 'ready', composerSelector: '#c-100' })
+  assert.deepEqual(fake.selectorsSet, [{ version: 1, chatgpt: { composer: ['#late'] } }])
+  assert.equal(fake.calls.filter((c) => c.op === 'ready').length, 1)
+  assert.equal(timers.intervals.length, 1)
+  // after boot, requests are handled directly
+  ipc.emit('triplex:adapter', { reqId: 'h2', op: 'health' })
+  assert.equal(ipc.result('h2').ok, true)
+})
+
+test('parked requests are dropped when the config resolves inert, rejects, or the preload is disposed during boot', async () => {
+  for (const outcome of ['inert', 'reject', 'dispose']) {
+    const ipc = fakeIpc()
+    let settleConfig
+    ipc.invoke = () => new Promise((resolve, reject) => (settleConfig = outcome === 'reject' ? reject : resolve))
+    const fake = fakeAdapter()
+    fake.behaviours.ready = async () => ({ el: {}, selector: '#c' })
+    const attached = attachIpc(ipc, () => fake.adapter, { setInterval: () => 0, clearInterval: () => {} })
+    ipc.emit('triplex:adapter', { reqId: 'h', op: 'health' })
+    ipc.emit('triplex:adapter', { reqId: 'r', op: 'ready', timeoutMs: 10 })
+    await until(() => typeof settleConfig === 'function') // adapter:config is asked on a later tick
+    if (outcome === 'dispose') attached.dispose()
+    settleConfig(outcome === 'reject' ? new Error('main is gone') : { site: outcome === 'dispose' ? 'chatgpt' : null, selectors: {} })
+    assert.equal(await attached.ready, false, outcome)
+    await tick()
+    await tick()
+    assert.deepEqual(ipc.sent, [], outcome)
+    assert.deepEqual(fake.calls, [], outcome)
+    ipc.emit('triplex:adapter', { reqId: 'late', op: 'health' })
+    await tick()
+    assert.deepEqual(ipc.sent, [], outcome) // still inert afterwards
+  }
 })

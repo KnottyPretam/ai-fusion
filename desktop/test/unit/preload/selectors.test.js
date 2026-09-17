@@ -57,8 +57,33 @@ test('the chatgpt/claude/grok cascades start with the entries the fake site is b
   assert.equal(DEFAULT_SELECTORS.chatgpt.send[0], "button[data-testid='send-button']")
   assert.equal(DEFAULT_SELECTORS.claude.composer[0], "div[contenteditable='true'].ProseMirror")
   assert.equal(DEFAULT_SELECTORS.claude.send[0], "button[aria-label='Send message']")
-  assert.equal(DEFAULT_SELECTORS.grok.composer[0], "textarea[aria-label='Ask Grok anything']")
-  assert.equal(DEFAULT_SELECTORS.grok.send[0], "button[aria-label='Submit']")
+  assert.equal(DEFAULT_SELECTORS.grok.composer[0], "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']")
+  assert.equal(DEFAULT_SELECTORS.grok.send[0], "button[data-testid='chat-submit']")
+})
+
+test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com, 2026-09-16): TipTap composer first, chat-submit first, no bare textarea fallback', () => {
+  const grok = DEFAULT_SELECTORS.grok
+  // copied from docs/desktop-contract.md §4
+  assert.deepEqual(grok.composer, [
+    "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']",
+    "div[role='textbox'][aria-label='Ask Grok anything']",
+    "div.ProseMirror[contenteditable='true']",
+    "textarea[aria-label='Ask Grok anything']",
+    "textarea[placeholder*='Grok']",
+    "div[contenteditable='true'][data-lexical-editor='true']",
+  ])
+  assert.deepEqual(grok.send, ["button[data-testid='chat-submit']", "button[aria-label='Submit']", "button[type='submit']"])
+  // grok.com carries a hidden 14 px helper <textarea>: a bare tag entry would pick it and the prompt would vanish
+  assert.ok(!grok.composer.includes('textarea'))
+  assert.ok(grok.composer.every((s) => /[[.#]/.test(s)), 'every grok composer entry is qualified, never a bare tag')
+  // every other key is untouched
+  assert.equal(grok.chatUrlPattern, '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+')
+  assert.deepEqual(grok.loggedOut, ["a[href*='/sign-in']", "a[href*='accounts.x.ai']"])
+  assert.deepEqual(grok.loggedOutUrl, ['accounts.x.ai', '/sign-in'])
+  assert.deepEqual(grok.challenge, ["iframe[src*='challenges.cloudflare.com']"])
+  assert.deepEqual(grok.challengeTitle, ['Just a moment'])
+  assert.deepEqual(grok.errorText, ['unusual activity'])
+  assert.deepEqual([grok.composerWaitMs, grok.sendWaitMs, grok.submitVerifyMs], [15000, 18000, 5000])
 })
 
 test('mergeSelectors: no override → an equal deep copy, no warnings, defaults untouched', () => {

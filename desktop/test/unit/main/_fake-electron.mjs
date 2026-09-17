@@ -1,9 +1,12 @@
 // A fake `electron` module for main-wiring.test.js: enough of app / BrowserWindow /
 // WebContentsView / session / shell / ipcMain / screen / Menu for main/main.js to run its
 // preflight and `start()` under plain Node. After `ready` it probes the wiring (IPC handlers,
-// layout, zoom, a shortcut, health forwarding, a full prompt:send round trip, window-bounds
-// persistence) and prints ONE line `FAKE_ELECTRON_REPORT <json>` before exiting; `app.exit(code)`
-// prints the report and exits with that code at once (the refusal paths).
+// layout, zoom, a shortcut, health forwarding, a full prompt:send round trip, the renderer's
+// origin guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the
+// Bluetooth chooser, the health + zoom replay, window-bounds persistence) and prints ONE line
+// `FAKE_ELECTRON_REPORT <json>` before exiting; `app.exit(code)` prints the report and exits with
+// that code at once (the refusal paths). Every FakeWebContents emits `web-contents-created` on
+// `app` as Electron does, synchronously in its constructor.
 
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -52,6 +55,7 @@ class FakeWebContents extends EventEmitter {
     this.reloads = 0
     this._destroyed = false
     this.mainFrame = { parent: null }
+    app.emit('web-contents-created', {}, this)
   }
   loadURL(u) {
     this.loads.push(u)
@@ -350,6 +354,71 @@ async function probe() {
   if (insertMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v0), { reqId: insertMsg[1].reqId, ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#c', sendSelector: 'b', assistantCount: 0, confirmedBy: 'composer_cleared', ms: 3, url: 'http://127.0.0.1:5199/c/1' })
   probes.promptSend = await settle(sendP)
   probes.rendererFocusedAfterSend = win.webContents.focused - focusedBefore
+
+  // renderer window: pinned to the origin of TRIPLEX_RENDERER_URL; popups external; IPC from a
+  // foreign document in the same webContents refused
+  const nav = (wc, event, url, extra = []) => {
+    const e = { prevented: false, url, preventDefault() { this.prevented = true } }
+    wc.emit(event, e, url, ...extra)
+    return e.prevented
+  }
+  let openedFrom = shell.opened.length
+  probes.rendererNav = {
+    foreign: nav(win.webContents, 'will-navigate', 'https://evil.example/'),
+    same: nav(win.webContents, 'will-navigate', 'http://localhost:5184/#/x'),
+    redirect: nav(win.webContents, 'will-redirect', 'https://evil.example/r', [false, true]),
+    popup: win.webContents.windowOpenHandler({ url: 'https://evil.example/p' }),
+    opened: shell.opened.slice(openedFrom),
+  }
+  probes.foreignFrame = await settle(ipcMain.invoke('panes:getInfo', { sender: win.webContents, senderFrame: { parent: null, url: 'https://evil.example/' } }))
+  probes.ownFrame = await settle(ipcMain.invoke('panes:getInfo', { sender: win.webContents, senderFrame: { parent: null, url: 'http://localhost:5184/' } }))
+
+  // site views: will-redirect follows the navigation matrix (main frame only); under E2E the SSO
+  // list is empty; an allowed child window is policed like its opener (did-create-window)
+  openedFrom = shell.opened.length
+  const child = new FakeWebContents('child') // web-contents-created → the backstop, as Electron does first
+  const childBackstop = { popup: child.windowOpenHandler ? child.windowOpenHandler({ url: 'http://127.0.0.1:5199/' }) : null, nav: nav(child, 'will-navigate', 'http://127.0.0.1:5199/') }
+  views[0].webContents.emit('did-create-window', { webContents: child }, { url: 'http://127.0.0.1:5199/popup' })
+  probes.viewPolicy = {
+    ssoPopupUnderE2E: views[0].webContents.windowOpenHandler({ url: 'https://accounts.google.com/o/oauth2' }),
+    ownPopup: views[0].webContents.windowOpenHandler({ url: 'http://127.0.0.1:5199/share' }).action,
+    redirect: nav(views[0].webContents, 'will-redirect', 'https://evil.example/r', [false, true]),
+    subframeRedirect: nav(views[0].webContents, 'will-redirect', 'https://evil.example/sub', [false, false]),
+    ownNav: nav(views[2].webContents, 'will-navigate', 'http://localhost:5199/?site=grok'),
+    childBackstop,
+    child: {
+      handler: typeof child.windowOpenHandler === 'function',
+      evilPopup: child.windowOpenHandler({ url: 'https://evil.example/' }),
+      evilNav: nav(child, 'will-navigate', 'https://evil.example/2'),
+      ownNav: nav(child, 'will-navigate', 'http://127.0.0.1:5199/cb'),
+    },
+    opened: shell.opened.slice(openedFrom),
+  }
+
+  // backstop: a webContents nobody policed opens nothing and stays put
+  const stray = new FakeWebContents('stray')
+  probes.backstop = {
+    popup: stray.windowOpenHandler ? stray.windowOpenHandler({ url: 'https://evil.example/' }) : null,
+    nav: nav(stray, 'will-navigate', 'http://127.0.0.1:5199/'),
+    redirect: nav(stray, 'will-redirect', 'http://127.0.0.1:5199/', [false, true]),
+  }
+
+  // Bluetooth chooser cancelled on every webContents, exactly one listener each
+  const bluetooth = (wc) => {
+    const e = { prevented: false, preventDefault() { this.prevented = true } }
+    let chosen = null
+    wc.emit('select-bluetooth-device', e, [{ deviceId: 'd1', deviceName: 'x' }], (id) => { chosen = id })
+    return { prevented: e.prevented, chosen, listeners: wc.listenerCount('select-bluetooth-device') }
+  }
+  probes.bluetooth = { view: bluetooth(views[0].webContents), window: bluetooth(win.webContents), stray: bluetooth(stray) }
+
+  // cached health + zoom replayed on the renderer's did-finish-load and after panes:getInfo
+  let sentFrom = win.webContents.sent.length
+  win.webContents.emit('did-finish-load')
+  probes.replay = win.webContents.sent.slice(sentFrom)
+  sentFrom = win.webContents.sent.length
+  await ipcMain.invoke('panes:getInfo', renderer)
+  probes.replayOnGetInfo = win.webContents.sent.slice(sentFrom)
 
   // a crash recreates the view (after RECREATE_DELAY_MS) and publishes health view_crashed
   const beforeCrash = views.length

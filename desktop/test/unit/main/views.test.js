@@ -1,12 +1,14 @@
 // views.js — sandbox:true + contextIsolation:true in every webPreferences (the pure option-builder),
 // the view manager with fakes: partitions, permissions per partition, zoom per view, layout,
-// render-process-gone → recreate + health view_crashed, slotOfSender, loadWithRetry.
+// render-process-gone → recreate + health view_crashed, slotOfSender, loadWithRetry, the
+// Bluetooth chooser cancelled per view, child windows policed, ssoHosts passed through.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildViewOptions, buildWindowOptions, crashedHealth, loadWithRetry, createViewManager, RECREATE_DELAY_MS, CRASH_LIMIT } from '../../../main/views.js'
 import { SITES, SLOTS } from '../../../main/sites.js'
 import { normalizeLayout } from '../../../main/layout.js'
-import { makeFakeWebContentsViewClass, fakeSession, fakeSettings, fakeIpcMain, fakeTimers, fakeLog, fakeSites, fakeWebContents, eventFrom } from './_fakes.js'
+import { isPoliced } from '../../../main/policy.js'
+import { makeFakeWebContentsViewClass, fakeSession, fakeSettings, fakeIpcMain, fakeTimers, fakeLog, fakeSites, fakeWebContents, eventFrom, fakeChildWindow, navEvent } from './_fakes.js'
 
 const PRELOAD = '/app/preload/site.cjs'
 
@@ -88,7 +90,7 @@ test('loadWithRetry: retries main-frame failures every retryMs up to maxRetries,
   assert.equal(ok.listenerCount('did-fail-load'), 0)
 })
 
-function setupManager({ zoom } = {}) {
+function setupManager({ zoom, ssoHosts } = {}) {
   const instances = []
   const WebContentsView = makeFakeWebContentsViewClass(instances)
   const sessions = {}
@@ -120,6 +122,7 @@ function setupManager({ zoom } = {}) {
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     now: timers.now,
+    ...(ssoHosts ? { ssoHosts } : {}),
   })
   return { manager, instances, sessions, children, timers, ipcMain, settings, healthEvents, opened, log }
 }
@@ -142,6 +145,10 @@ test('createAll: three views, one per slot, each on its partition with hardened 
     assert.equal(manager.get(slot), v)
     assert.equal(manager.webContents(slot), v.webContents)
     assert.equal(typeof v.webContents.windowOpenHandler, 'function', 'policy attached')
+    assert.equal(isPoliced(v.webContents), true)
+    assert.equal(v.webContents.listenerCount('will-redirect'), 1, 'redirects policed')
+    assert.equal(v.webContents.listenerCount('did-create-window'), 1, 'child windows policed')
+    assert.equal(v.webContents.listenerCount('select-bluetooth-device'), 1, 'Bluetooth chooser cancelled')
   })
   assert.equal(children.length, 3)
   await Promise.resolve()
@@ -151,6 +158,41 @@ test('createAll: three views, one per slot, each on its partition with hardened 
   assert.equal(instances[0].options.webPreferences.zoomFactor, 1.5)
   manager.createAll()
   assert.equal(instances.length, 3, 'idempotent')
+})
+
+test('every view cancels Bluetooth device requests, polices its child windows and redirects, and honours ssoHosts ([] under E2E)', () => {
+  const { manager, instances, opened } = setupManager()
+  manager.createAll()
+  const wc = instances[0].webContents
+  const ev = { prevented: false, preventDefault() { this.prevented = true } }
+  let chosen = null
+  wc.emit('select-bluetooth-device', ev, [{ deviceId: 'd1' }], (id) => { chosen = id })
+  assert.equal(ev.prevented, true)
+  assert.equal(chosen, '')
+
+  assert.equal(wc.windowOpenHandler({ url: 'https://accounts.google.com/o/oauth2' }).action, 'allow', 'SSO_HOSTS by default')
+  assert.equal(wc.windowOpenHandler({ url: 'http://127.0.0.1:5199/share' }).action, 'allow')
+  const child = fakeChildWindow()
+  wc.emit('did-create-window', child, { url: 'https://accounts.google.com/o/oauth2' })
+  assert.equal(isPoliced(child.webContents), true)
+  assert.deepEqual(child.webContents.windowOpenHandler({ url: 'https://evil.example/' }), { action: 'deny' })
+  const childNav = navEvent('https://evil.example/2')
+  child.webContents.emit('will-navigate', childNav, childNav.url)
+  assert.equal(childNav.prevented, true)
+  const redirect = navEvent('https://evil.example/r')
+  wc.emit('will-redirect', redirect, redirect.url, false, true)
+  assert.equal(redirect.prevented, true)
+  const own = navEvent('http://localhost:5199/c/1')
+  wc.emit('will-redirect', own, own.url, false, true)
+  assert.equal(own.prevented, false)
+  assert.deepEqual(opened, ['https://evil.example/', 'https://evil.example/2', 'https://evil.example/r'])
+
+  const e2e = setupManager({ ssoHosts: [] })
+  e2e.manager.createAll()
+  const gwc = e2e.instances[2].webContents
+  assert.deepEqual(gwc.windowOpenHandler({ url: 'https://accounts.google.com/' }), { action: 'deny' })
+  assert.deepEqual(e2e.opened, ['https://accounts.google.com/'], 'an E2E run never opens a real SSO host in-app')
+  assert.equal(gwc.windowOpenHandler({ url: 'http://127.0.0.1:5199/x' }).action, 'allow')
 })
 
 test('applyLayout sets bounds / visibility now and again for a view created later; slotOfSender by main-frame id', () => {

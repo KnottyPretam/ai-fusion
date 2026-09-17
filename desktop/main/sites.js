@@ -127,8 +127,12 @@ export function resolveSites(env = process.env) {
 export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', 'localhost', '::1', '[::1]'])
 
 /**
- * The `url` / `newChatUrl` entries of `sites` whose host is not loopback, as `{slot, key, url}`
- * (empty when every site URL is local). An unparseable URL counts as non-loopback.
+ * Everything in `sites` that would let an E2E run reach a real host, as `{slot, key, url}`:
+ * first the `url` / `newChatUrl` entries whose host is not loopback (an unparseable URL counts as
+ * non-loopback), then — only after every URL of every slot — the `hosts` entries that are not
+ * loopback (`key: 'hosts'`, `url` = the host): those are what policy.js trusts for in-view
+ * navigation and child windows, so a partial TRIPLEX_SITES_JSON that overrides only the URLs must
+ * still be refused. Empty when every site is local.
  */
 export function nonLoopbackSiteUrls(sites) {
   const out = []
@@ -143,6 +147,14 @@ export function nonLoopbackSiteUrls(sites) {
         host = null
       }
       if (!LOOPBACK_HOSTS.includes(host)) out.push({ slot, key, url: s[key] })
+    }
+  }
+  for (const slot of SLOTS) {
+    const s = sites && sites[slot]
+    if (!s || !Array.isArray(s.hosts)) continue
+    for (const host of s.hosts) {
+      const bare = String(host).toLowerCase().replace(/\.$/, '')
+      if (!LOOPBACK_HOSTS.includes(bare)) out.push({ slot, key: 'hosts', url: String(host) })
     }
   }
   return out

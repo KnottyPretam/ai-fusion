@@ -4,7 +4,10 @@
 // frame; a violation rejects `Error('bad_request')` (fire-and-forget channels drop it silently).
 // `adapter:config` is resolved by the sender's webContents id: a site view gets its slot and the
 // FULL merged selectors object, anything else (SSO popup, unknown page) gets `site: null` and
-// stays inert. No electron import: `ipcMain`, the view manager and the renderer test are injected.
+// stays inert. `panes:getInfo` also replays the cached health and the zoom factor of every view
+// (`panes:health` / `panes:zoom`): the renderer calls it once its listeners exist, so nothing sent
+// while the page was still loading stays lost. No electron import: `ipcMain`, the view manager and
+// the renderer test are injected.
 
 import { SLOTS, publicSites } from './sites.js'
 import { normalizeLayout } from './layout.js'
@@ -102,10 +105,26 @@ export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestra
     }
   }
 
+  /** Cached health + zoom of every view, re-sent to the renderer (a view manager without the getters is skipped). */
+  const replayState = () => {
+    if (typeof views.slots !== 'function') return
+    for (const slot of views.slots()) {
+      if (typeof views.getHealth === 'function') {
+        const h = views.getHealth(slot)
+        if (h) emit('panes:health', slot, h)
+      }
+      if (typeof views.zoomFactor === 'function') {
+        const factor = views.zoomFactor(slot)
+        if (typeof factor === 'number') emit('panes:zoom', { slot, factor })
+      }
+    }
+  }
+
   // --- renderer → main -------------------------------------------------------------------------
   handle('panes:getInfo', (event) => {
     requireRenderer(event)
     const layout = state.mode && state.active ? { mode: state.mode, active: state.active } : null
+    replayState()
     return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend: null, layout }
   })
 

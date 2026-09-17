@@ -5,7 +5,7 @@ import './index.jsx' // registers the `panes` slice
 import PromptBar, { errorCode, formatResult, resultTitle } from './PromptBar.jsx'
 import { initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
-import { useSlice } from '../../state/store.jsx'
+import { useDispatch, useSlice } from '../../state/store.jsx'
 import { fakeTriplex } from './fakes.js'
 
 afterEach(() => {
@@ -13,8 +13,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/** The store's dispatch, captured by the Probe so a test can drive the slice from outside PromptBar. */
+const store = { dispatch: null }
+
 function Probe() {
   const p = useSlice('panes')
+  store.dispatch = useDispatch()
   return <div data-testid="probe">{`${p.mode}:${p.active}:${p.sending}`}</div>
 }
 
@@ -118,11 +122,18 @@ describe('PromptBar: composer and Send', () => {
     const fake = fakeTriplex({ sendPrompt: vi.fn(() => d.promise) })
     mount(fake)
     type('lock me')
+    act(() => composer().focus())
+    expect(document.activeElement).toBe(composer())
     enter()
     expect(sendBtn()).toBeDisabled()
     expect(sendBtn()).toHaveTextContent('Sending…')
     expect(screen.getByTestId('prompt-newchat')).toBeDisabled()
     expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'true')
+    // main is about to focus a site view: the composer is read-only and no longer focused, so a
+    // keystroke typed now cannot land in that site's composer between insert and submit
+    expect(composer()).toHaveAttribute('readonly')
+    expect(composer()).toHaveAttribute('aria-busy', 'true')
+    expect(document.activeElement).not.toBe(composer())
     for (const slot of ['claude', 'chatgpt', 'grok']) expect(screen.getByTestId(`prompt-result-${slot}`)).toHaveAttribute('data-ok', 'pending')
     // Enter during a send is ignored
     enter()
@@ -138,6 +149,10 @@ describe('PromptBar: composer and Send', () => {
     })
     expect(sendBtn()).toBeEnabled()
     expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false')
+    // unlocked, and the focus comes back to the composer because it had it when the send started
+    expect(composer()).not.toHaveAttribute('readonly')
+    expect(composer()).toHaveAttribute('aria-busy', 'false')
+    expect(document.activeElement).toBe(composer())
     expect(screen.getByTestId('prompt-result-claude')).toHaveTextContent("Claude ✓ 1.2 s · div[contenteditable='true'].ProseMirror")
     expect(screen.getByTestId('prompt-result-claude')).toHaveAttribute('data-ok', 'true')
     expect(screen.getByTestId('prompt-result-chatgpt')).toHaveTextContent('ChatGPT ✗ send_not_found')
@@ -148,17 +163,50 @@ describe('PromptBar: composer and Send', () => {
     expect(composer()).toHaveValue('lock me')
   })
 
-  test('text typed during the send is never clobbered by the clear', async () => {
+  test('nothing can be typed while the send is in flight; typing resumes after the result', async () => {
+    const user = userEvent.setup()
     const d = deferred()
     const fake = fakeTriplex({ sendPrompt: vi.fn(() => d.promise) })
     mount(fake)
-    type('first')
-    enter()
-    type('second draft')
+    await user.type(composer(), 'first')
+    await user.keyboard('{Enter}')
+    expect(fake.sendPrompt).toHaveBeenCalledTimes(1)
+    expect(fake.sendPrompt.mock.calls[0][0].text).toBe('first')
+    // keys pressed now go nowhere in the renderer: the composer is blurred …
+    await user.keyboard('zzz')
+    expect(composer()).toHaveValue('first')
+    // … and even clicked back into, it is read-only for the whole send
+    await user.type(composer(), 'zzz')
+    expect(composer()).toHaveValue('first')
+    expect(fake.sendPrompt).toHaveBeenCalledTimes(1)
     await act(async () => {
       d.resolve({ results: { claude: { ok: true, ms: 1 }, chatgpt: { ok: true, ms: 1 }, grok: { ok: true, ms: 1 } } })
     })
+    // every target succeeded → cleared; typing after the result works again
+    expect(composer()).toHaveValue('')
+    await user.type(composer(), 'second draft')
     expect(composer()).toHaveValue('second draft')
+    expect(fake.sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  test('a panes/sendStart from outside PromptBar locks and blurs the composer too; the focus returns only if it had it', () => {
+    const fake = fakeTriplex()
+    mount(fake)
+    type('draft')
+    act(() => composer().focus())
+    act(() => store.dispatch({ type: 'panes/sendStart' }))
+    expect(composer()).toHaveAttribute('readonly')
+    expect(document.activeElement).not.toBe(composer())
+    expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:true')
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    expect(composer()).not.toHaveAttribute('readonly')
+    expect(document.activeElement).toBe(composer())
+    expect(composer()).toHaveValue('draft')
+    // a composer that was NOT focused at sendStart is left alone afterwards
+    act(() => composer().blur())
+    act(() => store.dispatch({ type: 'panes/sendStart' }))
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    expect(document.activeElement).not.toBe(composer())
   })
 
   test('a rejected sendPrompt (bad_request) becomes a ✗ line per target and unlocks', async () => {

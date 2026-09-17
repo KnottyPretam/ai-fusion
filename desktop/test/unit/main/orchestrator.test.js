@@ -1,8 +1,10 @@
 // orchestrator.js — two targets in parallel, insert phases never overlap (mutex), one failure does
-// not fail the other, renderer focus restored exactly once.
+// not fail the other, renderer focus restored exactly once, the insertAndSubmit budget covers the
+// preload's worst case, runs are queued behind each other.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, TIMEOUT_GRACE_MS } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, TIMEOUT_GRACE_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
+import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { fakeLog, tick } from './_fakes.js'
 
@@ -22,7 +24,8 @@ function scriptedClient(slot, trace) {
   }
 }
 
-function setup({ clients, timeouts } = {}) {
+/** `timeouts: null` → timeoutsFor answers null (the orchestrator's own defaults); undefined → the small test budget. */
+function setup({ clients, timeouts, insertSettleMs } = {}) {
   const trace = []
   const focused = []
   let restored = 0
@@ -38,8 +41,9 @@ function setup({ clients, timeouts } = {}) {
       restored += 1
       trace.push('renderer:focus')
     },
-    timeoutsFor: () => timeouts || { composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 },
+    timeoutsFor: () => (timeouts === undefined ? { composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 } : timeouts),
     log: fakeLog(),
+    ...(insertSettleMs !== undefined ? { insertSettleMs } : {}),
   })
   return { orch, table, trace, focused, restored: () => restored }
 }
@@ -62,7 +66,7 @@ test('two targets: ready phases run in parallel, insert phases are serialized by
   await settleAll()
   assert.deepEqual(trace.slice(2), ['chatgpt:ready:end', 'chatgpt:focus', 'chatgpt:insertAndSubmit:start'])
   assert.deepEqual(table.chatgpt.last().payload, { text: 'hello' })
-  assert.deepEqual(table.chatgpt.last().opts, { timeoutMs: 3500 + TIMEOUT_GRACE_MS })
+  assert.deepEqual(table.chatgpt.last().opts, { timeoutMs: 1000 + 2000 + 2 * 500 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS })
 
   // claude becomes ready while chatgpt is still inserting → it must wait (no focus, no insert)
   table.claude.calls[0].resolve({ ok: true, op: 'ready' })
@@ -189,4 +193,71 @@ test('createMutex serializes holders and tolerates a double release', async () =
   assert.equal(m.locked(), true)
   r2()
   assert.equal(m.locked(), false)
+})
+
+test('insertAndSubmit budget = composer + send + 2×verify + 2×INSERT_SETTLE_MS (+ grace): main never times out before the adapter', async () => {
+  assert.equal(INSERT_SETTLE_MS, SELECTORS_INSERT_SETTLE_MS, 'the settle delay comes from site.cjs through selectors.js')
+  assert.ok(Number.isFinite(INSERT_SETTLE_MS) && INSERT_SETTLE_MS > 0)
+  assert.equal(insertAndSubmitBudgetMs({ composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000, insertSettleMs: 60 }), 43120)
+  assert.equal(insertAndSubmitBudgetMs({ composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000 }), 15000 + 18000 + 2 * 5000 + 2 * INSERT_SETTLE_MS)
+
+  // the contract defaults (timeoutsFor → null): the preload's worst case is composerWaitMs +
+  // 2×INSERT_SETTLE_MS (two insert attempts) + sendWaitMs + submitVerifyMs (click) + submitVerifyMs (Enter)
+  const { orch, table } = setup({ timeouts: null })
+  const done = orch.submitAll({ targets: ['chatgpt'], text: 'x' })
+  await settleAll()
+  assert.deepEqual(table.chatgpt.last().payload, { timeoutMs: 15000 })
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  const insert = table.chatgpt.last()
+  assert.equal(insert.op, 'insertAndSubmit')
+  assert.equal(insert.opts.timeoutMs, 15000 + 18000 + 2 * 5000 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS)
+  assert.ok(insert.opts.timeoutMs >= 15000 + 18000 + 2 * 5000 + 2 * 60 + TIMEOUT_GRACE_MS, 'at least the reviewed worst case (43 120 ms) plus grace')
+  insert.resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await done
+
+  // the delay is injectable (a build of site.cjs with another INSERT_SETTLE_MS)
+  const custom = setup({ insertSettleMs: 250 })
+  const run = custom.orch.submitAll({ targets: ['grok'], text: 'x' })
+  await settleAll()
+  custom.table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.equal(custom.table.grok.last().opts.timeoutMs, 1000 + 2000 + 2 * 500 + 2 * 250 + TIMEOUT_GRACE_MS)
+  custom.table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await run
+})
+
+test('runs are queued: a second submitAll starts only after the first has restored the renderer focus', async () => {
+  const { orch, table, trace, restored } = setup()
+  const a = orch.submitAll({ targets: ['claude'], text: 'a' })
+  const b = orch.submitAll({ targets: ['claude', 'chatgpt'], text: 'b' })
+  await settleAll()
+  assert.deepEqual(trace, ['claude:ready:start'], 'run B has not touched any view')
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.deepEqual(trace.slice(-2), ['claude:focus', 'claude:insertAndSubmit:start'])
+  assert.equal(table.claude.calls.length, 2, 'still only run A on claude')
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  const ra = await a
+  assert.equal(ra.results.claude.ok, true)
+  await settleAll()
+  // A restored the renderer focus BEFORE B's first ready went out; B's ready phases then run in parallel
+  const focusAt = trace.indexOf('renderer:focus')
+  assert.ok(focusAt > 0)
+  assert.deepEqual(trace.slice(focusAt), ['renderer:focus', 'claude:ready:start', 'chatgpt:ready:start'])
+  table.claude.last().reject(new AdapterRequestError('logged_out', 'signed out'))
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  const rb = await b
+  assert.equal(rb.results.claude.code, 'logged_out')
+  assert.equal(rb.results.chatgpt.ok, true)
+  assert.equal(restored(), 2, 'once per run')
+  assert.equal(trace.at(-1), 'renderer:focus')
+  // the queue is not poisoned by a run whose every slot failed
+  const c = orch.submitAll({ targets: ['grok'], text: 'c' })
+  await settleAll()
+  table.grok.last().reject(new Error('boom'))
+  assert.equal((await c).results.grok.code, 'site_error')
+  assert.deepEqual(await orch.submitAll({ targets: [], text: '' }), { results: {} })
 })

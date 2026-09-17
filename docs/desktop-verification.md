@@ -11,12 +11,13 @@ text), so the table is the history of what was seen on which day.
 
 | item | stage gate | date | site | outcome | matched selectors | slot_error code | notes |
 |---|---|---|---|---|---|---|---|
-| 1. `cd desktop && npm ci` on this box; `chrome://gpu` recorded; `TRIPLEX_CHROMIUM_FLAGS` decision recorded. | S5 | | | | | | |
-| 2. Window opens with three login pages; a pane devtools `navigator.userAgent` contains `Electron/44`. | S5 | | | | | | |
-| 3. Log in to ChatGPT with "Continue with Google" → popup opens, completes, closes; same for Claude (Google) and Grok (X or Google). If Google rejects or Turnstile loops: email/password; record; never change the UA. | S5 | | | | | | |
-| 4. Restart → all three still logged in. | S5 | | | | | | |
-| 5. Health chips `composer ✓ send ✓ · signed in` on all three; `title` shows the matched cascade entry; a miss is fixed via `~/.config/triplex-desktop/selectors.json` + Reload and the corrected default committed. | S5 | | | | | | |
-| 6. Split mode: "Reply with exactly: PING-1" → Send → every composer filled and submitted; replies appear in each site's own GUI; result line ✓ ms + selector per site. | S5 | | | | | | |
+| 1. `cd desktop && npm ci` on this box; `chrome://gpu` recorded; `TRIPLEX_CHROMIUM_FLAGS` decision recorded. | S5 2026-09-16 | all | pass | — | — | Electron 44.4.1 via `npm ci` + `node node_modules/electron/install.js`; GPU software-only on NVIDIA 390 (no flag helps); `TRIPLEX_CHROMIUM_FLAGS` empty (docs/decisions.md S4) |
+| 2. Window opens with three login pages; a pane devtools `navigator.userAgent` contains `Electron/44`. | S5 2026-09-16 | all | pass | — | — | three login pages loaded, no Cloudflare challenge; `webContents.getUserAgent()` = `… Chrome/152.0.7977.78 Electron/44.4.1 Safari/537.36` (probe) |
+| 3. Log in to ChatGPT with "Continue with Google" → popup opens, completes, closes; same for Claude (Google) and Grok (X or Google). If Google rejects or Turnstile loops: email/password; record; never change the UA. | S5 2026-09-16 | all | pass | — | — | user signed in on all three (SSO path used not recorded); no rejection or Turnstile loop reported |
+| 4. Restart → all three still logged in. | S5 2026-09-16 | grok | pass | — | — | a fresh Electron launch on the same profile loaded grok.com signed in (composer + Submit present); claude/chatgpt to confirm on the next relaunch |
+| 5. Health chips `composer ✓ send ✓ · signed in` on all three; `title` shows the matched cascade entry; a miss is fixed via `~/.config/triplex-desktop/selectors.json` + Reload and the corrected default committed. | S5 2026-09-16 | grok | fail | composer=`textarea` (a hidden 14 px helper), send=none | — | grok.com's composer is `div.tiptap.ProseMirror[contenteditable][role=textbox][aria-label="Ask Grok anything"]`; its `button[type=submit][aria-label=Submit][data-testid=chat-submit]` only exists once the editor has text → cascade corrected in the default (see S5 fixes) |
+| 6. Split mode: "Reply with exactly: PING-1" → Send → every composer filled and submitted; replies appear in each site's own GUI; result line ✓ ms + selector per site. | S5 2026-09-16 | claude, chatgpt | pass | — | — | user report: prompt typed and submitted, replies appeared in both GUIs |
+| 6. (grok) re-run after the cascade fix | S5 | 2026-09-16 | grok | fail | composer=`textarea` (hidden) | — | user report: never submitted — text landed in the hidden helper textarea; fixed by the grok composer/send cascade change |
 | 7. Tabs mode: switch between panes while replies stream; return → reply present; badge on a hidden pane needing attention. | S5 | | | | | | |
 | 8. Edge text: backticks, quotes, `${}`, multi-line via Shift+Enter, ~3000 chars, emoji, a `/`-leading line → verbatim in all three. | S5 | | | | | | |
 | 9. Use a site directly (type in its composer, change its model picker) → works; a unified send afterwards continues that site's current chat. | S5 | | | | | | |

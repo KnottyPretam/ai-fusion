@@ -30,15 +30,29 @@ test('resolveSites: defaults, grok surface, TRIPLEX_SITES_JSON deep-merge (array
   assert.throws(() => resolveSites({ TRIPLEX_SITES_JSON: JSON.stringify({ grok: { hosts: 'grok.com' } }) }), /hosts must be/)
 })
 
-test('nonLoopbackSiteUrls lists every non-local url/newChatUrl (E2E refusal); publicSites drops hosts', () => {
-  assert.deepEqual(nonLoopbackSiteUrls(resolveSites({})).map((e) => `${e.slot}.${e.key}`), ['claude.url', 'claude.newChatUrl', 'chatgpt.url', 'chatgpt.newChatUrl', 'grok.url', 'grok.newChatUrl'])
+test('nonLoopbackSiteUrls lists every non-local url/newChatUrl, then every non-loopback trusted host (E2E refusal); publicSites drops hosts', () => {
+  const all = nonLoopbackSiteUrls(resolveSites({}))
+  assert.deepEqual(all.slice(0, 6).map((e) => `${e.slot}.${e.key}`), ['claude.url', 'claude.newChatUrl', 'chatgpt.url', 'chatgpt.newChatUrl', 'grok.url', 'grok.newChatUrl'], 'URLs first, in SLOTS order')
+  assert.deepEqual(all.slice(6).map((e) => `${e.slot}.${e.key}=${e.url}`), [...SITES.claude.hosts.map((h) => `claude.hosts=${h}`), ...SITES.chatgpt.hosts.map((h) => `chatgpt.hosts=${h}`), ...SITES.grok.hosts.map((h) => `grok.hosts=${h}`)], 'then the trusted hosts')
   const local = {}
   for (const s of SLOTS) local[s] = { url: `http://127.0.0.1:5199/?site=${s}`, newChatUrl: `http://localhost:5199/?site=${s}`, partition: `persist:${s}`, hosts: ['127.0.0.1'] }
   assert.deepEqual(nonLoopbackSiteUrls(local), [])
+  local.claude.hosts = ['127.0.0.1', 'LOCALHOST.', '[::1]', '::1']
+  assert.deepEqual(nonLoopbackSiteUrls(local), [], 'every loopback spelling counts')
   local.grok.newChatUrl = 'https://grok.com/'
   assert.deepEqual(nonLoopbackSiteUrls(local), [{ slot: 'grok', key: 'newChatUrl', url: 'https://grok.com/' }])
   local.grok.newChatUrl = 'not a url'
   assert.equal(nonLoopbackSiteUrls(local).length, 1)
+  local.grok.newChatUrl = 'http://127.0.0.1:5199/'
+  // loopback URLs but the real hosts (a partial TRIPLEX_SITES_JSON): policy.js would trust chatgpt.com
+  local.chatgpt.hosts = ['chatgpt.com']
+  assert.deepEqual(nonLoopbackSiteUrls(local), [{ slot: 'chatgpt', key: 'hosts', url: 'chatgpt.com' }])
+  local.claude.hosts = ['claude.ai']
+  local.grok.url = 'https://grok.com/'
+  assert.deepEqual(nonLoopbackSiteUrls(local).map((e) => `${e.slot}.${e.key}`), ['grok.url', 'claude.hosts', 'chatgpt.hosts'], 'a bad URL is always reported before a bad host')
+  local.claude.hosts = ['127.0.0.1']
+  local.chatgpt.hosts = ['127.0.0.1']
+  local.grok.url = 'http://127.0.0.1:5199/'
   assert.deepEqual(publicSites(resolveSites({})).claude, { url: 'https://claude.ai/new', newChatUrl: 'https://claude.ai/new', partition: 'persist:claude' })
   assert.deepEqual(Object.keys(publicSites(resolveSites({}))), ['claude', 'chatgpt', 'grok'])
 })

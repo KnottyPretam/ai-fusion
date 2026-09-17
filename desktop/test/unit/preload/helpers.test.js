@@ -22,12 +22,27 @@ const {
   VERIFY_TAIL_CHARS,
   SEND_POLL_MS,
   HEALTH_HEARTBEAT_MS,
+  INSERT_SETTLE_MS,
+  MESSAGE_SELECTORS,
+  ASSISTANT_SELECTORS,
+  ALERT_SELECTORS,
 } = require('../../../preload/site.cjs')
 
-test('constants match contract §3 (150 ms send poll, 20-char tail, 10 s heartbeat)', () => {
+test('constants match contract §3 (150 ms send poll, 20-char tail, 10 s heartbeat); INSERT_SETTLE_MS is exported for main\'s budget', () => {
   assert.equal(SEND_POLL_MS, 150)
   assert.equal(VERIFY_TAIL_CHARS, 20)
   assert.equal(HEALTH_HEARTBEAT_MS, 10000)
+  assert.ok(Number.isInteger(INSERT_SETTLE_MS) && INSERT_SETTLE_MS > 0 && INSERT_SETTLE_MS < 1000)
+})
+
+test('the selector lists are frozen non-empty string lists; assistant selectors are a strict subset of the message roles', () => {
+  for (const list of [MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS]) {
+    assert.ok(Object.isFrozen(list))
+    assert.ok(list.length > 0 && list.every((s) => typeof s === 'string' && s !== ''))
+  }
+  assert.ok(!ASSISTANT_SELECTORS.includes('[data-message-author-role]')) // user turns are never assistant turns
+  assert.ok(!ASSISTANT_SELECTORS.includes("[data-testid='user-message']"))
+  assert.ok(!ASSISTANT_SELECTORS.includes('.message-bubble'))
 })
 
 test('normalizeText: CRLF/CR → LF, NBSP → space, null/undefined → "", everything else verbatim', () => {
@@ -98,6 +113,15 @@ test('isEnabled: disabled and aria-disabled="true" are not enabled; missing attr
   assert.ok(isEnabled({ getAttribute: () => { throw new Error('no attrs') } }))
 })
 
+test('isEnabled honours :disabled inheritance (a disabled <fieldset>) and a bare disabled attribute; a throwing matches() is ignored', () => {
+  assert.ok(!isEnabled({ matches: (s) => s === ':disabled' }))
+  assert.ok(isEnabled({ matches: () => false }))
+  assert.ok(!isEnabled({ hasAttribute: (n) => n === 'disabled' }))
+  assert.ok(isEnabled({ hasAttribute: () => false, getAttribute: () => null }))
+  assert.ok(isEnabled({ matches: () => { throw new Error('unsupported pseudo-class') } }))
+  assert.ok(!isEnabled({ matches: () => { throw new Error('boom') }, getAttribute: (n) => (n === 'aria-disabled' ? 'true' : null) })) // the later checks still run
+})
+
 test('isVisible: no client rects → hidden; display:none / visibility:hidden → hidden; no layout APIs → visible', () => {
   assert.ok(isVisible({}))
   assert.ok(!isVisible(null))
@@ -111,6 +135,16 @@ test('isVisible: no client rects → hidden; display:none / visibility:hidden �
   const el = { getClientRects: () => [{}], ownerDocument: { defaultView: win({ display: 'none' }) } }
   assert.ok(!isVisible(el))
   assert.ok(isVisible({ getClientRects: () => { throw new Error('detached') } }))
+})
+
+test('isVisible rejects a zero-size bounding box (a collapsed duplicate) and accepts a real one', () => {
+  assert.ok(!isVisible({ getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 0, height: 0 }) }))
+  assert.ok(!isVisible({ getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 40, height: 0 }) }))
+  assert.ok(!isVisible({ getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 0, height: 20 }) }))
+  assert.ok(isVisible({ getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 40, height: 20 }) }))
+  assert.ok(isVisible({ getBoundingClientRect: () => ({ width: 40, height: 20 }) }))
+  assert.ok(isVisible({ getBoundingClientRect: () => null }))
+  assert.ok(isVisible({ getBoundingClientRect: () => { throw new Error('detached') } }))
 })
 
 test('isTextField and readText: textarea/input read `value`, contenteditable reads innerText then textContent', () => {

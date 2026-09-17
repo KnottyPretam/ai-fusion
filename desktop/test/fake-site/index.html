@@ -24,7 +24,21 @@
         <button class="send" type="button" aria-label="Send message" disabled>Send</button>
       </div>
     </template>
+    <!-- grok (default): the TipTap editor measured live on grok.com (2026-09-16) — a form-hosted
+         div.tiptap.ProseMirror[role=textbox][aria-label="Ask Grok anything"], a HIDDEN 14 px helper
+         textarea (no aria-label; a bare `textarea` selector picks it — the bug the corrected cascade
+         fixes) and an action slot that holds "Enter voice mode" while the editor is empty; site.js
+         swaps in button[type=submit][aria-label=Submit][data-testid=chat-submit] once text is in. -->
     <template id="tpl-grok">
+      <form class="composer">
+        <div class="tiptap ProseMirror" contenteditable="true" role="textbox" aria-label="Ask Grok anything" translate="no" tabindex="0"></div>
+        <textarea class="helper" tabindex="-1" rows="1"></textarea>
+        <button class="voice" type="button" aria-label="Enter voice mode">Voice</button>
+      </form>
+    </template>
+    <!-- grok (?composer=textarea): the older textarea composer, kept so the native-value-setter
+         insertion path stays covered. -->
+    <template id="tpl-grok-textarea">
       <div class="composer">
         <textarea aria-label="Ask Grok anything" rows="1"></textarea>
         <button class="send" type="button" aria-label="Submit" disabled>Send</button>

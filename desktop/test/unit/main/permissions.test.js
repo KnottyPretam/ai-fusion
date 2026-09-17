@@ -1,8 +1,9 @@
-// permissions.js — media / geolocation / notifications denied, clipboard-sanitized-write allowed.
+// permissions.js — media / geolocation / notifications denied, clipboard-sanitized-write allowed,
+// the Bluetooth device chooser cancelled per webContents.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { decide, ALLOWED, applyPermissionPolicy } from '../../../main/permissions.js'
-import { fakeSession } from './_fakes.js'
+import { decide, ALLOWED, applyPermissionPolicy, attachDeviceChooserPolicy, hasDeviceChooserPolicy } from '../../../main/permissions.js'
+import { fakeSession, fakeWebContents } from './_fakes.js'
 
 test('decide: only clipboard-sanitized-write and fullscreen are allowed', () => {
   assert.deepEqual([...ALLOWED], ['clipboard-sanitized-write', 'fullscreen'])
@@ -34,4 +35,23 @@ test('applyPermissionPolicy tolerates a session without a device handler and a n
   const ses = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }
   assert.doesNotThrow(() => applyPermissionPolicy(ses))
   assert.doesNotThrow(() => applyPermissionPolicy(null))
+})
+
+test('attachDeviceChooserPolicy: select-bluetooth-device is prevented and cancelled (callback \'\'); idempotent per webContents', () => {
+  const wc = fakeWebContents()
+  assert.equal(hasDeviceChooserPolicy(wc), false)
+  const handler = attachDeviceChooserPolicy(wc)
+  assert.equal(typeof handler, 'function')
+  assert.equal(attachDeviceChooserPolicy(wc), null, 'a second call installs nothing')
+  assert.equal(wc.listenerCount('select-bluetooth-device'), 1)
+  assert.equal(hasDeviceChooserPolicy(wc), true)
+  const ev = { prevented: false, preventDefault() { this.prevented = true } }
+  let chosen = null
+  wc.emit('select-bluetooth-device', ev, [{ deviceId: 'd1', deviceName: 'Speaker' }, { deviceId: 'd2', deviceName: 'Watch' }], (id) => { chosen = id })
+  assert.equal(ev.prevented, true, 'without preventDefault Electron picks the first device')
+  assert.equal(chosen, '', 'an empty id cancels the request')
+  assert.equal(attachDeviceChooserPolicy(null), null)
+  assert.equal(attachDeviceChooserPolicy({}), null)
+  assert.doesNotThrow(() => handler({ preventDefault() {} }, [], () => { throw new Error('request already gone') }))
+  assert.doesNotThrow(() => handler(undefined, undefined, undefined))
 })

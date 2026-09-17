@@ -18,6 +18,11 @@ const siteAdapter = require('../preload/site.cjs')
 
 export const DEFAULT_SELECTORS = siteAdapter.DEFAULT_SELECTORS
 export const mergeSelectors = siteAdapter.mergeSelectors
+/**
+ * The adapter's per-attempt settle delay inside `insertText` (site.cjs exports it; 120 ms when a
+ * build does not). The orchestrator budgets two of them per insertAndSubmit.
+ */
+export const INSERT_SETTLE_MS = Number.isFinite(siteAdapter.INSERT_SETTLE_MS) && siteAdapter.INSERT_SETTLE_MS >= 0 ? siteAdapter.INSERT_SETTLE_MS : 120
 
 function deepClone(v) {
   return v === undefined ? undefined : JSON.parse(JSON.stringify(v))

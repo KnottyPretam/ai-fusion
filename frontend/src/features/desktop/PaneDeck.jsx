@@ -7,6 +7,9 @@
 //   * `triplex.setActive({mode, active})` whenever either changes;
 //   * `triplex.onHealth` → panes/health, `triplex.onZoom` → panes/zoom,
 //     `triplex.onShortcut` → tab-n / toggle-mode / focus-prompt / new-chat-all.
+// Anything that navigates a view — new-chat-all, the per-pane Reload / New chat buttons — is
+// ignored/disabled while `panes.sending` is true (the same rule as PromptBar's "New chat
+// everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`.
 // Every `window.triplex` call is optional-chained: the deck renders under a partial stub and
 // under the web app, where the object is absent. Renderer chrome never overlaps a viewport
 // (deck bar above, header above, prompt bar below — see desktop.module.css).
@@ -93,10 +96,10 @@ function zoomPercent(factor) {
 export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
-  const { mode, active, health, lastSend, zoom } = panes
+  const { mode, active, health, lastSend, zoom, sending } = panes
   const viewports = useRef({})
-  const latest = useRef({ mode, active })
-  latest.current = { mode, active }
+  const latest = useRef({ mode, active, sending })
+  latest.current = { mode, active, sending }
 
   useLayoutReporter(api, mode, active, viewports)
 
@@ -139,7 +142,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
       if (tab) return activate(SLOT_IDS[Number(tab[1]) - 1])
       if (name === 'toggle-mode') return dispatch({ type: 'panes/mode', mode: latest.current.mode === 'tabs' ? 'split' : 'tabs' })
       if (name === 'focus-prompt') return promptRef?.current?.focus?.()
-      if (name === 'new-chat-all') return settle(api?.newChat?.([...SLOT_IDS]))
+      if (name === 'new-chat-all') return latest.current.sending ? undefined : settle(api?.newChat?.([...SLOT_IDS]))
       return undefined
     })
     return () => {
@@ -232,10 +235,10 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
                   {healthText(h)}
                 </span>
                 <span className={css.actions}>
-                  <button type="button" data-testid={`pane-${slot}-reload`} title={`Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
+                  <button type="button" data-testid={`pane-${slot}-reload`} disabled={sending} title={sending ? 'a send is in flight' : `Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
                     Reload
                   </button>
-                  <button type="button" data-testid={`pane-${slot}-newchat`} title={`Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
+                  <button type="button" data-testid={`pane-${slot}-newchat`} disabled={sending} title={sending ? 'a send is in flight' : `Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
                     New chat
                   </button>
                   <button type="button" data-testid={`pane-${slot}-open`} title="Open this page in the system browser" onClick={() => settle(api?.openExternal?.(slot))}>

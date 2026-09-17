@@ -4,7 +4,7 @@ import './index.jsx' // registers the `panes` slice
 import PaneDeck from './PaneDeck.jsx'
 import { initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
-import { useSlice } from '../../state/store.jsx'
+import { useDispatch, useSlice } from '../../state/store.jsx'
 import { RECTS, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
 
 let ro
@@ -22,8 +22,12 @@ function panes(over = {}) {
   return { ...initialPanes(), ...over }
 }
 
+/** The store's dispatch, captured by the Probe so a test can drive the slice from outside PaneDeck. */
+const store = { dispatch: null }
+
 function Probe() {
   const p = useSlice('panes')
+  store.dispatch = useDispatch()
   return <div data-testid="probe">{`${p.mode}:${p.active}:${JSON.stringify(p.zoom)}`}</div>
 }
 
@@ -223,6 +227,28 @@ describe('PaneDeck: header actions call the API with the slot', () => {
     expect(fake.inspect).toHaveBeenCalledWith('chatgpt')
   })
 
+  test('Reload and New chat are disabled while a send is in flight; Open / zoom / Inspect are not', () => {
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split', sending: true })
+    for (const slot of ['claude', 'chatgpt', 'grok']) {
+      expect(screen.getByTestId(`pane-${slot}-reload`)).toBeDisabled()
+      expect(screen.getByTestId(`pane-${slot}-newchat`)).toBeDisabled()
+      expect(screen.getByTestId(`pane-${slot}-reload`).title).toMatch(/send is in flight/)
+      expect(screen.getByTestId(`pane-${slot}-open`)).toBeEnabled()
+      expect(screen.getByTestId(`pane-${slot}-zoom-in`)).toBeEnabled()
+      expect(screen.getByTestId(`pane-${slot}-inspect`)).toBeEnabled()
+    }
+    fireEvent.click(screen.getByTestId('pane-claude-reload'))
+    fireEvent.click(screen.getByTestId('pane-grok-newchat'))
+    expect(fake.reload).not.toHaveBeenCalled()
+    expect(fake.newChat).not.toHaveBeenCalled()
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    expect(screen.getByTestId('pane-claude-reload')).toBeEnabled()
+    expect(screen.getByTestId('pane-claude-reload').title).toMatch(/Reload Claude/)
+    fireEvent.click(screen.getByTestId('pane-claude-reload'))
+    expect(fake.reload).toHaveBeenCalledWith('claude')
+  })
+
   test('Inspect only when info.dev', () => {
     const fake = fakeTriplex()
     renderWithStore(<PaneDeck api={fake} info={{ dev: false }} />, { preloaded: { panes: panes() } })
@@ -307,5 +333,25 @@ describe('PaneDeck: shortcuts', () => {
     // unknown names are ignored
     expect(() => act(() => fake.emit.shortcut('tab-9'))).not.toThrow()
     expect(() => act(() => fake.emit.shortcut(null))).not.toThrow()
+  })
+
+  test('new-chat-all is ignored while a send is in flight (the same rule as the New chat everywhere button)', () => {
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split', sending: true })
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(fake.newChat).not.toHaveBeenCalled()
+    // the other shortcuts keep working during a send
+    act(() => fake.emit.shortcut('toggle-mode'))
+    expect(screen.getByTestId('probe')).toHaveTextContent('tabs:chatgpt')
+    act(() => fake.emit.shortcut('tab-3'))
+    expect(screen.getByTestId('probe')).toHaveTextContent('tabs:grok')
+    // once the send settles the shortcut is live again, with the latest `sending` (no stale closure)
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(fake.newChat).toHaveBeenCalledTimes(1)
+    expect(fake.newChat).toHaveBeenCalledWith(['claude', 'chatgpt', 'grok'])
+    act(() => store.dispatch({ type: 'panes/sendStart' }))
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(fake.newChat).toHaveBeenCalledTimes(1)
   })
 })

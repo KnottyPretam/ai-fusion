@@ -65,7 +65,7 @@ as `error_type:"triplex"`. `max_tokens`, `response_format`, `plugins`, `reasonin
 ### 2. Electron IPC — `desktop/preload/renderer.cjs` exposes `window.triplex` via `contextBridge`
 
 Main validates every payload (`slot ∈ SLOTS`, `text` string ≤ 32768 chars, `targets ⊆ SLOTS`,
-sender is the renderer webContents; violations reject `Error('bad_request')`).
+sender is the renderer webContents AND the sender frame's origin is the renderer origin; violations reject `Error('bad_request')`). `panes:getInfo` also re-emits the cached `panes:health` and the current `panes:zoom` for every slot, and main replays both on the renderer's `did-finish-load`.
 
 ```ts
 triplex.version: string; triplex.slots: ['claude','chatgpt','grok']
@@ -130,16 +130,17 @@ scrubDom(document) → string, toMarkdown(el) → string /* Stage 3 */,
 createAdapter({document, window, site, selectors, now = Date.now}) → {
   health() → Health, sessionState() → 'ok'|'logged_out'|'challenge'|'blocked'|'unknown',
   findComposer() → {el, selector}|null, waitForComposer(timeoutMs) → Promise<{el, selector}>,
-  insertText(text) → Promise<{method:'execCommand'|'nativeValue'|'paste'}>,   // verifies the composer text ends with the last 20 chars
+  insertText(text) → Promise<{method:'execCommand'|'nativeValue'|'paste'|'already_present'}>,   // verifies after == before + text (whitespace-squashed); 'already_present' = the composer already held exactly the text, nothing written
   submit(timeoutMs) → Promise<{method:'click'|'enter', sendSelector, confirmedBy}>,
   insertAndSubmit(text) → Promise<{submitted:true, composerSelector, sendSelector, assistantCount, confirmedBy, ms}>,
-  countAssistant() → number,
+  countMessages() → number,     // every rendered message container (user + assistant); the signal behind confirmedBy:'assistant_count'
+  countAssistant() → number,    // assistant-role containers only ([data-message-author-role='assistant'], .font-claude-response, .font-claude-message, div[id^='response-'] + the v2 `assistant` cascade) — the observe baselineCount
   observe({baselineCount, quietMs, timeoutMs, signal}) → Promise<{text, doneBy, ms}>,   // Stage 2
 }
 class AdapterError extends Error { code; partial? }
 attachIpc(ipc, factory); boot()
 ```
-Insertion: contenteditable → `el.focus()`, explicit `Range` collapsed at the end,
+Session-rule scope: `errorText` is matched only inside alert-like containers (`[role=alert|status|dialog|alertdialog]`, `[aria-live]`) that are neither inside a message container nor wrapping the thread/composer — never in body text; `loggedOut` counts only when the match is visible and outside a message container; `challengeTitle` counts only as the exact Cloudflare title or when corroborated (no composer, or a `challenge` match); `ready`/`waitForComposer` timeouts answer the session state (`logged_out|challenge|blocked`) when it is not `ok`; ops that arrive before `adapter:config` resolves are parked and replayed once boot settles. Insertion: contenteditable → `el.focus()`, explicit `Range` collapsed at the end,
 `document.execCommand('insertText', false, text)`, dispatch `InputEvent('input')`, verify; on
 failure a synthetic `paste` `ClipboardEvent` with `DataTransfer`, verify; `<textarea>` → native
 `HTMLTextAreaElement.prototype.value` setter + `input`, verify; never `innerHTML`/`textContent`.
@@ -172,8 +173,8 @@ and (Stage 2) on `fs.watch`.
     "challenge": ["iframe[src*='challenges.cloudflare.com']"], "challengeTitle": ["Just a moment"],
     "errorText": ["unusual activity", "rate limit"], "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 },
   "grok": { "chatUrlPattern": "^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+",
-    "composer": ["textarea[aria-label='Ask Grok anything']", "textarea[placeholder='Ask anything']", "textarea[placeholder*='Grok']", "textarea[data-testid='grok-compose-input']", "div[contenteditable='true'][data-lexical-editor='true']", "textarea"],
-    "send": ["button[aria-label='Submit']", "button[aria-label='Send message']", "button[type='submit']"],
+    "composer": ["div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']", "div[role='textbox'][aria-label='Ask Grok anything']", "div.ProseMirror[contenteditable='true']", "textarea[aria-label='Ask Grok anything']", "textarea[placeholder*='Grok']", "div[contenteditable='true'][data-lexical-editor='true']"],
+    "send": ["button[data-testid='chat-submit']", "button[aria-label='Submit']", "button[type='submit']"],
     "loggedOut": ["a[href*='/sign-in']", "a[href*='accounts.x.ai']"], "loggedOutUrl": ["accounts.x.ai", "/sign-in"],
     "challenge": ["iframe[src*='challenges.cloudflare.com']"], "challengeTitle": ["Just a moment"],
     "errorText": ["unusual activity"], "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 } }
@@ -187,7 +188,7 @@ Version 2 (Stage 2, additive per site): `"stop"`, `"assistant"`, `"assistantText
 `assistant:[".font-claude-response:not(#markdown-artifact)",".font-claude-message"]`, `assistantText:[]`, `done:[]`;
 grok `stop:["button[aria-label='Stop']","button[aria-label*='Stop']"]`, `assistant:["div[id^='response-']"]`,
 `assistantText:[".response-content-markdown"]`, `done:[]`. Empty `stop`+`done` ⇒ quiet detection.
-Entries the research marked unverified are confirmed in Stage 4.
+Entries the research marked unverified are confirmed in Stage 4. Verified live on 2026-09-16 (grok.com, signed in): the composer is a TipTap/ProseMirror `div.tiptap.ProseMirror[contenteditable][role=textbox][aria-label="Ask Grok anything"]` inside a `form` (a hidden 14 px helper `textarea` also exists — a bare `textarea` entry must never be a fallback), and `button[type=submit][aria-label=Submit][data-testid=chat-submit]` is rendered only once the editor holds text (the voice-mode button occupies that slot while it is empty), so the send cascade is polled after insertion, never before.
 
 ### 5. Sites, policy, permissions, flags, env, files, package
 
@@ -197,7 +198,7 @@ Entries the research marked unverified are confirmed in Stage 4.
 `TRIPLEX_SITES_JSON` deep-merges (tests point every site at the fake site).
 `policy.js`: popup host ∈ `SSO_HOSTS ∪ site.hosts` → `{action:'allow'}` child window sharing
 the partition; `javascript:`/`data:` denied; else `shell.openExternal` + deny; `will-navigate`
-to a host outside `site.hosts ∪ SSO_HOSTS` → `preventDefault` + `shell.openExternal`.
+to a host outside `site.hosts ∪ SSO_HOSTS` → `preventDefault` + `shell.openExternal`; `will-redirect` (main frame) follows the same matrix; allowed child windows are policed recursively (`did-create-window`); a process-wide `web-contents-created` backstop denies popups and navigation for any unpoliced webContents; the renderer window is pinned to `new URL(TRIPLEX_RENDERER_URL).origin` (navigation/redirect elsewhere → `openExternal`, IPC from a foreign document → `bad_request`); `select-bluetooth-device` is cancelled on every webContents; under `TRIPLEX_E2E_APP=1` non-loopback `hosts` entries are refused and `SSO_HOSTS` is treated as empty.
 `permissions.js`: `ALLOWED = {'clipboard-sanitized-write','fullscreen'}`; everything else
 denied via `setPermissionRequestHandler`/`setPermissionCheckHandler`;
 `setDevicePermissionHandler(() => false)`. UA: never set, never changed. Chromium flags:

@@ -1,5 +1,6 @@
 // ipc.js — validation (unknown slot / non-string / oversize text / non-renderer sender rejected),
-// every panes:* channel, prompt:send, adapter:config by sender, health forwarding.
+// every panes:* channel, prompt:send, adapter:config by sender, health forwarding, the cached
+// health + zoom replayed after panes:getInfo.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requirePrompt, annotateHealth, MAX_PROMPT_CHARS } from '../../../main/ipc.js'
@@ -124,6 +125,31 @@ test('panes:getInfo reports version, dev, public sites and the layout once known
   assert.equal('hosts' in info.sites.claude, false)
   ipcMain.emit('panes:active', fromRenderer, { mode: 'tabs', active: 'grok' })
   assert.deepEqual((await ipcMain.invoke('panes:getInfo', fromRenderer)).layout, { mode: 'tabs', active: 'grok' })
+})
+
+test('panes:getInfo replays the cached health and the zoom factor of every view (the renderer subscribes before it asks)', async () => {
+  const { ipcMain, fromRenderer, views, sent, siteWc } = setup()
+  const h = { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: '#p', send: 'b', reply: null, stop: null, error: null }, url: 'u', host: 'h', title: 't', ts: 1 }
+  const cache = { grok: h }
+  views.slots = () => ['claude', 'chatgpt', 'grok']
+  views.getHealth = (slot) => cache[slot] || null
+  views.zoomFactor = (slot) => (slot === 'claude' ? 1.5 : 1)
+  const info = await ipcMain.invoke('panes:getInfo', fromRenderer)
+  assert.equal(info.version, '0.1.0')
+  assert.deepEqual(sent, [
+    ['panes:zoom', { slot: 'claude', factor: 1.5 }],
+    ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
+    ['panes:health', 'grok', h],
+    ['panes:zoom', { slot: 'grok', factor: 1 }],
+  ])
+  sent.length = 0
+  await rejects(ipcMain.invoke('panes:getInfo', eventFrom(siteWc.claude)))
+  assert.deepEqual(sent, [], 'a refused caller gets no replay')
+  // a view manager without the getters (older fakes) → getInfo still answers, nothing replayed
+  delete views.getHealth
+  delete views.zoomFactor
+  assert.equal((await ipcMain.invoke('panes:getInfo', fromRenderer)).dev, true)
+  assert.deepEqual(sent, [])
 })
 
 test('panes:layout normalizes and applies; panes:active validates and stores', () => {

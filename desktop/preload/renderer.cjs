@@ -1,5 +1,5 @@
 'use strict'
-// desktop/preload/renderer.cjs — exposes `window.triplex` to the renderer (contract §2, Stage 1 surface).
+// desktop/preload/renderer.cjs — exposes `window.triplex` to the renderer (contract §2, Stage 1 + Stage 2 surface).
 //
 // Sandboxed preload (`sandbox:true`, `contextIsolation:true`): only 'electron' is requirable.
 // `ipcRenderer` itself is never exposed; every method maps to exactly one channel:
@@ -16,7 +16,15 @@
 //   on     'panes:health'       cb(slot, health)
 //   on     'panes:shortcut'     cb({name})
 //   on     'panes:zoom'         cb({slot, factor})
-//   invoke 'prompt:send'        ({targets, text})        → {results}        (Stage 1 only)
+//   invoke 'prompt:send'        ({targets, text})        → {results}        (Stage 1 only; removed at the S6 merge)
+//   Stage 2:
+//   invoke 'panes:getCapture'   ()                       → {[slot]: boolean}
+//   invoke 'panes:setCapture'   (slot, on)
+//   on     'panes:bridge'       cb({connected, since?})
+//   on     'panes:turn'         cb({slot, phase, code?})  phase ∈ idle|typing|submitted|replying|done|error
+//   invoke 'panes:openChats'    (convId|null)             → {[slot]: 'navigated'|'new'|'kept'}
+//   invoke 'panes:signOut'      (slot)                   clearStorageData for that partition only, then newChatUrl
+//   invoke 'panes:snapshot'     (slot)                   → {path}   (scrubbed HTML under userData/snapshots/)
 //
 // Main validates every payload and rejects violations with Error('bad_request').
 
@@ -58,8 +66,16 @@ const api = Object.freeze({
   onHealth: subscribe('panes:health'),
   onShortcut: subscribe('panes:shortcut'),
   onZoom: subscribe('panes:zoom'),
-  // Stage 1 only (removed in Stage 2):
+  // Stage 1 only (removed at the S6 merge, when PromptBar sends through POST /send):
   sendPrompt: (req) => ipcRenderer.invoke('prompt:send', req),
+  // Stage 2 (handlers arrive with electron-bridge; until then main rejects them as unregistered):
+  getCapture: () => ipcRenderer.invoke('panes:getCapture'),
+  setCapture: (slot, on) => ipcRenderer.invoke('panes:setCapture', slot, on),
+  onBridge: subscribe('panes:bridge'),
+  onTurn: subscribe('panes:turn'),
+  openChats: (convId) => ipcRenderer.invoke('panes:openChats', convId),
+  signOut: (slot) => ipcRenderer.invoke('panes:signOut', slot),
+  saveDomSnapshot: (slot) => ipcRenderer.invoke('panes:snapshot', slot),
 })
 
 contextBridge.exposeInMainWorld('triplex', api)

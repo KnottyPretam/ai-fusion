@@ -1,6 +1,9 @@
 /* desktop/test/fake-site/site.js — look-alike composers for chatgpt / claude / grok.
  *
  * Query: ?site=chatgpt|claude|grok  ?state=ok|loggedout|challenge|blocked|slow  ?sendDelayMs=N
+ *        ?thread=noise  (a rendered user/assistant exchange whose text and links look like every
+ *        wall and banner rule — inside message containers, so the session must stay ok)
+ *        ?composer=textarea  (grok only: the older textarea composer instead of the TipTap editor)
  * Paths (SPA fallback): /c/<id> (after a submit), /auth/login|/login|/sign-in (login walls),
  * /challenges.cloudflare.com/* (the local stand-in for the Turnstile iframe; nothing leaves the box).
  *
@@ -8,7 +11,16 @@
  *   chatgpt  div#prompt-textarea.ProseMirror[contenteditable=true][translate=no] in a <form>,
  *            button[data-testid=send-button]#composer-submit-button (disabled until input)
  *   claude   div.ProseMirror[contenteditable=true], button[aria-label="Send message"]
- *   grok     textarea[aria-label="Ask Grok anything"], button[aria-label="Submit"]
+ *   grok     div.tiptap.ProseMirror[contenteditable=true][role=textbox][aria-label="Ask Grok anything"]
+ *            in a <form> (measured live on grok.com, 2026-09-16), next to a HIDDEN 14 px helper
+ *            <textarea> with no aria-label (a bare `textarea` selector picks it — the bug the
+ *            corrected cascade fixes). The action slot holds button[type=button][aria-label="Enter
+ *            voice mode"] while the editor is empty; button[type=submit][aria-label=Submit]
+ *            [data-testid=chat-submit] exists ONLY once the editor holds text (after ?sendDelayMs),
+ *            so the send cascade can only be resolved after the insertion. Submitting clears the
+ *            editor and restores the voice button.
+ *   grok&composer=textarea   textarea[aria-label="Ask Grok anything"], button[aria-label="Submit"]
+ *            (disabled until input) — keeps the native-value-setter insertion path covered.
  *
  * Editing model (pins the insertion technique):
  *   - contenteditable: a JS model is updated from TRUSTED beforeinput/input events only
@@ -19,7 +31,8 @@
  *     instance-level `value` setter keeps the tracker in sync (so `el.value = x` + a synthetic
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
- * window.__fake = {submitted: [], site, state, getText()} (the site's own debug surface).
+ * window.__fake = {submitted: [], site, state, variant, getText(), helperText()} (the site's own
+ * debug surface; `helperText()` is the hidden helper textarea's value, null when there is none).
  */
 ;(() => {
   'use strict'
@@ -40,6 +53,8 @@
   let state = params.get('state') || 'ok'
   if (LOGIN_PATHS.includes(path)) state = 'loggedout'
   const sendDelayMs = Math.max(0, Number(params.get('sendDelayMs')) || 0)
+  /** Composer variant: 'tiptap' (grok default), 'textarea' (grok&composer=textarea), 'prosemirror' (chatgpt/claude). */
+  const variant = site === 'grok' ? (params.get('composer') === 'textarea' ? 'textarea' : 'tiptap') : 'prosemirror'
 
   const app = document.getElementById('app')
   app.setAttribute('data-site', site)
@@ -48,7 +63,7 @@
   const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true)
 
   let composer = null // {el, getText(), clear()}
-  let sendButton = null
+  let actions = null // {apply(on)}: how "send enabled" is rendered — a disabled toggle, or grok's button swap
   let sendEnabled = false
   let sendTimer = null
 
@@ -56,7 +71,12 @@
     submitted: [],
     site,
     state,
+    variant,
     getText: () => (composer ? composer.getText() : null),
+    helperText: () => {
+      const helper = document.querySelector('textarea.helper')
+      return helper ? helper.value : null
+    },
   }
 
   // --- the Turnstile stand-in (only ever rendered inside the challenge iframe) ---------------
@@ -104,6 +124,24 @@
   thread.className = 'thread'
   app.appendChild(thread)
 
+  // ?thread=noise: chat content that mentions every errorText phrase of every site and links to
+  // every loggedOut href (/auth/login, /login, /sign-in, accounts.x.ai) — all inside
+  // article[data-message-author-role] containers. A correct session check keeps the page 'ok'.
+  if (params.get('thread') === 'noise') {
+    const user = document.createElement('article')
+    user.setAttribute('data-message-author-role', 'user')
+    user.innerHTML =
+      'How do I handle an API rate limit? Last time Something went wrong and it said You\'ve reached your limit — ' +
+      'see <a href="/auth/login">/auth/login</a>, <a href="/login">/login</a> and <a href="/sign-in">/sign-in</a>.'
+    thread.appendChild(user)
+    const assistant = document.createElement('article')
+    assistant.setAttribute('data-message-author-role', 'assistant')
+    assistant.innerHTML =
+      'A rate limit is a cap on requests. "Unusual activity has been detected" is the banner you would see; ' +
+      'unusual activity in your own logs is something else. For xAI, sign in at <a href="https://accounts.x.ai/sign-in">accounts.x.ai</a>.'
+    thread.appendChild(assistant)
+  }
+
   // --- helpers ------------------------------------------------------------------------------
   const randomId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
 
@@ -114,7 +152,7 @@
     }
     const apply = () => {
       sendEnabled = on
-      if (sendButton) sendButton.disabled = !on
+      if (actions) actions.apply(on)
     }
     if (on && sendDelayMs > 0) sendTimer = setTimeout(apply, sendDelayMs)
     else apply()
@@ -144,7 +182,42 @@
     return e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing
   }
 
-  // --- ProseMirror look-alike ---------------------------------------------------------------
+  // --- action slot strategies ---------------------------------------------------------------
+
+  /** chatgpt / claude / grok&composer=textarea: one send button, disabled until the model holds text. */
+  function toggleActions(button) {
+    button.disabled = true
+    return {
+      apply(on) {
+        button.disabled = !on
+      },
+    }
+  }
+
+  /**
+   * grok (TipTap): like the real page, the slot renders EITHER the voice-mode button (editor
+   * empty) OR the submit button (editor holds text) — never a disabled submit button. The submit
+   * button therefore does not exist in the DOM until text is in.
+   */
+  function swapActions(voiceButton) {
+    const submitButton = document.createElement('button')
+    submitButton.className = 'send'
+    submitButton.type = 'submit'
+    submitButton.setAttribute('aria-label', 'Submit')
+    submitButton.setAttribute('data-testid', 'chat-submit')
+    submitButton.textContent = 'Send'
+    let current = voiceButton
+    return {
+      apply(on) {
+        const next = on ? submitButton : voiceButton
+        if (next === current) return
+        current.replaceWith(next)
+        current = next
+      },
+    }
+  }
+
+  // --- ProseMirror look-alike (chatgpt, claude and grok's TipTap editor) --------------------
   function mountProseMirror(el, placeholder) {
     let model = ''
     let editTick = false // a trusted editing event happened since the last frame
@@ -272,13 +345,15 @@
 
   // --- per-site composer (markup from the <template>s in index.html) -----------------------
   function mountComposer() {
-    const box = clone('tpl-' + site)
-    const button = box.querySelector('button.send')
-    if (site === 'grok') {
-      composer = mountTextarea(box.querySelector('textarea'), cfg.placeholder)
+    const box = clone(variant === 'textarea' ? 'tpl-grok-textarea' : 'tpl-' + site)
+    if (variant === 'textarea') {
+      composer = mountTextarea(box.querySelector("textarea[aria-label='Ask Grok anything']"), cfg.placeholder)
     } else {
       composer = mountProseMirror(box.querySelector('.ProseMirror'), cfg.placeholder)
     }
+    const voice = box.querySelector('button.voice')
+    const button = box.querySelector('button.send')
+    actions = voice ? swapActions(voice) : toggleActions(button)
     if (box.tagName === 'FORM') {
       box.addEventListener('submit', (e) => {
         e.preventDefault()
@@ -287,8 +362,6 @@
     } else {
       button.addEventListener('click', submit)
     }
-    button.disabled = true
-    sendButton = button
     app.appendChild(box)
   }
 

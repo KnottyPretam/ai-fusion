@@ -7,9 +7,13 @@
 // reveals that pane in tabs mode so the user can act on it.
 //
 // Enter sends, Shift+Enter inserts a newline, an IME composition (`isComposing` / keyCode 229)
-// is never treated as a send. The composer stays editable while a send is in flight (Send is
-// disabled instead) and is cleared afterwards only when every target succeeded and the text is
-// still exactly what was sent. Stage 2 routes this through features/send/useSendTurn.js.
+// is never treated as a send. While a send is in flight main moves the OS focus into each target
+// view for the insert phase (orchestrator `focusView`), so the composer is read-only AND blurred
+// for the whole `sending` window — a keystroke typed then would otherwise land in the site's
+// composer between insert and submit. Main restores the renderer focus after the last insert
+// and the composer takes the focus back only if it had it when the send started. It is cleared
+// afterwards only when every target succeeded and the text is still exactly what was sent.
+// Stage 2 routes this through features/send/useSendTurn.js.
 import { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { desktopApi } from './PaneDeck.jsx'
@@ -60,6 +64,23 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
       alive.current = false
     }
   }, [])
+
+  // Keyed on the slice, not on this component's Send: a `panes/sendStart` from anywhere locks
+  // the composer the same way. Blur on the way in (main is about to focus a site view); on the
+  // way out give the focus back only when the composer had it — a user who clicked elsewhere
+  // during the send is not yanked back.
+  const hadFocus = useRef(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (sending) {
+      hadFocus.current = typeof document !== 'undefined' && document.activeElement === el
+      if (typeof el.blur === 'function') el.blur()
+    } else if (hadFocus.current) {
+      hadFocus.current = false
+      if (typeof el.focus === 'function') el.focus()
+    }
+  }, [sending, ref])
 
   const targets = selectedTargets(targetMap)
   const empty = text.trim() === ''
@@ -117,6 +138,8 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
           placeholder="Ask all three… (Enter to send, Shift+Enter for a new line, Ctrl+L to focus)"
           rows={2}
           value={text}
+          readOnly={sending}
+          aria-busy={sending}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />

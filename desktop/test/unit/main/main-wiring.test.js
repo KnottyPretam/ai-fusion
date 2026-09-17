@@ -1,8 +1,10 @@
 // main.js wiring — the real desktop/main/main.js run under Node with a fake `electron` module
 // (test/unit/main/_fake-electron.mjs, substituted by a module.register resolve hook). Proves the
-// preflight (flags, TRIPLEX_USER_DATA_DIR, loopback refusal), the window + three views with the
-// hardened webPreferences, every IPC channel, the shortcut path, health forwarding, one full
-// prompt:send round trip, crash recreation and the bounds → settings.json flush on close.
+// preflight (flags, TRIPLEX_USER_DATA_DIR, loopback refusal of URLs and trusted hosts), the window
+// + three views with the hardened webPreferences, every IPC channel, the shortcut path, health
+// forwarding, one full prompt:send round trip, the renderer's origin guard + foreign-frame IPC
+// refusal, child-window / redirect / backstop policy, the Bluetooth chooser, the health + zoom
+// replay, crash recreation and the bounds → settings.json flush on close.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -129,6 +131,44 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.promptSend.value.results.claude.url, 'http://127.0.0.1:5199/c/1')
   assert.equal(p.rendererFocusedAfterSend, 1, 'renderer focus restored once')
 
+  // the renderer window is pinned to the origin of TRIPLEX_RENDERER_URL; popups go to the system browser
+  assert.deepEqual(p.rendererNav, {
+    foreign: true,
+    same: false,
+    redirect: true,
+    popup: { action: 'deny' },
+    opened: ['https://evil.example/', 'https://evil.example/r', 'https://evil.example/p'],
+  })
+  assert.deepEqual(p.foreignFrame, { ok: false, error: 'bad_request' }, 'IPC from a foreign document in the renderer webContents is refused')
+  assert.equal(p.ownFrame.ok, true)
+  assert.equal(p.ownFrame.value.version, '0.1.0')
+
+  // site views: will-redirect policed (main frame only), SSO list empty under E2E, child windows policed like the opener
+  assert.deepEqual(p.viewPolicy.ssoPopupUnderE2E, { action: 'deny' }, 'TRIPLEX_E2E_APP=1: no real SSO host opens in-app')
+  assert.equal(p.viewPolicy.ownPopup, 'allow')
+  assert.equal(p.viewPolicy.redirect, true)
+  assert.equal(p.viewPolicy.subframeRedirect, false)
+  assert.equal(p.viewPolicy.ownNav, false)
+  assert.deepEqual(p.viewPolicy.childBackstop, { popup: { action: 'deny' }, nav: true }, 'before did-create-window the child is held by the backstop')
+  assert.deepEqual(p.viewPolicy.child, { handler: true, evilPopup: { action: 'deny' }, evilNav: true, ownNav: false })
+  assert.deepEqual(p.viewPolicy.opened, ['https://accounts.google.com/o/oauth2', 'https://evil.example/r', 'https://evil.example/', 'https://evil.example/2'])
+
+  // backstop: a webContents nobody policed opens nothing and stays put
+  assert.deepEqual(p.backstop, { popup: { action: 'deny' }, nav: true, redirect: true })
+
+  // select-bluetooth-device: prevented + cancelled on the renderer, every view and stray contents; one listener each
+  for (const kind of ['view', 'window', 'stray']) assert.deepEqual(p.bluetooth[kind], { prevented: true, chosen: '', listeners: 1 }, kind)
+
+  // cached health + zoom replayed on did-finish-load and after panes:getInfo
+  const expectedReplay = [
+    ['panes:health', 'claude', p.health[0][2]],
+    ['panes:zoom', { slot: 'claude', factor: 1 }],
+    ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
+    ['panes:zoom', { slot: 'grok', factor: 1.2 }],
+  ]
+  assert.deepEqual(p.replay, expectedReplay)
+  assert.deepEqual(p.replayOnGetInfo, expectedReplay)
+
   assert.deepEqual(p.crashHealth, ['view_crashed'])
   assert.equal(p.recreated, 1)
   assert.equal(p.recreatedPartition, 'persist:chatgpt')
@@ -149,6 +189,7 @@ test('saved window bounds are restored (clamped) on the next launch and maximize
   assert.deepEqual([win.options.x, win.options.y, win.options.width, win.options.height], [920, 380, 1000, 700], 'clamped into the 1920×1080 work area')
   assert.equal(report.views[0].options.webPreferences.zoomFactor, 1.5, 'zoom from settings')
   assert.equal(report.views[0].zoom, 1.5)
+  assert.ok(report.probes.replay.some(([c, m]) => c === 'panes:zoom' && m.slot === 'claude' && m.factor === 1.5), 'the persisted zoom is replayed to the renderer on did-finish-load')
 })
 
 test('TRIPLEX_CHROMIUM_FLAGS: a flag outside the allow-list refuses to start (exit 2) before any window', () => {
@@ -178,6 +219,21 @@ test('TRIPLEX_E2E_APP=1 refuses a non-loopback site URL (exit 3) before any wind
   const partial = run({ TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: JSON.stringify({ claude: { url: `${FAKE_BASE}/?site=claude`, newChatUrl: `${FAKE_BASE}/?site=claude` } }), TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
   assert.equal(partial.status, 3)
   assert.match(partial.stderr, /chatgpt\.url=https:\/\/chatgpt\.com\//)
+})
+
+test('TRIPLEX_E2E_APP=1 also refuses a non-loopback trusted host (exit 3): loopback URLs with the real hosts', () => {
+  const sites = {}
+  for (const slot of SLOTS) sites[slot] = { url: `${FAKE_BASE}/?site=${slot}`, newChatUrl: `${FAKE_BASE}/?site=${slot}` } // hosts stay chatgpt.com / claude.ai / grok.com
+  const { status, report, stderr } = run({ TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: JSON.stringify(sites), TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
+  assert.equal(status, 3)
+  assert.equal(report.exit, 3)
+  assert.equal(report.windows.length, 0)
+  assert.match(stderr, /refuses the non-loopback trusted host claude\.hosts=claude\.ai/)
+  const one = { ...JSON.parse(sitesJson()) }
+  one.grok.hosts = ['127.0.0.1', 'localhost', 'grok.com']
+  const partial = run({ TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: JSON.stringify(one), TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
+  assert.equal(partial.status, 3)
+  assert.match(partial.stderr, /grok\.hosts=grok\.com/)
 })
 
 test('a broken TRIPLEX_SITES_JSON is a config error (exit 2)', () => {

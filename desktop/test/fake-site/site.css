@@ -36,7 +36,15 @@ article[data-message-author-role='user'] {
   background: #e9eef6;
   white-space: pre-wrap;
 }
+article[data-message-author-role='assistant'] {
+  align-self: flex-start;
+  max-width: 70%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #f1f1f1;
+}
 .composer {
+  position: relative;
   display: flex;
   gap: 8px;
   align-items: flex-end;
@@ -45,6 +53,34 @@ article[data-message-author-role='user'] {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: #fff;
+}
+/* grok's hidden helper textarea, as on the real page: RENDERED (a 14×14 px box with client rects,
+   display/visibility untouched) but invisible. It therefore passes a layout-based visibility check,
+   which is exactly how the old bare `textarea` fallback picked it as the composer. */
+textarea.helper {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  flex: none;
+  box-sizing: border-box;
+  border: 0;
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  max-height: 14px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+button.voice {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  background: #fff;
+  cursor: pointer;
 }
 .ProseMirror, textarea {
   flex: 1;

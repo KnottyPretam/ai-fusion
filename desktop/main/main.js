@@ -8,21 +8,26 @@
 //
 // Before ready:  TRIPLEX_USER_DATA_DIR → app.setPath('userData'); TRIPLEX_CHROMIUM_FLAGS /
 //                TRIPLEX_DISABLE_GPU (allow-listed; anything else exits 2); TRIPLEX_SITES_JSON /
-//                TRIPLEX_GROK_SURFACE; TRIPLEX_E2E_APP=1 refuses non-loopback site URLs (exit 3);
-//                single-instance lock.
+//                TRIPLEX_GROK_SURFACE; TRIPLEX_E2E_APP=1 refuses non-loopback site URLs and
+//                trusted hosts (exit 3) and treats SSO_HOSTS as empty; single-instance lock;
+//                `web-contents-created` backstop (any webContents nobody policed opens nothing
+//                and stays put; the Bluetooth chooser is cancelled everywhere).
 // After ready:   settings.json (window bounds clamped to the matching display, zoom), selectors
-//                override, the renderer window (preload/renderer.cjs, sandbox), the three site views
-//                (views.js), the orchestrator, shortcuts (before-input-event everywhere + hidden
-//                menu), every IPC channel (ipc.js); global.__triplexTest under TRIPLEX_E2E_APP=1.
+//                override, the renderer window (preload/renderer.cjs, sandbox, pinned to the
+//                renderer URL's origin: navigations / redirects elsewhere go to the system browser
+//                and IPC from a foreign document is bad_request), the three site views (views.js),
+//                the orchestrator, shortcuts (before-input-event everywhere + hidden menu), every
+//                IPC channel (ipc.js), the cached health + zoom replayed to the renderer on every
+//                did-finish-load; global.__triplexTest under TRIPLEX_E2E_APP=1.
 
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu } from 'electron'
-import { resolveSites, nonLoopbackSiteUrls } from './sites.js'
+import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
-import { applyPermissionPolicy } from './permissions.js'
-import { isExternalUrl } from './policy.js'
+import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
+import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
 import { createSettings } from './settings.js'
 import { createSelectorsLoader, timeoutsFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
@@ -62,6 +67,11 @@ function rendererUrl() {
   return `http://127.0.0.1:${env.TRIPLEX_BACKEND_PORT || DEFAULT_BACKEND_PORT}/app/`
 }
 
+/** The only origin the renderer window may show and accept IPC from (null when the URL does not parse). */
+function rendererOrigin() {
+  return originOf(rendererUrl())
+}
+
 /** @type {Record<string, {url:string,newChatUrl:string,partition:string,hosts:string[]}>|null} */
 let sites = null
 
@@ -76,8 +86,12 @@ function preflight() {
     return fail(2, e.message)
   }
   if (E2E) {
+    // URLs first, then the hosts policy.js would trust for in-view navigation and child windows.
     const bad = nonLoopbackSiteUrls(sites)
-    if (bad.length) return fail(3, `TRIPLEX_E2E_APP=1 refuses the non-loopback site URL ${bad[0].slot}.${bad[0].key}=${bad[0].url}`)
+    if (bad.length) {
+      const what = bad[0].key === 'hosts' ? 'trusted host' : 'site URL'
+      return fail(3, `TRIPLEX_E2E_APP=1 refuses the non-loopback ${what} ${bad[0].slot}.${bad[0].key}=${bad[0].url}`)
+    }
   }
   return true
 }
@@ -102,7 +116,14 @@ function windowAlive() {
 }
 
 function isRenderer(event) {
-  return windowAlive() && isMainFrameOf(event, win.webContents)
+  if (!windowAlive() || !isMainFrameOf(event, win.webContents)) return false
+  try {
+    // Belt and braces under the will-navigate guard: a foreign document that somehow ended up in
+    // the renderer webContents (the preload re-runs for every document) never gets window.triplex.
+    return frameOriginMatches(event, rendererOrigin())
+  } catch (_e) {
+    return false
+  }
 }
 
 function sendToRenderer(channel, ...args) {
@@ -132,11 +153,11 @@ function createWindow() {
   win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: 'Triplex' }))
   if (bounds.maximized) win.maximize()
 
-  // The renderer never opens windows itself; links go to the system browser.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    openExternal(url)
-    return { action: 'deny' }
-  })
+  // The renderer never opens windows itself and never leaves its own origin: window.open, a
+  // navigation or a server-side redirect elsewhere goes to the system browser (window.triplex,
+  // incl. sendPrompt into three logged-in sessions, must never follow the window to a foreign page).
+  attachOriginPolicy(win.webContents, rendererOrigin(), { openExternal, log: console })
+  attachDeviceChooserPolicy(win.webContents)
   win.webContents.on('render-process-gone', (_event, details) => {
     if (details && details.reason === 'clean-exit') return
     console.error(`[renderer] render process gone (${details && details.reason}); reloading`)
@@ -164,6 +185,22 @@ function createWindow() {
 // Lifecycle
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Re-send what the renderer may have missed: the cached health of every view and the persisted
+ * zoom factors. `webContents.send` to a page that is still loading (launch, the reload after a
+ * renderer crash) is lost, and `panes:getInfo` carries neither. Wired to the renderer's
+ * did-finish-load here; ipc.js also replays right after `panes:getInfo`, when the renderer's
+ * listeners are known to exist.
+ */
+function replayToRenderer() {
+  if (!views || !windowAlive()) return
+  for (const slot of views.slots()) {
+    const h = views.getHealth(slot)
+    if (h) sendToRenderer('panes:health', slot, h)
+    sendToRenderer('panes:zoom', { slot, factor: views.zoomFactor(slot) })
+  }
+}
+
 function start() {
   const userData = app.getPath('userData')
   applyPermissionPolicy(session.defaultSession) // the renderer's own session
@@ -187,7 +224,9 @@ function start() {
     openExternal,
     onHealth: (slot, health) => sendToRenderer('panes:health', slot, health),
     dev: DEV,
+    ssoHosts: E2E ? [] : SSO_HOSTS, // an E2E run must never open a real SSO host, even as a popup
   })
+  win.webContents.on('did-finish-load', replayToRenderer)
 
   orchestrator = createOrchestrator({
     adapterFor: (slot) => views.adapterFor(slot),
@@ -251,6 +290,19 @@ if (preflight()) {
     app.whenReady().then(start)
   }
 }
+
+// Backstop for every webContents in the process (site views, the renderer, allowed SSO popups,
+// devtools, anything else): fires synchronously on construction, before views.js / createWindow()
+// attach their own policy, and stays inert for the contents they police; whatever nobody polices
+// opens no windows and does not navigate. Bluetooth device requests are cancelled everywhere.
+app.on('web-contents-created', (_event, contents) => {
+  try {
+    attachDefaultDenyPolicy(contents, { log: console })
+    attachDeviceChooserPolicy(contents)
+  } catch (e) {
+    console.warn(`[triplex] web-contents-created backstop failed: ${(e && e.message) || e}`)
+  }
+})
 
 app.on('before-quit', () => {
   if (settings) settings.flushWindowBounds()

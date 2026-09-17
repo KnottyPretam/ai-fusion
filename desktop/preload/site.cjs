@@ -26,10 +26,11 @@
 //     (its helper `request(msg)` does that and resolves with the matching 'triplex:adapter:result').
 //   * node --test — no `window`, never boots; `module.exports` exposes the pure parts.
 //
-// Stage 1 (site-adapters): the full adapter — selectors v1 with session detection, `findFirst`
-// over the document + open shadow roots, `waitForComposer`, the verified insertion cascade,
-// submit polling with confirmation, `ready`, `insertAndSubmit`, `countAssistant`, cancel, busy,
-// health on change + 10 s heartbeat. `observe` and `snapshot` arrive in Stage 2.
+// Stage 1 (site-adapters): the full adapter — selectors v1 with session detection (scoped: chat
+// content is never a wall or banner), `findFirst` over the document + open shadow roots,
+// `waitForComposer`, the idempotent verified insertion cascade, submit polling with confirmation,
+// `ready`, `insertAndSubmit`, `countMessages`/`countAssistant`, cancel, busy, health on change +
+// 10 s heartbeat, requests parked during boot. `observe` and `snapshot` arrive in Stage 2.
 
 ;(() => {
   'use strict'
@@ -66,10 +67,11 @@
   const MAX_SHADOW_DEPTH = 8
 
   /**
-   * What `countAssistant()` counts in v1 (no `assistant` cascade until selectors v2): every element
-   * matching one of these generic message containers — user AND assistant turns — de-duplicated,
-   * in the document and its open shadow roots. It is a monotonic "a message was appended" signal
-   * used to confirm a submission (the user turn appears), not a reply count; 0 when nothing matches.
+   * What `countMessages()` counts: every element matching one of these generic message containers
+   * — user AND assistant turns — de-duplicated, in the document and its open shadow roots. It is a
+   * monotonic "a message was appended" signal used to confirm a submission (the user turn appears),
+   * not a reply count; 0 when nothing matches. The same list defines "inside a chat message" for
+   * the session rules: text and links rendered inside one of these never count as a wall or banner.
    * A v2 `assistant` cascade (Stage 2) is counted in addition when present.
    */
   const MESSAGE_SELECTORS = Object.freeze([
@@ -80,6 +82,33 @@
     "div[id^='response-']", // grok assistant turns
     '.message-bubble', // grok user/assistant bubbles
   ])
+  const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
+
+  /**
+   * What `countAssistant()` counts: assistant-role containers only (+ a v2 `assistant` cascade).
+   * This is the `assistantCount` handed to main (contract §2/§3) — Stage 2's observe baseline — so
+   * the user's own turn, appended after the sample, is never mistaken for the reply.
+   */
+  const ASSISTANT_SELECTORS = Object.freeze([
+    "[data-message-author-role='assistant']", // chatgpt
+    '.font-claude-response', // claude
+    '.font-claude-message', // claude (older markup)
+    "div[id^='response-']", // grok
+  ])
+
+  /**
+   * Where `errorText` (contract §4) is looked for: alert-like containers only, never the whole
+   * body — a reply or prompt that merely mentions "rate limit" or "Something went wrong" is chat
+   * content, not a banner. Containers inside a message, or wrapping the thread/composer, are skipped.
+   */
+  const ALERT_SELECTORS = Object.freeze(["[role='alert']", "[role='status']", "[role='dialog']", "[role='alertdialog']", '[aria-live]'])
+
+  /**
+   * The Cloudflare interstitial's exact tab title. `challengeTitle` is a substring rule and the
+   * sites put the conversation title in the tab title, so a substring hit only counts when it is
+   * this exact title, or corroborated by a missing composer / a `challenge` element.
+   */
+  const CLOUDFLARE_CHALLENGE_TITLES = Object.freeze(['Just a moment...', 'Just a moment\u2026'])
 
   /** Selector config v1 — contract §4, verbatim. Override file: <userData>/selectors.json. */
   const DEFAULT_SELECTORS = {
@@ -127,15 +156,21 @@
     },
     grok: {
       chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+',
+      // Verified live on grok.com (signed in, 2026-09-16; contract §4): the composer is a
+      // TipTap/ProseMirror div inside a <form>. A hidden 14 px helper <textarea> also exists on the
+      // page, so a bare `textarea` entry must NEVER be a fallback — it matched the helper, the
+      // insertion "verified" against it and the prompt vanished.
       composer: [
+        "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']",
+        "div[role='textbox'][aria-label='Ask Grok anything']",
+        "div.ProseMirror[contenteditable='true']",
         "textarea[aria-label='Ask Grok anything']",
-        "textarea[placeholder='Ask anything']",
         "textarea[placeholder*='Grok']",
-        "textarea[data-testid='grok-compose-input']",
         "div[contenteditable='true'][data-lexical-editor='true']",
-        'textarea',
       ],
-      send: ["button[aria-label='Submit']", "button[aria-label='Send message']", "button[type='submit']"],
+      // Rendered only once the editor holds text (an "Enter voice mode" button occupies the slot
+      // while it is empty): `submit()` polls this cascade AFTER the insertion, never before.
+      send: ["button[data-testid='chat-submit']", "button[aria-label='Submit']", "button[type='submit']"],
       loggedOut: ["a[href*='/sign-in']", "a[href*='accounts.x.ai']"],
       loggedOutUrl: ['accounts.x.ai', '/sign-in'],
       challenge: ["iframe[src*='challenges.cloudflare.com']"],
@@ -345,11 +380,16 @@
     return out
   }
 
-  /** Rendered (has a box) and not hidden by CSS. Elements without layout APIs (fakes) count as visible. */
+  /** Rendered (a non-empty box) and not hidden by CSS. Elements without layout APIs (fakes) count as visible. */
   function isVisible(el, win) {
     if (!el) return false
     try {
       if (typeof el.getClientRects === 'function' && el.getClientRects().length === 0) return false
+      if (typeof el.getBoundingClientRect === 'function') {
+        // Playwright's rule: a collapsed 0×0 box (an overflow-hidden or animated-out duplicate) is not visible
+        const r = el.getBoundingClientRect()
+        if (r && (r.width === 0 || r.height === 0)) return false
+      }
       const view = win || (el.ownerDocument && el.ownerDocument.defaultView) || null
       if (view && typeof view.getComputedStyle === 'function') {
         const cs = view.getComputedStyle(el)
@@ -361,15 +401,22 @@
     return true
   }
 
-  /** Not `disabled` and not `aria-disabled="true"`. */
+  /** `fn()` returned true; a throwing `fn` (no attribute API, an unsupported pseudo-class) counts as false. */
+  function safeTrue(fn) {
+    try {
+      return fn() === true
+    } catch (_e) {
+      return false
+    }
+  }
+
+  /** Not `disabled` (property, attribute or `:disabled` — a disabled <fieldset> ancestor counts) and not `aria-disabled="true"`. */
   function isEnabled(el) {
     if (!el) return false
     if (el.disabled === true) return false
-    try {
-      if (typeof el.getAttribute === 'function' && String(el.getAttribute('aria-disabled')).toLowerCase() === 'true') return false
-    } catch (_e) {
-      /* no attributes: enabled */
-    }
+    if (safeTrue(() => typeof el.matches === 'function' && el.matches(':disabled'))) return false
+    if (safeTrue(() => typeof el.hasAttribute === 'function' && el.hasAttribute('disabled'))) return false
+    if (safeTrue(() => typeof el.getAttribute === 'function' && String(el.getAttribute('aria-disabled')).toLowerCase() === 'true')) return false
     return true
   }
 
@@ -445,16 +492,17 @@
 
     /**
      * First cascade entry with a match in the document or an open shadow root. With `visible`/
-     * `enabled`, the first matching ELEMENT of an entry that passes the filters (an entry whose
-     * matches are all hidden or disabled does not stop the cascade).
+     * `enabled`/`accept`, the first matching ELEMENT of an entry that passes the filters (an entry
+     * whose matches are all hidden, disabled or rejected does not stop the cascade).
      */
-    function findFirst(cascade, { visible = false, enabled = false } = {}) {
+    function findFirst(cascade, { visible = false, enabled = false, accept = null } = {}) {
       if (!Array.isArray(cascade)) return null
       let roots = null
       const shadow = () => (roots === null ? (roots = openShadowRoots(document)) : roots)
+      const filtered = visible || enabled || typeof accept === 'function'
       for (const selector of cascade) {
         if (typeof selector !== 'string' || selector === '') continue
-        if (!visible && !enabled) {
+        if (!filtered) {
           const el = deepQuerySelector(document, selector, shadow)
           if (el) return { el, selector }
           continue
@@ -462,6 +510,7 @@
         for (const el of deepQuerySelectorAll(document, selector, shadow)) {
           if (visible && !isVisible(el, win)) continue
           if (enabled && !isEnabled(el)) continue
+          if (accept && !accept(el)) continue
           return { el, selector }
         }
       }
@@ -496,17 +545,44 @@
       }
     }
 
-    function bodyText() {
+    /** True when `el` sits inside a rendered chat message (MESSAGE_SELECTORS); elements without `closest` (fakes) count as outside. */
+    function insideMessage(el) {
       try {
-        const body = document.body
-        if (!body) return ''
-        // innerText = rendered text only (script/style contents excluded); textContent is the fallback
-        // for documents without layout (node tests).
-        const t = typeof body.innerText === 'string' ? body.innerText : body.textContent
-        return String(t || '')
+        return !!(el && typeof el.closest === 'function' && el.closest(MESSAGE_SELECTOR))
       } catch (_e) {
-        return ''
+        return false
       }
+    }
+
+    /** True when `container` wraps the thread or the composer: a layout region (an `aria-live` app root), not a banner. */
+    function wrapsChat(container, composerEl) {
+      if (queryOne(container, MESSAGE_SELECTOR)) return true
+      try {
+        return !!(composerEl && container !== composerEl && typeof container.contains === 'function' && container.contains(composerEl))
+      } catch (_e) {
+        return false
+      }
+    }
+
+    /**
+     * The rendered text of every alert-like container (ALERT_SELECTORS, document + open shadow
+     * roots) that is neither inside a chat message nor wrapping the thread/composer. Replaces the
+     * whole-body scan: chat content never counts as a banner, and no layout is forced on the body.
+     */
+    function alertTexts(composerEl) {
+      const roots = openShadowRoots(document)
+      const seen = new Set()
+      const out = []
+      for (const selector of ALERT_SELECTORS) {
+        for (const el of deepQuerySelectorAll(document, selector, roots)) {
+          if (seen.has(el)) continue
+          seen.add(el)
+          if (insideMessage(el) || wrapsChat(el, composerEl)) continue
+          const t = readText(el)
+          if (t !== '') out.push(t)
+        }
+      }
+      return out
     }
 
     function includesAny(haystack, needles, { ci = false } = {}) {
@@ -515,8 +591,9 @@
       return needles.some((n) => typeof n === 'string' && n !== '' && h.includes(ci ? n.toLowerCase() : n))
     }
 
+    /** A rendered match first (a hidden or collapsed editor earlier in the DOM never wins), else any match (presence during mount). */
     function findComposer() {
-      return findFirst(sel.composer)
+      return findFirst(sel.composer, { visible: true }) || findFirst(sel.composer)
     }
 
     function findSend() {
@@ -536,14 +613,23 @@
       return hasStopCascade() ? findFirst(sel.stop, { visible: true }) : null
     }
 
-    /** Contract §4 rules, in order: loggedOutUrl → challengeTitle → challenge → loggedOut → errorText → ok/unknown. */
+    /**
+     * Contract §4 rules, in order: loggedOutUrl → challengeTitle → challenge → loggedOut → errorText → ok/unknown.
+     * Scope: `challengeTitle` counts only as the exact Cloudflare title or when corroborated (no
+     * composer, or a `challenge` element); `loggedOut` must be visible and outside a chat message;
+     * `errorText` is looked for in alert-like containers only (see ALERT_SELECTORS), never in the
+     * thread or the composer — a reply that mentions "rate limit" or links to /login stays `ok`.
+     */
     function sessionState() {
       if (includesAny(href(), sel.loggedOutUrl)) return 'logged_out'
-      if (includesAny(title(), sel.challengeTitle)) return 'challenge'
-      if (anyMatch(sel.challenge)) return 'challenge'
-      if (anyMatch(sel.loggedOut)) return 'logged_out'
-      if (includesAny(bodyText(), sel.errorText, { ci: true })) return 'blocked'
-      return findComposer() ? 'ok' : 'unknown'
+      const composer = findComposer()
+      const t = title()
+      const challengeEl = anyMatch(sel.challenge)
+      if (includesAny(t, sel.challengeTitle) && (challengeEl || !composer || CLOUDFLARE_CHALLENGE_TITLES.includes(t.trim()))) return 'challenge'
+      if (challengeEl) return 'challenge'
+      if (findFirst(sel.loggedOut, { visible: true, accept: (el) => !insideMessage(el) })) return 'logged_out'
+      if (alertTexts(composer ? composer.el : null).some((text) => includesAny(text, sel.errorText, { ci: true }))) return 'blocked'
+      return composer ? 'ok' : 'unknown'
     }
 
     function health() {
@@ -570,16 +656,26 @@
       }
     }
 
-    /** See MESSAGE_SELECTORS: distinct elements matching the generic message containers (+ a v2 `assistant` cascade). */
-    function countAssistant() {
+    function countDistinct(cascades) {
       const seen = new Set()
       const roots = openShadowRoots(document)
-      const cascades = (Array.isArray(sel.assistant) ? sel.assistant : []).concat(MESSAGE_SELECTORS)
       for (const selector of cascades) {
         if (typeof selector !== 'string' || selector === '') continue
         for (const el of deepQuerySelectorAll(document, selector, roots)) seen.add(el)
       }
       return seen.size
+    }
+
+    const assistantCascade = () => (Array.isArray(sel.assistant) ? sel.assistant : [])
+
+    /** See MESSAGE_SELECTORS: every rendered message, user and assistant (+ a v2 `assistant` cascade) — the submit-confirmation signal. */
+    function countMessages() {
+      return countDistinct(assistantCascade().concat(MESSAGE_SELECTORS))
+    }
+
+    /** See ASSISTANT_SELECTORS: assistant turns only (+ a v2 `assistant` cascade) — the `assistantCount` reported to main. */
+    function countAssistant() {
+      return countDistinct(assistantCascade().concat(ASSISTANT_SELECTORS))
     }
 
     function cascadeText(cascade) {
@@ -595,11 +691,20 @@
       return new AdapterError(state, `${state}: ${why[state] || 'session is not ok'}`)
     }
 
+    /** A wall / challenge / banner that appeared meanwhile is the reason, not "no composer": throw it. */
+    function throwIfRejected() {
+      const state = sessionState()
+      if (REJECT_STATES.includes(state)) throw stateError(state)
+    }
+
     /** Wait for the composer to exist (every 150 ms up to `timeoutMs`, default `composerWaitMs`). */
     async function waitForComposer(timeoutMs, { signal } = {}) {
       const ms = nonNegativeInt(timeoutMs, nonNegativeInt(sel.composerWaitMs, 15000))
       const found = await poll(() => findComposer(), { intervalMs: SEND_POLL_MS, timeoutMs: ms, signal })
-      if (!found) throw new AdapterError('composer_not_found', `no composer within ${ms} ms (tried: ${cascadeText(sel.composer)})`)
+      if (!found) {
+        throwIfRejected()
+        throw new AdapterError('composer_not_found', `no composer within ${ms} ms (tried: ${cascadeText(sel.composer)})`)
+      }
       return found
     }
 
@@ -701,13 +806,21 @@
     /**
      * Insert `text` at the end of the composer with the verified cascade (contract §3):
      * contenteditable → execCommand, else synthetic paste; text field → native value setter.
-     * Each attempt is verified (`tailMatches`) after INSERT_SETTLE_MS; nothing is ever cleared.
+     * Idempotent: a composer that already holds exactly `text` (the leftover of a failed attempt —
+     * nothing is ever cleared) is left alone and reported `already_present`, so a retry never
+     * submits the prompt doubled. Otherwise each attempt is verified after INSERT_SETTLE_MS: the
+     * composer must now hold the previous text followed by `text` (whitespace-insensitive — strictly
+     * stronger than the §3 tail-20 rule, which it implies), so a no-op insertion is a failed attempt
+     * and falls through to the next method, and finally to `site_error`.
      */
     async function insertText(text, { signal } = {}) {
       if (typeof text !== 'string') throw new AdapterError('site_error', 'insertText: text must be a string')
       const found = findComposer()
       if (!found) throw new AdapterError('composer_not_found', `no composer (tried: ${cascadeText(sel.composer)})`)
       const el = found.el
+      const before = squash(readText(el))
+      if (before === squash(text)) return { method: 'already_present' }
+      const expected = before + squash(text)
       const attempts = []
       const attempt = async (method, fn) => {
         let ran = false
@@ -720,8 +833,8 @@
         await sleep(INSERT_SETTLE_MS)
         throwIfAborted(signal)
         const current = findComposer()
-        if (tailMatches(readText(current ? current.el : el), text)) return true
-        attempts.push(`${method}: ${threw ? `threw ${threw}` : ran ? 'ran' : 'did not run'}; the composer text does not end with the inserted text`)
+        if (squash(readText(current ? current.el : el)) === expected) return true
+        attempts.push(`${method}: ${threw ? `threw ${threw}` : ran ? 'ran' : 'did not run'}; the composer text is not the previous text followed by the inserted text`)
         return false
       }
       if (isTextField(el)) {
@@ -765,14 +878,18 @@
       }
     }
 
-    /** stop button | composer emptied | countAssistant() grew, polled every 100 ms up to `verifyMs`. */
+    /**
+     * stop button | composer emptied | countMessages() grew, polled every 100 ms up to `verifyMs`.
+     * The third signal keeps its contract name `assistant_count` (§2 `confirmedBy`) although it is
+     * the message count (user turns included) that grows when a submission lands.
+     */
     function confirmSubmission(verifyMs, baseline, signal) {
       return poll(
         () => {
           if (findStop()) return 'stop_button'
           const c = findComposer()
           if (c && isBlank(readText(c.el))) return 'composer_cleared'
-          if (countAssistant() > baseline) return 'assistant_count'
+          if (countMessages() > baseline) return 'assistant_count'
           return null
         },
         { intervalMs: CONFIRM_POLL_MS, timeoutMs: verifyMs, signal },
@@ -783,7 +900,8 @@
      * Submit what is in the composer (contract §3): poll the send cascade every 150 ms up to
      * `timeoutMs` (default `sendWaitMs`) for a visible, enabled button, click it and confirm within
      * `submitVerifyMs`; else one Enter on the composer and confirm again. `assistantCount` is the
-     * `countAssistant()` sample taken immediately before the action that confirmed.
+     * `countAssistant()` sample (assistant turns only) taken immediately before the action that
+     * confirmed; the confirmation baseline is the `countMessages()` sample taken at the same time.
      */
     async function submit(timeoutMs, { signal } = {}) {
       const waitMs = nonNegativeInt(timeoutMs, nonNegativeInt(sel.sendWaitMs, 18000))
@@ -791,16 +909,18 @@
       const button = await poll(() => findSendButton(), { intervalMs: SEND_POLL_MS, timeoutMs: waitMs, signal })
       let assistantCount = 0
       if (button) {
+        const baseline = countMessages()
         assistantCount = countAssistant()
         clickEl(button.el)
-        const confirmedBy = await confirmSubmission(verifyMs, assistantCount, signal)
+        const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
         if (confirmedBy) return { method: 'click', sendSelector: button.selector, confirmedBy, assistantCount }
       }
       const composer = findComposer()
       if (composer) {
+        const baseline = countMessages()
         assistantCount = countAssistant()
         pressEnter(composer.el)
-        const confirmedBy = await confirmSubmission(verifyMs, assistantCount, signal)
+        const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
         if (confirmedBy) return { method: 'enter', sendSelector: button ? button.selector : null, confirmedBy, assistantCount }
       }
       if (!button) {
@@ -823,6 +943,7 @@
         { intervalMs: SEND_POLL_MS, timeoutMs: ms, signal },
       )
       if (!found) {
+        throwIfRejected()
         if (findComposer()) throw new AdapterError('timeout', `the stop button is still visible after ${Math.round(clock() - t0)} ms (the site is still replying)`)
         throw new AdapterError('composer_not_found', `no composer within ${ms} ms (tried: ${cascadeText(sel.composer)})`)
       }
@@ -869,6 +990,7 @@
       insertText,
       submit,
       insertAndSubmit,
+      countMessages,
       countAssistant,
       ready,
       url: href,
@@ -905,6 +1027,9 @@
    * Listens on 'triplex:adapter', answers on 'triplex:adapter:result', and publishes
    * 'triplex:adapter:health' on every change plus a 10 s heartbeat. One op in flight per view:
    * a second ready/insertAndSubmit/observe/snapshot answers `busy`; `cancel{target}` aborts it.
+   * Messages that arrive before `adapter:config` settles are parked and replayed in order once
+   * an adapter exists (dropped when the preload stays inert), so main never waits its full
+   * budget for a request that landed during boot.
    * Returns `{ready: Promise<boolean>, dispose()}` (ready resolves true when an adapter was created).
    */
   function attachIpc(ipc, factory, { setInterval: setI = globalThis.setInterval, clearInterval: clearI = globalThis.clearInterval } = {}) {
@@ -912,6 +1037,8 @@
       throw new Error('attachIpc: ipc must provide invoke/on/send')
     }
     let adapter = null
+    let booting = true // adapter:config not answered yet: messages are parked in `backlog`
+    const backlog = []
     let inFlight = null // {reqId, op, controller}
     let lastHealthKey = null
     let lastHealthAt = 0
@@ -962,7 +1089,12 @@
     }
 
     const handle = (msg) => {
-      if (!adapter || disposed || !msg || typeof msg !== 'object') return
+      if (disposed || !msg || typeof msg !== 'object') return
+      if (booting) {
+        backlog.push(msg)
+        return
+      }
+      if (!adapter) return
       const op = msg.op
       if (op === 'config') {
         // hot reload (Stage 2): replace selectors, no reply
@@ -1013,6 +1145,14 @@
 
     ipc.on('triplex:adapter', (_event, msg) => handle(msg))
 
+    /** Boot is over: replay the parked messages in order when an adapter exists, drop them otherwise. */
+    const settle = (created) => {
+      booting = false
+      const queued = backlog.splice(0)
+      if (created) for (const msg of queued) handle(msg)
+      return created
+    }
+
     const ready = Promise.resolve()
       .then(() => ipc.invoke('adapter:config'))
       .then((config) => {
@@ -1025,11 +1165,13 @@
         return true
       })
       .catch(() => false)
+      .then(settle)
 
     return {
       ready,
       dispose() {
         disposed = true
+        backlog.length = 0
         if (timer !== null) clearI(timer)
         timer = null
         if (inFlight !== null) inFlight.controller.abort()
@@ -1077,6 +1219,8 @@
       REJECT_STATES,
       RESULT_CODES,
       MESSAGE_SELECTORS,
+      ASSISTANT_SELECTORS,
+      ALERT_SELECTORS,
       DEFAULT_SELECTORS,
       mergeSelectors,
       siteFor,
