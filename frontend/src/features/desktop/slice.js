@@ -1,4 +1,5 @@
-// Desktop `panes` slice (renderer-desktop, Stage 1). Registered under key 'panes' from ./index.jsx.
+// Desktop `panes` slice (renderer-desktop Stage 1, renderer-desktop-2 Stage 2). Registered under key
+// 'panes' from ./index.jsx.
 //
 // Shape (docs/desktop-contract.md §7):
 //   { mode: 'tabs'|'split', active: slot, targets: {slot: bool},
@@ -16,14 +17,32 @@
 //   panes/target     {slot, on}                   one target checkbox
 //   panes/health     {slot, health}               Health object or null (from triplex.onHealth)
 //   panes/sendStart  {targets?}                   sending = true; clears lastSend for the targets (all when omitted)
-//   panes/sendResult {results}                    sending = false; lastSend[slot] = results[slot] (triplex.sendPrompt shape:
-//                                                 {ok, code?, message?, ms, url?, composerSelector?, sendSelector?})
+//   panes/sendResult {results}                    sending = false; lastSend[slot] = results[slot] (per-slot outcome
+//                                                 objects in the lastSend shape; `{}` just ends the send)
 //   panes/zoom       {slot, factor}               from triplex.onZoom / the zoom() reply
 //   panes/capture    {capture} | {slot, on}       whole map (getCapture) or one switch (setCapture)
 //   panes/bridge     {connected, since?}
 //   panes/turn       {slot, phase}                phase string from triplex.onTurn
 //   panes/drawer     {open?}                      boolean sets, omitted toggles
 //   panes/analyst    {slot?, visible?, health?}   merges the keys present
+//
+// Stage 2 — the unified prompt is a Triplex Send (`POST /api/conversations/{id}/send` through
+// features/send/useSendTurn.js) and the per-slot outcome comes from that stream, so this slice also
+// reads the frozen `sse {feature:'send', event}` action (every slice gets every action, the same way
+// the meter slice books other features' streams):
+//   turn_start{slots}          clears lastSend for the listed slots (a subset send or a solo continue)
+//   slot_done{slot, usage}     lastSend[slot] = {ok:true, ms: usage.latency_ms}            → "sent ✓ captured"
+//   slot_error{slot, code, …}  code 'not_captured' (capture is off for that site; the reply stayed
+//                              in the pane, docs/api-contract.md addendum) → {ok:true, code, message}
+//                              → "sent ✓ not captured"; any other code → {ok:false, code, message}
+//                              → "✗ <code>". In tabs mode a logged_out | challenge | blocked error
+//                              also activates that pane (auto-reveal, plan Decision 7).
+// Why here and not in a component effect: the `slots` slice is reset by the post-stream refetch
+// (`conversation/loaded`), React batches the dispatches of one chunk into one render, and the
+// persisted SendTurn keeps only the error MESSAGE — so a reducer that sees every event is the only
+// place where the outcome (with its code) is recorded exactly once and kept until the next send.
+// `lastSend` therefore describes the last unified send, whatever conversation is open (as in
+// Stage 1); a switch does not clear it, the next send / turn_start does.
 //
 // Convention (state/reducers.js, features/send/slice.js): an action that changes nothing returns
 // the SAME object, so untouched slices keep identity across the root reducer. Unknown slots and
@@ -33,7 +52,10 @@
 // `triplex.panes.mode|active|targets` in localStorage. `loadPersistedPanes(storage)` reads them
 // (used by the slice's initial-state factory in index.jsx, so the first render already has the
 // restored layout) and `persistPanes(storage, panes)` writes them; both swallow storage errors
-// (private mode, quota, a missing `localStorage` in the thumbnail/test sandbox).
+// (private mode, quota, a missing `localStorage` in the thumbnail/test sandbox). Stage 2 adds
+// `triplex.panes.captureNoticeSeen` = JSON `{slot: bool}` of the capture switches touched once
+// (the first-run ToS notice hides when all three are true); the switch VALUES themselves are
+// main's (`settings.json`), read back through `getCapture`.
 
 // Mirrored from features/send/slice.js (features never import across each other; state/* is frozen).
 export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
@@ -45,7 +67,20 @@ export const ATTENTION_SESSIONS = ['logged_out', 'challenge', 'blocked']
 /** Badge text per attention state (plan row: "session badge SIGN IN / CHALLENGE / BLOCKED"). */
 export const SESSION_BADGES = { logged_out: 'SIGN IN', challenge: 'CHALLENGE', blocked: 'BLOCKED' }
 
+/** slot_error code minted by backend/llm/bridge.py when capture is off for the site (api-contract addendum). */
+export const NOT_CAPTURED = 'not_captured'
+
+/** The capture switch label (plan Stage 2 row, verbatim) and the ToS wording next to it / in the notice. */
+export const CAPTURE_LABEL = 'Capture reply text from this page into Triplex (needed for Analyze/Fusion)'
+export const CAPTURE_NOTICE_TEXT =
+  'Capture is off by default for every site. Switching it on for a pane makes Triplex read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, and xAI’s forbid automated access beyond a conventional browser. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the three switches has been set once.'
+export const CAPTURE_TITLE = 'Reads the reply out of this page, the act the site’s terms of service name. Off by default; your decision per site.'
+
 export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets' }
+export const CAPTURE_NOTICE_KEY = 'triplex.panes.captureNoticeSeen'
+
+/** Phase words for pane-<slot>-phase (contract §2 onTurn: idle|typing|submitted|replying|done|error). */
+export const PHASE_TEXT = { idle: 'idle', typing: 'typing…', submitted: 'submitted', replying: 'replying…', done: 'done', error: 'error' }
 
 export function isSlotId(x) {
   return SLOT_IDS.includes(x)
@@ -96,6 +131,54 @@ function isFactor(x) {
   return typeof x === 'number' && Number.isFinite(x) && x > 0
 }
 
+/** lastSend without the given slots (same object when none of them was present). */
+function withoutSlots(lastSend, list) {
+  let out = lastSend
+  for (const k of list) {
+    if (k in out) {
+      if (out === lastSend) out = { ...out }
+      delete out[k]
+    }
+  }
+  return out
+}
+
+/**
+ * The lastSend entry for one terminal per-slot Send event (`slot_done` / `slot_error`), or null
+ * for any other event. `ms` is the call latency stamped in `slot_done.usage.latency_ms` (the web
+ * transport reports zero tokens and cost; latency is real). `not_captured` is an `ok` outcome with
+ * the code: the site answered, the text stayed in the pane.
+ */
+export function sendOutcome(ev) {
+  if (!ev || typeof ev !== 'object' || !isSlotId(ev.slot)) return null
+  if (ev.type === 'slot_done') {
+    const ms = ev.usage && typeof ev.usage === 'object' ? Number(ev.usage.latency_ms) || 0 : 0
+    return { ok: true, ms }
+  }
+  if (ev.type === 'slot_error') {
+    const code = ev.code === undefined || ev.code === null || ev.code === '' ? 'error' : String(ev.code)
+    const message = typeof ev.message === 'string' ? ev.message : ''
+    return { ok: code === NOT_CAPTURED, code, message, ms: 0 }
+  }
+  return null
+}
+
+function reduceSendEvent(s, ev) {
+  if (!ev || typeof ev !== 'object') return s
+  if (ev.type === 'turn_start') {
+    const list = Array.isArray(ev.slots) ? ev.slots.filter(isSlotId) : SLOT_IDS
+    const lastSend = withoutSlots(s.lastSend, list)
+    return lastSend === s.lastSend ? s : { ...s, lastSend }
+  }
+  const outcome = sendOutcome(ev)
+  if (!outcome) return s
+  const next = { ...s, lastSend: { ...s.lastSend, [ev.slot]: outcome } }
+  // Auto-reveal: a rejection that needs the user (sign in, solve a challenge, an "unusual
+  // activity" block) switches to that pane in tabs mode; split mode shows every pane already.
+  if (s.mode === 'tabs' && s.active !== ev.slot && resultNeedsAttention(outcome)) next.active = ev.slot
+  return next
+}
+
 export function panesReducer(s = initialPanes(), a) {
   switch (a.type) {
     case 'panes/mode':
@@ -111,13 +194,7 @@ export function panesReducer(s = initialPanes(), a) {
     }
     case 'panes/sendStart': {
       const list = Array.isArray(a.targets) ? a.targets.filter(isSlotId) : SLOT_IDS
-      let lastSend = s.lastSend
-      for (const k of list) {
-        if (k in lastSend) {
-          if (lastSend === s.lastSend) lastSend = { ...lastSend }
-          delete lastSend[k]
-        }
-      }
+      const lastSend = withoutSlots(s.lastSend, list)
       if (s.sending && lastSend === s.lastSend) return s
       return { ...s, sending: true, lastSend }
     }
@@ -162,6 +239,10 @@ export function panesReducer(s = initialPanes(), a) {
       const same = next.slot === s.analyst.slot && next.visible === s.analyst.visible && next.health === s.analyst.health
       return same ? s : { ...s, analyst: next }
     }
+    case 'sse':
+      // The unified prompt streams under feature key 'send' (a solo continue from the Stage 3
+      // drawer too); Analyze / Fusion events never touch the per-slot send outcome.
+      return a.feature === 'send' && a.event ? reduceSendEvent(s, a.event) : s
     default:
       return s
   }
@@ -186,7 +267,7 @@ export function needsAttention(session) {
   return ATTENTION_SESSIONS.includes(session)
 }
 
-/** A sendPrompt result whose code is a session state also means the pane needs the user. */
+/** A send outcome whose code is a session state also means the pane needs the user. */
 export function resultNeedsAttention(result) {
   return !!(result && typeof result === 'object' && !result.ok && ATTENTION_SESSIONS.includes(result.code))
 }
@@ -225,6 +306,17 @@ export function healthTitle(health) {
   if (m.error) parts.push(`error: ${m.error}`)
   if (health.url) parts.push(`url: ${health.url}`)
   return parts.join('\n')
+}
+
+/** Text for pane-<slot>-phase: the phase word ('' before the first onTurn event; unknown phases verbatim). */
+export function phaseText(phase) {
+  if (typeof phase !== 'string' || !phase) return ''
+  return PHASE_TEXT[phase] || phase
+}
+
+/** True when every capture switch has been set at least once (the first-run notice hides). */
+export function allCaptureTouched(touched) {
+  return SLOT_IDS.every((k) => !!(touched && touched[k]))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -274,6 +366,37 @@ export function persistPanes(storage = defaultStorage(), panes) {
     const targets = {}
     for (const k of SLOT_IDS) targets[k] = !!(panes.targets && panes.targets[k])
     storage.setItem(PERSIST_KEYS.targets, JSON.stringify(targets))
+  } catch {
+    /* quota / private mode: the in-memory state is still right */
+  }
+}
+
+/**
+ * Read which capture switches were touched once: `{claude, chatgpt, grok: bool}`. Accepts the JSON
+ * map this module writes and a bare `true` (= all seen); anything else means "none yet".
+ */
+export function loadCaptureTouched(storage = defaultStorage()) {
+  const out = perSlot(false)
+  if (!storage) return out
+  try {
+    const raw = storage.getItem(CAPTURE_NOTICE_KEY)
+    if (!raw) return out
+    const parsed = JSON.parse(raw)
+    if (parsed === true) return perSlot(true)
+    if (parsed && typeof parsed === 'object') for (const k of SLOT_IDS) if (parsed[k] === true) out[k] = true
+  } catch {
+    /* a bad value or an unavailable storage means "nothing persisted" */
+  }
+  return out
+}
+
+/** Write the touched map; never throws. */
+export function persistCaptureTouched(storage = defaultStorage(), touched) {
+  if (!storage || !touched) return
+  try {
+    const o = {}
+    for (const k of SLOT_IDS) o[k] = !!touched[k]
+    storage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify(o))
   } catch {
     /* quota / private mode: the in-memory state is still right */
   }

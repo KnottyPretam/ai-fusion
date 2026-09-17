@@ -1,14 +1,20 @@
 // Test fakes for the desktop renderer (not a test file: vitest only collects *.test.{js,jsx}).
 //
 // fakeTriplex()  — the `window.triplex` surface of desktop/preload/renderer.cjs (contract §2,
-//                  Stage 1) with vi.fn() methods; `emit.health(slot, h)` / `emit.shortcut(name)` /
-//                  `emit.zoom({slot, factor})` drive the subscribed callbacks; `unsubscribed`
+//                  Stage 1 + Stage 2: getCapture/setCapture/onBridge/onTurn/openChats/signOut/
+//                  saveDomSnapshot; `sendPrompt` is gone) with vi.fn() methods; `emit.health(slot, h)`
+//                  / `emit.shortcut(name)` / `emit.zoom({slot, factor})` / `emit.bridge({connected})`
+//                  / `emit.turn({slot, phase})` drive the subscribed callbacks; `unsubscribed`
 //                  counts the returned unsubscribe calls per channel.
 // installFakeResizeObserver() — a ResizeObserver whose instances are collected in `.instances`;
 //                  `triggerResize()` calls every live observer's callback.
 // syncFrames()   — requestAnimationFrame that runs the callback synchronously (so the
 //                  rAF-throttled setLayout fires inside the effect that scheduled it).
 // mockRect(el, rect) — pins getBoundingClientRect() for one element (jsdom measures 0×0).
+// Stage 2 (the prompt bar posts a Triplex Send): `stubFetch(routes)`, `jsonResponse`,
+// `sseResponse(events)`, `controlledStream()`, `conv(over)` and `CFG` — the stubbed-fetch harness
+// of features/send/useSendTurn.test.jsx / SendPane.test.jsx, so the desktop specs drive the real
+// api/http.js + api/sse.js + useSendTurn.js against canned responses.
 import { vi } from 'vitest'
 
 export const RECTS = {
@@ -17,9 +23,15 @@ export const RECTS = {
   grok: { x: 1000, y: 40, width: 500, height: 600 },
 }
 
+export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn']
+
 export function fakeTriplex(over = {}) {
-  const listeners = { health: new Set(), shortcut: new Set(), zoom: new Set() }
-  const unsubscribed = { health: 0, shortcut: 0, zoom: 0 }
+  const listeners = {}
+  const unsubscribed = {}
+  for (const c of CHANNELS) {
+    listeners[c] = new Set()
+    unsubscribed[c] = 0
+  }
   const subscribe = (channel) =>
     vi.fn((cb) => {
       listeners[channel].add(cb)
@@ -43,11 +55,15 @@ export function fakeTriplex(over = {}) {
     onHealth: subscribe('health'),
     onShortcut: subscribe('shortcut'),
     onZoom: subscribe('zoom'),
-    sendPrompt: vi.fn(async ({ targets }) => {
-      const results = {}
-      for (const slot of targets) results[slot] = { ok: true, ms: 1234, composerSelector: '#prompt-textarea', sendSelector: "button[data-testid='send-button']", url: `https://${slot}.example/c/1` }
-      return { results }
-    }),
+    // Stage 2. `getCapture` hands the map back synchronously so the many synchronous specs stay
+    // act()-clean (the preload's promise shape is covered by the capture specs with an async fake).
+    getCapture: vi.fn(() => ({ claude: false, chatgpt: false, grok: false })),
+    setCapture: vi.fn(async () => {}),
+    onBridge: subscribe('bridge'),
+    onTurn: subscribe('turn'),
+    openChats: vi.fn(async () => ({ claude: 'kept', chatgpt: 'kept', grok: 'kept' })),
+    signOut: vi.fn(async () => {}),
+    saveDomSnapshot: vi.fn(async () => ({ path: '/tmp/snapshot.html' })),
     ...over,
   }
   api.listeners = listeners
@@ -61,6 +77,12 @@ export function fakeTriplex(over = {}) {
     },
     zoom: (msg) => {
       for (const cb of [...listeners.zoom]) cb(msg)
+    },
+    bridge: (msg) => {
+      for (const cb of [...listeners.bridge]) cb(msg)
+    },
+    turn: (msg) => {
+      for (const cb of [...listeners.turn]) cb(msg)
     },
   }
   return api
@@ -140,3 +162,105 @@ export function pinViewportRects(rects = RECTS) {
     return rect ? { ...rect, top: rect.y, left: rect.x, right: rect.x + rect.width, bottom: rect.y + rect.height } : zero
   })
 }
+
+// ---------------------------------------------------------------------------------------------
+// Stubbed-fetch harness (Stage 2)
+// ---------------------------------------------------------------------------------------------
+
+export const CFG = {
+  slots: {
+    claude: { model: 'web:claude', effort: 'off' },
+    chatgpt: { model: 'web:chatgpt', effort: 'off' },
+    grok: { model: 'web:grok', effort: 'off' },
+  },
+  analyst_model: 'web:chatgpt:analyst',
+  max_iterations: 2,
+  materiality_min: 'medium',
+  grounded: false,
+}
+
+export function conv(over = {}) {
+  return {
+    schema_version: 1,
+    id: 'c1',
+    title: 'New conversation',
+    created_at: '2026-09-16T00:00:00.000Z',
+    updated_at: '2026-09-16T00:00:00.000Z',
+    slot_config: CFG,
+    threads: { claude: [], chatgpt: [], grok: [] },
+    turns: [],
+    ...over,
+  }
+}
+
+export function jsonResponse(body, status = 200) {
+  return { ok: status < 400, status, json: async () => body }
+}
+
+/** One SSE response whose whole body is served in a single chunk, then closed. */
+export function sseResponse(events) {
+  const text = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n'
+  const chunks = [new TextEncoder().encode(text)]
+  let i = 0
+  return {
+    ok: true,
+    status: 200,
+    json: async () => null,
+    body: {
+      getReader: () => ({
+        read: async () => (i < chunks.length ? { value: chunks[i++], done: false } : { value: undefined, done: true }),
+        cancel: async () => {},
+        releaseLock() {},
+      }),
+    },
+  }
+}
+
+/** A stream whose chunks the test serves by hand: `push(events)` = one chunk, `end()` closes it. */
+export function controlledStream() {
+  const queue = []
+  let waiter = null
+  const serve = (item) => {
+    if (waiter) {
+      const w = waiter
+      waiter = null
+      w(item)
+    } else queue.push(item)
+  }
+  const response = {
+    ok: true,
+    status: 200,
+    json: async () => null,
+    body: {
+      getReader: () => ({
+        read: () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((r) => (waiter = r))),
+        cancel: async () => {},
+        releaseLock() {},
+      }),
+    },
+  }
+  return {
+    response,
+    push: (events) => serve({ value: new TextEncoder().encode(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), done: false }),
+    end: () => serve({ value: undefined, done: true }),
+  }
+}
+
+/** Route stubbed fetch calls by method + url; records every call in order. */
+export function stubFetch(routes) {
+  const calls = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url, init = {}) => {
+      const method = (init.method || 'GET').toUpperCase()
+      const body = init.body ? JSON.parse(init.body) : undefined
+      calls.push({ method, url, body })
+      const r = routes.find((x) => x.method === method && (x.url instanceof RegExp ? x.url.test(url) : x.url === url))
+      if (!r) throw new TypeError(`fetch failed: unstubbed ${method} ${url}`)
+      return typeof r.respond === 'function' ? r.respond({ method, url, body }) : r.respond
+    }),
+  )
+  return calls
+}
+
+export const seqOf = (calls) => calls.map((c) => `${c.method} ${c.url}`)

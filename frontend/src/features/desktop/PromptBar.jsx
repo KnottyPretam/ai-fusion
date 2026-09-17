@@ -1,36 +1,60 @@
-// PromptBar (renderer-desktop, Stage 1): the unified prompt. One textarea, a target checkbox per
-// slot, Send (`triplex.sendPrompt({targets, text})` over IPC; main types the text into every
-// target page and submits it), "New chat everywhere" (`triplex.newChat(targets)`) and one result
-// line per target from the sendPrompt results. Stage 1 reads nothing back from the sites: the
-// result only says whether the submit happened (`✓ 1.2 s · #prompt-textarea`) or why not
-// (`✗ send_not_found`). A result whose code is a session state (logged_out | challenge | blocked)
-// reveals that pane in tabs mode so the user can act on it.
+// PromptBar (renderer-desktop Stage 1, renderer-desktop-2 Stage 2): the unified prompt. One
+// textarea, a target checkbox per slot, Send, "New chat everywhere" and one result line per slot.
 //
-// Enter sends, Shift+Enter inserts a newline, an IME composition (`isComposing` / keyCode 229)
-// is never treated as a send. While a send is in flight main moves the OS focus into each target
-// view for the insert phase (orchestrator `focusView`), so the composer is read-only AND blurred
-// for the whole `sending` window — a keystroke typed then would otherwise land in the site's
-// composer between insert and submit. Main restores the renderer focus after the last insert
-// and the composer takes the focus back only if it had it when the send started. It is cleared
-// afterwards only when every target succeeded and the text is still exactly what was sent.
-// Stage 2 routes this through features/send/useSendTurn.js.
+// Stage 2: Send is a Triplex Send through features/send/useSendTurn.js (the SendPane.startTurn
+// extraction): a conversation is created when none is selected, `POST /api/conversations/{id}/send`
+// carries `{prompt}` when all three targets are checked and `{prompt, slots}` for a strict subset
+// (`sendBody`), the persisted conversation is refetched afterwards with the hook's `isCurrent`
+// guard and the sidebar list refreshed after a first send. The backend routes each `web:<slot>`
+// model over the bridge to Electron, which types the text into that site's page. The Stage 1
+// `triplex.sendPrompt` IPC path is gone (removed from the preload at the S6 merge).
+//
+// Locking: `panes.sending` is dispatched around the turn (`panes/sendStart{targets}` before
+// `startTurn`, `panes/sendResult{}` when it settles — after the create round-trip, the stream and
+// the refetch) so PaneDeck's Reload / New chat / new-chat-all gating is unchanged from Stage 1;
+// the hook's `locked` (any feature stream, or a turn of this hook in flight) is honoured as well —
+// "locked while streams.send streams", also for a stream started elsewhere. While either holds the
+// composer is read-only AND blurred (main moves the OS focus into each site view for the insert
+// phase; a keystroke typed then would land in the site's composer between insert and submit); the
+// focus comes back only if the composer had it when the send started. The composer is cleared at
+// submit (the text is the persisted turn's prompt) and restored when the turn fails before it
+// streamed (a pre-stream 409/422, a failed create) so the user can retry.
+//
+// Per-slot result line: `panes.lastSend[slot]`, recorded by the slice from the send stream's
+// slot_done / slot_error events (`sent ✓ captured` | `sent ✓ not captured` | `✗ <code>`, see
+// slice.js); "…" while this bar's send is in flight and the slot has no outcome yet. The tabs-mode
+// auto-reveal of a `logged_out | challenge | blocked` slot happens in the reducer.
+//
+// `bridge-banner` mirrors `triplex.onBridge` (`panes/bridge`): shown until Electron reports its
+// WebSocket to the backend connected (the initial state is disconnected, contract §7), and again
+// whenever it drops — a Send then fails per slot with `bridge_unavailable`; Send stays enabled
+// because the bridge reconnects on its own. "New chat everywhere" = createConversation +
+// openChats(newId) through ./chats.js (the shell's instance when given, else one of our own);
+// disabled while any stream runs.
+//
+// Enter sends, Shift+Enter inserts a newline, an IME composition (`isComposing` / keyCode 229) is
+// never treated as a send. Every `window.triplex` call is optional-chained: the bar renders and
+// sends under a partial stub (desktop-smoke.test.jsx) and under the web app.
 import { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
+import { useSendTurn } from '../send/useSendTurn.js'
+import { useOpenChats } from './chats.js'
 import { desktopApi } from './PaneDeck.jsx'
-import { SLOT_IDS, SLOT_LABELS, initialPanes, resultNeedsAttention, selectedTargets } from './slice.js'
+import { NOT_CAPTURED, SLOT_IDS, SLOT_LABELS, initialPanes, selectedTargets } from './slice.js'
 import css from './desktop.module.css'
 
-/** '✓ 1.2 s · #prompt-textarea' | '✗ send_not_found' | '' */
+/** 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '✗ send_not_found' | '' */
 export function formatResult(r) {
   if (!r || typeof r !== 'object') return ''
   if (r.ok) {
     const seconds = (Number(r.ms) || 0) / 1000
-    return `✓ ${seconds.toFixed(1)} s${r.composerSelector ? ` · ${r.composerSelector}` : ''}`
+    const tail = seconds > 0 ? ` · ${seconds.toFixed(1)} s` : ''
+    return `${r.code === NOT_CAPTURED ? 'sent ✓ not captured' : 'sent ✓ captured'}${tail}`
   }
   return `✗ ${r.code || 'error'}`
 }
 
-/** Title for a result line: the message, the send selector and the page url when present. */
+/** Title for a result line: the message (and, for Stage 1 shaped results, the selectors / url). */
 export function resultTitle(r) {
   if (!r || typeof r !== 'object') return ''
   const parts = []
@@ -40,23 +64,21 @@ export function resultTitle(r) {
   return parts.join('\n')
 }
 
-/** A short code for a rejected IPC call ("… Error: bad_request" → 'bad_request'). */
-export function errorCode(e) {
-  const msg = String(e && e.message ? e.message : e || '').trim()
-  const m = /([a-z][a-z0-9_]*)$/i.exec(msg)
-  return m ? m[1] : 'ipc_error'
-}
+export const BRIDGE_BANNER_TEXT = 'Not connected to the Triplex backend bridge — a Send fails with bridge_unavailable until Electron reconnects (automatic).'
 
-export default function PromptBar({ api = desktopApi(), composerRef = null }) {
+export default function PromptBar({ api = desktopApi(), composerRef = null, chats = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
-  const { targets: targetMap, sending, lastSend, mode } = panes
+  const { targets: targetMap, sending, lastSend, bridge } = panes
+  const { startTurn, locked, banner } = useSendTurn()
+  const own = useOpenChats(api, { enabled: !chats })
+  const { newChatEverywhere, busy: creating, error: chatError } = chats || own
   const [text, setText] = useState('')
+  const [inFlight, setInFlight] = useState(null) // targets of the send this bar started, while it runs
   const ownRef = useRef(null)
   const ref = composerRef || ownRef
   const alive = useRef(true)
-  const modeRef = useRef(mode)
-  modeRef.current = mode
+  const sendingRef = useRef(false)
 
   useEffect(() => {
     alive.current = true
@@ -65,52 +87,57 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
     }
   }, [])
 
-  // Keyed on the slice, not on this component's Send: a `panes/sendStart` from anywhere locks
-  // the composer the same way. Blur on the way in (main is about to focus a site view); on the
-  // way out give the focus back only when the composer had it — a user who clicked elsewhere
-  // during the send is not yanked back.
+  useEffect(() => {
+    const off = api?.onBridge?.((msg) => {
+      if (msg && typeof msg === 'object') dispatch({ type: 'panes/bridge', connected: !!msg.connected, since: msg.since })
+    })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [api, dispatch])
+
+  const busy = sending || locked
+
+  // Keyed on the lock, not on this component's Send: a `panes/sendStart` from anywhere (or a
+  // stream started elsewhere) locks the composer the same way. Blur on the way in (main is about
+  // to focus a site view); on the way out give the focus back only when the composer had it — a
+  // user who clicked elsewhere during the send is not yanked back.
   const hadFocus = useRef(false)
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    if (sending) {
+    if (busy) {
       hadFocus.current = typeof document !== 'undefined' && document.activeElement === el
       if (typeof el.blur === 'function') el.blur()
     } else if (hadFocus.current) {
       hadFocus.current = false
       if (typeof el.focus === 'function') el.focus()
     }
-  }, [sending, ref])
+  }, [busy, ref])
 
   const targets = selectedTargets(targetMap)
   const empty = text.trim() === ''
-  const canSend = !sending && !empty && targets.length > 0
+  const canSend = !busy && !empty && targets.length > 0
 
   const send = async () => {
-    if (!canSend) return
+    if (!canSend || sendingRef.current) return
     const sent = text
     const list = targets
+    sendingRef.current = true
+    setText('')
+    setInFlight(list)
     dispatch({ type: 'panes/sendStart', targets: list })
-    let results = {}
+    let ok = false
     try {
-      const res = await Promise.resolve(api?.sendPrompt?.({ targets: list, text: sent }))
-      const got = res && typeof res === 'object' && res.results && typeof res.results === 'object' ? res.results : {}
-      for (const slot of list) {
-        const r = got[slot]
-        results[slot] = r && typeof r === 'object' ? r : { ok: false, code: api?.sendPrompt ? 'no_result' : 'unavailable', message: 'no result for this target', ms: 0 }
-      }
-    } catch (e) {
-      const code = errorCode(e)
-      const message = String((e && e.message) || e || code)
-      results = {}
-      for (const slot of list) results[slot] = { ok: false, code, message, ms: 0 }
+      // `sendBody` posts {prompt} for all three and {prompt, slots} for a strict subset.
+      ok = await startTurn({ prompt: sent, slots: list })
+    } finally {
+      sendingRef.current = false
+      dispatch({ type: 'panes/sendResult', results: {} })
+      if (alive.current) setInFlight(null)
     }
-    dispatch({ type: 'panes/sendResult', results })
-    if (list.every((slot) => results[slot].ok) && alive.current) setText((cur) => (cur === sent ? '' : cur))
-    if (modeRef.current === 'tabs') {
-      const reveal = list.find((slot) => resultNeedsAttention(results[slot]))
-      if (reveal) dispatch({ type: 'panes/active', active: reveal })
-    }
+    // Failed before / instead of streaming (the banner says why): keep the text for a retry.
+    if (!ok && alive.current) setText((cur) => (cur === '' ? sent : cur))
   }
 
   const onKeyDown = (e) => {
@@ -120,15 +147,26 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
     send()
   }
 
-  const newChatEverywhere = () => {
-    if (!targets.length) return
-    Promise.resolve(api?.newChat?.(targets)).catch(() => {})
+  const newChat = () => {
+    if (busy || creating) return
+    newChatEverywhere()
   }
 
-  const sendTitle = sending ? 'a send is in flight' : empty ? 'type a prompt first' : targets.length === 0 ? 'pick at least one target' : 'Send to every checked site (Enter)'
+  const sendTitle = sending ? 'a send is in flight' : locked ? 'a stream is running' : empty ? 'type a prompt first' : targets.length === 0 ? 'pick at least one target' : 'Send to every checked site (Enter)'
+  const message = banner || chatError || null
 
   return (
-    <div className={css.promptBar} data-testid="prompt-bar" data-sending={sending ? 'true' : 'false'}>
+    <div className={css.promptBar} data-testid="prompt-bar" data-sending={sending ? 'true' : 'false'} data-locked={busy ? 'true' : 'false'}>
+      {!bridge.connected ? (
+        <div className={css.bridgeBanner} data-testid="bridge-banner" role="status">
+          {BRIDGE_BANNER_TEXT}
+        </div>
+      ) : null}
+      {message ? (
+        <div className={css.banner} data-testid="prompt-banner" role="alert">
+          {message}
+        </div>
+      ) : null}
       <div className={css.promptRow}>
         <textarea
           ref={ref}
@@ -138,8 +176,8 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
           placeholder="Ask all three… (Enter to send, Shift+Enter for a new line, Ctrl+L to focus)"
           rows={2}
           value={text}
-          readOnly={sending}
-          aria-busy={sending}
+          readOnly={busy}
+          aria-busy={busy}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
@@ -156,16 +194,30 @@ export default function PromptBar({ api = desktopApi(), composerRef = null }) {
             </label>
           ))}
         </span>
-        <button type="button" className={css.newChat} data-testid="prompt-newchat" disabled={sending || targets.length === 0} title="Start a new chat in every checked site (Ctrl+Shift+N: all three)" onClick={newChatEverywhere}>
+        <button
+          type="button"
+          className={css.newChat}
+          data-testid="prompt-newchat"
+          disabled={busy || creating}
+          title={busy ? 'a stream is running' : 'Start a new Triplex conversation and a new chat in every site (Ctrl+Shift+N)'}
+          onClick={newChat}
+        >
           New chat everywhere
         </button>
         <span className={css.results} aria-live="polite">
           {SLOT_IDS.map((slot) => {
             const r = lastSend[slot]
-            const pending = sending && !r && targetMap[slot]
+            const pending = !r && !!inFlight && inFlight.includes(slot)
             if (!r && !pending) return null
             return (
-              <span key={slot} className={css.result} data-testid={`prompt-result-${slot}`} data-ok={pending ? 'pending' : r.ok ? 'true' : 'false'} title={pending ? 'sending…' : resultTitle(r)}>
+              <span
+                key={slot}
+                className={css.result}
+                data-testid={`prompt-result-${slot}`}
+                data-ok={pending ? 'pending' : r.ok ? 'true' : 'false'}
+                data-code={pending ? undefined : r.code || undefined}
+                title={pending ? 'sending…' : resultTitle(r)}
+              >
                 {`${SLOT_LABELS[slot]} ${pending ? '…' : formatResult(r)}`}
               </span>
             )

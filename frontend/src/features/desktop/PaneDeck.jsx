@@ -1,22 +1,51 @@
-// PaneDeck (renderer-desktop, Stage 1): the deck bar (tabs, Tabs/Split toggle) and the three
-// panes. Each pane is a header (health, session badge, Reload / New chat / Open / zoom / Inspect)
-// above an EMPTY viewport div: the site page itself is a native Electron WebContentsView that main
-// positions over the viewport's rect. This component is therefore the layout reporter —
+// PaneDeck (renderer-desktop Stage 1, renderer-desktop-2 Stage 2): the deck bar (tabs, Tabs/Split
+// toggle), the first-run capture notice and the three panes. Each pane is a header (health,
+// session badge, Reload / New chat / Open / zoom / Inspect, then the capture switch and the turn
+// phase) above an EMPTY viewport div: the site page itself is a native Electron WebContentsView
+// that main positions over the viewport's rect. This component is therefore the layout reporter —
 //   * `triplex.setLayout({slot: rect|null})`, rAF-throttled, from a ResizeObserver on every
 //     viewport, the window `resize` event and every mode/active change (hidden panes → null);
 //   * `triplex.setActive({mode, active})` whenever either changes;
-//   * `triplex.onHealth` → panes/health, `triplex.onZoom` → panes/zoom,
-//     `triplex.onShortcut` → tab-n / toggle-mode / focus-prompt / new-chat-all.
+//   * `triplex.onHealth` → panes/health, `triplex.onZoom` → panes/zoom, `triplex.onTurn` →
+//     panes/turn (Stage 2), `triplex.onShortcut` → tab-n / toggle-mode / focus-prompt / new-chat-all.
+// Stage 2 capture: `pane-<slot>-capture` is the per-site switch (off by default, plan Decision 3),
+// read from main with `getCapture()` on mount (the value is main's, persisted in settings.json) and
+// written with `setCapture(slot, on)` — optimistic in the slice, reverted if main rejects. The ToS
+// wording sits next to every switch (title) and in `capture-notice`, shown until each of the three
+// switches has been set once (`triplex.panes.captureNoticeSeen` in localStorage, slice.js). The
+// switch is disabled during a send: main reads it at observe time and a flip mid-turn would change
+// what that turn captures. `pane-<slot>-phase` shows the turn phase main reports over `onTurn`.
 // Anything that navigates a view — new-chat-all, the per-pane Reload / New chat buttons — is
 // ignored/disabled while `panes.sending` is true (the same rule as PromptBar's "New chat
-// everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`.
+// everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`. With an
+// `onNewChatAll` prop (DesktopShell passes the shared ./chats.js handler) the shortcut is a real
+// "New chat everywhere" (new conversation + openChats); without it, Stage 1's newChat(all).
 // Every `window.triplex` call is optional-chained: the deck renders under a partial stub and
 // under the web app, where the object is absent. Renderer chrome never overlaps a viewport
-// (deck bar above, header above, prompt bar below — see desktop.module.css).
-import { useCallback, useEffect, useRef } from 'react'
+// (deck bar and notice above, header above, prompt bar below — see desktop.module.css).
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { rectsFor, sameLayout } from './rects.js'
-import { SESSION_BADGES, SLOT_IDS, SLOT_LABELS, healthLevel, healthText, healthTitle, initialPanes, isSlotId, needsAttention, sessionOf, sessionText } from './slice.js'
+import {
+  CAPTURE_LABEL,
+  CAPTURE_NOTICE_TEXT,
+  CAPTURE_TITLE,
+  SESSION_BADGES,
+  SLOT_IDS,
+  SLOT_LABELS,
+  allCaptureTouched,
+  healthLevel,
+  healthText,
+  healthTitle,
+  initialPanes,
+  isSlotId,
+  loadCaptureTouched,
+  needsAttention,
+  persistCaptureTouched,
+  phaseText,
+  sessionOf,
+  sessionText,
+} from './slice.js'
 import css from './desktop.module.css'
 
 /** The contextBridge surface of desktop/preload/renderer.cjs, or null under the web app. */
@@ -93,13 +122,13 @@ function zoomPercent(factor) {
   return `${Math.round((Number(factor) || 1) * 100)}%`
 }
 
-export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null }) {
+export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null, onNewChatAll = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
-  const { mode, active, health, lastSend, zoom, sending } = panes
+  const { mode, active, health, lastSend, zoom, sending, capture, turn } = panes
   const viewports = useRef({})
-  const latest = useRef({ mode, active, sending })
-  latest.current = { mode, active, sending }
+  const latest = useRef({ mode, active, sending, onNewChatAll })
+  latest.current = { mode, active, sending, onNewChatAll }
 
   useLayoutReporter(api, mode, active, viewports)
 
@@ -136,13 +165,47 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   }, [api, dispatch])
 
   useEffect(() => {
+    const off = api?.onTurn?.((msg) => {
+      if (msg && isSlotId(msg.slot) && typeof msg.phase === 'string') dispatch({ type: 'panes/turn', slot: msg.slot, phase: msg.phase })
+    })
+    return () => {
+      if (typeof off === 'function') off()
+    }
+  }, [api, dispatch])
+
+  // The switch values are main's (settings.json): read them once per mount. The preload returns a
+  // promise; a stub that hands the map back synchronously is applied at once.
+  useEffect(() => {
+    if (!api || typeof api.getCapture !== 'function') return undefined
+    let alive = true
+    let reply
+    try {
+      reply = api.getCapture()
+    } catch {
+      return undefined
+    }
+    const apply = (map) => {
+      if (alive && map && typeof map === 'object') dispatch({ type: 'panes/capture', capture: map })
+    }
+    if (reply && typeof reply.then === 'function') Promise.resolve(reply).then(apply).catch(() => {})
+    else apply(reply)
+    return () => {
+      alive = false
+    }
+  }, [api, dispatch])
+
+  useEffect(() => {
     const off = api?.onShortcut?.((msg) => {
       const name = msg && typeof msg === 'object' ? msg.name : msg
       const tab = /^tab-([123])$/.exec(String(name))
       if (tab) return activate(SLOT_IDS[Number(tab[1]) - 1])
       if (name === 'toggle-mode') return dispatch({ type: 'panes/mode', mode: latest.current.mode === 'tabs' ? 'split' : 'tabs' })
       if (name === 'focus-prompt') return promptRef?.current?.focus?.()
-      if (name === 'new-chat-all') return latest.current.sending ? undefined : settle(api?.newChat?.([...SLOT_IDS]))
+      if (name === 'new-chat-all') {
+        if (latest.current.sending) return undefined
+        const handler = latest.current.onNewChatAll
+        return typeof handler === 'function' ? settle(handler()) : settle(api?.newChat?.([...SLOT_IDS]))
+      }
       return undefined
     })
     return () => {
@@ -156,6 +219,19 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
         if (r && typeof r.factor === 'number') dispatch({ type: 'panes/zoom', slot, factor: r.factor })
       })
       .catch(() => {})
+  }
+
+  const [touched, setTouched] = useState(() => loadCaptureTouched())
+  useEffect(() => {
+    persistCaptureTouched(undefined, touched)
+  }, [touched])
+  const noticeOpen = !allCaptureTouched(touched)
+
+  const toggleCapture = (slot, on) => {
+    if (latest.current.sending) return // the switch is disabled during a send; guard the handler too
+    dispatch({ type: 'panes/capture', slot, on })
+    setTouched((t) => (t[slot] ? t : { ...t, [slot]: true }))
+    Promise.resolve(api?.setCapture?.(slot, on)).catch(() => dispatch({ type: 'panes/capture', slot, on: !on }))
   }
 
   const setMode = (next) => dispatch({ type: 'panes/mode', mode: next })
@@ -212,55 +288,72 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
         </div>
         {version ? <span className={css.version}>{`desktop v${version}${dev ? ' (dev)' : ''}`}</span> : null}
       </div>
+      {noticeOpen ? (
+        <div className={css.notice} data-testid="capture-notice" role="note" aria-label="Capture and the sites' terms of service">
+          <strong>Capture reply text:</strong> {CAPTURE_NOTICE_TEXT}
+        </div>
+      ) : null}
       <div className={css.panes} data-mode={mode}>
         {SLOT_IDS.map((slot) => {
           const h = health[slot]
           const session = sessionOf(h)
           const badge = SESSION_BADGES[session]
           const hidden = mode === 'tabs' && slot !== active
+          const phase = turn[slot]
           return (
             <section key={slot} className={css.pane} data-testid={`pane-${slot}`} data-slot={slot} data-active={slot === active} hidden={hidden} aria-label={`${SLOT_LABELS[slot]} pane`}>
-              <header className={css.paneHeader}>
-                <span
-                  data-testid={`pane-${slot}-session`}
-                  data-session={session}
-                  data-level={healthLevel(h)}
-                  className={badge ? css.badge : css.dot}
-                  title={h ? `session: ${sessionText(session)}` : 'no health event from this pane yet'}
-                >
-                  {badge || ''}
-                </span>
-                <span className={css.paneName}>{SLOT_LABELS[slot]}</span>
-                <span data-testid={`pane-${slot}-health`} className={css.health} data-level={healthLevel(h)} title={healthTitle(h)}>
-                  {healthText(h)}
-                </span>
-                <span className={css.actions}>
-                  <button type="button" data-testid={`pane-${slot}-reload`} disabled={sending} title={sending ? 'a send is in flight' : `Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
-                    Reload
-                  </button>
-                  <button type="button" data-testid={`pane-${slot}-newchat`} disabled={sending} title={sending ? 'a send is in flight' : `Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
-                    New chat
-                  </button>
-                  <button type="button" data-testid={`pane-${slot}-open`} title="Open this page in the system browser" onClick={() => settle(api?.openExternal?.(slot))}>
-                    Open
-                  </button>
-                  <span className={css.zoom} role="group" aria-label={`${SLOT_LABELS[slot]} zoom`}>
-                    <button type="button" data-testid={`pane-${slot}-zoom-out`} title="Zoom out (Ctrl+-)" aria-label="Zoom out" onClick={() => zoomTo(slot, 'out')}>
-                      −
-                    </button>
-                    <button type="button" data-testid={`pane-${slot}-zoom-reset`} title="Reset zoom (Ctrl+0)" aria-label="Reset zoom" onClick={() => zoomTo(slot, 'reset')}>
-                      {zoomPercent(zoom[slot])}
-                    </button>
-                    <button type="button" data-testid={`pane-${slot}-zoom-in`} title="Zoom in (Ctrl+=)" aria-label="Zoom in" onClick={() => zoomTo(slot, 'in')}>
-                      +
-                    </button>
+              <header className={css.paneHead}>
+                <div className={css.paneHeader}>
+                  <span
+                    data-testid={`pane-${slot}-session`}
+                    data-session={session}
+                    data-level={healthLevel(h)}
+                    className={badge ? css.badge : css.dot}
+                    title={h ? `session: ${sessionText(session)}` : 'no health event from this pane yet'}
+                  >
+                    {badge || ''}
                   </span>
-                  {dev ? (
-                    <button type="button" data-testid={`pane-${slot}-inspect`} title="Open DevTools for this page (F12 on the active pane)" onClick={() => settle(api?.inspect?.(slot))}>
-                      Inspect
+                  <span className={css.paneName}>{SLOT_LABELS[slot]}</span>
+                  <span data-testid={`pane-${slot}-health`} className={css.health} data-level={healthLevel(h)} title={healthTitle(h)}>
+                    {healthText(h)}
+                  </span>
+                  <span className={css.actions}>
+                    <button type="button" data-testid={`pane-${slot}-reload`} disabled={sending} title={sending ? 'a send is in flight' : `Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
+                      Reload
                     </button>
-                  ) : null}
-                </span>
+                    <button type="button" data-testid={`pane-${slot}-newchat`} disabled={sending} title={sending ? 'a send is in flight' : `Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
+                      New chat
+                    </button>
+                    <button type="button" data-testid={`pane-${slot}-open`} title="Open this page in the system browser" onClick={() => settle(api?.openExternal?.(slot))}>
+                      Open
+                    </button>
+                    <span className={css.zoom} role="group" aria-label={`${SLOT_LABELS[slot]} zoom`}>
+                      <button type="button" data-testid={`pane-${slot}-zoom-out`} title="Zoom out (Ctrl+-)" aria-label="Zoom out" onClick={() => zoomTo(slot, 'out')}>
+                        −
+                      </button>
+                      <button type="button" data-testid={`pane-${slot}-zoom-reset`} title="Reset zoom (Ctrl+0)" aria-label="Reset zoom" onClick={() => zoomTo(slot, 'reset')}>
+                        {zoomPercent(zoom[slot])}
+                      </button>
+                      <button type="button" data-testid={`pane-${slot}-zoom-in`} title="Zoom in (Ctrl+=)" aria-label="Zoom in" onClick={() => zoomTo(slot, 'in')}>
+                        +
+                      </button>
+                    </span>
+                    {dev ? (
+                      <button type="button" data-testid={`pane-${slot}-inspect`} title="Open DevTools for this page (F12 on the active pane)" onClick={() => settle(api?.inspect?.(slot))}>
+                        Inspect
+                      </button>
+                    ) : null}
+                  </span>
+                </div>
+                <div className={css.captureRow}>
+                  <label className={css.capture} title={sending ? 'a send is in flight' : CAPTURE_TITLE}>
+                    <input type="checkbox" data-testid={`pane-${slot}-capture`} checked={!!capture[slot]} disabled={sending} onChange={(e) => toggleCapture(slot, e.target.checked)} />
+                    <span>{CAPTURE_LABEL}</span>
+                  </label>
+                  <span data-testid={`pane-${slot}-phase`} className={css.phase} data-phase={phase || 'none'} title={phase ? `turn phase: ${phase}` : 'no turn reported for this pane yet'}>
+                    {phaseText(phase)}
+                  </span>
+                </div>
               </header>
               <div
                 className={css.viewport}

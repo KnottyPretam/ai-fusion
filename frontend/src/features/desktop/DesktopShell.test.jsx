@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import DesktopShell from './index.jsx'
-import { PERSIST_KEYS } from './slice.js'
-import { renderWithStore } from '../../state/testing.jsx'
-import { RECTS, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
+import { CAPTURE_NOTICE_KEY, PERSIST_KEYS } from './slice.js'
+import { renderWithStore, sample } from '../../state/testing.jsx'
+import { RECTS, conv, fakeTriplex, health, installFakeResizeObserver, jsonResponse, pinViewportRects, seqOf, sseResponse, stubFetch, syncFrames } from './fakes.js'
 
 beforeEach(() => {
   localStorage.clear()
@@ -26,11 +26,11 @@ function mount(fake = fakeTriplex()) {
 describe('DesktopShell: composition', () => {
   test('keeps the Stage 0 test ids, shows the version from getInfo and the Inspect buttons when dev', async () => {
     const { fake } = mount()
-    for (const id of ['desktop-shell', 'pane-deck', 'prompt-bar', 'deck-mode-tabs', 'deck-mode-split', 'prompt-composer', 'prompt-send', 'prompt-newchat']) {
+    for (const id of ['desktop-shell', 'pane-deck', 'prompt-bar', 'deck-mode-tabs', 'deck-mode-split', 'prompt-composer', 'prompt-send', 'prompt-newchat', 'capture-notice', 'bridge-banner']) {
       expect(screen.getByTestId(id)).toBeInTheDocument()
     }
     for (const slot of ['claude', 'chatgpt', 'grok']) {
-      for (const suffix of ['', '-viewport', '-health', '-session', '-reload', '-newchat', '-open', '-zoom-in', '-zoom-out', '-zoom-reset']) {
+      for (const suffix of ['', '-viewport', '-health', '-session', '-reload', '-newchat', '-open', '-zoom-in', '-zoom-out', '-zoom-reset', '-capture', '-phase']) {
         expect(screen.getByTestId(`pane-${slot}${suffix}`)).toBeInTheDocument()
       }
       expect(screen.getByTestId(`deck-tab-${slot}`)).toBeInTheDocument()
@@ -38,6 +38,11 @@ describe('DesktopShell: composition', () => {
     }
     expect(fake.getInfo).toHaveBeenCalledTimes(1)
     expect(fake.getInfo).toHaveBeenCalledWith()
+    expect(fake.getCapture).toHaveBeenCalledTimes(1)
+    // every channel is subscribed exactly once across the composed shell
+    for (const ch of ['onHealth', 'onShortcut', 'onZoom', 'onBridge', 'onTurn']) expect(fake[ch]).toHaveBeenCalledTimes(1)
+    // the first render never renavigates the panes
+    expect(fake.openChats).not.toHaveBeenCalled()
     expect(await screen.findByText('desktop v0.1.0 (dev)')).toBeInTheDocument()
     expect(screen.getByTestId('pane-claude-inspect')).toBeInTheDocument()
     // the frozen smoke test's assertion text is still present (once) but visually hidden
@@ -103,22 +108,62 @@ describe('DesktopShell: shortcuts through the composed shell', () => {
     expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null })
   })
 
-  test('a send whose result is logged_out reveals the pane, and its header shows the session once health arrives', async () => {
-    const fake = fakeTriplex({
-      sendPrompt: vi.fn(async () => ({ results: { claude: { ok: false, code: 'logged_out', ms: 0 }, chatgpt: { ok: true, ms: 900, composerSelector: '#prompt-textarea' }, grok: { ok: true, ms: 1000 } } })),
-    })
-    mount(fake)
+  test('a Send whose grok slot is rejected logged_out reveals that pane in tabs mode; the header shows the session once health arrives', async () => {
+    const stream = [
+      sample.turnStart('t1'),
+      sample.slotStart('claude', 'web:claude', 'off'),
+      sample.slotStart('chatgpt', 'web:chatgpt', 'off'),
+      sample.slotStart('grok', 'web:grok', 'off'),
+      sample.slotDone('claude', { latency_ms: 900 }),
+      sample.slotDone('chatgpt', { latency_ms: 1000 }),
+      { type: 'slot_error', slot: 'grok', code: 'logged_out', error_type: 'site', message: 'grok is signed out; sign in from the pane', partial: '' },
+      sample.turnDone('t1'),
+    ]
+    const calls = stubFetch([
+      { method: 'POST', url: '/api/conversations', respond: jsonResponse(conv(), 201) },
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(stream) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(conv()) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    const { fake } = mount()
     fireEvent.click(screen.getByTestId('deck-mode-tabs'))
     expect(screen.getByTestId('deck-tab-chatgpt')).toHaveAttribute('aria-selected', 'true')
     fireEvent.change(screen.getByTestId('prompt-composer'), { target: { value: 'hi' } })
     fireEvent.keyDown(screen.getByTestId('prompt-composer'), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByTestId('deck-tab-claude')).toHaveAttribute('aria-selected', 'true'))
-    expect(screen.getByTestId('pane-claude')).toBeVisible()
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    expect(calls[1].body).toEqual({ prompt: 'hi' })
+    await waitFor(() => expect(screen.getByTestId('deck-tab-grok')).toHaveAttribute('aria-selected', 'true'))
+    expect(screen.getByTestId('pane-grok')).toBeVisible()
     expect(screen.getByTestId('pane-chatgpt')).not.toBeVisible()
-    expect(screen.getByTestId('prompt-result-claude')).toHaveTextContent('✗ logged_out')
-    expect(screen.getByTestId('prompt-result-chatgpt')).toHaveTextContent('✓ 0.9 s · #prompt-textarea')
-    act(() => fake.emit.health('claude', health({ session: 'logged_out', composer: false, send: false })))
-    expect(screen.getByTestId('pane-claude-session')).toHaveTextContent('SIGN IN')
+    expect(screen.getByTestId('prompt-result-grok')).toHaveTextContent('✗ logged_out')
+    expect(screen.getByTestId('prompt-result-claude')).toHaveTextContent('sent ✓ captured · 0.9 s')
+    // the conversation created by the first Send is what the panes are pointed at, once
+    await waitFor(() => expect(fake.openChats).toHaveBeenCalledWith('c1'))
+    expect(fake.openChats).toHaveBeenCalledTimes(1)
+    act(() => fake.emit.health('grok', health({ session: 'logged_out', composer: false, send: false })))
+    expect(screen.getByTestId('pane-grok-session')).toHaveTextContent('SIGN IN')
+    await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
+  })
+
+  test('Ctrl+Shift+N (new-chat-all) through the shell creates a conversation and opens its chats exactly once, like the button', async () => {
+    stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse(conv({ id: 'c9' }), 201) }])
+    const { fake } = mount()
+    act(() => fake.emit.shortcut('new-chat-all'))
+    await waitFor(() => expect(fake.openChats).toHaveBeenCalledWith('c9'))
+    await act(() => new Promise((r) => setTimeout(r, 0)))
+    expect(fake.openChats).toHaveBeenCalledTimes(1)
+    expect(fake.newChat).not.toHaveBeenCalled()
+  })
+
+  test('the bridge banner and the turn phase reach the shell from the preload channels; unmount unsubscribes every channel', () => {
+    const { fake, unmount } = mount()
+    expect(screen.getByTestId('bridge-banner')).toBeInTheDocument()
+    act(() => fake.emit.bridge({ connected: true, since: 1 }))
+    expect(screen.queryByTestId('bridge-banner')).toBeNull()
+    act(() => fake.emit.turn({ slot: 'claude', phase: 'replying' }))
+    expect(screen.getByTestId('pane-claude-phase')).toHaveTextContent('replying…')
+    unmount()
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 1, turn: 1 })
   })
 })
 
@@ -147,6 +192,8 @@ describe('DesktopShell: localStorage persistence', () => {
     expect(localStorage.getItem(PERSIST_KEYS.active)).toBe('claude')
     fireEvent.click(screen.getByTestId('prompt-target-grok'))
     expect(JSON.parse(localStorage.getItem(PERSIST_KEYS.targets))).toEqual({ claude: true, chatgpt: true, grok: false })
+    fireEvent.click(screen.getByTestId('pane-claude-capture'))
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: false, grok: false })
   })
 
   test('invalid stored values fall back to the defaults', () => {

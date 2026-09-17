@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import './index.jsx' // registers the `panes` slice
 import PaneDeck from './PaneDeck.jsx'
-import { initialPanes } from './slice.js'
+import { CAPTURE_LABEL, CAPTURE_NOTICE_KEY, CAPTURE_NOTICE_TEXT, initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { RECTS, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
+import { RECTS, conv, fakeTriplex, health, installFakeResizeObserver, pinViewportRects, syncFrames } from './fakes.js'
 
 let ro
 beforeEach(() => {
+  localStorage.clear()
   syncFrames()
   ro = installFakeResizeObserver()
   pinViewportRects()
@@ -16,6 +17,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  localStorage.clear()
 })
 
 function panes(over = {}) {
@@ -123,7 +125,7 @@ describe('PaneDeck: layout reporting', () => {
     const { unmount } = mount(fake)
     unmount()
     expect(ro.instances.every((i) => !i.alive)).toBe(true)
-    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1 })
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1 })
   })
 
   test('renders without any window.triplex and under a partial stub', () => {
@@ -335,6 +337,23 @@ describe('PaneDeck: shortcuts', () => {
     expect(() => act(() => fake.emit.shortcut(null))).not.toThrow()
   })
 
+  test('new-chat-all calls onNewChatAll (the shared "New chat everywhere") when provided, instead of newChat(all); still gated on sending', () => {
+    const fake = fakeTriplex()
+    const onNewChatAll = vi.fn(async () => conv({ id: 'c9' }))
+    mount(fake, { mode: 'split' }, { onNewChatAll })
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(onNewChatAll).toHaveBeenCalledTimes(1)
+    expect(fake.newChat).not.toHaveBeenCalled()
+    act(() => store.dispatch({ type: 'panes/sendStart' }))
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(onNewChatAll).toHaveBeenCalledTimes(1)
+    // a rejected handler never surfaces
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    onNewChatAll.mockImplementation(async () => { throw new Error('nope') })
+    expect(() => act(() => fake.emit.shortcut('new-chat-all'))).not.toThrow()
+    expect(onNewChatAll).toHaveBeenCalledTimes(2)
+  })
+
   test('new-chat-all is ignored while a send is in flight (the same rule as the New chat everywhere button)', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'split', sending: true })
@@ -353,5 +372,138 @@ describe('PaneDeck: shortcuts', () => {
     act(() => store.dispatch({ type: 'panes/sendStart' }))
     act(() => fake.emit.shortcut('new-chat-all'))
     expect(fake.newChat).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('PaneDeck: capture switches, the first-run notice and the turn phase (Stage 2)', () => {
+  const capture = (slot) => screen.getByTestId(`pane-${slot}-capture`)
+
+  test('reads getCapture on mount and reflects it; a click calls setCapture(slot, on) and updates the slice', async () => {
+    const fake = fakeTriplex({ getCapture: vi.fn(async () => ({ claude: true, chatgpt: false, grok: false })) })
+    mount(fake, { mode: 'split' })
+    expect(fake.getCapture).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(capture('claude')).toBeChecked())
+    expect(capture('chatgpt')).not.toBeChecked()
+    expect(capture('grok')).not.toBeChecked()
+    // the label is the plan's wording, once per pane
+    expect(screen.getAllByText(CAPTURE_LABEL)).toHaveLength(3)
+    expect(screen.getByLabelText(CAPTURE_LABEL, { selector: '[data-testid="pane-chatgpt-capture"]' })).toBe(capture('chatgpt'))
+    fireEvent.click(capture('chatgpt'))
+    expect(fake.setCapture).toHaveBeenCalledWith('chatgpt', true)
+    expect(capture('chatgpt')).toBeChecked()
+    fireEvent.click(capture('chatgpt'))
+    expect(fake.setCapture).toHaveBeenLastCalledWith('chatgpt', false)
+    expect(capture('chatgpt')).not.toBeChecked()
+    expect(fake.setCapture).toHaveBeenCalledTimes(2)
+  })
+
+  test('a rejected setCapture reverts the switch; a partial stub keeps the optimistic value', async () => {
+    const fake = fakeTriplex({ setCapture: vi.fn(async () => { throw new Error('bad_request') }) })
+    const first = mount(fake, { mode: 'split' })
+    fireEvent.click(capture('grok'))
+    expect(capture('grok')).toBeChecked()
+    await waitFor(() => expect(capture('grok')).not.toBeChecked())
+    first.unmount()
+    renderWithStore(<PaneDeck api={{}} />, { preloaded: { panes: panes() } })
+    fireEvent.click(capture('claude'))
+    expect(capture('claude')).toBeChecked()
+  })
+
+  test('the notice shows the terms-of-service wording until all three switches have been touched once, and remembers that in localStorage', () => {
+    const fake = fakeTriplex()
+    const { unmount } = mount(fake, { mode: 'split' })
+    const notice = screen.getByTestId('capture-notice')
+    expect(notice).toHaveTextContent(CAPTURE_NOTICE_TEXT)
+    expect(notice).toHaveTextContent(/terms of service/)
+    expect(notice).toHaveTextContent(/programmatically extract/)
+    expect(notice).toHaveTextContent(/automated or non-human means/)
+    // the notice sits above the panes in the flow (never over a view)
+    expect(screen.getByTestId('pane-deck').children[1]).toBe(notice)
+    fireEvent.click(capture('claude'))
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    fireEvent.click(capture('chatgpt'))
+    fireEvent.click(capture('chatgpt')) // touching the same switch twice does not count for another
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    fireEvent.click(capture('grok'))
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true })
+    unmount()
+    mount(fakeTriplex(), { mode: 'split' })
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
+  })
+
+  test('a partial or invalid stored map keeps the notice; a bare true hides it; a throwing storage never breaks the deck', () => {
+    localStorage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify({ claude: true, grok: true }))
+    const first = mount(fakeTriplex(), { mode: 'split' })
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    fireEvent.click(capture('chatgpt'))
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
+    first.unmount()
+    localStorage.setItem(CAPTURE_NOTICE_KEY, 'not json')
+    const second = mount(fakeTriplex(), { mode: 'split' })
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    second.unmount()
+    localStorage.setItem(CAPTURE_NOTICE_KEY, 'true')
+    const third = mount(fakeTriplex(), { mode: 'split' })
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
+    third.unmount()
+    vi.stubGlobal('localStorage', {
+      getItem() {
+        throw new Error('SecurityError')
+      },
+      setItem() {
+        throw new Error('QuotaExceededError')
+      },
+      clear() {},
+    })
+    expect(() => mount(fakeTriplex(), { mode: 'split' })).not.toThrow()
+    expect(() => fireEvent.click(capture('claude'))).not.toThrow()
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+  })
+
+  test('the switches are disabled while a send is in flight (main reads them at observe time)', () => {
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split', sending: true })
+    for (const slot of ['claude', 'chatgpt', 'grok']) expect(capture(slot)).toBeDisabled()
+    fireEvent.click(capture('claude'))
+    expect(fake.setCapture).not.toHaveBeenCalled()
+    act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
+    expect(capture('claude')).toBeEnabled()
+  })
+
+  test('pane-<slot>-phase renders the onTurn phase', () => {
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split' })
+    for (const slot of ['claude', 'chatgpt', 'grok']) {
+      expect(screen.getByTestId(`pane-${slot}-phase`)).toHaveTextContent('')
+      expect(screen.getByTestId(`pane-${slot}-phase`)).toHaveAttribute('data-phase', 'none')
+    }
+    act(() => fake.emit.turn({ slot: 'grok', phase: 'typing' }))
+    expect(screen.getByTestId('pane-grok-phase')).toHaveTextContent('typing…')
+    expect(screen.getByTestId('pane-grok-phase')).toHaveAttribute('data-phase', 'typing')
+    act(() => fake.emit.turn({ slot: 'grok', phase: 'replying', code: undefined }))
+    expect(screen.getByTestId('pane-grok-phase')).toHaveTextContent('replying…')
+    act(() => fake.emit.turn({ slot: 'grok', phase: 'done' }))
+    expect(screen.getByTestId('pane-grok-phase')).toHaveTextContent('done')
+    act(() => fake.emit.turn({ slot: 'claude', phase: 'error', code: 'logged_out' }))
+    expect(screen.getByTestId('pane-claude-phase')).toHaveTextContent('error')
+    expect(screen.getByTestId('pane-claude-phase')).toHaveAttribute('data-phase', 'error')
+    // unknown slots / non-string phases are ignored; an unknown phase word is shown verbatim
+    act(() => fake.emit.turn({ slot: 'gemini', phase: 'typing' }))
+    act(() => fake.emit.turn({ slot: 'chatgpt', phase: 7 }))
+    expect(screen.getByTestId('pane-chatgpt-phase')).toHaveTextContent('')
+    act(() => fake.emit.turn({ slot: 'chatgpt', phase: 'observing' }))
+    expect(screen.getByTestId('pane-chatgpt-phase')).toHaveTextContent('observing')
+  })
+
+  test('the capture row is part of the header, above the viewport', () => {
+    mount(fakeTriplex(), { mode: 'split' })
+    for (const slot of ['claude', 'chatgpt', 'grok']) {
+      const pane = screen.getByTestId(`pane-${slot}`)
+      expect(pane.firstElementChild.tagName).toBe('HEADER')
+      expect(pane.firstElementChild.contains(capture(slot))).toBe(true)
+      expect(pane.firstElementChild.contains(screen.getByTestId(`pane-${slot}-phase`))).toBe(true)
+      expect(pane.lastElementChild).toBe(screen.getByTestId(`pane-${slot}-viewport`))
+    }
   })
 })

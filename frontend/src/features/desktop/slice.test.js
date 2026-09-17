@@ -3,18 +3,25 @@ import './index.jsx' // registers the `panes` slice next to the core ones
 import { initialState, rootReducer } from '../../state/registry.js'
 import {
   ATTENTION_SESSIONS,
+  CAPTURE_NOTICE_KEY,
+  NOT_CAPTURED,
   PERSIST_KEYS,
   SLOT_IDS,
+  allCaptureTouched,
   healthLevel,
   healthText,
   healthTitle,
   initialPanes,
+  loadCaptureTouched,
   loadPersistedPanes,
   needsAttention,
   panesReducer,
+  persistCaptureTouched,
   persistPanes,
+  phaseText,
   resultNeedsAttention,
   selectedTargets,
+  sendOutcome,
   sessionOf,
   sessionText,
 } from './slice.js'
@@ -70,6 +77,15 @@ describe('panes slice: shape and reducer', () => {
       { type: 'panes/zoom', slot: 'claude', factor: 'big' },
       { type: 'panes/turn', slot: 'claude', phase: 42 },
       { type: 'something/else' },
+      // send-stream events that carry no per-slot outcome, or belong to another feature
+      { type: 'sse', feature: 'send', event: { type: 'slot_delta', slot: 'claude', text: 'x' } },
+      { type: 'sse', feature: 'send', event: { type: 'slot_start', slot: 'claude' } },
+      { type: 'sse', feature: 'send', event: { type: 'slot_done', slot: 'gemini' } },
+      { type: 'sse', feature: 'send', event: { type: 'turn_start', slots: ['claude'] } },
+      { type: 'sse', feature: 'send', event: null },
+      { type: 'sse', feature: 'send' },
+      { type: 'sse', feature: 'analyze', event: { type: 'slot_done', slot: 'claude' } },
+      { type: 'sse', feature: 'fusion', event: { type: 'slot_error', slot: 'claude', code: 'logged_out' } },
     ]) {
       expect(panesReducer(s, a)).toBe(s)
     }
@@ -223,5 +239,134 @@ describe('panes slice: localStorage persistence', () => {
 
   test('SLOT_IDS is the contract order', () => {
     expect(SLOT_IDS).toEqual(['claude', 'chatgpt', 'grok'])
+  })
+})
+
+describe('panes slice: send-stream outcomes (Stage 2)', () => {
+  const done = (slot, latency_ms = 1234) => ({ type: 'sse', feature: 'send', event: { type: 'slot_done', slot, usage: { latency_ms, cost_usd: 0 }, finish_reason: 'stop', truncated: false } })
+  const err = (slot, code, message = `${code} for ${slot}`) => ({ type: 'sse', feature: 'send', event: { type: 'slot_error', slot, code, error_type: 'site', message, partial: '' } })
+
+  test('sendOutcome shapes: slot_done → ok with the latency; not_captured → ok with the code; other codes → failed', () => {
+    expect(sendOutcome({ type: 'slot_done', slot: 'claude', usage: { latency_ms: 1234 } })).toEqual({ ok: true, ms: 1234 })
+    expect(sendOutcome({ type: 'slot_done', slot: 'claude' })).toEqual({ ok: true, ms: 0 })
+    expect(sendOutcome({ type: 'slot_done', slot: 'claude', usage: { latency_ms: 'x' } })).toEqual({ ok: true, ms: 0 })
+    expect(sendOutcome({ type: 'slot_error', slot: 'grok', code: NOT_CAPTURED, message: 'capture is off for grok; the reply is in the site pane' })).toEqual({
+      ok: true,
+      code: 'not_captured',
+      message: 'capture is off for grok; the reply is in the site pane',
+      ms: 0,
+    })
+    expect(sendOutcome({ type: 'slot_error', slot: 'grok', code: 'send_not_found', message: 'no send button' })).toEqual({ ok: false, code: 'send_not_found', message: 'no send button', ms: 0 })
+    expect(sendOutcome({ type: 'slot_error', slot: 'grok', code: 500, message: 7 })).toEqual({ ok: false, code: '500', message: '', ms: 0 })
+    expect(sendOutcome({ type: 'slot_error', slot: 'grok' })).toEqual({ ok: false, code: 'error', message: '', ms: 0 })
+    expect(sendOutcome({ type: 'slot_delta', slot: 'grok', text: 'x' })).toBeNull()
+    expect(sendOutcome({ type: 'slot_done', slot: 'gemini' })).toBeNull()
+    expect(sendOutcome(null)).toBeNull()
+  })
+
+  test('slot_done / slot_error record lastSend per slot; turn_start clears the listed slots; other keys keep identity', () => {
+    const s0 = initialPanes()
+    const s1 = panesReducer(s0, done('claude'))
+    expect(s1.lastSend).toEqual({ claude: { ok: true, ms: 1234 } })
+    expect(s1.sending).toBe(false)
+    expect(s1.health).toBe(s0.health)
+    expect(s1.targets).toBe(s0.targets)
+    const s2 = panesReducer(s1, err('chatgpt', NOT_CAPTURED, 'capture is off for chatgpt; the reply is in the site pane'))
+    expect(s2.lastSend.chatgpt).toEqual({ ok: true, code: 'not_captured', message: 'capture is off for chatgpt; the reply is in the site pane', ms: 0 })
+    expect(s2.lastSend.claude).toBe(s1.lastSend.claude)
+    const s3 = panesReducer(s2, err('grok', 'send_not_found', 'no enabled send button within 18000 ms'))
+    expect(s3.lastSend.grok).toEqual({ ok: false, code: 'send_not_found', message: 'no enabled send button within 18000 ms', ms: 0 })
+    expect(resultNeedsAttention(s3.lastSend.grok)).toBe(false)
+    // a later subset send / solo continue clears exactly the listed slots
+    const s4 = panesReducer(s3, { type: 'sse', feature: 'send', event: { type: 'turn_start', turn_id: 't2', feature: 'send', slots: ['grok', 'bogus'] } })
+    expect(Object.keys(s4.lastSend)).toEqual(['claude', 'chatgpt'])
+    expect(s4.lastSend.claude).toBe(s3.lastSend.claude)
+    // an unlisted turn_start clears all three
+    const s5 = panesReducer(s3, { type: 'sse', feature: 'send', event: { type: 'turn_start', turn_id: 't2', feature: 'send' } })
+    expect(s5.lastSend).toEqual({})
+    // the outcome of the last send is kept across a conversation switch / refetch (Stage 1 semantics)
+    expect(panesReducer(s3, { type: 'conversation/loaded', conversation: { id: 'c2' } })).toBe(s3)
+    expect(panesReducer(s3, { type: 'conversation/cleared' })).toBe(s3)
+  })
+
+  test('an attention slot_error (logged_out | challenge | blocked) activates that pane in tabs mode only', () => {
+    const tabs = { ...initialPanes(), mode: 'tabs', active: 'chatgpt' }
+    for (const code of ATTENTION_SESSIONS) {
+      const next = panesReducer(tabs, err('grok', code))
+      expect(next.active).toBe('grok')
+      expect(next.lastSend.grok.ok).toBe(false)
+      expect(resultNeedsAttention(next.lastSend.grok)).toBe(true)
+    }
+    // already active: only the outcome changes
+    expect(panesReducer(tabs, err('chatgpt', 'logged_out')).active).toBe('chatgpt')
+    // other failures and successes never switch
+    expect(panesReducer(tabs, err('grok', 'send_not_found')).active).toBe('chatgpt')
+    expect(panesReducer(tabs, err('grok', NOT_CAPTURED)).active).toBe('chatgpt')
+    expect(panesReducer(tabs, done('grok')).active).toBe('chatgpt')
+    // split mode shows every pane already
+    const split = { ...initialPanes(), mode: 'split', active: 'chatgpt' }
+    expect(panesReducer(split, err('grok', 'logged_out')).active).toBe('chatgpt')
+  })
+
+  test('through the root reducer a send outcome touches only the panes slice (the idle slots slice ignores a stale slot_done)', () => {
+    const state = initialState()
+    const next = rootReducer(state, done('claude'))
+    expect(next.panes.lastSend.claude).toEqual({ ok: true, ms: 1234 })
+    for (const key of Object.keys(state)) if (key !== 'panes') expect(next[key]).toBe(state[key])
+  })
+
+  test('phaseText', () => {
+    expect(phaseText(undefined)).toBe('')
+    expect(phaseText('')).toBe('')
+    expect(phaseText('idle')).toBe('idle')
+    expect(phaseText('typing')).toBe('typing…')
+    expect(phaseText('submitted')).toBe('submitted')
+    expect(phaseText('replying')).toBe('replying…')
+    expect(phaseText('done')).toBe('done')
+    expect(phaseText('error')).toBe('error')
+    expect(phaseText('observing')).toBe('observing')
+    expect(phaseText(7)).toBe('')
+  })
+})
+
+describe('panes slice: capture-notice persistence (Stage 2)', () => {
+  test('round-trips the touched map through triplex.panes.captureNoticeSeen; allCaptureTouched', () => {
+    const storage = memoryStorage()
+    expect(loadCaptureTouched(storage)).toEqual({ claude: false, chatgpt: false, grok: false })
+    persistCaptureTouched(storage, { claude: true, grok: 'yes' })
+    expect(storage.dump()).toEqual({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: true, chatgpt: false, grok: true }) })
+    expect(loadCaptureTouched(storage)).toEqual({ claude: true, chatgpt: false, grok: true })
+    expect(allCaptureTouched(loadCaptureTouched(storage))).toBe(false)
+    persistCaptureTouched(storage, { claude: true, chatgpt: true, grok: true })
+    expect(allCaptureTouched(loadCaptureTouched(storage))).toBe(true)
+    expect(allCaptureTouched(null)).toBe(false)
+  })
+
+  test('a bare true means all seen; junk, a missing key, a null storage and a throwing storage mean none', () => {
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: 'true' }))).toEqual({ claude: true, chatgpt: true, grok: true })
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: '{not json' }))).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: 'yes', chatgpt: 1, gemini: true }) }))).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(loadCaptureTouched(memoryStorage())).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(loadCaptureTouched(null)).toEqual({ claude: false, chatgpt: false, grok: false })
+    const broken = {
+      getItem() {
+        throw new Error('SecurityError')
+      },
+      setItem() {
+        throw new Error('QuotaExceededError')
+      },
+    }
+    expect(loadCaptureTouched(broken)).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(() => persistCaptureTouched(broken, { claude: true })).not.toThrow()
+    expect(() => persistCaptureTouched(null, { claude: true })).not.toThrow()
+    expect(() => persistCaptureTouched(memoryStorage(), null)).not.toThrow()
+  })
+
+  test('defaults to the global localStorage', () => {
+    localStorage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify({ grok: true }))
+    expect(loadCaptureTouched()).toEqual({ claude: false, chatgpt: false, grok: true })
+    persistCaptureTouched(undefined, { claude: true, chatgpt: true, grok: true })
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true })
+    localStorage.clear()
   })
 })

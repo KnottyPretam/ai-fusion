@@ -1,7 +1,8 @@
-/* renderer-desktop (Stage 1). Desktop chrome around the native site views. Palette tokens come from
-   the frozen index.css. Nothing here may overlap a viewport: the deck bar sits above the panes,
-   every pane header above its viewport, the prompt bar below — no modals, no overlays. The
-   viewport itself is an empty placeholder; Electron paints the site view over that rect. */
+/* renderer-desktop (Stage 1) + renderer-desktop-2 (Stage 2). Desktop chrome around the native site
+   views. Palette tokens come from the frozen index.css. Nothing here may overlap a viewport: the
+   deck bar and the capture notice sit above the panes, every pane header (both rows) above its
+   viewport, the prompt bar below — no modals, no overlays. The viewport itself is an empty
+   placeholder; Electron paints the site view over that rect. */
 
 .shell { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); color: var(--fg); }
 
@@ -23,6 +24,9 @@
 .modes button[aria-pressed='true'] { background: var(--primary); border-color: var(--primary); color: #fff; }
 .version { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; }
 
+/* first-run capture / terms-of-service notice (in the flow above the panes, never over a view) */
+.notice { flex: 0 0 auto; margin: 4px 4px 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-soft); color: var(--fg); font-size: 12px; line-height: 1.45; }
+
 /* health dot + badges (deck tabs and pane headers) */
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: 0 0 auto; }
 .dot[data-level='ok'] { background: var(--ok); }
@@ -41,7 +45,8 @@
 .pane[data-slot='claude'] { border-top-color: var(--claude); }
 .pane[data-slot='chatgpt'] { border-top-color: var(--chatgpt); }
 .pane[data-slot='grok'] { border-top-color: var(--grok); }
-.paneHeader { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 3px 6px; border-bottom: 1px solid var(--border); background: var(--bg-muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.paneHead { display: flex; flex-direction: column; flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--bg-muted); }
+.paneHeader { display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; white-space: nowrap; overflow: hidden; }
 .paneName { font-weight: 700; flex: 0 0 auto; }
 .pane[data-slot='claude'] .paneName { color: var(--claude); }
 .pane[data-slot='chatgpt'] .paneName { color: var(--chatgpt); }
@@ -58,15 +63,28 @@
 .zoom button:first-child { border-radius: 3px 0 0 3px; }
 .zoom button:nth-child(2) { border-radius: 0; margin-left: -1px; font-family: var(--mono); }
 .zoom button:last-child { border-radius: 0 3px 3px 0; margin-left: -1px; }
+/* second header row: the capture switch (ToS wording in its title) and the turn phase */
+.captureRow { display: flex; align-items: flex-start; gap: 8px; padding: 2px 6px 4px; border-top: 1px dashed var(--border); font-size: 11px; line-height: 1.35; color: var(--fg-muted); white-space: normal; }
+.capture { display: inline-flex; align-items: flex-start; gap: 5px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.capture input { flex: 0 0 auto; margin: 1px 0 0; }
+.capture input:disabled { cursor: not-allowed; }
+.capture:has(input:checked) { color: var(--fg); }
+.phase { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; }
+.phase[data-phase='typing'], .phase[data-phase='submitted'], .phase[data-phase='replying'] { color: var(--primary); }
+.phase[data-phase='done'] { color: var(--ok); }
+.phase[data-phase='error'] { color: var(--err); }
 .viewport { flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--bg-muted); }
 
 /* ---- prompt bar ------------------------------------------------------------------------- */
 .promptBar { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; padding: 6px 8px; border-top: 1px solid var(--border); background: var(--bg); }
+.bridgeBanner { padding: 3px 8px; border: 1px solid var(--warn); border-radius: 4px; background: var(--warn-soft); font-size: 12px; }
+.banner { padding: 3px 8px; border: 1px solid var(--err); border-radius: 4px; background: var(--err-soft); color: var(--err); font-size: 12px; }
 .promptRow { display: flex; align-items: flex-end; gap: 8px; }
 .composer { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 160px; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .composer:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 .composer[readonly] { background: var(--bg-muted); color: var(--fg-muted); cursor: default; }
 .sendBtn { flex: 0 0 auto; padding: 6px 14px; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; }
+.sendBtn:disabled { opacity: 0.6; cursor: not-allowed; }
 .promptMeta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--fg-muted); }
 .targets { display: inline-flex; align-items: center; gap: 10px; }
 .target { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
@@ -79,8 +97,7 @@
 .results { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
 .result { color: var(--fg-muted); }
 .result[data-ok='true'] { color: var(--ok); }
+.result[data-ok='true'][data-code='not_captured'] { color: var(--fg-muted); }
 .result[data-ok='false'] { color: var(--err); }
 .result[data-ok='pending'] { color: var(--fg-muted); font-style: italic; }
 .hint { font-size: 11px; color: var(--fg-muted); }
-
-/* text kept for assistive tech (and the frozen smoke test) without taking any space */
