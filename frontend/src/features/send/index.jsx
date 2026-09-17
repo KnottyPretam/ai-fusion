@@ -1,9 +1,7 @@
-// W9 (send-ui). Registers the `slots` slice at module scope and exports the Send pane, which
-// App.jsx imports by convention from features/send/index.jsx.
-import { registerSlice } from '../../state/registry.js'
-import { initialSlots, slotsReducer } from './slice.js'
+// W9 (send-ui). Exports the Send pane, which App.jsx imports by convention from
+// features/send/index.jsx. The `slots` slice is registered by ./register.js (Stage 2: shared with
+// useSendTurn.js, so importing either entry point registers it exactly once).
+import './register.js'
 import SendPane from './SendPane.jsx'
-
-registerSlice('slots', slotsReducer, initialSlots)
 
 export default SendPane

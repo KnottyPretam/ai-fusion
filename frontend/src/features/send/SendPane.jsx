@@ -1,28 +1,16 @@
 // W9 (send-ui). The Send pane: three live columns (claude | chatgpt | grok) plus the main
-// composer. Owns the stream lifecycle for both Send and per-column solo continue:
-//   no conversation -> createConversation(dispatch, {}) first
-//   run('send', url, {prompt})            (continue also streams under feature key 'send')
-//   then loadConversation(dispatch, id)   (the persisted thread becomes the source of truth)
-//   and, after the conversation's first send, loadConversations(dispatch) (backend auto-titles).
-//
-// Conversation isolation: a turn belongs to the conversation it was started in (`id`). If the
-// user switches / clears / deletes the conversation while its stream is open, the `slots` slice
-// has already dropped the live columns (conversation/loaded|cleared) and ignores the stale
-// stream's later events; here the pending prompt bubble is scoped to that conversation id, the
-// post-stream refetch of `id` is skipped before the GET and its response dropped after a switch
-// (the sidebar unfreezes at sse/end, before the refetch resolves, and a late conversation/loaded
-// of `id` would snap the whole UI back), and the error banner is retired. The composer stays
-// locked from submit — including the create round-trip of a first send — until the refetch
-// settles, so a second turn cannot start in the POST -> sse/end -> conversation/loaded gaps.
-import { useCallback, useEffect, useRef, useState } from 'react'
+// composer. The stream lifecycle for both Send and per-column solo continue — create a
+// conversation when none, run('send', …), the isCurrent-guarded refetch, the first-send list
+// refresh, the conversation-scoped pending prompt / banner and the composer lock from submit
+// (including the create round-trip of a first send) until the refetch settles — lives in
+// useSendTurn.js (Stage 2: shared with the desktop PromptBar); this pane is its consumer.
+import { useEffect, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { useRunStream } from '../../api/runStream.js'
-import { createConversation, loadConversation, loadConversations, loadModels } from '../../api/http.js'
+import { loadModels } from '../../api/http.js'
 import SlotColumn from './SlotColumn.jsx'
 import { SLOT_IDS } from './slice.js'
+import { useSendTurn } from './useSendTurn.js'
 import styles from './send.module.css'
-
-const STREAM_KEYS = ['send', 'analyze', 'fusion']
 
 // Shown next to the main composer while slotConfig.grounded is on (PLAN §8 Phase 5).
 export const GROUNDED_HINT_TITLE =
@@ -30,21 +18,12 @@ export const GROUNDED_HINT_TITLE =
 
 export default function SendPane() {
   const dispatch = useDispatch()
-  const run = useRunStream()
   const conversation = useSlice('conversation')
   const slotConfig = useSlice('slotConfig')
   const streams = useSlice('streams') || {}
   const models = useSlice('models') || { loaded: false, error: null }
   const [prompt, setPrompt] = useState('')
-  const [pending, setPending] = useState(null) // { prompt, slots, convId } while a turn is in flight
-  const [inFlight, setInFlight] = useState(false) // submit -> post-stream refetch settled
-  const [localError, setLocalError] = useState(null)
-  // Conversation id (null = none) the current turn / banner belongs to; `undefined` = retired.
-  const [bannerFor, setBannerFor] = useState(undefined)
   const currentId = conversation ? conversation.id : null
-  // Latest rendered conversation id, readable after the awaits in startTurn.
-  const convIdRef = useRef(null)
-  convIdRef.current = currentId
 
   // Model catalog for the dropdowns. Rejections are swallowed: the frozen smoke test renders
   // <App/> under Node's fetch, where a relative URL rejects.
@@ -52,76 +31,8 @@ export default function SendPane() {
     if (!models.loaded && !models.error) loadModels(dispatch).catch(() => {})
   }, []) // once per mount on purpose: the catalog is global and other panes may load it too
 
-  // A conversation switch retires the banner of the previous one for good.
-  useEffect(() => {
-    setBannerFor((f) => (f === currentId ? f : undefined))
-  }, [currentId])
-
+  const { startTurn, locked, pending, banner } = useSendTurn()
   const sendStreaming = streams.send && streams.send.status === 'streaming'
-  const anyStreaming = STREAM_KEYS.some((k) => streams[k] && streams[k].status === 'streaming')
-  const locked = anyStreaming || inFlight
-
-  const startTurn = useCallback(
-    async ({ slot = null, prompt: raw }) => {
-      const text = (raw || '').trim()
-      if (!text) return false
-      if (!conversation && slot) return false // solo continue needs an existing conversation
-      setLocalError(null)
-      setBannerFor(conversation ? conversation.id : null)
-      // Lock first: the create round-trip below is part of the turn. Unlocked, a second Enter
-      // during POST /api/conversations would run with the same `conversation === null` closure
-      // and create a second conversation plus a second three-model Send for one intended turn.
-      setInFlight(true)
-      let conv = conversation
-      if (!conv) {
-        try {
-          conv = await createConversation(dispatch, {})
-        } catch (e) {
-          setLocalError(e && e.message ? e.message : 'could not create conversation')
-          setInFlight(false)
-          return false
-        }
-        // createConversation dispatched conversation/loaded; the render that mirrors it into the
-        // ref may not have flushed before a fast stream ends.
-        convIdRef.current = conv.id
-      }
-      const id = conv.id
-      setBannerFor(id)
-      const firstSend = !slot && !(conv.turns || []).length
-      const url = slot ? `/api/conversations/${id}/slots/${slot}/continue` : `/api/conversations/${id}/send`
-      setPending({ prompt: text, slots: slot ? [slot] : SLOT_IDS, convId: id })
-      let ok = true
-      try {
-        await run('send', url, { prompt: text })
-      } catch {
-        ok = false // streams.send.error carries the message (sse/end{ok:false})
-      }
-      try {
-        if (convIdRef.current !== id) {
-          // Switched / cleared / deleted mid-stream: the columns were reset already and refetching
-          // `id` would silently navigate the user back to it.
-          setPending(null)
-        } else {
-          try {
-            // The refetch is skipped before the GET (above) AND its response dropped after a
-            // switch: the sidebar re-enables select/new/delete the moment streams.send leaves
-            // 'streaming', which is before this GET resolves (`inFlight` only locks this pane).
-            await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
-            setPending(null)
-          } catch {
-            if (!ok) setPending(null) // else keep the prompt bubble next to the live reply
-          }
-        }
-        // The backend auto-titled the conversation on its first send; the list refresh does not
-        // navigate, so it runs even when the user has moved on.
-        if (firstSend) loadConversations(dispatch).catch(() => {})
-      } finally {
-        setInFlight(false)
-      }
-      return ok
-    },
-    [conversation, dispatch, run],
-  )
 
   function submit() {
     const text = prompt.trim()
@@ -137,8 +48,6 @@ export default function SendPane() {
     }
   }
 
-  const streamError = streams.send && streams.send.status === 'error' ? streams.send.error : null
-  const banner = bannerFor === currentId ? localError || streamError : null
   const grounded = !!(slotConfig && slotConfig.grounded)
 
   return (
