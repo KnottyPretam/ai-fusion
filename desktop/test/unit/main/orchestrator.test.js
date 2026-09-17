@@ -1,181 +1,563 @@
-// orchestrator.js — two targets in parallel, insert phases never overlap (mutex), one failure does
-// not fail the other, renderer focus restored exactly once, the insertAndSubmit budget covers the
-// preload's worst case, runs are queued behind each other.
+// orchestrator.js — one bridge request → one site-view turn: reject from the health cache without
+// touching the adapter, accepted before any DOM write, navigation rule (decision 12), insert
+// phases serialized by the mutex (decision 13), chat-URL recording, capture off → captured:false
+// without observe, capture on → observe with baselineCount, cancel aborts the in-flight op,
+// failure mapping, budgets, every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, TIMEOUT_GRACE_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
-import { fakeLog, tick } from './_fakes.js'
+import { validate } from '../../../main/protocol.js'
+import { fakeLog, fakeTimers, tick } from './_fakes.js'
 
-/** A scripted adapter client: every request returns a deferred the test settles by hand. */
+const SLOTS = ['claude', 'chatgpt', 'grok']
+const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
+const PATTERN = '^https://x\\.test/c/[a-z0-9]+'
+
+/** A scripted adapter client: every request returns a deferred the test settles by hand; aborts are traced. */
 function scriptedClient(slot, trace) {
-  const calls = [] // {op, payload, opts, resolve, reject}
+  const calls = [] // {op, payload, opts, aborted, resolve, reject}
   return {
     slot,
     calls,
-    request(op, payload, opts) {
+    request(op, payload, opts = {}) {
       return new Promise((resolve, reject) => {
         trace.push(`${slot}:${op}:start`)
-        calls.push({ op, payload, opts, resolve: (v) => { trace.push(`${slot}:${op}:end`); resolve(v) }, reject: (e) => { trace.push(`${slot}:${op}:fail`); reject(e) } })
+        const call = {
+          op,
+          payload,
+          opts,
+          aborted: false,
+          resolve: (v) => {
+            trace.push(`${slot}:${op}:end`)
+            resolve(v)
+          },
+          reject: (e) => {
+            trace.push(`${slot}:${op}:fail`)
+            reject(e)
+          },
+        }
+        if (opts.signal) {
+          opts.signal.addEventListener(
+            'abort',
+            () => {
+              call.aborted = true
+              trace.push(`${slot}:${op}:abort`)
+            },
+            { once: true },
+          )
+        }
+        calls.push(call)
       })
     },
     last: () => calls[calls.length - 1],
+    ops: () => calls.map((c) => c.op),
   }
 }
 
-/** `timeouts: null` → timeoutsFor answers null (the orchestrator's own defaults); undefined → the small test budget. */
-function setup({ clients, timeouts, insertSettleMs } = {}) {
+function okHealth(extra = {}) {
+  return { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: '#c', send: 'b', reply: null, stop: null, error: null }, url: 'https://x.test/', host: 'x.test', title: 't', ts: 1, ...extra }
+}
+
+/**
+ * setup(opts): clients (slots with a live adapter), health {slot: Health}, capture {slot: bool},
+ * links {slot: url} for CONV, urls {slot: current url}, pattern, timeouts (undefined → the small
+ * test budget; null → the orchestrator's defaults), analyst (an analystAdapterFor fn).
+ */
+function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs } = {}) {
   const trace = []
-  const focused = []
-  let restored = 0
   const table = {}
-  for (const slot of clients || ['claude', 'chatgpt', 'grok']) table[slot] = scriptedClient(slot, trace)
+  for (const slot of clients) table[slot] = scriptedClient(slot, trace)
+  const timers = fakeTimers()
+  const phases = []
+  const loads = []
+  const navCbs = {}
+  const chatsSet = []
+  const chatsDoc = { [CONV]: { ...links } }
+  const current = { ...urls }
+  let restored = 0
+  let clock = 1000.4
   const orch = createOrchestrator({
     adapterFor: (slot) => table[slot] || null,
-    focusView: (slot) => {
-      trace.push(`${slot}:focus`)
-      focused.push(slot)
-    },
+    ...(analyst ? { analystAdapterFor: analyst } : {}),
+    focusView: (slot) => trace.push(`${slot}:focus`),
     restoreRendererFocus: () => {
       restored += 1
       trace.push('renderer:focus')
     },
     timeoutsFor: () => (timeouts === undefined ? { composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 } : timeouts),
+    captureTimeoutsFor: () => (timeouts === undefined ? { quietMs: 250, firstTokenMs: 3000, captureTimeoutMs: 4000 } : timeouts),
+    chatUrlPatternFor: () => pattern,
+    getHealth: (slot) => health[slot] || null,
+    getCapture: () => ({ claude: false, chatgpt: false, grok: false, ...capture }),
+    chats: {
+      get: (convId, slot) => (chatsDoc[convId] && chatsDoc[convId][slot]) || null,
+      set: (convId, slot, url) => {
+        chatsSet.push([convId, slot, url])
+        chatsDoc[convId] = { ...(chatsDoc[convId] || {}), [slot]: url }
+      },
+    },
+    currentUrl: (slot) => current[slot] || '',
+    loadUrl: async (slot, url) => {
+      loads.push([slot, url])
+      if (url.includes('fail')) throw new Error('ERR_CONNECTION_REFUSED')
+      current[slot] = url
+    },
+    onNavigate: (slot, cb) => {
+      navCbs[slot] = cb
+      return () => {
+        if (navCbs[slot] === cb) delete navCbs[slot]
+      }
+    },
+    newChatUrl: (slot) => `https://x.test/new-${slot}`,
+    onTurn: (slot, phase, code) => phases.push(code === undefined ? `${slot}:${phase}` : `${slot}:${phase}:${code}`),
+    now: () => {
+      clock += 100.3
+      return clock
+    },
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
     log: fakeLog(),
     ...(insertSettleMs !== undefined ? { insertSettleMs } : {}),
   })
-  return { orch, table, trace, focused, restored: () => restored }
+  const emitted = []
+  const emit = (frame) => emitted.push(frame)
+  const navigate = (slot, url) => {
+    current[slot] = url
+    if (navCbs[slot]) navCbs[slot](url, { inPage: true })
+  }
+  return { orch, table, trace, timers, phases, loads, chatsSet, chatsDoc, current, emitted, emit, navigate, restored: () => restored, navCbs }
 }
 
-const settleAll = async (n = 6) => {
+const request = (slot, extra = {}) => ({ type: 'request', req_id: `req-${slot}`, model: `web:${slot}`, slot, view: 'pane', fresh: false, text: 'hello `x`', role: slot, purpose: 'chat', conversation_id: CONV, timeout_s: 600, ...extra })
+
+const settleAll = async (n = 8) => {
   for (let i = 0; i < n; i++) await tick()
 }
 
-test('two targets: ready phases run in parallel, insert phases are serialized by the mutex', async () => {
-  const { orch, table, trace, focused } = setup()
-  const done = orch.submitAll({ targets: ['chatgpt', 'claude'], text: 'hello' })
-  await settleAll()
-  // both ready requests are in flight at once (parallel)
-  assert.deepEqual(trace, ['claude:ready:start', 'chatgpt:ready:start'])
-  assert.deepEqual(table.claude.last().payload, { timeoutMs: 1000 })
-  assert.deepEqual(table.claude.last().opts, { timeoutMs: 1000 + TIMEOUT_GRACE_MS })
+const assertValid = (frame) => {
+  const r = validate(frame)
+  assert.equal(r.ok, true, `${r.error} — ${JSON.stringify(frame)}`)
+  assert.equal(r.direction, 'client')
+}
 
-  // chatgpt becomes ready first → it takes the mutex, focuses, inserts
-  table.chatgpt.last().resolve({ ok: true, op: 'ready', composerSelector: '#prompt-textarea' })
-  await settleAll()
-  assert.deepEqual(trace.slice(2), ['chatgpt:ready:end', 'chatgpt:focus', 'chatgpt:insertAndSubmit:start'])
-  assert.deepEqual(table.chatgpt.last().payload, { text: 'hello' })
-  assert.deepEqual(table.chatgpt.last().opts, { timeoutMs: 1000 + 2000 + 2 * 500 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS })
+// --- rejections from the health cache ------------------------------------------------------------
 
-  // claude becomes ready while chatgpt is still inserting → it must wait (no focus, no insert)
-  table.claude.calls[0].resolve({ ok: true, op: 'ready' })
-  await settleAll()
-  assert.equal(trace.filter((t) => t === 'claude:focus').length, 0, 'claude must not focus while chatgpt holds the insert mutex')
-  assert.equal(table.claude.calls.length, 1)
-
-  // chatgpt finishes → claude proceeds
-  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#prompt-textarea', sendSelector: "button[data-testid='send-button']", url: 'https://chatgpt.test/c/1', ms: 12 })
-  await settleAll()
-  assert.deepEqual(trace.slice(-3), ['chatgpt:insertAndSubmit:end', 'claude:focus', 'claude:insertAndSubmit:start'])
-  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: 'div.ProseMirror', sendSelector: "button[aria-label='Send message']", url: 'https://claude.test/chat/2', ms: 9 })
-
-  const { results } = await done
-  assert.deepEqual(Object.keys(results), ['claude', 'chatgpt'], 'results in SLOTS order')
-  assert.equal(results.chatgpt.ok, true)
-  assert.equal(results.chatgpt.composerSelector, '#prompt-textarea')
-  assert.equal(results.chatgpt.sendSelector, "button[data-testid='send-button']")
-  assert.equal(results.chatgpt.url, 'https://chatgpt.test/c/1')
-  assert.equal(typeof results.chatgpt.ms, 'number')
-  assert.equal(results.claude.ok, true)
-  assert.deepEqual(focused, ['chatgpt', 'claude'])
-  // the insert phases never overlapped: every insert:start follows the previous insert:end
-  const inserts = trace.filter((t) => t.includes('insertAndSubmit'))
-  assert.deepEqual(inserts, ['chatgpt:insertAndSubmit:start', 'chatgpt:insertAndSubmit:end', 'claude:insertAndSubmit:start', 'claude:insertAndSubmit:end'])
+test('rejected from the health cache before any adapter call: logged_out / challenge / blocked / view_crashed / stop → view_busy', async () => {
+  const cases = [
+    [okHealth({ session: 'logged_out' }), 'logged_out'],
+    [okHealth({ session: 'challenge' }), 'challenge'],
+    [okHealth({ session: 'blocked' }), 'blocked'],
+    [okHealth({ matched: { composer: null, send: null, reply: null, stop: null, error: 'view_crashed' } }), 'view_crashed'],
+    [okHealth({ stop: true }), 'view_busy'],
+  ]
+  for (const [h, code] of cases) {
+    const { orch, table, emitted, emit, phases } = setup({ health: { chatgpt: h } })
+    const final = await orch.run(request('chatgpt'), emit)
+    assert.deepEqual(emitted, [final])
+    assert.equal(final.type, 'rejected')
+    assert.equal(final.code, code)
+    assert.equal(final.req_id, 'req-chatgpt')
+    assert.equal(typeof final.message, 'string')
+    assertValid(final)
+    assert.deepEqual(table.chatgpt.calls, [], `${code}: the adapter was never touched`)
+    assert.deepEqual(phases, [], 'a rejection is not a turn')
+  }
 })
 
-test('one failure does not fail the other; the failed slot reports its code', async () => {
-  const { orch, table } = setup()
-  const done = orch.submitAll({ targets: ['claude', 'grok'], text: 'x' })
+test('rejectFromHealth: null / unknown / ok health proceeds; inflight wins over everything', () => {
+  assert.equal(rejectFromHealth(null), null)
+  assert.equal(rejectFromHealth(okHealth()), null)
+  assert.equal(rejectFromHealth(okHealth({ session: 'unknown', stop: false })), null)
+  assert.equal(rejectFromHealth(okHealth({ session: 'logged_out' }), { inflight: true }).code, 'view_busy')
+  assert.equal(rejectFromHealth(okHealth({ session: 'logged_out' })).code, 'logged_out')
+})
+
+test('unknown slot → unknown_site; no live view → view_crashed; analyst view → analyst_not_chosen until Stage 3 injects a runner', async () => {
+  const { orch, emit, emitted } = setup({ clients: ['claude'] })
+  const a = await orch.run(request('bing'), emit)
+  assert.equal(a.code, 'unknown_site')
+  assert.equal(a.type, 'rejected')
+  const b = await orch.run(request('chatgpt'), emit)
+  assert.equal(b.code, 'view_crashed')
+  const c = await orch.run(request('claude', { model: 'web:claude:analyst', view: 'analyst', role: 'analyst', purpose: 'extraction', fresh: true }), emit)
+  assert.equal(c.code, 'analyst_not_chosen')
+  for (const f of emitted) assertValid(f)
+})
+
+test('a second request on a slot whose turn is in flight → view_busy; other slots proceed', async () => {
+  const { orch, table, emit } = setup()
+  const first = orch.run(request('claude', { req_id: 'first' }), emit)
   await settleAll()
-  table.claude.last().reject(new AdapterRequestError('logged_out', 'sign in first'))
+  assert.deepEqual(table.claude.ops(), ['ready'])
+  assert.deepEqual(orch.inflight('claude'), { reqId: 'first', view: 'pane' })
+  const second = await orch.run(request('claude', { req_id: 'second' }), emit)
+  assert.equal(second.type, 'rejected')
+  assert.equal(second.code, 'view_busy')
+  assert.equal(second.req_id, 'second')
+  assert.deepEqual(table.claude.ops(), ['ready'], 'the busy slot got no second op')
+  const other = orch.run(request('grok'), emit)
+  await settleAll()
+  assert.deepEqual(table.grok.ops(), ['ready'])
+  table.claude.last().resolve({ ok: true, op: 'ready' })
   table.grok.last().resolve({ ok: true, op: 'ready' })
   await settleAll()
-  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, ms: 1 })
-  const { results } = await done
-  assert.deepEqual(results.claude, { ok: false, code: 'logged_out', message: 'sign in first', ms: results.claude.ms })
-  assert.equal(results.grok.ok, true)
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, url: 'https://x.test/' })
+  await settleAll()
+  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, url: 'https://x.test/' })
+  assert.equal((await first).ok, true)
+  assert.equal((await other).ok, true)
+  assert.equal(orch.inflight('claude'), null)
 })
 
-test('a failure INSIDE the insert phase releases the mutex so the next target still inserts', async () => {
-  const { orch, table, trace } = setup()
-  const done = orch.submitAll({ targets: ['claude', 'chatgpt'], text: 'x' })
+// --- the turn ------------------------------------------------------------------------------------
+
+test('capture off: accepted → ready → mutex⟨focus, insertAndSubmit⟩ → result captured:false with url + integer ms; no observe', async () => {
+  const { orch, table, trace, emitted, emit, phases, restored } = setup({ health: { chatgpt: okHealth() }, urls: { chatgpt: 'https://x.test/' } })
+  const done = orch.run(request('chatgpt'), emit)
+  await settleAll()
+  assert.deepEqual(emitted, [{ type: 'accepted', req_id: 'req-chatgpt', view: 'pane', slot: 'chatgpt' }])
+  assertValid(emitted[0])
+  assert.deepEqual(trace, ['chatgpt:ready:start'])
+  assert.deepEqual(table.chatgpt.last().payload, { timeoutMs: 1000 })
+  assert.equal(table.chatgpt.last().opts.timeoutMs, 1000 + TIMEOUT_GRACE_MS)
+  assert.ok(table.chatgpt.last().opts.signal instanceof AbortSignal, 'every op carries the turn signal')
+  table.chatgpt.last().resolve({ ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  assert.deepEqual(trace.slice(1), ['chatgpt:ready:end', 'chatgpt:focus', 'chatgpt:insertAndSubmit:start'])
+  assert.deepEqual(phases, ['chatgpt:typing'])
+  assert.deepEqual(table.chatgpt.last().payload, { text: 'hello `x`' })
+  assert.equal(table.chatgpt.last().opts.timeoutMs, 1000 + 2000 + 2 * 500 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS)
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#c', sendSelector: 'b', assistantCount: 2, confirmedBy: 'composer_cleared', ms: 3, url: 'https://x.test/' })
+  const final = await done
+  assert.deepEqual(final, { type: 'result', req_id: 'req-chatgpt', ok: true, captured: false, url: 'https://x.test/', ms: final.ms })
+  assert.ok(Number.isInteger(final.ms) && final.ms > 0, `ms is an integer: ${final.ms}`)
+  assertValid(final)
+  assert.deepEqual(emitted[1], final)
+  assert.deepEqual(table.chatgpt.ops(), ['ready', 'insertAndSubmit'], 'no observe when capture is off')
+  assert.deepEqual(phases, ['chatgpt:typing', 'chatgpt:submitted', 'chatgpt:done'])
+  assert.equal(restored(), 1, 'renderer focus restored after the insert phase')
+  assert.equal(trace.at(-1), 'renderer:focus')
+})
+
+test('capture on: observe is called with baselineCount = the submit result assistantCount (+ quietMs/timeoutMs); result captured:true carries text, url, done_by', async () => {
+  const { orch, table, emitted, emit, phases } = setup({ capture: { claude: true }, urls: { claude: 'https://x.test/c/abc' } })
+  const done = orch.run(request('claude'), emit)
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 3, url: 'https://x.test/c/abc' })
+  await settleAll()
+  const obs = table.claude.last()
+  assert.equal(obs.op, 'observe')
+  assert.deepEqual(obs.payload, { baselineCount: 3, quietMs: 250, timeoutMs: 4000 })
+  assert.equal(obs.opts.timeoutMs, observeBudgetMs({ firstTokenMs: 3000, captureTimeoutMs: 4000 }) + TIMEOUT_GRACE_MS)
+  assert.deepEqual(phases, ['claude:typing', 'claude:submitted', 'claude:replying'])
+  obs.resolve({ ok: true, op: 'observe', text: 'At sea level water boils at 100 °C.', doneBy: 'stop_gone', ms: 900, url: 'https://x.test/c/abc' })
+  const final = await done
+  assert.deepEqual(final, { type: 'result', req_id: 'req-claude', ok: true, captured: true, text: 'At sea level water boils at 100 °C.', url: 'https://x.test/c/abc', ms: final.ms, done_by: 'stop_gone' })
+  assert.ok(Number.isInteger(final.ms))
+  assertValid(final)
+  assert.deepEqual(emitted.map((f) => f.type), ['accepted', 'result'])
+  assert.equal(phases.at(-1), 'claude:done')
+})
+
+test('a missing / bogus assistantCount observes from baseline 0; an unknown doneBy is reported as quiet; an empty text is still ok', async () => {
+  const { orch, table, emit } = setup({ capture: { grok: true } })
+  const done = orch.run(request('grok'), emit)
+  await settleAll()
+  table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: -1 })
+  await settleAll()
+  assert.equal(table.grok.last().payload.baselineCount, 0)
+  table.grok.last().resolve({ ok: true, op: 'observe', text: '', doneBy: 'weird', ms: 1 })
+  const final = await done
+  assert.equal(final.captured, true)
+  assert.equal(final.text, '')
+  assert.equal(final.done_by, 'quiet')
+  assertValid(final)
+})
+
+// --- navigation rule (decision 12) ---------------------------------------------------------------
+
+test('a recorded link that differs from the view URL → loadUrl(link) before ready; equal → no navigation', async () => {
+  const { orch, table, loads, emit, trace } = setup({ links: { chatgpt: 'https://x.test/c/old' }, urls: { chatgpt: 'https://x.test/' } })
+  const done = orch.run(request('chatgpt'), emit)
+  await settleAll()
+  assert.deepEqual(loads, [['chatgpt', 'https://x.test/c/old']])
+  assert.deepEqual(trace, ['chatgpt:ready:start'], 'ready waits for the composer of the opened chat')
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1, url: 'https://x.test/c/old' })
+  const final = await done
+  assert.equal(final.ok, true)
+  assert.equal(final.url, 'https://x.test/c/old')
+
+  const same = setup({ links: { chatgpt: 'https://x.test/c/old' }, urls: { chatgpt: 'https://x.test/c/old' } })
+  const run2 = same.orch.run(request('chatgpt'), same.emit)
+  await settleAll()
+  assert.deepEqual(same.loads, [], 'already on the recorded chat: no navigation')
+  same.table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  same.table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await run2).ok, true)
+  assert.deepEqual(same.chatsSet, [], 'the link is already recorded; no rewrite')
+})
+
+test('no link + view on a chat URL → no navigation, that URL is recorded right after the submit (adopt)', async () => {
+  const { orch, table, loads, chatsSet, emit } = setup({ urls: { grok: 'https://x.test/c/adopted' } })
+  const done = orch.run(request('grok'), emit)
+  await settleAll()
+  assert.deepEqual(loads, [])
+  table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.deepEqual(chatsSet, [], 'nothing recorded before the submit')
+  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, url: 'https://x.test/c/adopted' })
+  const final = await done
+  assert.deepEqual(chatsSet, [[CONV, 'grok', 'https://x.test/c/adopted']])
+  assert.equal(final.url, 'https://x.test/c/adopted')
+})
+
+test('no link + view on a non-matching URL → recorded only after a MATCHING navigation within 15 s; non-matching navigations never recorded', async () => {
+  const { orch, table, chatsSet, emit, navigate, timers, navCbs } = setup({ urls: { chatgpt: 'https://x.test/' } })
+  const done = orch.run(request('chatgpt'), emit)
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, url: 'https://x.test/' })
+  const final = await done
+  assert.equal(final.ok, true)
+  assert.equal(final.url, 'https://x.test/', 'the result carries the current URL when no chat URL is known yet')
+  assert.deepEqual(chatsSet, [])
+  assert.equal(typeof navCbs.chatgpt, 'function', 'watching for the chat URL after the result')
+  navigate('chatgpt', 'https://x.test/settings')
+  assert.deepEqual(chatsSet, [], 'a non-matching URL is never recorded')
+  navigate('chatgpt', 'https://x.test/c/new1')
+  assert.deepEqual(chatsSet, [[CONV, 'chatgpt', 'https://x.test/c/new1']])
+  assert.equal(navCbs.chatgpt, undefined, 'the watch stops after the first match')
+  navigate('chatgpt', 'https://x.test/c/new2')
+  assert.deepEqual(chatsSet.length, 1, 'one link per turn')
+
+  // the 15 s window: a late navigation is ignored
+  const late = setup({ urls: { chatgpt: 'https://x.test/' } })
+  const run2 = late.orch.run(request('chatgpt'), late.emit)
+  await settleAll()
+  late.table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  late.table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await run2
+  late.timers.advance(CHAT_URL_WAIT_MS + 1)
+  late.navigate('chatgpt', 'https://x.test/c/toolate')
+  assert.deepEqual(late.chatsSet, [])
+  assert.equal(timers.pending(), 0)
+})
+
+test('no conversation id → nothing recorded; a broken / missing chatUrlPattern → nothing recorded, the turn still succeeds', async () => {
+  const anon = setup({ urls: { claude: 'https://x.test/c/abc' } })
+  const r1 = anon.orch.run(request('claude', { conversation_id: null }), anon.emit)
+  await settleAll()
+  anon.table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  anon.table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await r1).ok, true)
+  assert.deepEqual(anon.chatsSet, [])
+
+  const broken = setup({ urls: { claude: 'https://x.test/c/abc' }, pattern: '([' })
+  const r2 = broken.orch.run(request('claude'), broken.emit)
+  await settleAll()
+  broken.table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  broken.table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await r2).ok, true)
+  assert.deepEqual(broken.chatsSet, [])
+  assert.equal(compileChatUrlPattern('(['), null)
+  assert.equal(compileChatUrlPattern(''), null)
+  assert.ok(compileChatUrlPattern(PATTERN) instanceof RegExp)
+})
+
+test('a failed navigation to the recorded chat → result navigation (after accepted); fresh:true opens newChatUrl first', async () => {
+  const { orch, table, emitted, emit, phases } = setup({ links: { grok: 'https://x.test/c/fail' }, urls: { grok: 'https://x.test/' } })
+  const final = await orch.run(request('grok'), emit)
+  assert.deepEqual(emitted.map((f) => f.type), ['accepted', 'result'])
+  assert.equal(final.ok, false)
+  assert.equal(final.code, 'navigation')
+  assert.match(final.message, /could not open the recorded chat/)
+  assert.equal(final.partial, null)
+  assertValid(final)
+  assert.deepEqual(table.grok.calls, [], 'no adapter op after a failed load')
+  assert.deepEqual(phases, ['grok:error:navigation'])
+
+  const fresh = setup({ links: { grok: 'https://x.test/c/keep' }, urls: { grok: 'https://x.test/c/keep' } })
+  const run2 = fresh.orch.run(request('grok', { fresh: true }), fresh.emit)
+  await settleAll()
+  assert.deepEqual(fresh.loads, [['grok', 'https://x.test/new-grok']], 'fresh:true ignores the recorded link')
+  fresh.table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  fresh.table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await run2).ok, true)
+})
+
+// --- parallel requests, the mutex, focus --------------------------------------------------------
+
+test('three parallel requests: ready phases overlap, insert phases never do, renderer focus restored once after the last insert', async () => {
+  const { orch, table, trace, emit, restored } = setup()
+  const runs = SLOTS.map((slot) => orch.run(request(slot), emit))
+  await settleAll()
+  assert.deepEqual(trace, ['claude:ready:start', 'chatgpt:ready:start', 'grok:ready:start'])
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.deepEqual(trace.slice(3), ['chatgpt:ready:end', 'chatgpt:focus', 'chatgpt:insertAndSubmit:start'])
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.equal(trace.filter((t) => t.endsWith(':focus') && !t.startsWith('chatgpt')).length, 0, 'nobody else focuses while chatgpt inserts')
+  assert.equal(restored(), 0)
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await settleAll()
+  assert.equal(restored(), 0, 'inserts still queued: renderer focus not restored yet')
+  const inserting = SLOTS.filter((s) => table[s].last().op === 'insertAndSubmit' && s !== 'chatgpt')
+  assert.equal(inserting.length, 1, 'exactly one of the others holds the mutex')
+  table[inserting[0]].last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await settleAll()
+  const third = SLOTS.find((s) => s !== 'chatgpt' && s !== inserting[0])
+  assert.equal(table[third].last().op, 'insertAndSubmit')
+  table[third].last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  const finals = await Promise.all(runs)
+  assert.deepEqual(finals.map((f) => f.ok), [true, true, true])
+  assert.equal(restored(), 1)
+  const inserts = trace.filter((t) => t.includes('insertAndSubmit'))
+  for (let i = 0; i < inserts.length; i += 2) {
+    assert.ok(inserts[i].endsWith(':start') && inserts[i + 1].endsWith(':end') && inserts[i].split(':')[0] === inserts[i + 1].split(':')[0], inserts.join(' '))
+  }
+  assert.equal(orch.mutex.locked(), false)
+})
+
+test('a failure inside the insert phase releases the mutex; the failed turn reports the adapter code with partial', async () => {
+  const { orch, table, emit, phases } = setup()
+  const a = orch.run(request('claude'), emit)
+  const b = orch.run(request('chatgpt'), emit)
   await settleAll()
   table.claude.last().resolve({ ok: true, op: 'ready' })
   table.chatgpt.last().resolve({ ok: true, op: 'ready' })
   await settleAll()
-  // claude holds the mutex (ready resolved first) and fails its insert
-  assert.equal(trace.includes('claude:insertAndSubmit:start'), true)
-  assert.equal(trace.includes('chatgpt:insertAndSubmit:start'), false)
-  table.claude.last().reject(new AdapterRequestError('send_not_found', 'no button'))
+  assert.equal(table.claude.last().op, 'insertAndSubmit')
+  table.claude.last().reject(new AdapterRequestError('send_not_found', 'no enabled send button within 18000 ms'))
   await settleAll()
-  assert.equal(trace.includes('chatgpt:insertAndSubmit:start'), true)
+  assert.equal(table.chatgpt.last().op, 'insertAndSubmit')
   table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  const { results } = await done
-  assert.equal(results.claude.code, 'send_not_found')
-  assert.equal(results.chatgpt.ok, true)
+  const fa = await a
+  assert.deepEqual(fa, { type: 'result', req_id: 'req-claude', ok: false, code: 'send_not_found', message: 'no enabled send button within 18000 ms', partial: null })
+  assertValid(fa)
+  assert.equal((await b).ok, true)
+  assert.ok(phases.includes('claude:error:send_not_found'))
   assert.equal(orch.mutex.locked(), false)
 })
 
-test('renderer focus is restored exactly once, after the last insert, even with failures', async () => {
-  const { orch, table, trace, restored } = setup()
-  const done = orch.submitAll({ targets: ['claude', 'chatgpt', 'grok'], text: 'x' })
+// --- cancel ---------------------------------------------------------------------------------------
+
+test('cancel(reqId) aborts the in-flight op: the adapter answers cancelled (with partial) → result cancelled; cancel of an unknown id is false', async () => {
+  const { orch, table, emit, phases } = setup({ capture: { claude: true } })
+  const done = orch.run(request('claude'), emit)
   await settleAll()
-  assert.equal(restored(), 0)
-  table.claude.last().reject(new AdapterRequestError('challenge', 'turnstile'))
-  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  const obs = table.claude.last()
+  assert.equal(obs.op, 'observe')
+  assert.equal(orch.cancel('nope'), false)
+  assert.equal(orch.cancel('req-claude'), true)
+  assert.equal(obs.aborted, true, 'the observe op saw the abort')
+  assert.equal(orch.cancel('req-claude'), true, 'idempotent while the turn is still winding down')
+  obs.reject(new AdapterRequestError('cancelled', 'cancelled by the backend', { partial: 'At sea level' }))
+  const final = await done
+  assert.deepEqual(final, { type: 'result', req_id: 'req-claude', ok: false, code: 'cancelled', message: 'cancelled by the backend', partial: 'At sea level' })
+  assertValid(final)
+  assert.equal(phases.at(-1), 'claude:error:cancelled')
+  assert.equal(orch.cancel('req-claude'), false, 'gone once the turn has finished')
+})
+
+test('a cancel while the turn waits for the mutex skips the insert entirely (nothing typed)', async () => {
+  const { orch, table, emit, trace } = setup()
+  const a = orch.run(request('claude'), emit)
+  const b = orch.run(request('grok'), emit)
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
   table.grok.last().resolve({ ok: true, op: 'ready' })
   await settleAll()
-  assert.equal(restored(), 0, 'not before the inserts')
-  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  await settleAll()
-  assert.equal(restored(), 0, 'not while grok still inserts')
-  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  await done
-  assert.equal(restored(), 1)
-  assert.equal(trace[trace.length - 1], 'renderer:focus')
+  assert.equal(table.claude.last().op, 'insertAndSubmit', 'claude holds the mutex')
+  assert.equal(table.grok.last().op, 'ready', 'grok waits for it')
+  orch.cancel('req-grok')
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  const fb = await b
+  assert.equal(fb.code, 'cancelled')
+  assert.deepEqual(table.grok.ops(), ['ready'], 'no insert after the cancel')
+  assert.equal(trace.includes('grok:focus'), false)
+  assert.equal((await a).ok, true)
+  assert.equal(orch.mutex.locked(), false)
 })
 
-test('a missing view → view_crashed for that slot only; unknown / duplicate targets are dropped', async () => {
-  const { orch, table } = setup({ clients: ['chatgpt'] })
-  const done = orch.submitAll({ targets: ['claude', 'chatgpt', 'chatgpt', 'nope'], text: 'x' })
+// --- failure mapping ---------------------------------------------------------------------------------
+
+test('adapter codes outside the §1 result set (busy, logged_out from ready) become site_error with the code in the message; result codes pass through', async () => {
+  const cases = [
+    [new AdapterRequestError('busy', 'op observe in flight'), 'site_error', 'busy: op observe in flight'],
+    [new AdapterRequestError('logged_out', 'signed out'), 'site_error', 'logged_out: signed out'],
+    [new AdapterRequestError('timeout', 'ready timed out'), 'timeout', 'ready timed out'],
+    [new AdapterRequestError('adapter_gone', 'navigated'), 'adapter_gone', 'navigated'],
+    [new AdapterRequestError('view_crashed', 'gone'), 'view_crashed', 'gone'],
+    [new Error('boom'), 'site_error', 'boom'],
+  ]
+  for (const [err, code, message] of cases) {
+    const { orch, table, emit } = setup()
+    const done = orch.run(request('grok'), emit)
+    await settleAll()
+    table.grok.last().reject(err)
+    const final = await done
+    assert.equal(final.code, code, err.message)
+    assert.equal(final.message, message)
+    assertValid(final)
+  }
+})
+
+// --- budgets / mutex ----------------------------------------------------------------------------------
+
+test('insertAndSubmit budget = composer + send + 2×verify + 2×INSERT_SETTLE_MS (+ grace); observe budget = firstToken + capture (+ grace); the contract defaults apply when timeoutsFor answers null', async () => {
+  assert.equal(INSERT_SETTLE_MS, SELECTORS_INSERT_SETTLE_MS, 'the settle delay comes from site.cjs through selectors.js')
+  assert.ok(Number.isFinite(INSERT_SETTLE_MS) && INSERT_SETTLE_MS > 0)
+  assert.equal(insertAndSubmitBudgetMs({ composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000, insertSettleMs: 60 }), 43120)
+  assert.equal(observeBudgetMs({ firstTokenMs: 90000, captureTimeoutMs: 300000 }), 390000)
+
+  const { orch, table, emit } = setup({ timeouts: null, capture: { chatgpt: true } })
+  const done = orch.run(request('chatgpt'), emit)
   await settleAll()
+  assert.deepEqual(table.chatgpt.last().payload, { timeoutMs: 15000 })
   table.chatgpt.last().resolve({ ok: true, op: 'ready' })
   await settleAll()
-  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  const { results } = await done
-  assert.deepEqual(Object.keys(results), ['claude', 'chatgpt'])
-  assert.equal(results.claude.code, 'view_crashed')
-  assert.equal(results.chatgpt.ok, true)
-})
-
-test('an empty target list resolves with no results and still restores focus once', async () => {
-  const { orch, restored } = setup()
-  assert.deepEqual(await orch.submitAll({ targets: [], text: 'x' }), { results: {} })
-  assert.equal(restored(), 1)
-})
-
-test('a non-AdapterRequestError failure is reported as site_error with its message', async () => {
-  const { orch, table } = setup()
-  const done = orch.submitAll({ targets: ['grok'], text: 'x' })
+  const insert = table.chatgpt.last()
+  assert.equal(insert.opts.timeoutMs, 15000 + 18000 + 2 * 5000 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS)
+  insert.resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1 })
   await settleAll()
-  table.grok.last().reject(new Error('boom'))
-  const { results } = await done
-  assert.equal(results.grok.code, 'site_error')
-  assert.equal(results.grok.message, 'boom')
+  const obs = table.chatgpt.last()
+  assert.deepEqual(obs.payload, { baselineCount: 1, quietMs: 2500, timeoutMs: 300000 })
+  assert.equal(obs.opts.timeoutMs, 90000 + 300000 + TIMEOUT_GRACE_MS)
+  obs.resolve({ ok: true, op: 'observe', text: 't', doneBy: 'quiet', ms: 1 })
+  await done
+
+  const custom = setup({ insertSettleMs: 250 })
+  const run = custom.orch.run(request('grok'), custom.emit)
+  await settleAll()
+  custom.table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  assert.equal(custom.table.grok.last().opts.timeoutMs, 1000 + 2000 + 2 * 500 + 2 * 250 + TIMEOUT_GRACE_MS)
+  custom.table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  await run
 })
 
-test('createMutex serializes holders and tolerates a double release', async () => {
+test('createMutex serializes holders, counts waiters and tolerates a double release', async () => {
   const m = createMutex()
   const order = []
   const r1 = await m.lock()
@@ -186,78 +568,26 @@ test('createMutex serializes holders and tolerates a double release', async () =
   })
   await settleAll()
   assert.deepEqual(order, [])
+  assert.equal(m.waiting(), 1)
   r1()
   r1()
   const r2 = await second
   assert.deepEqual(order, ['second'])
   assert.equal(m.locked(), true)
+  assert.equal(m.waiting(), 0)
   r2()
   assert.equal(m.locked(), false)
 })
 
-test('insertAndSubmit budget = composer + send + 2×verify + 2×INSERT_SETTLE_MS (+ grace): main never times out before the adapter', async () => {
-  assert.equal(INSERT_SETTLE_MS, SELECTORS_INSERT_SETTLE_MS, 'the settle delay comes from site.cjs through selectors.js')
-  assert.ok(Number.isFinite(INSERT_SETTLE_MS) && INSERT_SETTLE_MS > 0)
-  assert.equal(insertAndSubmitBudgetMs({ composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000, insertSettleMs: 60 }), 43120)
-  assert.equal(insertAndSubmitBudgetMs({ composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000 }), 15000 + 18000 + 2 * 5000 + 2 * INSERT_SETTLE_MS)
-
-  // the contract defaults (timeoutsFor → null): the preload's worst case is composerWaitMs +
-  // 2×INSERT_SETTLE_MS (two insert attempts) + sendWaitMs + submitVerifyMs (click) + submitVerifyMs (Enter)
-  const { orch, table } = setup({ timeouts: null })
-  const done = orch.submitAll({ targets: ['chatgpt'], text: 'x' })
+test('an emit() that throws is logged, never fails the turn', async () => {
+  const { orch, table } = setup()
+  const done = orch.run(request('claude'), () => {
+    throw new Error('socket closed')
+  })
   await settleAll()
-  assert.deepEqual(table.chatgpt.last().payload, { timeoutMs: 15000 })
-  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
-  await settleAll()
-  const insert = table.chatgpt.last()
-  assert.equal(insert.op, 'insertAndSubmit')
-  assert.equal(insert.opts.timeoutMs, 15000 + 18000 + 2 * 5000 + 2 * INSERT_SETTLE_MS + TIMEOUT_GRACE_MS)
-  assert.ok(insert.opts.timeoutMs >= 15000 + 18000 + 2 * 5000 + 2 * 60 + TIMEOUT_GRACE_MS, 'at least the reviewed worst case (43 120 ms) plus grace')
-  insert.resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  await done
-
-  // the delay is injectable (a build of site.cjs with another INSERT_SETTLE_MS)
-  const custom = setup({ insertSettleMs: 250 })
-  const run = custom.orch.submitAll({ targets: ['grok'], text: 'x' })
-  await settleAll()
-  custom.table.grok.last().resolve({ ok: true, op: 'ready' })
-  await settleAll()
-  assert.equal(custom.table.grok.last().opts.timeoutMs, 1000 + 2000 + 2 * 500 + 2 * 250 + TIMEOUT_GRACE_MS)
-  custom.table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  await run
-})
-
-test('runs are queued: a second submitAll starts only after the first has restored the renderer focus', async () => {
-  const { orch, table, trace, restored } = setup()
-  const a = orch.submitAll({ targets: ['claude'], text: 'a' })
-  const b = orch.submitAll({ targets: ['claude', 'chatgpt'], text: 'b' })
-  await settleAll()
-  assert.deepEqual(trace, ['claude:ready:start'], 'run B has not touched any view')
   table.claude.last().resolve({ ok: true, op: 'ready' })
   await settleAll()
-  assert.deepEqual(trace.slice(-2), ['claude:focus', 'claude:insertAndSubmit:start'])
-  assert.equal(table.claude.calls.length, 2, 'still only run A on claude')
   table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  const ra = await a
-  assert.equal(ra.results.claude.ok, true)
-  await settleAll()
-  // A restored the renderer focus BEFORE B's first ready went out; B's ready phases then run in parallel
-  const focusAt = trace.indexOf('renderer:focus')
-  assert.ok(focusAt > 0)
-  assert.deepEqual(trace.slice(focusAt), ['renderer:focus', 'claude:ready:start', 'chatgpt:ready:start'])
-  table.claude.last().reject(new AdapterRequestError('logged_out', 'signed out'))
-  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
-  await settleAll()
-  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
-  const rb = await b
-  assert.equal(rb.results.claude.code, 'logged_out')
-  assert.equal(rb.results.chatgpt.ok, true)
-  assert.equal(restored(), 2, 'once per run')
-  assert.equal(trace.at(-1), 'renderer:focus')
-  // the queue is not poisoned by a run whose every slot failed
-  const c = orch.submitAll({ targets: ['grok'], text: 'c' })
-  await settleAll()
-  table.grok.last().reject(new Error('boom'))
-  assert.equal((await c).results.grok.code, 'site_error')
-  assert.deepEqual(await orch.submitAll({ targets: [], text: '' }), { results: {} })
+  const final = await done
+  assert.equal(final.ok, true)
 })

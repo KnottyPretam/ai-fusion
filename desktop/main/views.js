@@ -16,7 +16,7 @@ import { attachPolicy } from './policy.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
 import { stepZoom, clampZoom } from './settings.js'
-import { createAdapterClient, isMainFrameOf } from './adapter-client.js'
+import { createAdapterClient, isMainFrameOf, REQUEST_CHANNEL } from './adapter-client.js'
 
 export const LOAD_RETRY_MS = 1000
 export const LOAD_RETRY_MAX = 30
@@ -146,6 +146,12 @@ export function loadWithRetry(wc, url, { tag = 'view', log = console, setTimeout
  *   manager.setHealth(slot, h) / getHealth(slot)      the health cache the renderer also receives
  *   manager.onCreated(cb) → unsubscribe               cb(slot, webContents) for every (re)created view
  *   manager.createAll() / destroyAll()
+ *   Stage 2:
+ *   manager.loadUrl(slot, url) → Promise             a recorded chat link (rejects `navigation` on a failed load)
+ *   manager.onNavigate(slot, cb) → unsubscribe        cb(url, {inPage}) on did-navigate / did-navigate-in-page (main frame)
+ *   manager.pushConfig(selectors) → count             {op:'config', selectors} to every live view (hot reload)
+ *   manager.signOut(slot) → Promise<boolean>          clearStorageData on THAT partition only, then newChatUrl
+ *   manager.partitionOf(slot) → string
  */
 export function createViewManager({
   WebContentsView,
@@ -390,6 +396,69 @@ export function createViewManager({
       } catch (_err) {
         return ''
       }
+    },
+    async loadUrl(slot, url) {
+      const e = live(requireSlot(slot))
+      if (!e) {
+        const err = new Error(`${slot}: no live view`)
+        err.code = 'view_crashed'
+        throw err
+      }
+      if (typeof url !== 'string' || url === '') throw new Error('loadUrl: url is required')
+      if (e.cancelLoad) e.cancelLoad()
+      e.cancelLoad = null
+      try {
+        await e.wc.loadURL(url)
+      } catch (err) {
+        // ERR_ABORTED (-3): a newer navigation superseded this one (the site's own redirect); the
+        // adapter's `ready` decides what the page ended up as. Anything else is a failed load.
+        if (err && (err.errno === -3 || err.code === 'ERR_ABORTED')) return true
+        const out = new Error(`${slot}: could not open ${url} (${(err && err.message) || err})`)
+        out.code = 'navigation'
+        throw out
+      }
+      return true
+    },
+    onNavigate(slot, cb) {
+      const e = live(requireSlot(slot))
+      if (!e || typeof cb !== 'function' || typeof e.wc.on !== 'function') return () => {}
+      const onFull = (_event, url) => cb(String(url || ''), { inPage: false })
+      const onInPage = (_event, url, isMainFrame) => {
+        if (isMainFrame === false) return
+        cb(String(url || ''), { inPage: true })
+      }
+      e.wc.on('did-navigate', onFull)
+      e.wc.on('did-navigate-in-page', onInPage)
+      return () => {
+        if (typeof e.wc.removeListener !== 'function') return
+        e.wc.removeListener('did-navigate', onFull)
+        e.wc.removeListener('did-navigate-in-page', onInPage)
+      }
+    },
+    pushConfig(selectors) {
+      let count = 0
+      for (const slot of SLOTS) {
+        const e = live(slot)
+        if (!e) continue
+        try {
+          e.wc.send(REQUEST_CHANNEL, { op: 'config', selectors })
+          count += 1
+        } catch (err) {
+          warn(`[view ${slot}] config push failed: ${(err && err.message) || err}`)
+        }
+      }
+      return count
+    },
+    partitionOf(slot) {
+      return sites[requireSlot(slot)].partition
+    },
+    async signOut(slot) {
+      requireSlot(slot)
+      const ses = sessionFromPartition(sites[slot].partition)
+      if (!ses || typeof ses.clearStorageData !== 'function') throw new Error(`${slot}: session has no clearStorageData`)
+      await ses.clearStorageData()
+      info(`[view ${slot}] storage cleared for ${sites[slot].partition}`)
+      return manager.newChat(slot)
     },
     inspect(slot) {
       const e = live(requireSlot(slot))

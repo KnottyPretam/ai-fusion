@@ -17,6 +17,12 @@ import { randomUUID } from 'node:crypto'
 export const RESULT_CHANNEL = 'triplex:adapter:result'
 export const REQUEST_CHANNEL = 'triplex:adapter'
 export const DEFAULT_TIMEOUT_MS = 45000
+/**
+ * After an abort (`request(..., {signal})`) main sends `cancel{target}` and lets the adapter answer
+ * `cancelled` itself (contract §2); when no answer comes within this grace the request is failed
+ * locally with `cancelled` so a bridge `cancel` always terminates the turn.
+ */
+export const CANCEL_GRACE_MS = 2000
 
 export class AdapterRequestError extends Error {
   constructor(code, message, extra = {}) {
@@ -74,6 +80,8 @@ export function createAdapterClient(
   function settle(reqId, entry) {
     pending.delete(reqId)
     if (entry.timer !== null) clearT(entry.timer)
+    if (entry.cancelTimer !== null) clearT(entry.cancelTimer)
+    if (entry.detachAbort) entry.detachAbort()
   }
 
   function failAll(code, message) {
@@ -112,7 +120,12 @@ export function createAdapterClient(
     webContents.on('destroyed', onGone)
   }
 
-  function request(op, payload = {}, { timeoutMs } = {}) {
+  /**
+   * request(op, payload, {timeoutMs, signal}): `signal` (an AbortSignal) cancels the in-flight op —
+   * main sends `cancel{target: reqId}`, the adapter aborts the op and answers `cancelled` (that
+   * result settles the promise); CANCEL_GRACE_MS without an answer → rejected `cancelled` locally.
+   */
+  function request(op, payload = {}, { timeoutMs, signal } = {}) {
     return new Promise((resolve, reject) => {
       if (disposed) {
         reject(new AdapterRequestError('adapter_gone', `${slot}: adapter client disposed`, { op }))
@@ -125,7 +138,32 @@ export function createAdapterClient(
       const reqId = String(makeId())
       const budget = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS
       const msg = { ...(payload && typeof payload === 'object' ? payload : {}), reqId, op }
-      const entry = { op, resolve, reject, timer: null, started: now() }
+      const entry = { op, resolve, reject, timer: null, cancelTimer: null, detachAbort: null, started: now() }
+      if (signal && typeof signal === 'object' && typeof signal.addEventListener === 'function') {
+        const onAbort = () => {
+          if (!pending.has(reqId)) return
+          try {
+            send({ reqId: String(makeId()), op: 'cancel', target: reqId })
+          } catch (_e) {
+            settle(reqId, entry)
+            reject(new AdapterRequestError('cancelled', `${slot}: ${op} cancelled (view gone)`, { op }))
+            return
+          }
+          entry.cancelTimer = setT(() => {
+            if (!pending.has(reqId)) return
+            settle(reqId, entry)
+            reject(new AdapterRequestError('cancelled', `${slot}: ${op} cancelled (no answer from the adapter)`, { op }))
+          }, CANCEL_GRACE_MS)
+          if (entry.cancelTimer && typeof entry.cancelTimer.unref === 'function') entry.cancelTimer.unref()
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        entry.detachAbort = () => signal.removeEventListener('abort', onAbort)
+        if (signal.aborted) {
+          reject(new AdapterRequestError('cancelled', `${slot}: ${op} cancelled before it was sent`, { op }))
+          entry.detachAbort()
+          return
+        }
+      }
       entry.timer = setT(() => {
         if (!pending.has(reqId)) return
         settle(reqId, entry)

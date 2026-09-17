@@ -1,4 +1,4 @@
-// desktop/main/main.js — Electron main process wiring (Stage 1 electron-main).
+// desktop/main/main.js — Electron main process wiring (Stage 1 electron-main → Stage 2 electron-bridge).
 //
 // Run from desktop/: `npx electron .` (package.json "main"). ESM on purpose ("type":"module").
 // This is the ONLY module that imports 'electron'; every other file under main/ takes its
@@ -12,14 +12,20 @@
 //                trusted hosts (exit 3) and treats SSO_HOSTS as empty; single-instance lock;
 //                `web-contents-created` backstop (any webContents nobody policed opens nothing
 //                and stays put; the Bluetooth chooser is cancelled everywhere).
-// After ready:   settings.json (window bounds clamped to the matching display, zoom), selectors
-//                override, the renderer window (preload/renderer.cjs, sandbox, pinned to the
-//                renderer URL's origin: navigations / redirects elsewhere go to the system browser
-//                and IPC from a foreign document is bad_request), the three site views (views.js),
-//                the orchestrator, shortcuts (before-input-event everywhere + hidden menu), every
-//                IPC channel (ipc.js), the cached health + zoom replayed to the renderer on every
-//                did-finish-load; global.__triplexTest under TRIPLEX_E2E_APP=1.
+// After ready:   settings.json (window bounds clamped to the matching display, zoom, capture),
+//                chats.json, the selectors override (+ fs.watch hot reload → {op:'config'} to every
+//                view), the backend — attached (`TRIPLEX_BACKEND_URL` + `BRIDGE_TOKEN`) or spawned
+//                (`.venv/bin/python -m backend.main` on TRIPLEX_BACKEND_PORT with a per-launch
+//                random token, logs in <userData>/logs/backend.log, restart ≤3/min, SIGTERM on quit)
+//                — the renderer window (preload/renderer.cjs, sandbox, pinned to the renderer URL's
+//                origin), the three site views (views.js), the orchestrator (one bridge request →
+//                one turn), the bridge client (hello{token} → hello_ack → request/result, capture /
+//                health frames, backoff, `panes:bridge`), shortcuts + the application menu
+//                (menu.js), every IPC channel (ipc.js), the cached health + zoom + bridge state
+//                replayed to the renderer on every did-finish-load; global.__triplexTest under
+//                TRIPLEX_E2E_APP=1.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -29,20 +35,24 @@ import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
 import { createSettings } from './settings.js'
-import { createSelectorsLoader, timeoutsFor } from './selectors.js'
+import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
 import { createOrchestrator } from './orchestrator.js'
-import { registerIpc } from './ipc.js'
+import { registerIpc, saveDomSnapshot } from './ipc.js'
 import { createShortcuts } from './shortcuts.js'
+import { buildMenuTemplate } from './menu.js'
 import { isMainFrameOf } from './adapter-client.js'
+import { createChats } from './chats.js'
+import { createBridgeClient, bridgeUrlFor } from './bridge-client.js'
+import { buildSpawnSpec, attachSpec, createBackend, randomToken, DEFAULT_PORT } from './backend.js'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PKG = require('../package.json')
 
+const REPO_DIR = path.resolve(__dirname, '..', '..')
 const RENDERER_PRELOAD = path.join(__dirname, '..', 'preload', 'renderer.cjs')
 const SITE_PRELOAD = path.join(__dirname, '..', 'preload', 'site.cjs')
-const DEFAULT_BACKEND_PORT = '8021'
 const SELECTORS_FILE = 'selectors.json'
 const DEFAULT_ACTIVE = 'chatgpt' // the renderer slice's initial active pane
 
@@ -62,9 +72,18 @@ function fail(code, message) {
 
 if (env.TRIPLEX_USER_DATA_DIR) app.setPath('userData', path.resolve(env.TRIPLEX_USER_DATA_DIR))
 
+/** {port, url} of the backend this launch talks to (attached or spawned); set in start(). */
+let backendInfo = null
+
+function backendPort() {
+  const n = Number(env.TRIPLEX_BACKEND_PORT || DEFAULT_PORT)
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_PORT
+}
+
 function rendererUrl() {
   if (env.TRIPLEX_RENDERER_URL) return env.TRIPLEX_RENDERER_URL
-  return `http://127.0.0.1:${env.TRIPLEX_BACKEND_PORT || DEFAULT_BACKEND_PORT}/app/`
+  const base = backendInfo ? backendInfo.url : `http://127.0.0.1:${backendPort()}`
+  return `${base}/app/`
 }
 
 /** The only origin the renderer window may show and accept IPC from (null when the URL does not parse). */
@@ -103,11 +122,16 @@ function preflight() {
 /** @type {BrowserWindow|null} */
 let win = null
 let settings = null
+let chats = null
 let selectors = null
+let stopSelectorsWatch = null
 let views = null
 let orchestrator = null
 let shortcuts = null
 let ipc = null
+let bridge = null
+let backend = null
+let bridgeState = { connected: false }
 /** {mode, active} as last reported by the renderer over 'panes:active' (shared with shortcuts). */
 const layoutState = { mode: null, active: null }
 
@@ -144,6 +168,10 @@ function openExternal(url) {
   return shell.openExternal(String(url)).catch((e) => console.warn(`[triplex] openExternal failed: ${(e && e.message) || e}`))
 }
 
+function activeSlot() {
+  return layoutState.active || DEFAULT_ACTIVE
+}
+
 // ---------------------------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------------------------
@@ -155,7 +183,7 @@ function createWindow() {
 
   // The renderer never opens windows itself and never leaves its own origin: window.open, a
   // navigation or a server-side redirect elsewhere goes to the system browser (window.triplex,
-  // incl. sendPrompt into three logged-in sessions, must never follow the window to a foreign page).
+  // which drives three logged-in sessions, must never follow the window to a foreign page).
   attachOriginPolicy(win.webContents, rendererOrigin(), { openExternal, log: console })
   attachDeviceChooserPolicy(win.webContents)
   win.webContents.on('render-process-gone', (_event, details) => {
@@ -186,11 +214,11 @@ function createWindow() {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Re-send what the renderer may have missed: the cached health of every view and the persisted
- * zoom factors. `webContents.send` to a page that is still loading (launch, the reload after a
- * renderer crash) is lost, and `panes:getInfo` carries neither. Wired to the renderer's
- * did-finish-load here; ipc.js also replays right after `panes:getInfo`, when the renderer's
- * listeners are known to exist.
+ * Re-send what the renderer may have missed: the cached health of every view, the persisted
+ * zoom factors and the bridge state. `webContents.send` to a page that is still loading (launch,
+ * the reload after a renderer crash) is lost, and `panes:getInfo` carries neither. Wired to the
+ * renderer's did-finish-load here; ipc.js also replays right after `panes:getInfo`, when the
+ * renderer's listeners are known to exist.
  */
 function replayToRenderer() {
   if (!views || !windowAlive()) return
@@ -199,17 +227,43 @@ function replayToRenderer() {
     if (h) sendToRenderer('panes:health', slot, h)
     sendToRenderer('panes:zoom', { slot, factor: views.zoomFactor(slot) })
   }
+  sendToRenderer('panes:bridge', bridgeState)
+}
+
+/** Decide where the backend is: attach to TRIPLEX_BACKEND_URL, else prepare a spawn on TRIPLEX_BACKEND_PORT. */
+function resolveBackend(userData) {
+  const attached = attachSpec(env, { log: console })
+  if (attached) {
+    backendInfo = { port: attached.port, url: attached.url }
+    console.log(`[backend] attaching to ${attached.url} (TRIPLEX_BACKEND_URL)`)
+    return { token: attached.token, backend: null }
+  }
+  const token = randomToken()
+  const spec = buildSpawnSpec({ repoDir: REPO_DIR, userData, port: backendPort(), token, settings, env })
+  backendInfo = { port: spec.port, url: spec.url }
+  return { token, backend: createBackend({ spec, logDir: path.join(userData, 'logs'), log: console }) }
 }
 
 function start() {
   const userData = app.getPath('userData')
+  try {
+    fs.mkdirSync(userData, { recursive: true })
+  } catch (e) {
+    console.warn(`[triplex] cannot create ${userData}: ${(e && e.message) || e}`)
+  }
   applyPermissionPolicy(session.defaultSession) // the renderer's own session
 
   settings = createSettings({ dir: userData, screen })
   settings.load()
 
+  chats = createChats({ dir: userData })
+  chats.load()
+
   selectors = createSelectorsLoader({ filePath: env.TRIPLEX_SELECTORS_FILE || path.join(userData, SELECTORS_FILE) })
   selectors.load()
+
+  const resolved = resolveBackend(userData)
+  backend = resolved.backend
 
   createWindow()
 
@@ -222,7 +276,10 @@ function start() {
     settings,
     ipcMain,
     openExternal,
-    onHealth: (slot, health) => sendToRenderer('panes:health', slot, health),
+    onHealth: (slot, health) => {
+      sendToRenderer('panes:health', slot, health)
+      if (bridge) bridge.sendHealth(slot, health)
+    },
     dev: DEV,
     ssoHosts: E2E ? [] : SSO_HOSTS, // an E2E run must never open a real SSO host, even as a popup
   })
@@ -233,10 +290,25 @@ function start() {
     focusView: (slot) => views.focus(slot),
     restoreRendererFocus: focusRenderer,
     timeoutsFor: (slot) => timeoutsFor(selectors.current(), slot),
+    captureTimeoutsFor: (slot) => captureTimeoutsFor(selectors.current(), slot),
+    chatUrlPatternFor: (slot) => chatUrlPatternFor(selectors.current(), slot),
+    getHealth: (slot) => views.getHealth(slot),
+    getCapture: () => settings.getCapture(),
+    chats,
+    currentUrl: (slot) => views.currentUrl(slot),
+    loadUrl: (slot, url) => views.loadUrl(slot, url),
+    onNavigate: (slot, cb) => views.onNavigate(slot, cb),
+    newChatUrl: (slot) => sites[slot].newChatUrl,
+    onTurn: (slot, phase, code) => sendToRenderer('panes:turn', code === undefined ? { slot, phase } : { slot, phase, code }),
   })
 
+  const reloadSelectors = () => {
+    selectors.reload()
+    views.pushConfig(selectors.current())
+  }
+
   shortcuts = createShortcuts({
-    getActive: () => layoutState.active || DEFAULT_ACTIVE,
+    getActive: activeSlot,
     zoom: (slot, direction) => views.zoom(slot, direction),
     reload: (slot) => {
       selectors.reload()
@@ -250,13 +322,47 @@ function start() {
   shortcuts.attach(win.webContents)
   views.onCreated((_slot, wc) => shortcuts.attach(wc)) // before createAll: initial and recreated views alike
   views.createAll()
+
+  const snapshotsDir = path.join(userData, 'snapshots')
   try {
     // The hidden menu is the accelerator fallback; before-input-event is the primary path, so a
     // menu problem must never take the app down.
-    Menu.setApplicationMenu(Menu.buildFromTemplate(shortcuts.menuTemplate()))
+    const template = buildMenuTemplate({
+      shortcuts,
+      dev: DEV,
+      getActive: activeSlot,
+      actions: {
+        reloadSelectors,
+        saveSnapshot: (slot) => saveDomSnapshot({ views, snapshotsDir }, slot),
+        signOut: (slot) => views.signOut(slot),
+      },
+      log: console,
+    })
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
   } catch (e) {
     console.warn(`[triplex] application menu not installed: ${(e && e.message) || e}`)
   }
+
+  // Bridge client: hello carries the capture switches; Stage 2 announces no analyst (the hidden
+  // analyst view arrives with Stage 3, which passes settings.getAnalyst() here instead).
+  bridge = createBridgeClient({
+    url: bridgeUrlFor(backendInfo.url),
+    token: resolved.token,
+    version: PKG.version,
+    getCapture: () => settings.getCapture(),
+    getAnalyst: () => null,
+    getHealth: (slot) => views.getHealth(slot),
+    onRequest: (frame, emit) => orchestrator.run(frame, emit),
+    onCancel: (reqId) => orchestrator.cancel(reqId),
+    onState: (state) => {
+      bridgeState = state
+      sendToRenderer('panes:bridge', state)
+    },
+    log: console,
+  })
+  settings.subscribe(({ key }) => {
+    if (key === 'capture') bridge.sendCapture(settings.getCapture())
+  })
 
   ipc = registerIpc({
     ipcMain,
@@ -265,15 +371,41 @@ function start() {
     layoutState,
     orchestrator,
     selectors,
+    settings,
+    chats,
     sites,
     version: PKG.version,
     dev: DEV,
+    getBackend: () => backendInfo,
+    getBridgeState: () => bridgeState,
+    snapshotsDir,
+    onHealth: (slot, health) => bridge.sendHealth(slot, health),
     openExternal,
     sendToRenderer,
   })
 
+  stopSelectorsWatch = selectors.watch({
+    onChange: ({ changed, error }) => {
+      if (!changed) return
+      const n = views.pushConfig(selectors.current())
+      console.log(`[selectors] override ${error ? 'invalid (last good kept)' : 'reloaded'}; config pushed to ${n} view(s)`)
+    },
+  })
+
+  if (backend) {
+    backend
+      .start()
+      .then(() => bridge.connect())
+      .catch((e) => {
+        console.error(`[backend] ${(e && e.message) || e}; the bridge keeps retrying`)
+        bridge.connect()
+      })
+  } else {
+    bridge.connect()
+  }
+
   if (E2E) {
-    globalThis.__triplexTest = { views, orchestrator, settings, selectors, layoutState, ipc }
+    globalThis.__triplexTest = { views, orchestrator, settings, selectors, layoutState, ipc, bridge, chats, backend: backend || { info: () => backendInfo, attached: true } }
   }
 }
 
@@ -306,6 +438,9 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.on('before-quit', () => {
   if (settings) settings.flushWindowBounds()
+  if (stopSelectorsWatch) stopSelectorsWatch()
+  if (bridge) bridge.close()
+  if (backend) backend.stop().catch(() => {})
 })
 
 app.on('window-all-closed', () => {
