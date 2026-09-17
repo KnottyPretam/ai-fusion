@@ -58,6 +58,12 @@ article[data-message-author-role='user'] {
   resize: none;
   background: transparent;
 }
+/* Like the real ProseMirror composers: runs of spaces and tabs are kept verbatim, so the editing
+   engine does not rewrite them as NBSP (a submitted text must equal the typed one byte for byte). */
+.ProseMirror {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .ProseMirror p { margin: 0; }
 .ProseMirror.is-empty p:first-child::before {
   content: attr(data-placeholder);
