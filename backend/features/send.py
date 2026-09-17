@@ -4,7 +4,11 @@ docs/semantics.md "Send/continue" (+ addendum), docs/api-contract.md send events
 
 Pre-checks (all BEFORE the first yield, so the router's `sse_response` turns them into plain JSON
 errors): `store.load` -> 404 not_found; blank prompt -> 422 empty_prompt; unknown slot -> 404
-not_found(slot); then `busy_guard` LAST -> 409 busy.
+not_found(slot); Send's `slots` subset (desktop addendum: omitted / None = all three, an unknown
+slot -> 404 not_found(slot), an empty list -> 422 empty_slots, duplicates removed and the list
+ordered as SLOT_IDS); then `busy_guard` LAST -> 409 busy. A subset Send runs exactly those slots:
+`turn_start.slots` lists them and the persisted SendTurn holds only their entries, so Analyze
+reports the others as `incomplete_send_turn{missing}`.
 
 Producer model: ONE coordinator `asyncio.Task` per turn owns every LLM call and every persistence
 write, pushes event dicts into one `asyncio.Queue`, and releases the busy guard in its `finally`
@@ -108,10 +112,13 @@ class SlotOutcome:
 
 
 # --------------------------------------------------------------------------- public API (frozen)
-async def run_send(conv_id: str, prompt: str) -> AsyncIterator[dict[str, Any]]:
+async def run_send(
+    conv_id: str, prompt: str, *, slots: Sequence[str] | None = None
+) -> AsyncIterator[dict[str, Any]]:
     started = time.monotonic()
     conv = await _precheck(conv_id, prompt)
-    async for ev in _stream_turn(conv, prompt, "send", SLOT_IDS, started):
+    chosen = resolve_slots(slots)  # 404 not_found(slot) / 422 empty_slots, before the guard
+    async for ev in _stream_turn(conv, prompt, "send", chosen or SLOT_IDS, started):
         yield ev
 
 
@@ -140,6 +147,22 @@ async def _precheck(conv_id: str, prompt: str) -> Conversation:
     if not isinstance(prompt, str) or not prompt.strip():
         raise api_errors.unprocessable("empty_prompt")
     return conv
+
+
+def resolve_slots(slots: Sequence[str] | None) -> tuple[SlotId, ...]:
+    """The Send subset: None -> every slot; an unknown entry -> 404 not_found("slot"); an empty
+    list -> 422 empty_slots; duplicates dropped; SLOT_IDS order."""
+    if slots is None:
+        return SLOT_IDS
+    if isinstance(slots, str | bytes) or not isinstance(slots, Sequence):
+        raise api_errors.not_found("slot")
+    for slot in slots:
+        if slot not in SLOT_IDS:
+            raise api_errors.not_found("slot")
+    chosen = tuple(slot for slot in SLOT_IDS if slot in slots)
+    if not chosen:
+        raise api_errors.unprocessable("empty_slots")
+    return chosen
 
 
 # --------------------------------------------------------------------------- coordinator
@@ -429,6 +452,7 @@ __all__ = [
     "EMPTY_REPLY",
     "INTERNAL_ERROR",
     "SlotOutcome",
+    "resolve_slots",
     "run_continue",
     "run_send",
     "wait_for_background",

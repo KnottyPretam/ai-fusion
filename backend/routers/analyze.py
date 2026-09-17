@@ -8,6 +8,8 @@
 
 The feature performs every pre-check before its first yield; `sse_response` awaits that first
 event so those HTTPExceptions stay plain JSON errors in FastAPI's `{detail:{error}}` envelope.
+The call runs inside `bridge.conversation_scope(conv_id)` (desktop addendum): the producer task
+is created inside the first `__anext__` and inherits the conversation id for its bridge requests.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..features.analyze import run_analyze
+from ..llm.bridge import conversation_scope
 from ..sse import sse_response
 
 router = APIRouter(prefix="/api/conversations", tags=["analyze"])
@@ -30,4 +33,5 @@ class AnalyzeBody(BaseModel):
 @router.post("/{conv_id}/analyze")
 async def analyze(conv_id: str, body: AnalyzeBody | None = None) -> StreamingResponse:
     body = body or AnalyzeBody()
-    return await sse_response(run_analyze(conv_id, of_turn=body.of_turn, force=body.force))
+    with conversation_scope(conv_id):
+        return await sse_response(run_analyze(conv_id, of_turn=body.of_turn, force=body.force))
