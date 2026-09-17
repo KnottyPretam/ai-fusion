@@ -122,3 +122,39 @@ export function resolveSites(env = process.env) {
   }
   return sites
 }
+
+/** Hosts a site URL may use under `TRIPLEX_E2E_APP=1` (contract §5: the app refuses anything else). */
+export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
+/**
+ * The `url` / `newChatUrl` entries of `sites` whose host is not loopback, as `{slot, key, url}`
+ * (empty when every site URL is local). An unparseable URL counts as non-loopback.
+ */
+export function nonLoopbackSiteUrls(sites) {
+  const out = []
+  for (const slot of SLOTS) {
+    const s = sites && sites[slot]
+    if (!s) continue
+    for (const key of ['url', 'newChatUrl']) {
+      let host = null
+      try {
+        host = new URL(String(s[key])).hostname
+      } catch (_e) {
+        host = null
+      }
+      if (!LOOPBACK_HOSTS.includes(host)) out.push({ slot, key, url: s[key] })
+    }
+  }
+  return out
+}
+
+/** The site table as `panes:getInfo` reports it: `{[slot]: {url, newChatUrl, partition}}` (hosts stay private). */
+export function publicSites(sites) {
+  const out = {}
+  for (const slot of SLOTS) {
+    const s = sites && sites[slot]
+    if (!s) continue
+    out[slot] = { url: s.url, newChatUrl: s.newChatUrl, partition: s.partition }
+  }
+  return out
+}
