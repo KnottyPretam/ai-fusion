@@ -242,7 +242,9 @@
     composer.clear()
     setSendEnabled(false)
     setTimeout(() => {
-      history.pushState({}, '', '/c/' + randomId() + location.search)
+      // Real sites mint the chat id on the FIRST message and keep it for later turns; do the same so a
+      // recorded chat link stays equal to the pane's URL across sends.
+      if (!/^\/c\/[A-Za-z0-9]+/.test(location.pathname)) history.pushState({}, '', '/c/' + randomId() + location.search)
     }, 500)
     if (replyOpts.enabled) startReply(text)
   }

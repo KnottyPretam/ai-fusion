@@ -65,7 +65,7 @@ function okHealth(extra = {}) {
  * links {slot: url} for CONV, urls {slot: current url}, pattern, timeouts (undefined → the small
  * test budget; null → the orchestrator's defaults), analyst (an analystAdapterFor fn).
  */
-function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs } = {}) {
+function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs, setHealth } = {}) {
   const trace = []
   const table = {}
   for (const slot of clients) table[slot] = scriptedClient(slot, trace)
@@ -90,6 +90,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
     captureTimeoutsFor: () => (timeouts === undefined ? { quietMs: 250, firstTokenMs: 3000, captureTimeoutMs: 4000 } : timeouts),
     chatUrlPatternFor: () => pattern,
     getHealth: (slot) => health[slot] || null,
+    setHealth,
     getCapture: () => ({ claude: false, chatgpt: false, grok: false, ...capture }),
     chats: {
       get: (convId, slot) => (chatsDoc[convId] && chatsDoc[convId][slot]) || null,
@@ -150,7 +151,6 @@ test('rejected from the health cache before any adapter call: logged_out / chall
     [okHealth({ session: 'challenge' }), 'challenge'],
     [okHealth({ session: 'blocked' }), 'blocked'],
     [okHealth({ matched: { composer: null, send: null, reply: null, stop: null, error: 'view_crashed' } }), 'view_crashed'],
-    [okHealth({ stop: true }), 'view_busy'],
   ]
   for (const [h, code] of cases) {
     const { orch, table, emitted, emit, phases } = setup({ health: { chatgpt: h } })
@@ -163,6 +163,44 @@ test('rejected from the health cache before any adapter call: logged_out / chall
     assertValid(final)
     assert.deepEqual(table.chatgpt.calls, [], `${code}: the adapter was never touched`)
     assert.deepEqual(phases, [], 'a rejection is not a turn')
+  }
+})
+
+test('a cached stop:true is re-read from the adapter before rejecting: still streaming → view_busy, finished → the turn proceeds', async () => {
+  {
+    const { orch, table, emitted, emit, phases } = setup({ health: { chatgpt: okHealth({ stop: true }) } })
+    const run = orch.run(request('chatgpt'), emit)
+    await settleAll()
+    assert.deepEqual(table.chatgpt.ops(), ['health'], 'the cache alone never decides a stop rejection')
+    table.chatgpt.last().resolve({ ok: true, op: 'health', health: okHealth({ stop: true }) })
+    const final = await run
+    assert.deepEqual(emitted, [final])
+    assert.equal(final.type, 'rejected')
+    assert.equal(final.code, 'view_busy')
+    assertValid(final)
+    assert.deepEqual(table.chatgpt.ops(), ['health'], 'no DOM write after the rejection')
+    assert.deepEqual(phases, [], 'a rejection is not a turn')
+  }
+  {
+    const stored = []
+    const { orch, table, emitted, emit } = setup({ health: { chatgpt: okHealth({ stop: true }) }, setHealth: (slot, h) => stored.push([slot, h.stop]) })
+    const run = orch.run(request('chatgpt'), emit)
+    await settleAll()
+    table.chatgpt.last().resolve({ ok: true, op: 'health', health: okHealth({ stop: false }) })
+    await settleAll()
+    assert.deepEqual(table.chatgpt.ops(), ['health', 'ready'], 'the turn proceeds to ready')
+    assert.equal(emitted[0].type, 'accepted')
+    assert.deepEqual(stored, [['chatgpt', false]], 'the fresh read is stored back into the cache')
+    table.chatgpt.last().reject(Object.assign(new Error('stop'), { code: 'timeout' }))
+    await run
+  }
+  {
+    const { orch, table, emit } = setup({ health: { chatgpt: okHealth({ stop: true }) } })
+    const run = orch.run(request('chatgpt'), emit)
+    await settleAll()
+    table.chatgpt.last().reject(new Error('ipc gone'))
+    const final = await run
+    assert.equal(final.code, 'view_busy')
   }
 })
 

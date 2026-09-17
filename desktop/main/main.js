@@ -293,6 +293,7 @@ function start() {
     captureTimeoutsFor: (slot) => captureTimeoutsFor(selectors.current(), slot),
     chatUrlPatternFor: (slot) => chatUrlPatternFor(selectors.current(), slot),
     getHealth: (slot) => views.getHealth(slot),
+    setHealth: (slot, h) => views.setHealth(slot, h),
     getCapture: () => settings.getCapture(),
     chats,
     currentUrl: (slot) => views.currentUrl(slot),
@@ -352,6 +353,7 @@ function start() {
     getCapture: () => settings.getCapture(),
     getAnalyst: () => null,
     getHealth: (slot) => views.getHealth(slot),
+    setHealth: (slot, h) => views.setHealth(slot, h),
     onRequest: (frame, emit) => orchestrator.run(frame, emit),
     onCancel: (reqId) => orchestrator.cancel(reqId),
     onState: (state) => {

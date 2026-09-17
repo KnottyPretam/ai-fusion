@@ -93,6 +93,9 @@ export function createMutex() {
   }
 }
 
+/** How long a fresh `health` read may take before the cached value is used instead. */
+export const FRESH_HEALTH_TIMEOUT_MS = 3000
+
 /** The §1 reject code the health cache dictates for a slot, or null when the view may proceed. */
 export function rejectFromHealth(health, { inflight = false } = {}) {
   if (inflight) return { code: 'view_busy', message: 'a turn is already in flight on this view' }
@@ -132,6 +135,7 @@ function adapterFailure(e) {
  *   captureTimeoutsFor?(slot)      {quietMs, firstTokenMs, captureTimeoutMs} (v2; defaults when absent)
  *   chatUrlPatternFor?(slot)       the site's chatUrlPattern source (nothing recorded when absent)
  *   getHealth?(slot)               the cached Health object (null → proceed)
+ *   setHealth?(slot, h)            store a fresh Health read back into the cache (renderer replay uses it)
  *   getCapture?()                  {slot: boolean} (absent → capture off everywhere)
  *   chats?                         {get(convId, slot), set(convId, slot, url)}
  *   currentUrl?(slot)              the view's URL now
@@ -150,6 +154,7 @@ export function createOrchestrator({
   captureTimeoutsFor = null,
   chatUrlPatternFor = null,
   getHealth = null,
+  setHealth = null,
   getCapture = null,
   chats = null,
   currentUrl = null,
@@ -373,7 +378,21 @@ export function createOrchestrator({
     const key = view === 'analyst' ? `analyst:${slot}` : slot
     const client = view === 'analyst' ? analystAdapterFor(slot) : adapterFor(slot)
     if (!client) return reject('view_crashed', `${slot}: no live view`)
-    const health = typeof getHealth === 'function' ? getHealth(slot) : null
+    let health = typeof getHealth === 'function' ? getHealth(slot) : null
+    if (view !== 'analyst' && health && health.stop === true && !active.has(key)) {
+      // The cache is fed by the adapter's change/poll publishes (1.5 s) — a stop button that showed
+      // for a short reply can linger in it. Re-read before rejecting so a finished reply never
+      // turns a send into view_busy; a site that is really still answering stays rejected.
+      try {
+        const fresh = await client.request('health', {}, { timeoutMs: FRESH_HEALTH_TIMEOUT_MS })
+        if (fresh && fresh.ok !== false && fresh.health && typeof fresh.health === 'object') {
+          health = fresh.health
+          if (typeof setHealth === 'function') setHealth(slot, fresh.health)
+        }
+      } catch (_e) {
+        /* keep the cached value */
+      }
+    }
     const bad = rejectFromHealth(view === 'analyst' ? null : health, { inflight: active.has(key) })
     if (bad) return reject(bad.code, `${slot}: ${bad.message}`)
 

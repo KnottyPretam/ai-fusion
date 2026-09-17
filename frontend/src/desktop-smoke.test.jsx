@@ -23,7 +23,6 @@ function fakeTriplex() {
     onZoom() {
       return () => {}
     },
-    sendPrompt: async () => ({ results: {} }),
   }
 }
 

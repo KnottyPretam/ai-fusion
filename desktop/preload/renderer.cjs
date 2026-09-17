@@ -16,7 +16,6 @@
 //   on     'panes:health'       cb(slot, health)
 //   on     'panes:shortcut'     cb({name})
 //   on     'panes:zoom'         cb({slot, factor})
-//   invoke 'prompt:send'        ({targets, text})        → {results}        (Stage 1 only; removed at the S6 merge)
 //   Stage 2:
 //   invoke 'panes:getCapture'   ()                       → {[slot]: boolean}
 //   invoke 'panes:setCapture'   (slot, on)
@@ -66,9 +65,7 @@ const api = Object.freeze({
   onHealth: subscribe('panes:health'),
   onShortcut: subscribe('panes:shortcut'),
   onZoom: subscribe('panes:zoom'),
-  // Stage 1 only (removed at the S6 merge, when PromptBar sends through POST /send):
-  sendPrompt: (req) => ipcRenderer.invoke('prompt:send', req),
-  // Stage 2 (handlers arrive with electron-bridge; until then main rejects them as unregistered):
+  // Stage 2 (PromptBar sends through POST /send; the bridge drives the views):
   getCapture: () => ipcRenderer.invoke('panes:getCapture'),
   setCapture: (slot, on) => ipcRenderer.invoke('panes:setCapture', slot, on),
   onBridge: subscribe('panes:bridge'),

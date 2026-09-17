@@ -325,6 +325,8 @@ scenario with `monkeypatch.setenv("MOCK_SCENARIO", "stalemate")`.
 
 ## Desktop addendum (Stage 2+)
 
+`transport_disabled` is minted in `backend/llm/client.py` from the constant in `backend/llm/bridge.py` (the desktop codes live there); the bridge router's accept INFO line names version/sites/capture/analyst only, never the token.
+
 Additive, written at Stage 0 (tag `S4`) so the Stage 2 `bridge-backend` workstream builds against text
 that exists. The wire shapes live in `docs/desktop-contract.md` (§1 bridge protocol, §6 backend keys /
 routing / endpoints). Nothing above changes: the OpenRouter and mock paths stay byte-identical, and the

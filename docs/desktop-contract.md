@@ -32,7 +32,7 @@ Electron → backend
 - `{"type":"result","req_id","ok":true,"captured":true,"text":"<final reply>","url":"https://chatgpt.com/c/…","ms":12345,"done_by":"done_selector"|"stop_gone"|"quiet"}`
 - `{"type":"result","req_id","ok":true,"captured":false,"url":"…","ms":1234}` (capture off; `view:"pane"` only)
 - `{"type":"result","req_id","ok":false,"code":"composer_not_found"|"send_not_found"|"not_submitted"|"reply_not_found"|"timeout"|"cancelled"|"adapter_gone"|"site_error"|"navigation"|"view_crashed","message":"...","partial":"..."}`
-- `{"type":"pong","ts":1710000000000}`
+- `{"type":"pong","ts":1710000000000}` (echoes the ping's `ts`)
 
 Backend → Electron
 - `{"type":"hello_ack","protocol":1,"backend_version":"0.1.0","ping_s":20}`
@@ -40,7 +40,7 @@ Backend → Electron
 - `{"type":"cancel","req_id"}` (on timeout or consumer `aclose`)
 - `{"type":"ping","ts"}` every `BRIDGE_PING_S` (20); two missed pongs → close 1011, pending requests fail `bridge_disconnected`.
 
-Rules: a second valid `hello` supersedes (old socket closed 4002 `superseded`, its pending
+Rules (readings taken at S6, binding from here): `BridgeHub.request` signals bridge-level failures by raising `BridgeError(code)` (`bridge_unavailable` / `bridge_no_ack` / `timeout` / `bridge_disconnected`), never by yielding a frame; the `timeout_s` deadline starts when the request frame is sent and the ack wait is `min(accept_timeout_s, timeout_s)`; `cancel` is sent on the no-ack timeout, the result timeout and `aclose`; a `result` without a preceding `accepted` is an implicit acceptance and a `rejected` after `accepted` is the terminal frame; a failed `result` carrying `partial` is emitted as one text delta before the error delta; a malformed or binary frame after the handshake closes 4001; the client re-sends the cached `health` of every slot right after each `hello_ack`, drops any `request` received before `hello_ack`, closes the socket itself with 4000 after 10 s without `hello_ack` or 2.5 × `ping_s` without a ping (never fatal), and treats 4001/4002/4003 as fatal (no reconnect) and everything else as reconnectable with backoff; `status().since` is ISO-8601 UTC, `health_ts` the backend's receive time in epoch ms, `sites` always lists all three slots, and `detach` resets every cache. From S6 `Health.reply`/`Health.stop` are booleans (`reply` = an assistant container exists via the v2 `assistant` cascade + the cross-site assistant selectors; `stop` = a visible stop button; `null` only when the stop cascade is empty). A second valid `hello` supersedes (old socket closed 4002 `superseded`, its pending
 requests fail `bridge_disconnected`); no `accepted`/`rejected` within
 `BRIDGE_ACCEPT_TIMEOUT_S` (15) → `bridge_no_ack`; no `result` within `timeout_s`
 (`BRIDGE_TIMEOUT_S`, 600) → `cancel` sent + `timeout`; frame bodies are never logged (one INFO
@@ -82,9 +82,9 @@ onZoom(cb:({slot,factor})=>void): ()=>void                               // on '
 sendPrompt({targets, text}): Promise<{results:{[slot]:{ok, code?, message?, ms, url?, composerSelector?, sendSelector?}}}>   // invoke 'prompt:send'
 // Stage 2:
 getCapture(): Promise<{[slot]:boolean}>; setCapture(slot, on): Promise<void>            // invoke 'panes:getCapture'|'panes:setCapture'
-onBridge(cb:({connected, since?})=>void): ()=>void                                     // on 'panes:bridge'
+onBridge(cb:({connected, since?})=>void): ()=>void                                     // on 'panes:bridge' (main emits the CURRENT state on the renderer's did-finish-load and after getInfo, like health/zoom)
 onTurn(cb:({slot, phase:'idle'|'typing'|'submitted'|'replying'|'done'|'error', code?})=>void): ()=>void   // on 'panes:turn'
-openChats(convId:string|null): Promise<{[slot]:'navigated'|'new'|'kept'}>              // invoke 'panes:openChats'
+openChats(convId:string|null): Promise<{[slot]:'navigated'|'new'|'kept'}>              // invoke 'panes:openChats' ('kept' also while a turn is in flight on that view or when a recorded link fails to load; null = the open conversation was cleared — main leaves the panes where they are; a navigated pane emits panes:turn {phase:'idle'})
 signOut(slot): Promise<void>                                                            // invoke 'panes:signOut' (clearStorageData for that partition only, then newChatUrl)
 saveDomSnapshot(slot): Promise<{path}>                                                  // invoke 'panes:snapshot' (scrubbed HTML under userData/snapshots/)
 // Stage 3:
@@ -106,7 +106,7 @@ main → preload   webContents.send('triplex:adapter', msg)
    {reqId, op:'health'}
    {reqId, op:'ready', timeoutMs}                                   // composer present & no stop button, session ok
    {reqId, op:'insertAndSubmit', text}
-   {reqId, op:'observe', baselineCount:number, quietMs?, timeoutMs?}   // Stage 2
+   {reqId, op:'observe', baselineCount:number, quietMs?, firstTokenMs?, timeoutMs?}   // Stage 2 (timeoutMs overrides captureTimeoutMs)
    {reqId, op:'snapshot'}                                           // Stage 2 (scrubbed DOM)
    {reqId, op:'cancel', target: reqId}
    {op:'config', selectors}                                         // Stage 2 hot reload, no reply
@@ -179,7 +179,7 @@ and (Stage 2) on `fs.watch`.
     "challenge": ["iframe[src*='challenges.cloudflare.com']"], "challengeTitle": ["Just a moment"],
     "errorText": ["unusual activity"], "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 } }
 ```
-Version 2 (Stage 2, additive per site): `"stop"`, `"assistant"`, `"assistantText"`, `"done"`,
+Version 2 (Stage 2, additive per site; `DEFAULT_SELECTORS.version` stays 1 — an override carrying `version: 2` warns and is applied): `"stop"`, `"assistant"`, `"assistantText"`, `"done"`,
 `"quietMs": 2500`, `"firstTokenMs": 90000`, `"captureTimeoutMs": 300000` — chatgpt
 `stop:["button[data-testid='stop-button']","button[aria-label='Stop streaming']","button[aria-label='Stop answering']"]`,
 `assistant:["[data-message-author-role='assistant']"]`, `assistantText:[".markdown",".whitespace-pre-wrap"]`,
@@ -310,13 +310,13 @@ view_crashed, cancelled` (`error_type` `triplex` or `site`).
 health:{slot:Health|null}, lastSend:{slot:{ok,code,message,ms,composerSelector,sendSelector}},
 sending:false, zoom:{slot:number}, capture:{slot:bool} (S2), bridge:{connected:bool} (S2),
 turn:{slot:phase} (S2), drawerOpen:bool (S3), analyst:{slot|null, visible, health} (S3)}`;
-actions `panes/mode`, `panes/active`, `panes/target`, `panes/health`, `panes/sendStart`,
+from Stage 2 `lastSend[slot]` is `{ok, code?, message?, ms}` recorded by the panes reducer from the send stream (`slot_done` → ok with `usage.latency_ms`; `slot_error{not_captured}` → ok:true with the code; other codes → ok:false), `turn_start{slots}` clears the listed slots, the tabs-mode auto-reveal on `logged_out|challenge|blocked` is a reducer transition (`panes/active`), and `lastSend` describes the last unified send regardless of the open conversation; actions `panes/mode`, `panes/active`, `panes/target`, `panes/health`, `panes/sendStart`,
 `panes/sendResult`, `panes/zoom`, `panes/capture`, `panes/bridge`, `panes/turn`, `panes/drawer`,
 `panes/analyst`. Test ids: `desktop-shell`, `pane-deck`, `deck-mode-tabs`, `deck-mode-split`,
 `deck-tab-<slot>`, `deck-tab-analyst` (S3), `pane-<slot>`, `pane-<slot>-viewport`,
 `pane-<slot>-health`, `pane-<slot>-session`, `pane-<slot>-reload`, `pane-<slot>-newchat`,
 `pane-<slot>-open`, `pane-<slot>-zoom-in|out|reset`, `pane-<slot>-inspect` (dev only), `pane-<slot>-capture` (S2),
-`pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`,
+`pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`, `prompt-banner` (S2: role=alert for a pre-stream failure of a Send or of New chat everywhere),
 `prompt-newchat`, `prompt-result-<slot>`, `bridge-banner` (S2), `capture-notice` (S2),
 `desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),
 `drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp). Renderer chrome never overlaps a

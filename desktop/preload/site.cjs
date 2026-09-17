@@ -87,6 +87,7 @@
 
   const HEALTH_HEARTBEAT_MS = 10000
   const HEALTH_POLL_MS = 1500
+  const HEALTH_MUTATION_THROTTLE_MS = 400
   /** Contract §3: the send cascade is polled every 150 ms (the composer wait uses the same tick). */
   const SEND_POLL_MS = 150
   const CONFIRM_POLL_MS = 100
@@ -1455,6 +1456,8 @@
     let lastHealthKey = null
     let lastHealthAt = 0
     let timer = null
+    let mutationObserver = null
+    let mutationTimer = null
     let disposed = false
 
     const reply = (res) => {
@@ -1577,6 +1580,24 @@
         if (!adapter) return false
         publishHealth(true)
         timer = setI(() => publishHealth(false), HEALTH_POLL_MS)
+        // DOM changes (a stop button appearing/disappearing, a login wall) refresh main's cache
+        // within HEALTH_MUTATION_THROTTLE_MS instead of waiting for the poll; guarded for node tests.
+        try {
+          const MO = typeof globalThis.MutationObserver === 'function' ? globalThis.MutationObserver : null
+          const doc = typeof globalThis.document === 'object' && globalThis.document ? globalThis.document : null
+          if (MO && doc && doc.documentElement) {
+            mutationObserver = new MO(() => {
+              if (mutationTimer !== null || disposed) return
+              mutationTimer = globalThis.setTimeout(() => {
+                mutationTimer = null
+                publishHealth(false)
+              }, HEALTH_MUTATION_THROTTLE_MS)
+            })
+            mutationObserver.observe(doc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'class', 'style', 'hidden', 'aria-label', 'data-testid'] })
+          }
+        } catch (_e) {
+          /* no DOM here (unit tests) */
+        }
         return true
       })
       .catch(() => false)
@@ -1586,6 +1607,18 @@
       ready,
       dispose() {
         disposed = true
+        if (mutationObserver) {
+          try {
+            mutationObserver.disconnect()
+          } catch (_e) {
+            /* ignore */
+          }
+          mutationObserver = null
+        }
+        if (mutationTimer !== null) {
+          globalThis.clearTimeout(mutationTimer)
+          mutationTimer = null
+        }
         backlog.length = 0
         if (timer !== null) clearI(timer)
         timer = null
