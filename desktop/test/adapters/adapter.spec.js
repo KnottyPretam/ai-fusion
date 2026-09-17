@@ -3,25 +3,15 @@
 // Every test injects the REAL desktop/preload/site.cjs (read from disk, the very file Electron
 // loads as the site preload) into a system-Chrome page with `page.addInitScript`, right after an
 // init script that installs `window.__triplexFakeIpc` (the shape documented at the top of
-// site.cjs). Ops are then driven exactly as main would drive them: a `{reqId, op, ...}` message on
-// 'triplex:adapter', the answer read back from 'triplex:adapter:result'. The prompt text is always
-// a message field — it is never spliced into code.
+// site.cjs) — see _harness.js. Ops are then driven exactly as main would drive them: a
+// `{reqId, op, ...}` message on 'triplex:adapter', the answer read back from
+// 'triplex:adapter:result'. The prompt text is always a message field — it is never spliced into
+// code. Stage 1 coverage lives here (boot, insertion, health, ready, the session gates, retries,
+// busy / cancel, config, grok's TipTap calibration); Stage 2 (observe, snapshot, ?reply=json,
+// ready after a loadURL to /c/<id>) lives in observe.spec.js.
 
-import fs from 'node:fs'
-import path from 'node:path'
-import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-
-const require = createRequire(import.meta.url)
-const SITE_CJS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'preload', 'site.cjs')
-const { DEFAULT_SELECTORS, SLOTS, mergeSelectors } = require(SITE_CJS)
-const SITE_SRC = fs.readFileSync(SITE_CJS, 'utf8')
-
-const CONFIRMED_BY = ['stop_button', 'composer_cleared', 'assistant_count']
-
-/** Backticks, quotes, ${}, a backslash-n literal, newlines (incl. a blank line), a tab, two spaces, unicode, markup. */
-const TRICKY = 'hello `x` "y" \'z\' ${z} \\n\n  line2 with  two spaces\n\n\tline4 — ünïcödé 日本語 🚀 <b>&amp;</b>\nend'
+import { DEFAULT_SELECTORS, SLOTS, CONFIRMED_BY, TRICKY, open, request, fake, ipcState, outerHtml, withOverride } from './_harness.js'
 
 /** ≥ 4 KB (UTF-8 bytes) of numbered tricky lines, ending with a newline. */
 function fourKb() {
@@ -32,73 +22,6 @@ function fourKb() {
   return s
 }
 const FOUR_KB = fourKb()
-
-/**
- * Installed by addInitScript BEFORE site.cjs. The three members site.cjs uses are `invoke`, `on`
- * and `send` (see the boot comment in site.cjs); the rest is the test's own driving surface.
- */
-function installFakeIpc({ site, selectors, dev }) {
-  const handlers = new Map()
-  const pending = new Map()
-  let seq = 0
-  const ipc = {
-    site,
-    selectors,
-    dev: !!dev,
-    invoked: [],
-    sent: [],
-    results: [],
-    healths: [],
-    invoke(channel, ...args) {
-      ipc.invoked.push({ channel, args })
-      if (channel === 'adapter:config') return Promise.resolve({ site: ipc.site, selectors: ipc.selectors, dev: ipc.dev })
-      return Promise.reject(new Error(`fake ipc: unknown channel ${channel}`))
-    },
-    on(channel, handler) {
-      if (!handlers.has(channel)) handlers.set(channel, [])
-      handlers.get(channel).push(handler)
-    },
-    send(channel, payload) {
-      ipc.sent.push({ channel, payload })
-      if (channel === 'triplex:adapter:result') {
-        ipc.results.push(payload)
-        const resolve = pending.get(payload && payload.reqId)
-        if (resolve) {
-          pending.delete(payload.reqId)
-          resolve(payload)
-        }
-      } else if (channel === 'triplex:adapter:health') {
-        ipc.healths.push(payload)
-      }
-    },
-    // --- test side ---
-    emit(channel, msg) {
-      for (const h of handlers.get(channel) || []) h({ senderId: 0 }, msg)
-    },
-    request(msg) {
-      const reqId = typeof msg.reqId === 'string' ? msg.reqId : `req-${++seq}`
-      return new Promise((resolve) => {
-        pending.set(reqId, resolve)
-        ipc.emit('triplex:adapter', { ...msg, reqId })
-      })
-    },
-    handlerCount(channel) {
-      return (handlers.get(channel) || []).length
-    },
-  }
-  window.__triplexFakeIpc = ipc
-}
-
-async function open(page, { site, state, thread, sendDelayMs, composer, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site } = {}) {
-  await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
-  await page.addInitScript({ content: SITE_SRC })
-  const q = new URLSearchParams({ site })
-  if (state) q.set('state', state)
-  if (thread) q.set('thread', thread)
-  if (sendDelayMs) q.set('sendDelayMs', String(sendDelayMs))
-  if (composer) q.set('composer', composer) // grok only: 'textarea' = the older textarea composer
-  await page.goto(`/?${q.toString()}`)
-}
 
 /** grok (TipTap, as measured live on 2026-09-16): the submit button exists only once the editor holds text. */
 const VOICE_BUTTON = "button[type='button'][aria-label='Enter voice mode']"
@@ -117,12 +40,6 @@ const OLD_GROK = {
   ],
   send: ["button[aria-label='Submit']", "button[aria-label='Send message']", "button[type='submit']"],
 }
-
-const request = (page, msg) => page.evaluate((m) => window.__triplexFakeIpc.request(m), msg)
-const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
-const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
-const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)
-const withOverride = (site, override) => mergeSelectors(DEFAULT_SELECTORS, { [site]: override }).merged
 
 function expectSubmitted(res, sel) {
   expect(res).toMatchObject({ ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: sel.composer[0], sendSelector: sel.send[0] })
@@ -170,15 +87,15 @@ for (const site of SLOTS) {
       expect(Buffer.byteLength(f.submitted[0], 'utf8')).toBeGreaterThanOrEqual(4096)
     })
 
-    test('health: composer true, send as the empty composer renders it, matched names the first cascade entries, session ok, error null', async ({ page }) => {
+    test('health: composer true, send as the empty composer renders it, reply/stop false on a fresh page (selectors v2), matched names the first cascade entries, session ok, error null', async ({ page }) => {
       await open(page, { site })
       const res = await request(page, { op: 'health' })
       expect(res).toMatchObject({ ok: true, op: 'health' })
       expect(res.health).toMatchObject({
         composer: true,
         send: sendWhenEmpty,
-        reply: null,
-        stop: null,
+        reply: false,
+        stop: false,
         session: 'ok',
         matched: { composer: sel.composer[0], send: sendWhenEmpty ? sel.send[0] : null, reply: null, stop: null, error: null },
         host: '127.0.0.1',
@@ -464,11 +381,10 @@ test('config op hot-reloads the selectors (no reply) and health follows; open sh
   expect(last).toMatchObject({ composer: false, session: 'unknown' }) // published on the change
 })
 
-test('protocol edges: unknown op → site_error; observe/snapshot → site_error before stage 2; a message without reqId is ignored', async ({ page }) => {
+test('protocol edges: unknown op → site_error; a message without reqId is ignored; snapshot answers on a fresh page', async ({ page }) => {
   await open(page, { site: 'grok' })
   expect(await request(page, { op: 'frobnicate' })).toMatchObject({ ok: false, op: 'frobnicate', code: 'site_error' })
-  expect(await request(page, { op: 'observe', baselineCount: 0 })).toMatchObject({ ok: false, op: 'observe', code: 'site_error' })
-  expect(await request(page, { op: 'snapshot' })).toMatchObject({ ok: false, op: 'snapshot', code: 'site_error' })
+  expect(await request(page, { op: 'snapshot' })).toMatchObject({ ok: true, op: 'snapshot' })
   const before = (await ipcState(page)).results.length
   await page.evaluate(() => window.__triplexFakeIpc.emit('triplex:adapter', { op: 'health' }))
   await page.waitForTimeout(100)

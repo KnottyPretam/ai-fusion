@@ -1,7 +1,8 @@
 // attachIpc over a fake IPC and a fake adapter (contract §2 "Main ↔ site preload"): inert on
-// site:null, health on boot / on change / 10 s heartbeat, op dispatch and result shapes, one op in
-// flight (busy), cancel, error-code mapping, config hot reload, dispose, and requests that land
-// before adapter:config settles (parked and replayed, dropped when inert).
+// site:null, health on boot / on change / 10 s heartbeat, op dispatch and result shapes (Stage 2:
+// observe carries the url, snapshot the html), one op in flight (busy), cancel, error-code mapping
+// with the partial, config hot reload, dispose, and requests that land before adapter:config
+// settles (parked and replayed, dropped when inert).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -209,6 +210,29 @@ test('ready and insertAndSubmit dispatch to the adapter with a signal and answer
   ipc.emit('triplex:adapter', { reqId: 'r2', op: 'ready', timeoutMs: 1 })
   await until(() => ipc.result('r2'))
   assert.equal(ipc.healths().at(-1).session, 'ok')
+})
+
+test('observe and snapshot answer the §2 result shapes: observe {text, doneBy, ms, url} with the message fields passed through, snapshot {html}; an observe failure carries the partial', async () => {
+  const { ipc, fake } = await boot()
+  fake.behaviours.observe = async ({ baselineCount, quietMs, timeoutMs }) => ({ text: `reply after ${baselineCount}/${quietMs}/${timeoutMs}`, doneBy: 'stop_gone', ms: 321 })
+  fake.behaviours.snapshot = async () => ({ html: '<!doctype html>\n<html></html>\n' })
+  ipc.emit('triplex:adapter', { reqId: 'o1', op: 'observe', baselineCount: 2, quietMs: 500, timeoutMs: 9000 })
+  assert.deepEqual(await until(() => ipc.result('o1')), { reqId: 'o1', ok: true, op: 'observe', text: 'reply after 2/500/9000', doneBy: 'stop_gone', ms: 321, url: 'u' })
+  const call = fake.calls.find((c) => c.op === 'observe')
+  assert.ok(call.signal && call.signal.aborted === false)
+  assert.deepEqual([call.args.baselineCount, call.args.quietMs, call.args.timeoutMs], [2, 500, 9000])
+  ipc.emit('triplex:adapter', { reqId: 's1', op: 'snapshot' })
+  assert.deepEqual(await until(() => ipc.result('s1')), { reqId: 's1', ok: true, op: 'snapshot', html: '<!doctype html>\n<html></html>\n' })
+  fake.behaviours.observe = async () => {
+    throw new AdapterError('timeout', 'still replying', 'half')
+  }
+  ipc.emit('triplex:adapter', { reqId: 'o2', op: 'observe', baselineCount: 0 })
+  assert.deepEqual(await until(() => ipc.result('o2')), { reqId: 'o2', ok: false, op: 'observe', code: 'timeout', message: 'still replying', partial: 'half' })
+  fake.behaviours.observe = async () => {
+    throw new AdapterError('site_error', 'Unusual activity has been detected')
+  }
+  ipc.emit('triplex:adapter', { reqId: 'o3', op: 'observe', baselineCount: 0 })
+  assert.deepEqual(await until(() => ipc.result('o3')), { reqId: 'o3', ok: false, op: 'observe', code: 'site_error', message: 'Unusual activity has been detected' })
 })
 
 test('one op in flight per view: the second answers busy naming the first; the slot frees when the first settles', async () => {

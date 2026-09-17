@@ -141,3 +141,30 @@ button.send[disabled] { opacity: 0.35; cursor: not-allowed; }
 .challenge iframe { width: 300px; height: 65px; border: 0; }
 .challenge { margin: 80px auto; text-align: center; }
 .mounting { margin: 24px 16px; color: var(--muted); }
+
+/* --- Stage 2: replies (the assistant containers of the selectors v2 cascades) and the stop button --- */
+/* chatgpt: the text lives in .markdown inside article[data-message-author-role='assistant']; claude:
+   .font-claude-response IS the text container; grok: .response-content-markdown inside #response-<id>.
+   pre-wrap keeps the reply's spaces, tabs and newlines in innerText, so "Echo: <text>" reads back exactly. */
+.reply {
+  align-self: flex-start;
+  max-width: 70%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: #f1f1f1;
+}
+.markdown,
+.font-claude-response,
+.response-content-markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+article[data-message-author-role='assistant'] .actions { margin-top: 6px; }
+button.stop {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: #fff;
+  background: #444;
+  cursor: pointer;
+}

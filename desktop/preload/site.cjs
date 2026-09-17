@@ -30,7 +30,37 @@
 // content is never a wall or banner), `findFirst` over the document + open shadow roots,
 // `waitForComposer`, the idempotent verified insertion cascade, submit polling with confirmation,
 // `ready`, `insertAndSubmit`, `countMessages`/`countAssistant`, cancel, busy, health on change +
-// 10 s heartbeat, requests parked during boot. `observe` and `snapshot` arrive in Stage 2.
+// 10 s heartbeat, requests parked during boot.
+//
+// Stage 2 (capture-adapters): selectors v2 (`stop`/`assistant`/`assistantText`/`done`/`quietMs`/
+// `firstTokenMs`/`captureTimeoutMs` per site, contract §4), the `observe` op (final-text capture:
+// a new assistant container beyond `baselineCount`, done by done-selector | stop-gone | quiet,
+// `timeout` with the partial text, MutationObserver throttled to 100 ms + a 300 ms poll), the
+// `snapshot` op (`scrubDom`), `errorText` → `site_error` carrying only the matched phrase, and the
+// `config` hot reload (re-merge onto the defaults, health re-run). Readings taken where the contract
+// is silent (also listed in the S6 build log):
+//   * `DEFAULT_SELECTORS.version` stays 1: v2 is additive per site, and main's loader pins the
+//     version check (an override carrying `version: 2` warns and is otherwise applied).
+//   * observe: `timeoutMs` overrides `captureTimeoutMs`, `quietMs` overrides `quietMs`, an optional
+//     `firstTokenMs` overrides `firstTokenMs` (the first-token wait is capped by the budget); a
+//     missing `baselineCount` means the current `countAssistant()`.
+//   * "the done selector on the last container" = a VISIBLE `done` match that is the last container,
+//     inside it, or after it in document order (an older turn's copy button never counts).
+//   * "stop button seen then gone" = seen during THIS observe; while it is visible the reply is
+//     never quiet; when it was never seen (the reply finished before observe started) quiet applies.
+//   * quiet needs non-blank text; an empty container waits for the budget (`timeout`, partial "").
+//   * the text is normalised (CRLF → LF, NBSP → space) and never trimmed.
+//   * a banner mid-reply is `site_error` whose message is the configured `errorText` phrase that
+//     matched — never the banner's or the page's text; a wall / challenge mid-reply answers
+//     `logged_out` / `challenge`; the partial text rides along on those and on `cancelled` when it is
+//     non-blank, and always on `timeout`.
+//   * snapshot: comments, doctype and whitespace-only text nodes are dropped (a non-blank text node
+//     becomes `…`), `<template>` content is not serialised, open shadow roots are emitted as
+//     `<template shadowrootmode="open">`, and kept attribute VALUES are rewritten where they carry
+//     identity (uuid, `@`, `/c/`, `/chat/`, `googleusercontent`, `x.com/`) so the output passes the
+//     fixture lint (`test/unit/preload/_fixture-lint.js`).
+//   * `config`: a full config is re-merged onto DEFAULT_SELECTORS (every key present, unknown keys
+//     dropped with the usual warnings); a bare site block is taken as-is.
 
 ;(() => {
   'use strict'
@@ -65,6 +95,28 @@
   /** After an insertion, let the editor's own reconciliation frame run before reading back. */
   const INSERT_SETTLE_MS = 60
   const MAX_SHADOW_DEPTH = 8
+  /** Stage 2 observe cadence: a DOM mutation triggers a check at most every 100 ms; a poll runs every 300 ms regardless. */
+  const OBSERVE_THROTTLE_MS = 100
+  const OBSERVE_POLL_MS = 300
+  /** snapshot (contract §2/§3): elements dropped with their subtrees, and the only attributes kept (emitted in DOM order). */
+  const SNAPSHOT_DROP_TAGS = Object.freeze(['script', 'style', 'link', 'meta', 'img', 'svg', 'iframe', 'video', 'audio'])
+  const SNAPSHOT_KEEP_ATTRS = Object.freeze([
+    'id',
+    'class',
+    'role',
+    'contenteditable',
+    'aria-label',
+    'data-testid',
+    'data-message-author-role',
+    'data-lexical-editor',
+    'type',
+    'disabled',
+    'placeholder',
+    'translate',
+  ])
+  const VOID_TAGS = Object.freeze(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
+  /** What every non-blank text node becomes in a snapshot. */
+  const TEXT_PLACEHOLDER = '\u2026'
 
   /**
    * What `countMessages()` counts: every element matching one of these generic message containers
@@ -110,7 +162,14 @@
    */
   const CLOUDFLARE_CHALLENGE_TITLES = Object.freeze(['Just a moment...', 'Just a moment\u2026'])
 
-  /** Selector config v1 — contract §4, verbatim. Override file: <userData>/selectors.json. */
+  /**
+   * Selector config — contract §4 verbatim: the v1 keys, plus the v2 keys (`stop`, `assistant`,
+   * `assistantText`, `done`, `quietMs`, `firstTokenMs`, `captureTimeoutMs`) added per site in Stage
+   * 2. `version` stays 1: v2 is additive, and an override file written against v1 keeps working
+   * (main's loader warns on any other version). Override file: <userData>/selectors.json.
+   * Empty `stop` + `done` ⇒ quiet detection (claude and grok have no done marker; their stop
+   * buttons are the done signal, quiet the fallback).
+   */
   const DEFAULT_SELECTORS = {
     version: 1,
     chatgpt: {
@@ -136,6 +195,14 @@
       composerWaitMs: 15000,
       sendWaitMs: 18000,
       submitVerifyMs: 5000,
+      // v2 (Stage 2)
+      stop: ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']"],
+      assistant: ["[data-message-author-role='assistant']"],
+      assistantText: ['.markdown', '.whitespace-pre-wrap'],
+      done: ["button[data-testid='copy-turn-action-button']"],
+      quietMs: 2500,
+      firstTokenMs: 90000,
+      captureTimeoutMs: 300000,
     },
     claude: {
       chatUrlPattern: '^https://claude\\.ai/chat/[0-9a-f-]+',
@@ -153,6 +220,14 @@
       composerWaitMs: 15000,
       sendWaitMs: 18000,
       submitVerifyMs: 5000,
+      // v2 (Stage 2)
+      stop: ["button[aria-label='Stop response']", "button[aria-label*='Stop']"],
+      assistant: ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'],
+      assistantText: [],
+      done: [],
+      quietMs: 2500,
+      firstTokenMs: 90000,
+      captureTimeoutMs: 300000,
     },
     grok: {
       chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+',
@@ -179,6 +254,14 @@
       composerWaitMs: 15000,
       sendWaitMs: 18000,
       submitVerifyMs: 5000,
+      // v2 (Stage 2)
+      stop: ["button[aria-label='Stop']", "button[aria-label*='Stop']"],
+      assistant: ["div[id^='response-']"],
+      assistantText: ['.response-content-markdown'],
+      done: [],
+      quietMs: 2500,
+      firstTokenMs: 90000,
+      captureTimeoutMs: 300000,
     },
   }
 
@@ -315,6 +398,11 @@
     return typeof code === 'string' && RESULT_CODES.includes(code)
   }
 
+  /** The usable entries of a selector cascade: non-empty strings, in order; `[]` for anything else. */
+  function nonEmptyCascade(cascade) {
+    return Array.isArray(cascade) ? cascade.filter((s) => typeof s === 'string' && s !== '') : []
+  }
+
   class AdapterError extends Error {
     constructor(code, message, partial) {
       super(message || code)
@@ -441,6 +529,93 @@
     }
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // DOM snapshot scrubbing (contract §3 `scrubDom`; Stage 2)
+  // ---------------------------------------------------------------------------------------------
+
+  function escapeAttr(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  /**
+   * Kept attribute values are structure, but on the real sites a few carry identity (a chat or
+   * message uuid inside an id, an e-mail in a label, an avatar host in a class): every pattern the
+   * fixture lint rejects is rewritten, so a snapshot can be committed under test/fixtures/dom/.
+   */
+  function scrubValue(v) {
+    return String(v)
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'uuid')
+      .replace(/googleusercontent/gi, 'img-host')
+      .replace(/x\.com\//gi, 'x-com/')
+      .replace(/\/(c|chat)\//g, '/$1-/')
+      .replace(/@/g, '(at)')
+  }
+
+  function tagNameOf(node) {
+    const n = typeof node.localName === 'string' && node.localName !== '' ? node.localName : String(node.nodeName || node.tagName || '')
+    return n.toLowerCase()
+  }
+
+  /** `[name, value]` pairs from a NamedNodeMap / array of `{name, value}`, or a plain object (fakes). */
+  function attrsOf(node) {
+    const a = node.attributes
+    if (!a) return []
+    if (typeof a.length === 'number') {
+      return Array.from(a, (x) => [String(x.name).toLowerCase(), x.value === null || x.value === undefined ? '' : String(x.value)])
+    }
+    if (isPlainObject(a)) return Object.keys(a).map((k) => [k.toLowerCase(), String(a[k])])
+    return []
+  }
+
+  function childrenOf(node) {
+    const c = node.childNodes
+    return c && typeof c.length === 'number' ? Array.from(c) : []
+  }
+
+  function scrubNode(node, out) {
+    if (!node || typeof node.nodeType !== 'number') return
+    const type = node.nodeType
+    if (type === 3) {
+      const s = typeof node.data === 'string' ? node.data : typeof node.nodeValue === 'string' ? node.nodeValue : ''
+      if (s.trim() !== '') out.push(TEXT_PLACEHOLDER)
+      return
+    }
+    if (type === 11) {
+      for (const c of childrenOf(node)) scrubNode(c, out)
+      return
+    }
+    if (type !== 1) return // comments, doctype, processing instructions, cdata: dropped
+    const tag = tagNameOf(node)
+    if (SNAPSHOT_DROP_TAGS.includes(tag)) return
+    out.push('<' + tag)
+    for (const [name, value] of attrsOf(node)) {
+      if (SNAPSHOT_KEEP_ATTRS.includes(name)) out.push(' ' + name + '="' + escapeAttr(scrubValue(value)) + '"')
+    }
+    out.push('>')
+    if (VOID_TAGS.includes(tag)) return
+    if (node.shadowRoot) {
+      out.push('<template shadowrootmode="open">')
+      scrubNode(node.shadowRoot, out)
+      out.push('</template>')
+    }
+    for (const c of childrenOf(node)) scrubNode(c, out)
+    out.push('</' + tag + '>')
+  }
+
+  /**
+   * scrubDom(document) → string (contract §3): the page's structure and nothing else — every
+   * `script|style|link|meta|img|svg|iframe|video|audio` dropped with its subtree, only
+   * SNAPSHOT_KEEP_ATTRS kept (values passed through `scrubValue`), every non-blank text node
+   * replaced by `…`, whitespace-only text / comments / doctype dropped, open shadow roots inlined
+   * as `<template shadowrootmode="open">`. Accepts a Document (its documentElement) or any node.
+   */
+  function scrubDom(doc) {
+    const root = doc && doc.documentElement ? doc.documentElement : doc
+    const out = []
+    scrubNode(root, out)
+    return '<!doctype html>\n' + out.join('') + '\n'
+  }
+
   function makeController() {
     const AC = globalThis.AbortController
     if (typeof AC === 'function') return new AC()
@@ -459,16 +634,32 @@
 
   /**
    * createAdapter({document, window, site, selectors, now = Date.now, timers}) — contract §3.
-   * `selectors` may be the full config (`{version, chatgpt, claude, grok}`) or one site's block.
-   * `timers` ({setTimeout}) is injectable for tests; `now` stamps `ts`/`ms` and drives timeouts.
-   * Every async op takes an optional `{signal}` (AbortSignal-like) and rejects with
-   * `AdapterError('cancelled')` once it is aborted.
+   * `selectors` may be the full config (`{version, chatgpt, claude, grok}`, re-merged onto
+   * DEFAULT_SELECTORS so every key exists) or one site's block (taken as-is).
+   * `timers` ({setTimeout, clearTimeout}) is injectable for tests; `now` stamps `ts`/`ms` and
+   * drives timeouts. Every async op takes an optional `{signal}` (AbortSignal-like) and rejects
+   * with `AdapterError('cancelled')` once it is aborted.
    */
   function createAdapter({ document, window, site, selectors, now = Date.now, timers } = {}) {
     if (!document) throw new Error('createAdapter: document is required')
     const win = window || (document.defaultView ? document.defaultView : null)
     const setT = (timers && timers.setTimeout) || globalThis.setTimeout
-    let sel = siteSelectors(selectors, site) || {}
+    const clearT = (timers && timers.clearTimeout) || globalThis.clearTimeout
+
+    /**
+     * This site's block out of `next`: a full config is re-merged onto DEFAULT_SELECTORS (override
+     * replaces per key; unknown keys are dropped; every v1/v2 key is present afterwards), a bare
+     * block (`{composer: [...]}`) is used as-is, anything else is null.
+     */
+    function resolveSelectors(next) {
+      if (isPlainObject(next) && site && isPlainObject(next[site])) {
+        const merged = mergeSelectors(DEFAULT_SELECTORS, next).merged
+        return isPlainObject(merged[site]) ? merged[site] : next[site]
+      }
+      if (isPlainObject(next) && Array.isArray(next.composer)) return next
+      return null
+    }
+    let sel = resolveSelectors(selectors) || siteSelectors(undefined, site) || {}
 
     const sleep = (ms) => new Promise((resolve) => setT(resolve, ms))
     const clock = () => Number(now()) || 0
@@ -591,6 +782,22 @@
       return needles.some((n) => typeof n === 'string' && n !== '' && h.includes(ci ? n.toLowerCase() : n))
     }
 
+    /**
+     * The first configured `errorText` phrase found (case-insensitively) in an alert-like container
+     * outside the chat — returned VERBATIM FROM THE CONFIG, never the banner's text, so an error
+     * message built from it carries no page content. Null when nothing matches.
+     */
+    function matchedErrorPhrase(composerEl) {
+      const phrases = nonEmptyCascade(sel.errorText)
+      if (phrases.length === 0) return null
+      for (const text of alertTexts(composerEl)) {
+        const h = text.toLowerCase()
+        const hit = phrases.find((p) => h.includes(p.toLowerCase()))
+        if (hit) return hit
+      }
+      return null
+    }
+
     /** A rendered match first (a hidden or collapsed editor earlier in the DOM never wins), else any match (presence during mount). */
     function findComposer() {
       return findFirst(sel.composer, { visible: true }) || findFirst(sel.composer)
@@ -628,24 +835,26 @@
       if (includesAny(t, sel.challengeTitle) && (challengeEl || !composer || CLOUDFLARE_CHALLENGE_TITLES.includes(t.trim()))) return 'challenge'
       if (challengeEl) return 'challenge'
       if (findFirst(sel.loggedOut, { visible: true, accept: (el) => !insideMessage(el) })) return 'logged_out'
-      if (alertTexts(composer ? composer.el : null).some((text) => includesAny(text, sel.errorText, { ci: true }))) return 'blocked'
+      if (matchedErrorPhrase(composer ? composer.el : null) !== null) return 'blocked'
       return composer ? 'ok' : 'unknown'
     }
 
+    /** Health (contract §1): `reply` = an assistant container exists (v2 `assistant` cascade + ASSISTANT_SELECTORS); `stop` = a visible stop button, null only without a stop cascade. */
     function health() {
       const composer = findComposer()
       const send = findSend()
       const stop = hasStopCascade() ? findStop() : null
+      const reply = findFirst(assistantCascade().concat(ASSISTANT_SELECTORS))
       return {
         composer: composer !== null,
         send: send !== null,
-        reply: null,
+        reply: reply !== null,
         stop: hasStopCascade() ? stop !== null : null,
         session: sessionState(),
         matched: {
           composer: composer ? composer.selector : null,
           send: send ? send.selector : null,
-          reply: null,
+          reply: reply ? reply.selector : null,
           stop: stop ? stop.selector : null,
           error: null,
         },
@@ -676,6 +885,63 @@
     /** See ASSISTANT_SELECTORS: assistant turns only (+ a v2 `assistant` cascade) — the `assistantCount` reported to main. */
     function countAssistant() {
       return countDistinct(assistantCascade().concat(ASSISTANT_SELECTORS))
+    }
+
+    /** Document-order comparator over compareDocumentPosition; 0 without the API (fakes keep insertion order). */
+    function docOrder(a, b) {
+      try {
+        if (a === b || typeof a.compareDocumentPosition !== 'function') return 0
+        const p = a.compareDocumentPosition(b)
+        if (p & 4) return -1 // b follows a
+        if (p & 2) return 1 // b precedes a
+      } catch (_e) {
+        /* fall through */
+      }
+      return 0
+    }
+
+    /** Every assistant container (the same set `countAssistant()` counts), de-duplicated, in document order. */
+    function assistantContainers() {
+      const seen = new Set()
+      const out = []
+      const roots = openShadowRoots(document)
+      for (const selector of assistantCascade().concat(ASSISTANT_SELECTORS)) {
+        if (typeof selector !== 'string' || selector === '') continue
+        for (const el of deepQuerySelectorAll(document, selector, roots)) {
+          if (seen.has(el)) continue
+          seen.add(el)
+          out.push(el)
+        }
+      }
+      return out.length > 1 ? out.sort(docOrder) : out
+    }
+
+    /** `el` is `container` itself, inside it, or later in document order — an older turn's marker never counts. */
+    function onOrAfter(container, el) {
+      if (container === el) return true
+      try {
+        if (typeof container.contains === 'function' && container.contains(el)) return true
+        if (typeof container.compareDocumentPosition === 'function') return (container.compareDocumentPosition(el) & 4) !== 0
+      } catch (_e) {
+        /* fall through */
+      }
+      return false
+    }
+
+    /** A visible `done` match on or after `container` (the "done selector on the last container"); null without a done cascade. */
+    function findDone(container) {
+      const cascade = nonEmptyCascade(sel.done)
+      if (cascade.length === 0) return null
+      return findFirst(cascade, { visible: true, accept: (el) => onOrAfter(container, el) })
+    }
+
+    /** A container's reply text: its first `assistantText` match, else the container itself, as rendered text (innerText, else textContent). */
+    function replyText(container) {
+      for (const selector of nonEmptyCascade(sel.assistantText)) {
+        const hit = queryOne(container, selector)
+        if (hit) return readText(hit)
+      }
+      return readText(container)
     }
 
     function cascadeText(cascade) {
@@ -970,14 +1236,158 @@
       }
     }
 
-    /** Hot reload (config op): take the site block of a full config or a bare block; anything else is ignored. */
-    function setSelectors(next) {
-      if (isPlainObject(next) && site && isPlainObject(next[site])) sel = next[site]
-      else if (isPlainObject(next) && Array.isArray(next.composer)) sel = next
+    // ---- capture (Stage 2) ------------------------------------------------------------------
+
+    /**
+     * observe op (contract §2/§3): wait for a NEW assistant container beyond `baselineCount` (the
+     * `assistantCount` main took from insertAndSubmit), then follow the LAST container until the
+     * reply is done and resolve `{text, doneBy, ms}` with its final text — one text, at the end
+     * (streaming re-renders are non-monotonic; Decision 16).
+     *
+     *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
+     *                 else `reply_not_found`
+     *   done          `done_selector`  a visible `done` match on or after the last container
+     *                 `stop_gone`      a stop button was seen during this observe and is gone now
+     *                 `quiet`          the text is non-blank and unchanged for `quietMs` while no stop
+     *                                  button is visible (the only signal when stop + done are empty)
+     *   budget        `timeoutMs` (default `captureTimeoutMs`) elapsed → `timeout` with the partial text
+     *   session       a banner → `site_error` whose message is ONLY the configured phrase that matched;
+     *                 a wall / challenge → `logged_out` / `challenge`; `cancelled` on abort — each with
+     *                 the partial text when it is non-blank
+     *   cadence       a MutationObserver on the document throttled to OBSERVE_THROTTLE_MS plus an
+     *                 OBSERVE_POLL_MS poll (the poll alone where MutationObserver does not exist)
+     *   text          the last container's first `assistantText` match, else the container itself,
+     *                 as rendered text; CRLF → LF and NBSP → space, never trimmed
+     * `quietMs` / `timeoutMs` / `firstTokenMs` in the message override the selectors; a missing
+     * `baselineCount` means the current count.
+     */
+    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, signal } = {}) {
+      const t0 = clock()
+      const baseline = nonNegativeInt(baselineCount, countAssistant())
+      const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
+      const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
+      const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
+      let container = null
+      let text = ''
+      let lastText = null
+      let lastChangeAt = t0
+      let seenStop = false
+      const partial = () => (isBlank(text) ? undefined : text)
+
+      /** One sample: throws the terminal AdapterError, returns the doneBy string, or null to keep going. */
+      const check = () => {
+        const now = clock()
+        if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
+        const state = sessionState()
+        if (state === 'blocked') {
+          const composer = findComposer()
+          throw new AdapterError('site_error', matchedErrorPhrase(composer ? composer.el : null) || 'blocked', partial())
+        }
+        if (state === 'logged_out' || state === 'challenge') throw new AdapterError(state, stateError(state).message, partial())
+        const containers = assistantContainers()
+        if (containers.length > baseline) container = containers[containers.length - 1]
+        if (!container) {
+          if (now - t0 >= firstToken) {
+            throw new AdapterError(
+              'reply_not_found',
+              `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))})`,
+            )
+          }
+          return null
+        }
+        text = normalizeText(replyText(container))
+        if (text !== lastText) {
+          lastText = text
+          lastChangeAt = now
+        }
+        if (findDone(container)) return 'done_selector'
+        if (findStop()) {
+          seenStop = true
+          lastChangeAt = now // the site says it is still replying: never quiet while the stop button shows
+        } else if (seenStop) {
+          return 'stop_gone'
+        } else if (!isBlank(text) && now - lastChangeAt >= quiet) {
+          return 'quiet'
+        }
+        if (now - t0 >= budget) throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+        return null
+      }
+
+      return new Promise((resolve, reject) => {
+        let settled = false
+        let throttle = null
+        let pollTimer = null
+        let mo = null
+        const onAbort = () => settle(() => reject(new AdapterError('cancelled', 'cancelled by main', partial())))
+        const cleanup = () => {
+          if (mo) {
+            try {
+              mo.disconnect()
+            } catch (_e) {
+              /* ignore */
+            }
+            mo = null
+          }
+          if (throttle !== null) clearT(throttle)
+          if (pollTimer !== null) clearT(pollTimer)
+          throttle = pollTimer = null
+          if (signal && typeof signal.removeEventListener === 'function') signal.removeEventListener('abort', onAbort)
+        }
+        function settle(fn) {
+          if (settled) return
+          settled = true
+          cleanup()
+          fn()
+        }
+        const run = () => {
+          if (settled) return
+          let doneBy = null
+          try {
+            doneBy = check()
+          } catch (e) {
+            settle(() => reject(e))
+            return
+          }
+          if (doneBy) settle(() => resolve({ text, doneBy, ms: Math.round(clock() - t0) }))
+        }
+        const schedulePoll = () => {
+          pollTimer = setT(() => {
+            pollTimer = null
+            run()
+            if (!settled) schedulePoll()
+          }, OBSERVE_POLL_MS)
+        }
+        if (signal && typeof signal.addEventListener === 'function') signal.addEventListener('abort', onAbort)
+        const MO = ctor('MutationObserver')
+        if (MO) {
+          try {
+            mo = new MO(() => {
+              if (settled || throttle !== null) return
+              throttle = setT(() => {
+                throttle = null
+                run()
+              }, OBSERVE_THROTTLE_MS)
+            })
+            mo.observe(document, { childList: true, characterData: true, subtree: true, attributes: true })
+          } catch (_e) {
+            mo = null
+          }
+        }
+        run()
+        if (!settled) schedulePoll()
+      })
     }
 
-    const notYet = (op) => async () => {
-      throw new AdapterError('site_error', `${op} is not available before stage 2`)
+    /** snapshot op (contract §2): the scrubbed DOM — structure and selector-bearing attributes only, every text node `…`. */
+    async function snapshot({ signal } = {}) {
+      throwIfAborted(signal)
+      return { html: scrubDom(document) }
+    }
+
+    /** Hot reload (config op): re-merge a full config onto the defaults, or take a bare block; anything else is ignored. */
+    function setSelectors(next) {
+      const resolved = resolveSelectors(next)
+      if (resolved) sel = resolved
     }
 
     return {
@@ -996,8 +1406,10 @@
       url: href,
       setSelectors,
       // ---- Stage 2 --------------------------------------------------------------------------
-      observe: notYet('observe'),
-      snapshot: notYet('snapshot'),
+      observe,
+      snapshot,
+      assistantContainers,
+      replyText,
     }
   }
 
@@ -1083,7 +1495,10 @@
         const r = await adapter.insertAndSubmit(msg.text, { signal })
         return { ...r, url: adapter.url() }
       }
-      if (op === 'observe') return adapter.observe({ ...msg, signal })
+      if (op === 'observe') {
+        const r = await adapter.observe({ ...msg, signal })
+        return { ...r, url: adapter.url() }
+      }
       if (op === 'snapshot') return adapter.snapshot({ signal })
       throw new AdapterError('site_error', `unknown op ${String(op)}`)
     }
@@ -1097,7 +1512,7 @@
       if (!adapter) return
       const op = msg.op
       if (op === 'config') {
-        // hot reload (Stage 2): replace selectors, no reply
+        // hot reload (Stage 2): re-merge the selectors, re-run health, no reply
         if (msg.selectors !== undefined) adapter.setSelectors(msg.selectors)
         publishHealth(true)
         return
@@ -1237,6 +1652,7 @@
       isEnabled,
       isTextField,
       readText,
+      scrubDom,
       createAdapter,
       AdapterError,
       attachIpc,
@@ -1247,6 +1663,10 @@
       CONFIRM_POLL_MS,
       VERIFY_TAIL_CHARS,
       INSERT_SETTLE_MS,
+      OBSERVE_THROTTLE_MS,
+      OBSERVE_POLL_MS,
+      SNAPSHOT_DROP_TAGS,
+      SNAPSHOT_KEEP_ATTRS,
     }
   }
 
