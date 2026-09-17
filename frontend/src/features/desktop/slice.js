@@ -1,5 +1,4 @@
-// Desktop `panes` slice (Stage 0 placeholder by the integrator; features/desktop/** is owned by
-// renderer-desktop from Stage 1). Registered under key 'panes' from ./index.jsx.
+// Desktop `panes` slice (renderer-desktop, Stage 1). Registered under key 'panes' from ./index.jsx.
 //
 // Shape (docs/desktop-contract.md §7):
 //   { mode: 'tabs'|'split', active: slot, targets: {slot: bool},
@@ -7,14 +6,19 @@
 //     sending: bool, zoom: {slot: number}, capture: {slot: bool} (S2), bridge: {connected: bool} (S2),
 //     turn: {slot: phase} (S2), drawerOpen: bool (S3), analyst: {slot: slot|null, visible, health} (S3) }
 //
+// Health is the object `site.cjs` publishes over 'panes:health' (contract §3):
+//   { composer: bool, send: bool, reply, stop, session: 'ok'|'logged_out'|'challenge'|'blocked'|'unknown',
+//     matched: {composer: selector|null, send: selector|null, reply, stop, error}, url, host, title, ts }
+//
 // Actions (§7) and the payloads this reducer reads:
 //   panes/mode       {mode}                       'tabs' | 'split'
 //   panes/active     {active}                     a slot id
 //   panes/target     {slot, on}                   one target checkbox
 //   panes/health     {slot, health}               Health object or null (from triplex.onHealth)
 //   panes/sendStart  {targets?}                   sending = true; clears lastSend for the targets (all when omitted)
-//   panes/sendResult {results}                    sending = false; lastSend[slot] = results[slot] (triplex.sendPrompt shape)
-//   panes/zoom       {slot, factor}               from triplex.onZoom / zoom()
+//   panes/sendResult {results}                    sending = false; lastSend[slot] = results[slot] (triplex.sendPrompt shape:
+//                                                 {ok, code?, message?, ms, url?, composerSelector?, sendSelector?})
+//   panes/zoom       {slot, factor}               from triplex.onZoom / the zoom() reply
 //   panes/capture    {capture} | {slot, on}       whole map (getCapture) or one switch (setCapture)
 //   panes/bridge     {connected, since?}
 //   panes/turn       {slot, phase}                phase string from triplex.onTurn
@@ -24,10 +28,24 @@
 // Convention (state/reducers.js, features/send/slice.js): an action that changes nothing returns
 // the SAME object, so untouched slices keep identity across the root reducer. Unknown slots and
 // malformed payloads are ignored, never thrown.
+//
+// Persistence (contract §5, "one owner per persisted key"): the renderer owns
+// `triplex.panes.mode|active|targets` in localStorage. `loadPersistedPanes(storage)` reads them
+// (used by the slice's initial-state factory in index.jsx, so the first render already has the
+// restored layout) and `persistPanes(storage, panes)` writes them; both swallow storage errors
+// (private mode, quota, a missing `localStorage` in the thumbnail/test sandbox).
 
 // Mirrored from features/send/slice.js (features never import across each other; state/* is frozen).
 export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
+export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
 export const MODES = ['tabs', 'split']
+
+/** Session states that need the user (contract §3 codes = Health.session values). */
+export const ATTENTION_SESSIONS = ['logged_out', 'challenge', 'blocked']
+/** Badge text per attention state (plan row: "session badge SIGN IN / CHALLENGE / BLOCKED"). */
+export const SESSION_BADGES = { logged_out: 'SIGN IN', challenge: 'CHALLENGE', blocked: 'BLOCKED' }
+
+export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets' }
 
 export function isSlotId(x) {
   return SLOT_IDS.includes(x)
@@ -43,11 +61,20 @@ function perSlot(value) {
   return o
 }
 
-export function initialPanes() {
+/**
+ * Initial state. `persisted` (optional) = `{mode?, active?, targets?}` as returned by
+ * loadPersistedPanes; anything invalid falls back to the defaults, key by key.
+ */
+export function initialPanes(persisted) {
+  const p = persisted && typeof persisted === 'object' ? persisted : {}
+  const targets = perSlot(true)
+  if (p.targets && typeof p.targets === 'object') {
+    for (const k of SLOT_IDS) if (typeof p.targets[k] === 'boolean') targets[k] = p.targets[k]
+  }
   return {
-    mode: 'split',
-    active: 'chatgpt',
-    targets: perSlot(true),
+    mode: isMode(p.mode) ? p.mode : 'split',
+    active: isSlotId(p.active) ? p.active : 'chatgpt',
+    targets,
     health: perSlot(null),
     lastSend: {},
     sending: false,
@@ -137,5 +164,117 @@ export function panesReducer(s = initialPanes(), a) {
     }
     default:
       return s
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Derivations shared by PaneDeck / PromptBar (pure)
+// ---------------------------------------------------------------------------------------------
+
+/** The slots whose target checkbox is on, in SLOT_IDS order. */
+export function selectedTargets(targets) {
+  return SLOT_IDS.filter((k) => !!(targets && targets[k]))
+}
+
+/** Health.session or 'unknown' when the pane has not reported yet. */
+export function sessionOf(health) {
+  const s = health && typeof health === 'object' ? health.session : null
+  return typeof s === 'string' ? s : 'unknown'
+}
+
+export function needsAttention(session) {
+  return ATTENTION_SESSIONS.includes(session)
+}
+
+/** A sendPrompt result whose code is a session state also means the pane needs the user. */
+export function resultNeedsAttention(result) {
+  return !!(result && typeof result === 'object' && !result.ok && ATTENTION_SESSIONS.includes(result.code))
+}
+
+/**
+ * Health dot level: 'none' (no health yet) | 'bad' (session needs attention, or no composer) |
+ * 'warn' (composer but no send button) | 'ok'.
+ */
+export function healthLevel(health) {
+  if (!health || typeof health !== 'object') return 'none'
+  if (needsAttention(sessionOf(health))) return 'bad'
+  if (!health.composer) return 'bad'
+  if (!health.send) return 'warn'
+  return 'ok'
+}
+
+const SESSION_WORDS = { ok: 'signed in', logged_out: 'signed out', challenge: 'challenge', blocked: 'blocked', unknown: 'unknown' }
+
+/** Human text for the session state (health text suffix). */
+export function sessionText(session) {
+  return SESSION_WORDS[session] || 'unknown'
+}
+
+/** 'composer ✓ send ✓ · signed in' (or 'no health yet' before the first health event). */
+export function healthText(health) {
+  if (!health || typeof health !== 'object') return 'no health yet'
+  const tick = (v) => (v ? '✓' : '✗')
+  return `composer ${tick(health.composer)} send ${tick(health.send)} · ${sessionText(sessionOf(health))}`
+}
+
+/** Title attribute for the health text: the matched selectors (or "none") and the page. */
+export function healthTitle(health) {
+  if (!health || typeof health !== 'object') return 'no health event from this pane yet'
+  const m = health.matched && typeof health.matched === 'object' ? health.matched : {}
+  const parts = [`composer: ${m.composer || 'none'}`, `send: ${m.send || 'none'}`]
+  if (m.error) parts.push(`error: ${m.error}`)
+  if (health.url) parts.push(`url: ${health.url}`)
+  return parts.join('\n')
+}
+
+// ---------------------------------------------------------------------------------------------
+// localStorage persistence (renderer-owned keys, contract §5)
+// ---------------------------------------------------------------------------------------------
+
+function defaultStorage() {
+  // Bare `localStorage` (globalThis) rather than `window.localStorage`: the access itself can throw
+  // (a SecurityError when site data is blocked), and tests inject a stub via vi.stubGlobal.
+  try {
+    return typeof localStorage !== 'undefined' && localStorage ? localStorage : null
+  } catch {
+    return null
+  }
+}
+
+/** Read `{mode?, active?, targets?}` from storage; invalid or missing values are omitted. */
+export function loadPersistedPanes(storage = defaultStorage()) {
+  const out = {}
+  if (!storage) return out
+  try {
+    const mode = storage.getItem(PERSIST_KEYS.mode)
+    if (isMode(mode)) out.mode = mode
+    const active = storage.getItem(PERSIST_KEYS.active)
+    if (isSlotId(active)) out.active = active
+    const raw = storage.getItem(PERSIST_KEYS.targets)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        const targets = {}
+        for (const k of SLOT_IDS) if (typeof parsed[k] === 'boolean') targets[k] = parsed[k]
+        out.targets = targets
+      }
+    }
+  } catch {
+    /* a bad value or an unavailable storage means "nothing persisted" */
+  }
+  return out
+}
+
+/** Write mode / active / targets; never throws. */
+export function persistPanes(storage = defaultStorage(), panes) {
+  if (!storage || !panes) return
+  try {
+    storage.setItem(PERSIST_KEYS.mode, panes.mode)
+    storage.setItem(PERSIST_KEYS.active, panes.active)
+    const targets = {}
+    for (const k of SLOT_IDS) targets[k] = !!(panes.targets && panes.targets[k])
+    storage.setItem(PERSIST_KEYS.targets, JSON.stringify(targets))
+  } catch {
+    /* quota / private mode: the in-memory state is still right */
   }
 }
