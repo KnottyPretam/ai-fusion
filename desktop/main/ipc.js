@@ -12,12 +12,13 @@
 // Stage 2: `panes:getCapture` / `panes:setCapture` (settings.json; the bridge `capture` frame is
 // re-sent by main's settings subscription), `panes:openChats(convId|null)` → per slot
 // 'navigated' (a recorded link that differs) | 'new' (no link → newChatUrl) | 'kept' (already
-// there, or a turn is in flight on that view), `panes:signOut(slot)` (clearStorageData on that
-// partition only, then newChatUrl), `panes:snapshot(slot)` (adapter `snapshot` → scrubbed HTML
-// under `<userData>/snapshots/<slot>-<ts>.html` → {path}). `prompt:send` is GONE: the unified
-// prompt is a Triplex Send over HTTP; the handler only answers `Error('prompt_send_removed')`
-// until the integrator drops `sendPrompt` from renderer.cjs.
-// No electron import: `ipcMain`, the view manager, settings, chats and `fs` are injected.
+// there, a turn in flight on that view, a link that failed or is still loading after
+// OPEN_CHATS_LOAD_TIMEOUT_MS); `null` = the open conversation was cleared: every pane is 'kept'
+// and nothing is navigated (§2). The three panes are opened in parallel. `panes:signOut(slot)`
+// (clearStorageData on that partition only, then newChatUrl), `panes:snapshot(slot)` (adapter
+// `snapshot` → scrubbed HTML under `<userData>/snapshots/<slot>-<ts>.html` → {path}).
+// `prompt:send` is gone (§2: removed in Stage 2) — no handler, nothing answers on that channel.
+// No electron import: `ipcMain`, the view manager, settings, chats, `fs` and the timers are injected.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -28,6 +29,8 @@ import { isExternalUrl } from './policy.js'
 export const MAX_PROMPT_CHARS = 32768
 export const MAX_CONV_ID_CHARS = 200
 export const SNAPSHOT_TIMEOUT_MS = 15000
+/** panes:openChats waits at most this long for one pane's recorded chat to load (then 'kept'; the load goes on). */
+export const OPEN_CHATS_LOAD_TIMEOUT_MS = 15000
 export const ZOOM_DIRECTIONS = Object.freeze(['in', 'out', 'reset'])
 export const MODES = Object.freeze(['tabs', 'split'])
 export const OPEN_CHATS_RESULTS = Object.freeze(['navigated', 'new', 'kept'])
@@ -86,6 +89,14 @@ export function annotateHealth(health, selectorsError) {
   return { ...health, matched: { ...matched, error: String(selectorsError) } }
 }
 
+/** The `panes:bridge` payload for a bridge state: `{connected:true, since}` | `{connected:false, error?}`. */
+export function publicBridgeState(b) {
+  if (b.connected && b.since != null) return { connected: true, since: b.since }
+  const out = { connected: b.connected }
+  if (!b.connected && typeof b.error === 'string' && b.error !== '') out.error = b.error
+  return out
+}
+
 /** The file name a DOM snapshot is written under: `<slot>-<ts>.html` (ts = integer ms). */
 export function snapshotFileName(slot, ts) {
   return `${requireSlot(slot)}-${Math.round(Number(ts) || 0)}.html`
@@ -122,12 +133,12 @@ export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = 
  *   sites               the resolved site table
  *   version, dev        for 'panes:getInfo' / 'adapter:config'
  *   getBackend()        {port, url} | null for 'panes:getInfo'
- *   getBridgeState()    {connected, since?} replayed as 'panes:bridge'
+ *   getBridgeState()    {connected, since?, error?} replayed as 'panes:bridge'
  *   snapshotsDir        <userData>/snapshots
  *   onHealth(slot, h)   called after an adapter health report is cached (main → bridge `health` frame)
  *   openExternal(url)   shell.openExternal
  *   sendToRenderer(channel, ...args)
- *   fs, now, log
+ *   fs, now, log, setTimeout, clearTimeout
  */
 export function registerIpc({
   ipcMain,
@@ -150,6 +161,8 @@ export function registerIpc({
   fs = nodeFs,
   now = Date.now,
   log = console,
+  setTimeout: setT = globalThis.setTimeout,
+  clearTimeout: clearT = globalThis.clearTimeout,
 } = {}) {
   if (!ipcMain || typeof ipcMain.handle !== 'function' || typeof ipcMain.on !== 'function') throw new Error('registerIpc: ipcMain is required')
   if (typeof isRenderer !== 'function') throw new Error('registerIpc: isRenderer is required')
@@ -194,32 +207,68 @@ export function registerIpc({
     }
     if (typeof getBridgeState === 'function') {
       const b = getBridgeState()
-      if (b && typeof b.connected === 'boolean') emit('panes:bridge', b.connected && b.since != null ? { connected: true, since: b.since } : { connected: b.connected })
+      if (b && typeof b.connected === 'boolean') emit('panes:bridge', publicBridgeState(b))
     }
   }
 
   const inflight = (slot) => !!(orchestrator && typeof orchestrator.inflight === 'function' && orchestrator.inflight(slot))
 
-  /** One pane for `panes:openChats`: 'navigated' | 'new' | 'kept'. */
+  /** `{timedOut:true}` after `ms`, else `{timedOut:false, value}`; a rejection propagates only before the timeout. */
+  const bounded = (promise, ms) =>
+    new Promise((resolve, reject) => {
+      let timer = setT(() => {
+        timer = null
+        resolve({ timedOut: true })
+      }, ms)
+      Promise.resolve(promise).then(
+        (value) => {
+          if (timer === null) return
+          clearT(timer)
+          resolve({ timedOut: false, value })
+        },
+        (e) => {
+          if (timer === null) return
+          clearT(timer)
+          reject(e)
+        },
+      )
+    })
+
+  /** One pane for `panes:openChats`: 'navigated' | 'new' | 'kept'. Never rejects. */
   async function openChat(slot, convId) {
-    if (inflight(slot)) {
-      warn(`openChats: ${slot} has a turn in flight; kept`)
-      return 'kept'
-    }
-    const current = typeof views.currentUrl === 'function' ? views.currentUrl(slot) : ''
-    const link = convId && chats && typeof chats.get === 'function' ? chats.get(convId, slot) : null
-    if (link) {
-      if (current === link) return 'kept'
-      if (typeof views.loadUrl !== 'function') return 'kept'
-      try {
-        await views.loadUrl(slot, link)
-        emit('panes:turn', { slot, phase: 'idle' })
-        return 'navigated'
-      } catch (e) {
-        warn(`openChats: ${slot} could not open the recorded chat: ${(e && e.message) || e}`)
+    if (convId === null) return 'kept' // the open conversation was cleared: nothing to open, the pane stays (§2)
+    try {
+      if (inflight(slot)) {
+        warn(`openChats: ${slot} has a turn in flight; kept`)
         return 'kept'
       }
+      const current = typeof views.currentUrl === 'function' ? views.currentUrl(slot) : ''
+      const link = chats && typeof chats.get === 'function' ? chats.get(convId, slot) : null
+      if (link) {
+        if (current === link) return 'kept'
+        if (typeof views.loadUrl !== 'function') return 'kept'
+        try {
+          const r = await bounded(views.loadUrl(slot, link), OPEN_CHATS_LOAD_TIMEOUT_MS)
+          if (r.timedOut) {
+            warn(`openChats: ${slot} is still loading the recorded chat after ${OPEN_CHATS_LOAD_TIMEOUT_MS} ms; kept`)
+            return 'kept'
+          }
+          emit('panes:turn', { slot, phase: 'idle' })
+          return 'navigated'
+        } catch (e) {
+          warn(`openChats: ${slot} could not open the recorded chat: ${(e && e.message) || e}`)
+          return 'kept'
+        }
+      }
+      return openFresh(slot, current)
+    } catch (e) {
+      warn(`openChats: ${slot} failed: ${(e && e.message) || e}; kept`)
+      return 'kept'
     }
+  }
+
+  /** No recorded link: a fresh chat unless the pane is already on newChatUrl. */
+  function openFresh(slot, current) {
     const fresh = sites && sites[slot] ? sites[slot].newChatUrl : null
     if (fresh && current === fresh) return 'kept'
     views.newChat(slot)
@@ -297,13 +346,6 @@ export function registerIpc({
     return { factor }
   })
 
-  // Stage 1's IPC prompt is gone (the unified prompt is POST /api/conversations/{id}/send);
-  // renderer.cjs still exposes sendPrompt until the integrator removes it — answer clearly.
-  handle('prompt:send', async (event) => {
-    requireRenderer(event)
-    throw new Error('prompt_send_removed')
-  })
-
   // --- Stage 2 ---------------------------------------------------------------------------------
   handle('panes:getCapture', (event) => {
     requireRenderer(event)
@@ -322,8 +364,11 @@ export function registerIpc({
   handle('panes:openChats', async (event, convId) => {
     requireRenderer(event)
     const id = requireConvId(convId)
+    const results = await Promise.all(SLOTS.map((slot) => openChat(slot, id))) // the three loads run in parallel
     const out = {}
-    for (const slot of SLOTS) out[slot] = await openChat(slot, id)
+    SLOTS.forEach((slot, i) => {
+      out[slot] = results[i]
+    })
     return out
   })
 

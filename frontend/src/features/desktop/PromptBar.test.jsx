@@ -105,7 +105,7 @@ describe('PromptBar: pure helpers', () => {
 })
 
 describe('PromptBar: Send through useSendTurn', () => {
-  test('a first Send creates a conversation, posts {prompt} (all three checked), clears the composer, opens the new chats once and shows one result line per slot', async () => {
+  test('a first Send creates a conversation, posts {prompt} (all three checked), clears the composer, leaves the panes on their chats (no openChats) and shows one result line per slot', async () => {
     const fake = fakeTriplex()
     const calls = stubTurn({ create: true, send: () => sseResponse(fullStream('t1')), after: afterSend('hello all') })
     mount(fake)
@@ -116,15 +116,16 @@ describe('PromptBar: Send through useSendTurn', () => {
     expect(calls[0].body).toEqual({})
     expect(calls[1].body).toEqual({ prompt: 'hello `x` "y" ${z}\nline2' })
     await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:c1'))
-    // the conversation id changed (null → c1): the panes are pointed at its chats exactly once
-    expect(fake.openChats).toHaveBeenCalledTimes(1)
-    expect(fake.openChats).toHaveBeenCalledWith('c1')
+    // the conversation id changed (null → c1) under panes.sending: it is this Send's own create, so
+    // the panes are adopted (Decision 12) — never renavigated under the in-flight bridge requests
+    expect(fake.openChats).not.toHaveBeenCalled()
     for (const slot of ['claude', 'chatgpt', 'grok']) {
       expect(result(slot)).toHaveTextContent('sent ✓ captured · 0.5 s')
       expect(result(slot)).toHaveAttribute('data-ok', 'true')
     }
     expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-locked', 'false')
     expect(composer()).not.toHaveAttribute('readonly')
+    expect(fake.openChats).not.toHaveBeenCalled() // the refetch re-dispatched the same id; sending is over
   })
 
   test('a strict subset of targets posts {prompt, slots}; only the listed slots get a result line; no conversation is created', async () => {

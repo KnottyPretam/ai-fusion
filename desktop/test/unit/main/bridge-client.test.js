@@ -2,7 +2,8 @@
 // result round trip with the corpus frame shapes, ping → pong, cancel → onCancel, reconnect
 // schedule 0.5→10 s, fatal closes (superseded 4002, bad token 4003) → no reconnect storm, a socket
 // drop mid-turn → the turn completes locally and its frames are discarded, capture / analyst /
-// health frames, hello_ack + ping watchdogs, close().
+// health frames (a change refused while `open` is flushed after the ack), hello_ack + ping
+// watchdogs, close(), bridgeUrlFor (loopback only unless allowRemote).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -108,10 +109,14 @@ function setup({ health = {}, capture = { claude: false, chatgpt: true, grok: fa
   return { client, sockets, last, timers, states, cancels, requests, log, handshake }
 }
 
-test('bridgeUrlFor maps the backend URL to the bridge WebSocket', () => {
+test('bridgeUrlFor maps the backend URL to the bridge WebSocket; a non-loopback host is refused unless allowRemote', () => {
   assert.equal(bridgeUrlFor('http://127.0.0.1:8021'), 'ws://127.0.0.1:8021/api/bridge')
   assert.equal(bridgeUrlFor('http://127.0.0.1:8021/'), 'ws://127.0.0.1:8021/api/bridge')
   assert.equal(bridgeUrlFor('https://localhost:9/x'), 'wss://localhost:9/api/bridge')
+  assert.equal(bridgeUrlFor('http://[::1]:8021'), 'ws://[::1]:8021/api/bridge')
+  assert.throws(() => bridgeUrlFor('http://example.com:8021'), /non-loopback backend host example\.com.*TRIPLEX_ALLOW_REMOTE_BACKEND=1/)
+  assert.throws(() => bridgeUrlFor('https://10.0.0.5'), /non-loopback/)
+  assert.equal(bridgeUrlFor('http://example.com:8021', { allowRemote: true }), 'ws://example.com:8021/api/bridge')
   assert.throws(() => createBridgeClient({ url: URL }), /token is required/)
 })
 
@@ -278,11 +283,12 @@ test('capture / analyst / health frames go out only while connected and only whe
   assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false }), false, 'not connected: nothing sent')
   client.connect()
   last().open()
-  assert.equal(client.sendCapture(), false, 'open but no hello_ack yet')
+  assert.equal(client.sendCapture(), false, 'open but no hello_ack yet (marked dirty: flushed after the ack)')
   last().receive(HELLO_ACK)
+  assert.deepEqual(last().frames('capture'), [{ type: 'capture', capture: { claude: false, chatgpt: true, grok: false } }], 'the refused change is re-sent from the live getter right after the ack')
   assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false }), true)
   assert.equal(client.sendCapture(), true, 'defaults to getCapture()')
-  assert.deepEqual(last().frames('capture'), [
+  assert.deepEqual(last().frames('capture').slice(1), [
     { type: 'capture', capture: { claude: true, chatgpt: false, grok: false } },
     { type: 'capture', capture: { claude: false, chatgpt: true, grok: false } },
   ])
@@ -302,6 +308,49 @@ test('capture / analyst / health frames go out only while connected and only whe
   for (const f of last().sent) assert.equal(validate(f).ok, true, JSON.stringify(f))
   // the token is never logged
   assert.ok(log.lines.every(([, m]) => !m.includes('e2e')), 'no log line carries the token')
+})
+
+test('a capture / analyst change that lands between hello and hello_ack is flushed after the ack (health first), from the live getters; a change before open is carried by the hello itself', () => {
+  const capture = { claude: false, chatgpt: false, grok: false }
+  const { client, last, log } = setup({ health: { chatgpt: HEALTH }, capture, analyst: 'grok' })
+  client.connect()
+  assert.equal(client.sendCapture({ ...capture, claude: true }), false, 'connecting: refused, not dirty (the hello carries the live value)')
+  capture.claude = true
+  last().open()
+  assert.deepEqual(last().sent[0].capture, { claude: true, chatgpt: false, grok: false }, 'the hello snapshots the getter at open')
+  capture.grok = true // the user flips grok while the ack is pending
+  assert.equal(client.sendCapture({ ...capture }), false, 'open: refused …')
+  assert.equal(client.sendAnalyst('claude'), false)
+  assert.deepEqual(last().sent.length, 1, '… and nothing but the hello went out')
+  last().receive(HELLO_ACK)
+  assert.deepEqual(last().sent.slice(1), [
+    { type: 'health', slot: 'chatgpt', health: HEALTH },
+    { type: 'capture', capture: { claude: true, chatgpt: false, grok: true } },
+    { type: 'analyst', analyst: { slot: 'grok' } },
+  ], 'health replayed first, then the dirty capture (live getter, grok:true) and the dirty analyst (live getter)')
+  for (const f of last().sent) assert.equal(validate(f).ok, true, JSON.stringify(f))
+  // nothing dirty: an ack sends health only
+  last().drop(1006)
+  const { timers } = setup()
+  void timers
+  assert.ok(log.lines.every(([, m]) => !m.includes('e2e')), 'no log line carries the token')
+  const clean = setup({ health: { chatgpt: HEALTH } })
+  clean.client.connect()
+  clean.last().open()
+  clean.last().receive(HELLO_ACK)
+  assert.deepEqual(clean.last().sent.map((f) => f.type), ['hello', 'health'], 'no dirty flag → no capture / analyst frame after the ack')
+  // a dirty flag never survives a reconnect: the next hello carries the value
+  const again = setup({ capture })
+  again.client.connect()
+  again.last().open()
+  capture.chatgpt = true
+  assert.equal(again.client.sendCapture(), false)
+  again.last().drop(1006)
+  again.timers.advance(BACKOFF_MS[0])
+  again.last().open()
+  assert.deepEqual(again.last().sent[0].capture, { claude: true, chatgpt: true, grok: true })
+  again.last().receive(HELLO_ACK)
+  assert.deepEqual(again.last().sent.map((f) => f.type), ['hello'], 'the hello already carried it; nothing flushed')
 })
 
 test('watchdogs: no hello_ack within 10 s → close 4000 + reconnect; no ping for 2.5 × ping_s → close 4000 + reconnect', () => {

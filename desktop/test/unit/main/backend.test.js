@@ -1,6 +1,8 @@
 // backend.js — buildSpawnSpec (venv path, §6 env keys incl. DATA_DIR / TRIPLEX_DESKTOP=1 /
-// BRIDGE_TOKEN / ANALYST_MODEL from settings, never OPENROUTER_API_KEY, uv fallback), attachSpec,
-// start() polling GET /, backend.log, restart ≤3/min then give up, stop() SIGTERM → SIGKILL.
+// BRIDGE_TOKEN / ANALYST_MODEL from settings, OPENROUTER_API_KEY pinned to '' so the repo .env
+// cannot re-supply it, uv fallback), attachSpec (loopback only unless TRIPLEX_ALLOW_REMOTE_BACKEND=1),
+// start() refusing a port that already answers, then polling GET /, backend.log, restart ≤3/min
+// then give up, stop() SIGTERM → SIGKILL.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter, once } from 'node:events'
@@ -8,14 +10,14 @@ import { PassThrough } from 'node:stream'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSpawnSpec, attachSpec, createBackend, randomToken, DEFAULT_PORT, START_TIMEOUT_MS, START_POLL_MS, RESTART_LIMIT, RESTART_DELAY_MS, RESTART_WINDOW_MS, STOP_GRACE_MS, LOG_FILE } from '../../../main/backend.js'
+import { buildSpawnSpec, attachSpec, createBackend, randomToken, isLoopbackHost, DEFAULT_PORT, START_TIMEOUT_MS, START_POLL_MS, RESTART_LIMIT, RESTART_DELAY_MS, RESTART_WINDOW_MS, STOP_GRACE_MS, LOG_FILE } from '../../../main/backend.js'
 import { fakeTimers, fakeLog, tick } from './_fakes.js'
 
 const REPO = '/repo'
 const USER = '/home/u/.config/triplex-desktop'
 const TOKEN = 'a'.repeat(64)
 
-test('buildSpawnSpec: .venv python, cwd = repo, the §6 env, no OPENROUTER_API_KEY / MOCK_* / parent SLOT_* leaks', () => {
+test('buildSpawnSpec: .venv python, cwd = repo, the §6 env, OPENROUTER_API_KEY pinned to \'\' (never the parent value), no MOCK_* / parent SLOT_* leaks', () => {
   const parent = { PATH: '/usr/bin', HOME: '/home/u', OPENROUTER_API_KEY: 'sk-secret', MOCK_OPENROUTER: '1', MOCK_SCENARIO: 'planted_factual', SLOT_CLAUDE_MODEL: 'openai/x', ANALYST_MODEL: 'openai/y', LOG_LEVEL: 'DEBUG', OLLAMA_BASE_URL: 'http://x', PORT: '8001', DATA_DIR: './data' }
   const spec = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'chatgpt' }, env: parent, home: '/home/u', exists: (p) => p === path.join(REPO, '.venv', 'bin', 'python') })
   assert.equal(spec.command, '/repo/.venv/bin/python')
@@ -41,7 +43,8 @@ test('buildSpawnSpec: .venv python, cwd = repo, the §6 env, no OPENROUTER_API_K
   assert.equal(e.ANALYST_MODEL, 'web:chatgpt:analyst')
   assert.equal(e.TRIPLEX_APP_DIR, path.join(REPO, 'frontend', 'dist'))
   assert.equal(e.LOG_LEVEL, 'DEBUG', 'the parent LOG_LEVEL is honoured')
-  assert.equal('OPENROUTER_API_KEY' in e, false, 'never the key')
+  assert.equal(Object.hasOwn(e, 'OPENROUTER_API_KEY'), true, 'present …')
+  assert.equal(e.OPENROUTER_API_KEY, '', '… and empty: python-dotenv (override=False) leaves a set variable alone, so the repo .env cannot re-supply the key')
   assert.equal('MOCK_SCENARIO' in e, false)
   assert.equal('OLLAMA_BASE_URL' in e, false, 'OLLAMA_* only under TRIPLEX_OLLAMA=1')
   assert.equal(e.PATH, '/usr/bin')
@@ -49,15 +52,16 @@ test('buildSpawnSpec: .venv python, cwd = repo, the §6 env, no OPENROUTER_API_K
   assert.ok(Object.values(e).every((v) => typeof v === 'string'))
 })
 
-test('buildSpawnSpec: ANALYST_MODEL omitted when settings.analyst is null (or settings absent); settings objects with getAnalyst work; TRIPLEX_OLLAMA=1 passes OLLAMA_*; TRIPLEX_DATA_DIR overrides', () => {
+test('buildSpawnSpec: ANALYST_MODEL pinned to \'\' when settings.analyst is null (or settings absent) so a .env slug never becomes the analyst; settings objects with getAnalyst work; TRIPLEX_OLLAMA=1 passes OLLAMA_*; TRIPLEX_DATA_DIR overrides', () => {
   const exists = () => true
-  const nul = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: null }, env: {}, exists })
-  assert.equal('ANALYST_MODEL' in nul.env, false)
-  assert.equal('ANALYST_MODEL' in buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, env: {}, exists }).env, false)
+  const nul = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: null }, env: { ANALYST_MODEL: 'openai/from-parent' }, exists })
+  assert.equal(nul.env.ANALYST_MODEL, '', 'present and empty (dotenv cannot fill it; the backend reads it as "no analyst")')
+  assert.equal(buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, env: {}, exists }).env.ANALYST_MODEL, '')
   const viaGetter = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { getAnalyst: () => 'grok' }, env: {}, exists })
   assert.equal(viaGetter.env.ANALYST_MODEL, 'web:grok:analyst')
   const bogus = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'gemini' }, env: {}, exists })
-  assert.equal('ANALYST_MODEL' in bogus.env, false)
+  assert.equal(bogus.env.ANALYST_MODEL, '')
+  assert.equal(bogus.env.OPENROUTER_API_KEY, '', 'pinned empty even when the parent had no key')
   const ollama = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, env: { TRIPLEX_OLLAMA: '1', OLLAMA_BASE_URL: 'http://x', OLLAMA_MODELS: 'hermes3' }, exists })
   assert.equal(ollama.env.OLLAMA_BASE_URL, 'http://x')
   assert.equal(ollama.env.OLLAMA_MODELS, 'hermes3')
@@ -98,11 +102,35 @@ test('randomToken is 64 hex chars and never repeats; attachSpec reads TRIPLEX_BA
   assert.equal(attachSpec({ TRIPLEX_BACKEND_URL: '  ' }), null)
   assert.deepEqual(attachSpec({ TRIPLEX_BACKEND_URL: 'http://127.0.0.1:8021/', BRIDGE_TOKEN: 'e2e' }), { url: 'http://127.0.0.1:8021', port: 8021, token: 'e2e', attached: true })
   const log = fakeLog()
-  const noToken = attachSpec({ TRIPLEX_BACKEND_URL: 'https://host' }, { log })
+  const noToken = attachSpec({ TRIPLEX_BACKEND_URL: 'https://localhost' }, { log })
   assert.equal(noToken.port, 443)
   assert.match(noToken.token, /^[0-9a-f]{64}$/)
   assert.ok(log.lines.some(([lvl, m]) => lvl === 'warn' && m.includes('random token')))
   assert.throws(() => attachSpec({ TRIPLEX_BACKEND_URL: 'not a url' }), /not a URL/)
+})
+
+test('attachSpec refuses a TRIPLEX_BACKEND_URL whose host is not loopback unless TRIPLEX_ALLOW_REMOTE_BACKEND=1, which warns loudly', () => {
+  for (const url of ['http://10.0.0.5:8021', 'https://backend.example.com', 'http://127.0.0.1.evil.example:8021', 'ws://10.0.0.5:8021']) {
+    assert.throws(() => attachSpec({ TRIPLEX_BACKEND_URL: url, BRIDGE_TOKEN: 't' }, { log: fakeLog() }), /non-loopback host .*TRIPLEX_ALLOW_REMOTE_BACKEND=1/, url)
+  }
+  assert.throws(() => attachSpec({ TRIPLEX_BACKEND_URL: 'http://10.0.0.5:8021', BRIDGE_TOKEN: 't', TRIPLEX_ALLOW_REMOTE_BACKEND: 'yes' }, { log: fakeLog() }), /non-loopback/, 'only the exact value 1 overrides')
+  for (const url of ['http://127.0.0.1:8021', 'http://localhost:8021', 'http://[::1]:8021', 'http://LOCALHOST:8021']) {
+    const log = fakeLog()
+    assert.equal(attachSpec({ TRIPLEX_BACKEND_URL: url, BRIDGE_TOKEN: 't' }, { log }).attached, true, url)
+    assert.equal(log.lines.length, 0, `${url}: loopback needs no warning`)
+  }
+  const log = fakeLog()
+  const remote = attachSpec({ TRIPLEX_BACKEND_URL: 'http://10.0.0.5:8021', BRIDGE_TOKEN: 'secret-token', TRIPLEX_ALLOW_REMOTE_BACKEND: '1' }, { log })
+  assert.deepEqual(remote, { url: 'http://10.0.0.5:8021', port: 8021, token: 'secret-token', attached: true })
+  const warning = log.lines.find(([lvl, m]) => lvl === 'warn' && m.includes('REMOTE backend host 10.0.0.5'))
+  assert.ok(warning, JSON.stringify(log.lines))
+  assert.match(warning[1], /cleartext http/)
+  assert.ok(log.lines.every(([, m]) => !m.includes('secret-token')), 'the token is never logged')
+  assert.equal(isLoopbackHost('localhost'), true)
+  assert.equal(isLoopbackHost('[::1]'), true)
+  assert.equal(isLoopbackHost('localhost.'), true)
+  assert.equal(isLoopbackHost('10.0.0.5'), false)
+  assert.equal(isLoopbackHost(undefined), false)
 })
 
 // --- createBackend --------------------------------------------------------------------------------
@@ -120,11 +148,16 @@ function fakeChild(pid) {
   return c
 }
 
-function harness({ okAfter = 2, logDir } = {}) {
+/**
+ * `okAfter` = how many probes AFTER the spawn are refused before GET / answers; the probe that
+ * start() sends BEFORE spawning is refused unless `portBusy` (a foreign server on the port).
+ */
+function harness({ okAfter = 2, logDir, portBusy = false } = {}) {
   const timers = fakeTimers()
   const children = []
   const spawns = []
   let probes = 0
+  let postProbes = 0
   const spec = { command: '/repo/.venv/bin/python', args: ['-m', 'backend.main'], cwd: '/repo', env: { PORT: '8021' }, port: 8021, url: 'http://127.0.0.1:8021', via: 'venv', available: true }
   const log = fakeLog()
   const states = []
@@ -139,7 +172,12 @@ function harness({ okAfter = 2, logDir } = {}) {
     },
     fetch: async (url) => {
       probes += 1
-      if (probes <= okAfter) throw new Error('ECONNREFUSED')
+      if (spawns.length === 0) {
+        if (portBusy) return { ok: true, url }
+        throw new Error('ECONNREFUSED')
+      }
+      postProbes += 1
+      if (postProbes <= okAfter) throw new Error('ECONNREFUSED')
       return { ok: true, url }
     },
     setTimeout: timers.setTimeout,
@@ -169,7 +207,7 @@ test('start() spawns with the spec (piped stdio), polls GET / until it answers, 
   assert.deepEqual(info, { port: 8021, url: 'http://127.0.0.1:8021', pid: 1000 })
   assert.equal(spawns.length, 1)
   assert.deepEqual(spawns[0], { command: '/repo/.venv/bin/python', args: ['-m', 'backend.main'], opts: { cwd: '/repo', env: { PORT: '8021' }, stdio: ['ignore', 'pipe', 'pipe'] } })
-  assert.equal(probes(), 3, 'two refusals, then ok')
+  assert.equal(probes(), 4, 'the pre-spawn probe (refused: the port is free), two refusals, then ok')
   assert.deepEqual(backend.info(), { port: 8021, url: 'http://127.0.0.1:8021' })
   assert.equal(backend.status().ready, true)
   assert.equal(backend.status().running, true)
@@ -200,6 +238,20 @@ test('start() spawns with the spec (piped stdio), polls GET / until it answers, 
   await stopped
   assert.equal(backend.status().running, false)
   await waitForLog(/backend exited \(0\)/)
+})
+
+test('start() refuses to spawn onto a port that already answers GET / (code port_in_use, nothing spawned, the log names the attach knob)', async () => {
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-backend-busy-'))
+  const { backend, spawns, log, states, probes } = harness({ okAfter: 0, portBusy: true, logDir })
+  await assert.rejects(backend.start(), (e) => e.code === 'port_in_use' && /already answers: another server owns port 8021/.test(e.message) && /TRIPLEX_BACKEND_URL=http:\/\/127\.0\.0\.1:8021/.test(e.message))
+  assert.equal(spawns.length, 0, 'never spawned')
+  assert.equal(probes(), 1)
+  assert.equal(backend.status().running, false)
+  assert.equal(backend.status().ready, false)
+  assert.deepEqual(states, [], 'no state change: nothing was started')
+  assert.ok(log.lines.some(([lvl, m]) => lvl === 'error' && m.includes('already answers')), JSON.stringify(log.lines))
+  await backend.stop() // ends the log stream → backend.log is complete on disk
+  assert.match(fs.readFileSync(path.join(logDir, LOG_FILE), 'utf8'), /refusing to spawn: http:\/\/127\.0\.0\.1:8021\/ already answers/)
 })
 
 test('start() rejects when GET / never answers within 45 s (the child is stopped) or when the child exits first', async () => {

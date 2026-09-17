@@ -22,11 +22,16 @@
 //   would leave the pane in a half state) and every frame it emits afterwards is discarded — the
 //   backend has already failed that request `bridge_disconnected` and never re-sends a req_id.
 //
+//   A `capture` / `analyst` change that lands while the socket is `open` (hello sent, hello_ack
+//   pending) cannot go out yet and would be stale in the hello the backend is reading; it is
+//   marked dirty and flushed from the live getters right after the ack (after the health replay).
+//
 //   Frame bodies are never logged (the token travels only inside `hello`).
 //   The socket is `globalThis.WebSocket` (Node ≥ 22 / Electron 44); `makeSocket` is injectable
-//   so node --test drives the client with a fake. No electron import.
+//   so node --test drives the client with a fake. No electron import. `bridgeUrlFor` refuses a
+//   backend host that is not loopback unless `allowRemote` (TRIPLEX_ALLOW_REMOTE_BACKEND=1).
 
-import { SLOTS } from './sites.js'
+import { SLOTS, LOOPBACK_HOSTS } from './sites.js'
 import { parseFrame, validateClientFrame, checkHealth } from './protocol.js'
 
 export const PROTOCOL = 1
@@ -43,9 +48,16 @@ export const FATAL_CLOSE_CODES = Object.freeze([CLOSE_MALFORMED, CLOSE_SUPERSEDE
 export const CLOSE_CLIENT_TIMEOUT = 4000
 export const WS_OPEN = 1
 
-/** `http://127.0.0.1:8021` (or `.../` / `https:`) → `ws://127.0.0.1:8021/api/bridge`. */
-export function bridgeUrlFor(backendUrl) {
+/**
+ * `http://127.0.0.1:8021` (or `.../` / `https:`) → `ws://127.0.0.1:8021/api/bridge`. A host that is
+ * not loopback throws unless `allowRemote` — the hello carries the bridge token and every request
+ * that follows drives the signed-in site views.
+ */
+export function bridgeUrlFor(backendUrl, { allowRemote = false } = {}) {
   const u = new URL(String(backendUrl))
+  if (!allowRemote && !LOOPBACK_HOSTS.includes(u.hostname.toLowerCase().replace(/\.$/, ''))) {
+    throw new Error(`bridge: refusing the non-loopback backend host ${u.hostname} (set TRIPLEX_ALLOW_REMOTE_BACKEND=1 to attach to a remote backend)`)
+  }
   const proto = u.protocol === 'https:' || u.protocol === 'wss:' ? 'wss:' : 'ws:'
   return `${proto}//${u.host}/api/bridge`
 }
@@ -122,6 +134,8 @@ export function createBridgeClient({
   let pingTimer = null
   let discarded = 0
   let lastClose = null
+  let captureDirty = false // a capture change refused while `open` (hello sent, ack pending)
+  let analystDirty = false
   const inflight = new Map() // req_id -> {slot, generation, started}
 
   function emitState() {
@@ -216,6 +230,18 @@ export function createBridgeClient({
     }
   }
 
+  /** Capture / analyst changes that landed between hello and hello_ack go out now, from the live getters. */
+  function flushDirty() {
+    if (captureDirty) {
+      captureDirty = false
+      sendCapture()
+    }
+    if (analystDirty) {
+      analystDirty = false
+      sendAnalyst()
+    }
+  }
+
   function dispatch(frame) {
     const g = generation
     inflight.set(frame.req_id, { slot: frame.slot, generation: g, started: now() })
@@ -262,6 +288,7 @@ export function createBridgeClient({
         info(`connected (backend ${f.backend_version}, ping every ${pingS} s)`)
         emitState()
         resendHealth()
+        flushDirty()
         armPingWatch()
         return
       }
@@ -339,6 +366,8 @@ export function createBridgeClient({
     listen(ws, 'open', () => {
       if (g !== generation) return
       state = 'open'
+      captureDirty = false // the hello built now carries the live values
+      analystDirty = false
       if (!sendRaw(buildHello())) return
       helloTimer = setT(() => {
         helloTimer = null
@@ -379,12 +408,18 @@ export function createBridgeClient({
   }
 
   function sendCapture(capture) {
-    if (state !== 'connected') return false
+    if (state !== 'connected') {
+      if (state === 'open') captureDirty = true // the hello already went out with the old value
+      return false
+    }
     return sendFrame({ type: 'capture', capture: { ...(capture || getCapture()) } })
   }
 
   function sendAnalyst(choice) {
-    if (state !== 'connected') return false
+    if (state !== 'connected') {
+      if (state === 'open') analystDirty = true
+      return false
+    }
     return sendFrame({ type: 'analyst', analyst: analystChoice(choice === undefined ? getAnalyst() : choice) })
   }
 

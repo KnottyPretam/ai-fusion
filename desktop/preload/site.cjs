@@ -13,10 +13,13 @@
 // failure; one op in flight per view (a second one answers `busy`); `ms`/`ts` are integers.
 //
 // Boot environments (contract §3: boots when `process.versions.electron` or `window.__triplexFakeIpc` exists):
-//   * Electron preload — `require('electron').ipcRenderer` is the IPC; `adapter:config` is answered
-//     by main from the sender id (`site:null` = stay inert, e.g. an SSO popup).
-//   * Playwright (test/adapters/*.spec.js) — the spec installs the fake IPC with `page.addInitScript`
-//     BEFORE injecting this file. Its exact shape, the only surface this file touches:
+//   * Electron preload — `require('electron').ipcRenderer` is the IPC, ALWAYS: whenever
+//     `process.versions.electron` exists a page global is never consulted (so a site that defined
+//     `window.__triplexFakeIpc` could not capture the adapter even if this file ran in its main
+//     world; a failing `require('electron')` boots nothing). `adapter:config` is answered by main
+//     from the sender id (`site:null` = stay inert, e.g. an SSO popup).
+//   * Playwright (test/adapters/*.spec.js) — outside Electron only: the spec installs the fake IPC
+//     with `page.addInitScript` BEFORE injecting this file. Its exact shape, the only surface this file touches:
 //       window.__triplexFakeIpc = {
 //         invoke(channel, ...args) → Promise   // invoke('adapter:config') resolves {site: slot|null, selectors, dev}
 //         on(channel, handler)                 // registers handler(event, msg) for channel 'triplex:adapter'
@@ -44,10 +47,23 @@
 //   * observe: `timeoutMs` overrides `captureTimeoutMs`, `quietMs` overrides `quietMs`, an optional
 //     `firstTokenMs` overrides `firstTokenMs` (the first-token wait is capped by the budget); a
 //     missing `baselineCount` means the current `countAssistant()`.
-//   * "the done selector on the last container" = a VISIBLE `done` match that is the last container,
-//     inside it, or after it in document order (an older turn's copy button never counts).
+//   * "the done selector on the last container" = a VISIBLE, clickable `done` match (not `opacity:0`
+//     or `pointer-events:none` — a hover-revealed action bar is not a marker) that is the last
+//     container, inside it, or after it in document order (an older turn's copy button never
+//     counts), and only while NO stop button is visible: the site's own "still replying" signal
+//     wins over a marker (a finished tool turn's action bar while the answer is still streaming).
 //   * "stop button seen then gone" = seen during THIS observe; while it is visible the reply is
 //     never quiet; when it was never seen (the reply finished before observe started) quiet applies.
+//   * an end signal (done selector, stop gone) never resolves on the sample that saw it: one more
+//     sample is taken OBSERVE_THROTTLE_MS later and the capture resolves once the text has not
+//     moved between two samples (the final markdown render may land a frame after the marker or
+//     the stop button); past the budget the latest text is returned with that doneBy, not `timeout`.
+//   * cadence: a mutation tick only reads the thread; the session (wall / challenge / banner) is
+//     re-checked on the 300 ms poll and on any sample about to give a terminal answer (a reply
+//     frozen by a banner is `site_error`, never `stop_gone`); every sample walks the open shadow
+//     roots at most once (`sampled()` shares one `openShadowRoots(document)` per sample); the
+//     MutationObserver is re-scoped from the document to the reply's parent (the thread) once the
+//     reply container is known — a container appended elsewhere is still caught by the poll.
 //   * quiet needs non-blank text; an empty container waits for the budget (`timeout`, partial "").
 //   * the text is normalised (CRLF → LF, NBSP → space) and never trimmed.
 //   * a banner mid-reply is `site_error` whose message is the configured `errorText` phrase that
@@ -56,9 +72,12 @@
 //     non-blank, and always on `timeout`.
 //   * snapshot: comments, doctype and whitespace-only text nodes are dropped (a non-blank text node
 //     becomes `…`), `<template>` content is not serialised, open shadow roots are emitted as
-//     `<template shadowrootmode="open">`, and kept attribute VALUES are rewritten where they carry
-//     identity (uuid, `@`, `/c/`, `/chat/`, `googleusercontent`, `x.com/`) so the output passes the
-//     fixture lint (`test/unit/preload/_fixture-lint.js`).
+//     `<template shadowrootmode="open">`, and kept attribute VALUES have every identity token
+//     replaced WHOLE (a uuid → `uuid`, an e-mail address → `email`, an `@handle` → `handle`,
+//     `x.com/<profile…>` → `x-com/profile`, `/c/<id>` and `/chat/<id>` → `/c-/id` / `/chat-/id`,
+//     `googleusercontent` → `img-host`) — never just the delimiter the fixture lint
+//     (`test/unit/preload/_fixture-lint.js`) keys on, so nothing of an account survives and the
+//     output passes the lint by construction.
 //   * `config`: a full config is re-merged onto DEFAULT_SELECTORS (every key present, unknown keys
 //     dropped with the usual warnings); a bare site block is taken as-is.
 
@@ -469,7 +488,17 @@
     return out
   }
 
-  /** Rendered (a non-empty box) and not hidden by CSS. Elements without layout APIs (fakes) count as visible. */
+  /** The element's computed style through `win`, else its own document's view; null without one. */
+  function computedStyle(el, win) {
+    const view = win || (el.ownerDocument && el.ownerDocument.defaultView) || null
+    return view && typeof view.getComputedStyle === 'function' ? view.getComputedStyle(el) || null : null
+  }
+
+  /**
+   * Rendered (a non-empty box) and not hidden by CSS: `display:none`, `visibility:hidden` or
+   * `opacity:0` (a hover-revealed action bar, grok's invisible helper textarea). Elements without
+   * layout APIs (fakes) count as visible.
+   */
   function isVisible(el, win) {
     if (!el) return false
     try {
@@ -479,13 +508,22 @@
         const r = el.getBoundingClientRect()
         if (r && (r.width === 0 || r.height === 0)) return false
       }
-      const view = win || (el.ownerDocument && el.ownerDocument.defaultView) || null
-      if (view && typeof view.getComputedStyle === 'function') {
-        const cs = view.getComputedStyle(el)
-        if (cs && (cs.visibility === 'hidden' || cs.display === 'none')) return false
-      }
+      const cs = computedStyle(el, win)
+      if (cs && (cs.visibility === 'hidden' || cs.display === 'none' || String(cs.opacity) === '0')) return false
     } catch (_e) {
       /* treat as visible */
+    }
+    return true
+  }
+
+  /** Visible AND reachable by a click: a painted button under `pointer-events:none` is not one the user could press (the send / stop / done filters). */
+  function isClickable(el, win) {
+    if (!isVisible(el, win)) return false
+    try {
+      const cs = computedStyle(el, win)
+      if (cs && cs.pointerEvents === 'none') return false
+    } catch (_e) {
+      /* treat as clickable */
     }
     return true
   }
@@ -540,16 +578,22 @@
 
   /**
    * Kept attribute values are structure, but on the real sites a few carry identity (a chat or
-   * message uuid inside an id, an e-mail in a label, an avatar host in a class): every pattern the
-   * fixture lint rejects is rewritten, so a snapshot can be committed under test/fixtures/dom/.
+   * message uuid inside an id, an e-mail address or an X handle in a label or a placeholder, an
+   * avatar host in a class). Every identity TOKEN is replaced whole — the address with its local
+   * part and domain, the profile path, the chat id — never just the delimiter the fixture lint
+   * keys on, so nothing of the account survives and the lint passes by construction; the bare
+   * delimiter rules at the end only cover a token-less leftover (`/c/` at the end of a value).
    */
   function scrubValue(v) {
     return String(v)
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'uuid')
       .replace(/googleusercontent/gi, 'img-host')
-      .replace(/x\.com\//gi, 'x-com/')
-      .replace(/\/(c|chat)\//g, '/$1-/')
-      .replace(/@/g, '(at)')
+      .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)*/g, 'email') // the whole address, local part and domain
+      .replace(/@[\w.+-]+/g, 'handle') // a bare @handle
+      .replace(/@/g, '(at)') // a stray at-sign
+      .replace(/x\.com\/[^\s"'<>]*/gi, 'x-com/profile') // a profile link, path included
+      .replace(/\/(c|chat)\/[^\s"'<>/]+/g, '/$1-/id') // a chat id
+      .replace(/\/(c|chat)\//g, '/$1-/') // a token-less chat path
   }
 
   function tagNameOf(node) {
@@ -662,6 +706,27 @@
     }
     let sel = resolveSelectors(selectors) || siteSelectors(undefined, site) || {}
 
+    /**
+     * The document's open shadow roots, walked (`querySelectorAll('*')`) at most once per SAMPLE:
+     * `sampled(fn)` opens a scope in which every finder shares one walk (health(), observe's check,
+     * the ready / confirmation polls); outside a scope each finder walks at most once per call.
+     */
+    let sample = null // {roots: ShadowRoot[]|null} while a sample runs
+    function shadowRoots() {
+      if (sample === null) return openShadowRoots(document)
+      if (sample.roots === null) sample.roots = openShadowRoots(document)
+      return sample.roots
+    }
+    function sampled(fn) {
+      if (sample !== null) return fn() // already inside a sample: share it
+      sample = { roots: null }
+      try {
+        return fn()
+      } finally {
+        sample = null
+      }
+    }
+
     const sleep = (ms) => new Promise((resolve) => setT(resolve, ms))
     const clock = () => Number(now()) || 0
 
@@ -684,14 +749,15 @@
 
     /**
      * First cascade entry with a match in the document or an open shadow root. With `visible`/
-     * `enabled`/`accept`, the first matching ELEMENT of an entry that passes the filters (an entry
-     * whose matches are all hidden, disabled or rejected does not stop the cascade).
+     * `clickable`/`enabled`/`accept`, the first matching ELEMENT of an entry that passes the filters
+     * (an entry whose matches are all hidden, unclickable, disabled or rejected does not stop the
+     * cascade). `clickable` implies `visible` and also rejects `pointer-events:none`.
      */
-    function findFirst(cascade, { visible = false, enabled = false, accept = null } = {}) {
+    function findFirst(cascade, { visible = false, clickable = false, enabled = false, accept = null } = {}) {
       if (!Array.isArray(cascade)) return null
       let roots = null
-      const shadow = () => (roots === null ? (roots = openShadowRoots(document)) : roots)
-      const filtered = visible || enabled || typeof accept === 'function'
+      const shadow = () => (roots === null ? (roots = shadowRoots()) : roots)
+      const filtered = visible || clickable || enabled || typeof accept === 'function'
       for (const selector of cascade) {
         if (typeof selector !== 'string' || selector === '') continue
         if (!filtered) {
@@ -700,7 +766,7 @@
           continue
         }
         for (const el of deepQuerySelectorAll(document, selector, shadow)) {
-          if (visible && !isVisible(el, win)) continue
+          if (clickable ? !isClickable(el, win) : visible && !isVisible(el, win)) continue
           if (enabled && !isEnabled(el)) continue
           if (accept && !accept(el)) continue
           return { el, selector }
@@ -762,7 +828,7 @@
      * whole-body scan: chat content never counts as a banner, and no layout is forced on the body.
      */
     function alertTexts(composerEl) {
-      const roots = openShadowRoots(document)
+      const roots = shadowRoots()
       const seen = new Set()
       const out = []
       for (const selector of ALERT_SELECTORS) {
@@ -808,17 +874,18 @@
       return findFirst(sel.send)
     }
 
-    /** The send button the adapter would click: visible and enabled, document + open shadow roots. */
+    /** The send button the adapter would click: visible, clickable and enabled, document + open shadow roots. */
     function findSendButton() {
-      return findFirst(sel.send, { visible: true, enabled: true })
+      return findFirst(sel.send, { clickable: true, enabled: true })
     }
 
     function hasStopCascade() {
       return Array.isArray(sel.stop) && sel.stop.some((s) => typeof s === 'string' && s !== '')
     }
 
+    /** The stop button the user could press (visible and clickable); null without a stop cascade. */
     function findStop() {
-      return hasStopCascade() ? findFirst(sel.stop, { visible: true }) : null
+      return hasStopCascade() ? findFirst(sel.stop, { clickable: true }) : null
     }
 
     /**
@@ -840,35 +907,37 @@
       return composer ? 'ok' : 'unknown'
     }
 
-    /** Health (contract §1): `reply` = an assistant container exists (v2 `assistant` cascade + ASSISTANT_SELECTORS); `stop` = a visible stop button, null only without a stop cascade. */
+    /** Health (contract §1): `reply` = an assistant container exists (v2 `assistant` cascade + ASSISTANT_SELECTORS); `stop` = a visible stop button, null only without a stop cascade. One sample: one shadow-root walk. */
     function health() {
-      const composer = findComposer()
-      const send = findSend()
-      const stop = hasStopCascade() ? findStop() : null
-      const reply = findFirst(assistantCascade().concat(ASSISTANT_SELECTORS))
-      return {
-        composer: composer !== null,
-        send: send !== null,
-        reply: reply !== null,
-        stop: hasStopCascade() ? stop !== null : null,
-        session: sessionState(),
-        matched: {
-          composer: composer ? composer.selector : null,
-          send: send ? send.selector : null,
-          reply: reply ? reply.selector : null,
-          stop: stop ? stop.selector : null,
-          error: null,
-        },
-        url: href(),
-        host: host(),
-        title: title(),
-        ts: Math.round(clock()),
-      }
+      return sampled(() => {
+        const composer = findComposer()
+        const send = findSend()
+        const stop = hasStopCascade() ? findStop() : null
+        const reply = findFirst(assistantCascade().concat(ASSISTANT_SELECTORS))
+        return {
+          composer: composer !== null,
+          send: send !== null,
+          reply: reply !== null,
+          stop: hasStopCascade() ? stop !== null : null,
+          session: sessionState(),
+          matched: {
+            composer: composer ? composer.selector : null,
+            send: send ? send.selector : null,
+            reply: reply ? reply.selector : null,
+            stop: stop ? stop.selector : null,
+            error: null,
+          },
+          url: href(),
+          host: host(),
+          title: title(),
+          ts: Math.round(clock()),
+        }
+      })
     }
 
     function countDistinct(cascades) {
       const seen = new Set()
-      const roots = openShadowRoots(document)
+      const roots = shadowRoots()
       for (const selector of cascades) {
         if (typeof selector !== 'string' || selector === '') continue
         for (const el of deepQuerySelectorAll(document, selector, roots)) seen.add(el)
@@ -905,7 +974,7 @@
     function assistantContainers() {
       const seen = new Set()
       const out = []
-      const roots = openShadowRoots(document)
+      const roots = shadowRoots()
       for (const selector of assistantCascade().concat(ASSISTANT_SELECTORS)) {
         if (typeof selector !== 'string' || selector === '') continue
         for (const el of deepQuerySelectorAll(document, selector, roots)) {
@@ -929,18 +998,26 @@
       return false
     }
 
-    /** A visible `done` match on or after `container` (the "done selector on the last container"); null without a done cascade. */
+    /** A visible, clickable `done` match on or after `container` (the "done selector on the last container"); null without a done cascade. */
     function findDone(container) {
       const cascade = nonEmptyCascade(sel.done)
       if (cascade.length === 0) return null
-      return findFirst(cascade, { visible: true, accept: (el) => onOrAfter(container, el) })
+      return findFirst(cascade, { clickable: true, accept: (el) => onOrAfter(container, el) })
     }
 
-    /** A container's reply text: its first `assistantText` match, else the container itself, as rendered text (innerText, else textContent). */
+    /**
+     * A container's reply text: EVERY match of the first `assistantText` entry that matches, in
+     * document order (a match nested in another is skipped), joined by a blank line — a turn
+     * rendered as several blocks (a summary before the answer, text around a tool block) is
+     * captured whole, not truncated to its first block; without a match the container itself.
+     * Rendered text (innerText, else textContent). Stage 3's `toMarkdown` replaces the join.
+     */
     function replyText(container) {
       for (const selector of nonEmptyCascade(sel.assistantText)) {
-        const hit = queryOne(container, selector)
-        if (hit) return readText(hit)
+        const hits = deepQuerySelectorAll(container, selector)
+        if (hits.length === 0) continue
+        const blocks = hits.filter((el) => !hits.some((other) => other !== el && safeTrue(() => other.contains(el))))
+        return blocks.map(readText).join('\n\n')
       }
       return readText(container)
     }
@@ -1152,13 +1229,14 @@
      */
     function confirmSubmission(verifyMs, baseline, signal) {
       return poll(
-        () => {
-          if (findStop()) return 'stop_button'
-          const c = findComposer()
-          if (c && isBlank(readText(c.el))) return 'composer_cleared'
-          if (countMessages() > baseline) return 'assistant_count'
-          return null
-        },
+        () =>
+          sampled(() => {
+            if (findStop()) return 'stop_button'
+            const c = findComposer()
+            if (c && isBlank(readText(c.el))) return 'composer_cleared'
+            if (countMessages() > baseline) return 'assistant_count'
+            return null
+          }),
         { intervalMs: CONFIRM_POLL_MS, timeoutMs: verifyMs, signal },
       )
     }
@@ -1203,10 +1281,11 @@
       if (REJECT_STATES.includes(first)) throw stateError(first)
       const t0 = clock()
       const found = await poll(
-        () => {
-          const c = findComposer()
-          return c && !findStop() ? c : null
-        },
+        () =>
+          sampled(() => {
+            const c = findComposer()
+            return c && !findStop() ? c : null
+          }),
         { intervalMs: SEND_POLL_MS, timeoutMs: ms, signal },
       )
       if (!found) {
@@ -1247,78 +1326,121 @@
      *
      *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
      *                 else `reply_not_found`
-     *   done          `done_selector`  a visible `done` match on or after the last container
+     *   done          `done_selector`  a visible, clickable `done` match on or after the last container
+     *                                  while NO stop button is visible (the site's "still replying"
+     *                                  signal wins over a finished tool turn's action bar)
      *                 `stop_gone`      a stop button was seen during this observe and is gone now
      *                 `quiet`          the text is non-blank and unchanged for `quietMs` while no stop
      *                                  button is visible (the only signal when stop + done are empty)
+     *                 an end signal (done selector, stop gone) is never resolved on the sample that
+     *                 saw it: one more sample is taken OBSERVE_THROTTLE_MS later, and the capture
+     *                 resolves once the text has not moved between two samples — the final markdown
+     *                 render may land a frame after the marker; past the budget the latest text is
+     *                 returned with that doneBy rather than `timeout`
      *   budget        `timeoutMs` (default `captureTimeoutMs`) elapsed → `timeout` with the partial text
      *   session       a banner → `site_error` whose message is ONLY the configured phrase that matched;
      *                 a wall / challenge → `logged_out` / `challenge`; `cancelled` on abort — each with
-     *                 the partial text when it is non-blank
-     *   cadence       a MutationObserver on the document throttled to OBSERVE_THROTTLE_MS plus an
-     *                 OBSERVE_POLL_MS poll (the poll alone where MutationObserver does not exist)
-     *   text          the last container's first `assistantText` match, else the container itself,
-     *                 as rendered text; CRLF → LF and NBSP → space, never trimmed
+     *                 the partial text when it is non-blank; re-checked on the poll samples only
+     *   cadence       a MutationObserver throttled to OBSERVE_THROTTLE_MS plus an OBSERVE_POLL_MS poll
+     *                 (the poll alone where MutationObserver does not exist); the observer watches the
+     *                 document until the reply container is known, then only the reply's parent (the
+     *                 thread); every sample walks the open shadow roots at most once
+     *   text          the last container's `assistantText` matches (first entry that matches, every
+     *                 block joined by a blank line), else the container itself, as rendered text;
+     *                 CRLF → LF and NBSP → space, never trimmed
      * `quietMs` / `timeoutMs` / `firstTokenMs` in the message override the selectors; a missing
      * `baselineCount` means the current count.
      */
     function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, signal } = {}) {
       const t0 = clock()
-      const baseline = nonNegativeInt(baselineCount, countAssistant())
+      const given = nonNegativeInt(baselineCount, null)
+      const baseline = given === null ? countAssistant() : given // walked only when main sent no count
       const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
+      const SETTLE = Symbol('settle') // the end was seen; take one more sample before resolving
+      const SETTLE_MS = OBSERVE_THROTTLE_MS // how long the text must hold still after the end signal
       let container = null
       let text = ''
       let lastText = null
       let lastChangeAt = t0
       let seenStop = false
+      let endSeen = null // 'done_selector' | 'stop_gone' once the site signalled the end
+      let endSeenAt = 0
       const partial = () => (isBlank(text) ? undefined : text)
 
-      /** One sample: throws the terminal AdapterError, returns the doneBy string, or null to keep going. */
-      const check = () => {
-        const now = clock()
-        if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
+      /** The session gate: a banner → site_error carrying ONLY the configured phrase; a wall / challenge → that state; each with the partial. */
+      const sessionGate = () => {
         const state = sessionState()
         if (state === 'blocked') {
           const composer = findComposer()
           throw new AdapterError('site_error', matchedErrorPhrase(composer ? composer.el : null) || 'blocked', partial())
         }
         if (state === 'logged_out' || state === 'challenge') throw new AdapterError(state, stateError(state).message, partial())
-        const containers = assistantContainers()
-        if (containers.length > baseline) container = containers[containers.length - 1]
-        if (!container) {
-          if (now - t0 >= firstToken) {
-            throw new AdapterError(
-              'reply_not_found',
-              `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))})`,
-            )
-          }
-          return null
-        }
-        text = normalizeText(replyText(container))
-        if (text !== lastText) {
-          lastText = text
-          lastChangeAt = now
-        }
-        if (findDone(container)) return 'done_selector'
-        if (findStop()) {
-          seenStop = true
-          lastChangeAt = now // the site says it is still replying: never quiet while the stop button shows
-        } else if (seenStop) {
-          return 'stop_gone'
-        } else if (!isBlank(text) && now - lastChangeAt >= quiet) {
-          return 'quiet'
-        }
-        if (now - t0 >= budget) throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
-        return null
       }
+
+      /**
+       * One sample, sharing a single shadow-root walk. `full` (the initial run and the poll) also
+       * re-checks the session; a mutation tick only reads the thread — unless it is about to give
+       * a terminal answer, which never bypasses the session gate (a reply frozen by a banner is
+       * `site_error`, not `stop_gone`). Throws the terminal AdapterError, returns the doneBy string,
+       * SETTLE (the end was seen but the text must hold still for one more sample), or null.
+       */
+      const check = (full) =>
+        sampled(() => {
+          const now = clock()
+          if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
+          if (full) sessionGate()
+          const containers = assistantContainers()
+          if (containers.length > baseline) container = containers[containers.length - 1]
+          if (!container) {
+            if (now - t0 >= firstToken) {
+              throw new AdapterError(
+                'reply_not_found',
+                `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))})`,
+              )
+            }
+            return null
+          }
+          text = normalizeText(replyText(container))
+          const changed = text !== lastText
+          if (changed) {
+            lastText = text
+            lastChangeAt = now
+          }
+          let result = null
+          if (endSeen === null) {
+            const stop = findStop()
+            if (stop) {
+              seenStop = true
+              lastChangeAt = now // the site says it is still replying: never quiet, and a marker does not count yet
+            } else if (findDone(container)) {
+              endSeen = 'done_selector'
+            } else if (seenStop) {
+              endSeen = 'stop_gone'
+            } else if (!isBlank(text) && now - lastChangeAt >= quiet) {
+              result = 'quiet'
+            }
+            if (endSeen !== null) endSeenAt = now
+          }
+          if (endSeen !== null) {
+            // settling: resolve once a settle window has passed since the end signal AND since the last
+            // text change (two samples a few ms apart never count as "held still"), or the budget is spent
+            const still = now - endSeenAt >= SETTLE_MS && now - lastChangeAt >= SETTLE_MS
+            result = still || now - t0 >= budget ? endSeen : SETTLE
+          }
+          const spent = result === null && now - t0 >= budget
+          if (!full && (typeof result === 'string' || spent)) sessionGate() // a terminal answer never bypasses the session check
+          if (spent) throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+          return result
+        })
 
       return new Promise((resolve, reject) => {
         let settled = false
         let throttle = null
         let pollTimer = null
         let mo = null
+        let observed = null // what the MutationObserver watches: the document, then the reply's parent
         const onAbort = () => settle(() => reject(new AdapterError('cancelled', 'cancelled by main', partial())))
         const cleanup = () => {
           if (mo) {
@@ -1340,21 +1462,45 @@
           cleanup()
           fn()
         }
-        const run = () => {
-          if (settled) return
-          let doneBy = null
+        /** Re-point the observer at `target` (the thread once the reply container is known); a failure keeps the poll as the only trigger. */
+        const observeTarget = (target) => {
+          if (!mo || !target || typeof target !== 'object' || target === observed) return
           try {
-            doneBy = check()
+            mo.disconnect()
+            mo.observe(target, { childList: true, characterData: true, subtree: true, attributes: true })
+            observed = target
+          } catch (_e) {
+            observed = null
+          }
+        }
+        /** The next sample OBSERVE_THROTTLE_MS from now (one at a time; a due mutation sample counts). */
+        const scheduleSample = () => {
+          if (throttle !== null) return
+          throttle = setT(() => {
+            throttle = null
+            run(false)
+          }, OBSERVE_THROTTLE_MS)
+        }
+        const run = (full) => {
+          if (settled) return
+          let r = null
+          try {
+            r = check(full)
           } catch (e) {
             settle(() => reject(e))
             return
           }
-          if (doneBy) settle(() => resolve({ text, doneBy, ms: Math.round(clock() - t0) }))
+          if (r === SETTLE) scheduleSample()
+          else if (r) {
+            settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0) }))
+            return
+          }
+          if (container && observed === document) observeTarget(container.parentNode || container)
         }
         const schedulePoll = () => {
           pollTimer = setT(() => {
             pollTimer = null
-            run()
+            run(true)
             if (!settled) schedulePoll()
           }, OBSERVE_POLL_MS)
         }
@@ -1363,18 +1509,15 @@
         if (MO) {
           try {
             mo = new MO(() => {
-              if (settled || throttle !== null) return
-              throttle = setT(() => {
-                throttle = null
-                run()
-              }, OBSERVE_THROTTLE_MS)
+              if (!settled) scheduleSample()
             })
             mo.observe(document, { childList: true, characterData: true, subtree: true, attributes: true })
+            observed = document
           } catch (_e) {
             mo = null
           }
         }
-        run()
+        run(true)
         if (!settled) schedulePoll()
       })
     }
@@ -1628,32 +1771,61 @@
     }
   }
 
-  function pickIpc() {
-    if (typeof window !== 'undefined' && window && window.__triplexFakeIpc) return window.__triplexFakeIpc
-    if (typeof process !== 'undefined' && process && process.versions && process.versions.electron) {
+  /**
+   * The globals a boot looks at — `window`, `document`, `process` and the `require` that resolves
+   * 'electron' — resolved from `env` when given (unit tests stand them in), else from the globals.
+   */
+  function bootEnv(env) {
+    const e = env && typeof env === 'object' ? env : {}
+    return {
+      window: 'window' in e ? e.window : typeof window !== 'undefined' ? window : undefined,
+      document: 'document' in e ? e.document : typeof document !== 'undefined' ? document : undefined,
+      process: 'process' in e ? e.process : typeof process !== 'undefined' ? process : undefined,
+      require: typeof e.require === 'function' ? e.require : (name) => require(name),
+    }
+  }
+
+  function underElectron(proc) {
+    return !!(proc && proc.versions && proc.versions.electron)
+  }
+
+  /**
+   * The IPC to attach. Under Electron (`process.versions.electron`) it is ALWAYS
+   * `require('electron').ipcRenderer` — a page global is never consulted there, so a
+   * `window.__triplexFakeIpc` a site could define can never capture the adapter even if this file
+   * ran in a page's main world, and a failing `require('electron')` boots nothing rather than
+   * falling back. Only outside Electron (the Playwright harness in plain Chrome) is
+   * `window.__triplexFakeIpc` the IPC. Null = do not boot.
+   */
+  function pickIpc(env) {
+    const e = bootEnv(env)
+    if (underElectron(e.process)) {
       try {
-        return require('electron').ipcRenderer
+        const electron = e.require('electron')
+        return (electron && electron.ipcRenderer) || null
       } catch (_e) {
         return null
       }
     }
-    return null
+    return (e.window && e.window.__triplexFakeIpc) || null
   }
 
-  /** Boot only inside a page (Electron preload or a Chrome page carrying `window.__triplexFakeIpc`). */
-  function shouldBoot() {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return false
-    if (window.__triplexFakeIpc) return true
-    return typeof process !== 'undefined' && !!(process && process.versions && process.versions.electron)
+  /** Boot only inside a page: an Electron preload, or (outside Electron) a Chrome page carrying `window.__triplexFakeIpc`. */
+  function shouldBoot(env) {
+    const e = bootEnv(env)
+    if (!e.window || !e.document) return false
+    if (underElectron(e.process)) return true
+    return !!e.window.__triplexFakeIpc
   }
 
-  function boot() {
-    const ipc = pickIpc()
-    if (!ipc) return null
+  function boot(env) {
+    const e = bootEnv(env)
+    const ipc = pickIpc(e)
+    if (!ipc || !e.document) return null
     return attachIpc(ipc, (config) =>
       createAdapter({
-        document,
-        window,
+        document: e.document,
+        window: e.window,
         site: config.site,
         selectors: config.selectors || DEFAULT_SELECTORS,
       }),
@@ -1682,6 +1854,7 @@
       deepQuerySelector,
       deepQuerySelectorAll,
       isVisible,
+      isClickable,
       isEnabled,
       isTextField,
       readText,
@@ -1689,6 +1862,8 @@
       createAdapter,
       AdapterError,
       attachIpc,
+      pickIpc,
+      shouldBoot,
       boot,
       HEALTH_HEARTBEAT_MS,
       HEALTH_POLL_MS,

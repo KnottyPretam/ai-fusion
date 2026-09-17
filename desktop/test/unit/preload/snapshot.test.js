@@ -1,9 +1,11 @@
 // scrubDom (contract §3, Stage 2) over a fake node tree (no jsdom): the dropped elements, the
 // attribute allow-list, text → `…`, comments / doctype / whitespace-only text dropped, void tags,
-// open shadow roots, attribute escaping and value scrubbing, and both attribute shapes.
+// open shadow roots, attribute escaping and value scrubbing (identity tokens replaced whole, so an
+// e-mail's local part / domain, an X handle and a chat id never survive), and both attribute shapes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { lintText } from './_fixture-lint.js'
 
 const require = createRequire(import.meta.url)
 const { scrubDom, SNAPSHOT_DROP_TAGS, SNAPSHOT_KEEP_ATTRS } = require('../../../preload/site.cjs')
@@ -93,8 +95,24 @@ test('scrubDom: attribute values are escaped and scrubbed of identity; attribute
   const html = scrubDom(doc)
   assert.equal(
     html,
-    '<!doctype html>\n<div><span aria-label="a &quot;quoted&quot; &lt;b&gt; &amp; me(at)example.com" id="turn-uuid">…</span><i class="lh3.img-host.com"></i></div>\n',
+    '<!doctype html>\n<div><span aria-label="a &quot;quoted&quot; &lt;b&gt; &amp; email" id="turn-uuid">…</span><i class="lh3.img-host.com"></i></div>\n',
   )
+})
+
+test('scrubDom replaces identity TOKENS whole, never just the lint delimiter: an e-mail in aria-label / id / placeholder loses its local part and domain, x.com/<handle> its handle, /c/<id> and /chat/<id> their id', () => {
+  const doc = el('div', {}, [
+    el('button', { 'aria-label': 'Open menu for jane.doe@gmail.com', id: 'user-jane.doe@gmail.com', placeholder: 'Signed in as jane.doe@gmail.com' }),
+    el('a', { class: 'profile x.com/janedoe', 'aria-label': 'https://x.com/janedoe/status/123 and X.COM/JaneDoe' }),
+    el('a', { 'data-testid': 'link-/c/abc123notuuid', id: 'thread-/chat/0f1e2d3c', class: 'tail /c/' }),
+    el('span', { 'aria-label': 'ping @janedoe or jane@localhost, lone @ sign' }),
+  ])
+  const html = scrubDom(doc)
+  assert.deepEqual(lintText(html), [], html)
+  for (const leaked of ['jane', 'doe', 'gmail', 'localhost', 'abc123', '0f1e2d3c', 'status/123']) assert.ok(!html.includes(leaked), `leaked: ${leaked} in ${html}`)
+  assert.ok(html.includes('aria-label="Open menu for email" id="email" placeholder="Signed in as email"'), html) // `user-jane.doe@…` is itself an address
+  assert.ok(html.includes('class="profile x-com/profile" aria-label="https://x-com/profile and x-com/profile"'), html)
+  assert.ok(html.includes('data-testid="link-/c-/id" id="thread-/chat-/id" class="tail /c-/"'), html)
+  assert.ok(html.includes('aria-label="ping handle or email, lone (at) sign"'), html)
 })
 
 test('scrubDom: void elements have no closing tag, open shadow roots are inlined as <template shadowrootmode="open">, unknown node types and nodes without a nodeType are dropped', () => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pkgutil
 
 from fastapi import FastAPI
@@ -28,6 +29,13 @@ def create_app() -> FastAPI:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     app = FastAPI(title=f"{s.app_title} API")
+    if os.environ.get("TRIPLEX_DESKTOP", "0") == "1":
+        # Desktop mode: this loopback HTTP API drives the user's logged-in browser sessions, so a
+        # DNS-rebinding page must never reach it — only loopback Host headers are served
+        # ("testserver" is starlette's TestClient). The bridge router adds the WebSocket Origin check.
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[

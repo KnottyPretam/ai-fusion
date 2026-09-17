@@ -2,15 +2,19 @@
 // selector fallbacks, waitForComposer / ready / insertAndSubmit gates, countAssistant, the
 // insertion cascade's verification and "never innerHTML/textContent", submit's confirmation rules
 // and error codes; Stage 2: observe (first token, done-selector / stop-gone / quiet, timeout with
-// a partial, banner → site_error with the phrase only, wall, cancel, document order, text rules),
-// snapshot and the config re-merge. Timeouts are shortened through a selectors block; timers are
-// real (no MutationObserver under node: observe runs on its 300 ms poll alone).
+// a partial, banner → site_error with the phrase only, wall, cancel, document order, text rules,
+// the settle sample after an end signal, stop-over-done, opacity-0 / pointer-events:none markers,
+// one shadow-root walk per sample, the mutation-tick / poll split), snapshot, the config re-merge
+// and the boot IPC choice. Timeouts are shortened through a selectors block; timers are real (no
+// MutationObserver under node unless a test injects one through `window`: observe then runs on
+// its 300 ms poll alone).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS, scrubDom, OBSERVE_POLL_MS, OBSERVE_THROTTLE_MS } = require('../../../preload/site.cjs')
+const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS, scrubDom, OBSERVE_POLL_MS, OBSERVE_THROTTLE_MS, pickIpc, shouldBoot, boot } =
+  require('../../../preload/site.cjs')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -821,15 +825,30 @@ test('grok: the submit button that exists only once the editor holds text is fou
 // Stage 2 (capture-adapters): observe / snapshot / config re-merge over the fake document
 // ---------------------------------------------------------------------------------------------
 
-/** An assistant container: `text` is its innerText; `parts` maps an assistantText selector to an inner element; `inside` lists the elements it contains. */
-function container(text, { parts = {}, inside = [] } = {}) {
+/**
+ * An assistant container: `text` is its innerText (reads counted in `reads`); `parts` maps an
+ * assistantText selector to an inner element or a list of them; `inside` lists the elements it
+ * contains; `parentNode` its parent (the thread) when a test needs one.
+ */
+function container(text, { parts = {}, inside = [], parentNode = null } = {}) {
   const el = {
     tagName: 'DIV',
     _text: text,
+    reads: 0,
+    parentNode,
     get innerText() {
+      el.reads += 1
       return el._text
     },
-    querySelector: (s) => parts[s] || null,
+    querySelector: (s) => {
+      const v = parts[s]
+      return Array.isArray(v) ? v[0] || null : v || null
+    },
+    querySelectorAll: (s) => {
+      if (s === '*') return []
+      const v = parts[s]
+      return v === undefined ? [] : Array.isArray(v) ? v : [v]
+    },
     contains: (x) => inside.includes(x),
   }
   return el
@@ -1037,10 +1056,253 @@ test('observe / replyText: the first assistantText match wins, else the containe
   assert.equal(a.replyText(container('plain')), 'plain')
   assert.equal(a.replyText(container('plain', { parts: { '.markdown': { textContent: 'from textContent' } } })), 'from textContent')
   const throwing = container('fallback')
-  throwing.querySelector = () => {
+  throwing.querySelector = throwing.querySelectorAll = () => {
     throw new SyntaxError('bad selector')
   }
   assert.equal(a.replyText(throwing), 'fallback')
+})
+
+test('observe / replyText: EVERY match of the first assistantText entry that matches is joined in document order by a blank line (a summary block before the answer is not dropped); a nested match is skipped; the cascade is a fallback, never a union', async () => {
+  const summary = { innerText: 'thinking summary' }
+  const inner = { innerText: 'nested' }
+  const answer = { innerText: 'the answer\nnested', contains: (x) => x === inner }
+  const reply = container('thinking summary\nthe answer\nnested', { parts: { '.markdown': [summary, answer, inner] } })
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
+  const r = await a.observe({ baselineCount: 0 })
+  assert.deepEqual([r.text, r.doneBy], ['thinking summary\n\nthe answer\nnested', 'quiet'])
+  assert.equal(a.replyText(reply), 'thinking summary\n\nthe answer\nnested')
+  const pre = { innerText: 'pre-wrap text' }
+  assert.equal(a.replyText(container('c', { parts: { '.markdown': [], '.whitespace-pre-wrap': [pre] } })), 'pre-wrap text')
+  assert.equal(a.replyText(container('c', { parts: { '.markdown': [summary], '.whitespace-pre-wrap': [pre] } })), 'thinking summary')
+  assert.equal(a.replyText(container('only the container')), 'only the container')
+})
+
+/** A fake element with a real-looking box whose computed style is `style` (through its own document's view). */
+const styled = (style) => ({
+  getClientRects: () => [{}],
+  getBoundingClientRect: () => ({ width: 20, height: 20 }),
+  ownerDocument: { defaultView: { getComputedStyle: () => style } },
+})
+
+test('observe: a done match painted at opacity 0 (a hover-revealed action bar) never ends the capture — the reply waits for stop_gone; once opaque it counts; a stop button under pointer-events:none is no stop button (quiet applies, health.stop false)', async () => {
+  const copyStyle = { opacity: '0' }
+  const copy = styled(copyStyle)
+  const md = { innerText: 'streaming' }
+  const reply = container('', { parts: { '.markdown': md }, inside: [copy] })
+  const doc = fakeDocument({
+    match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply], "button[data-testid='copy-turn-action-button']": [copy], "button[data-testid='stop-button']": [{}] },
+  })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  const grow = setInterval(() => {
+    md.innerText += '.'
+  }, 60)
+  setTimeout(() => clearInterval(grow), 400)
+  setTimeout(() => {
+    delete doc.match["button[data-testid='stop-button']"]
+  }, 450)
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0 })
+  assert.equal(r.doneBy, 'stop_gone') // never done_selector while the marker is invisible
+  assert.ok(Date.now() - t0 >= 450)
+  assert.equal(r.text, md.innerText)
+  copyStyle.opacity = '1'
+  const t1 = Date.now()
+  assert.equal((await a.observe({ baselineCount: 0 })).doneBy, 'done_selector')
+  assert.ok(Date.now() - t1 < 300) // the first sample saw it, one settle sample later it resolved
+  delete doc.match["button[data-testid='copy-turn-action-button']"]
+  doc.match["button[data-testid='stop-button']"] = [styled({ pointerEvents: 'none' })]
+  assert.equal(a.health().stop, false)
+  const t2 = Date.now()
+  const q = await a.observe({ baselineCount: 0 })
+  assert.equal(q.doneBy, 'quiet') // the unpressable stop button was never "seen"
+  assert.ok(Date.now() - t2 < 1000)
+  clearInterval(grow)
+})
+
+test('one shadow-root walk per sample: health() walks the document once; every observe sample walks it at most once', async () => {
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [container('settled')] } })
+  let walks = 0
+  const qsa = doc.querySelectorAll
+  doc.querySelectorAll = (s) => {
+    if (s === '*') walks += 1
+    return qsa(s)
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  a.health()
+  assert.equal(walks, 1)
+  assert.equal(a.sessionState(), 'ok')
+  walks = 0
+  let samples = 1 // the initial run
+  const timers = {
+    setTimeout: (fn, ms) =>
+      setTimeout(() => {
+        samples += 1
+        fn()
+      }, ms),
+    clearTimeout,
+  }
+  const b = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt'), timers })
+  const r = await b.observe({ baselineCount: 0 })
+  assert.equal(r.doneBy, 'quiet')
+  assert.ok(walks >= 1 && walks <= samples, `${walks} walks over ${samples} samples`)
+})
+
+test('observe: a mutation tick only reads the thread (the session is re-checked on the 300 ms poll), and the MutationObserver is re-scoped from the document to the reply\'s parent once the container is known', async () => {
+  const observers = []
+  class FakeMutationObserver {
+    constructor(cb) {
+      this.cb = cb
+      this.targets = []
+      this.disconnects = 0
+      observers.push(this)
+    }
+    observe(target, opts) {
+      this.targets.push({ target, opts })
+    }
+    disconnect() {
+      this.disconnects += 1
+    }
+  }
+  const thread = { tagName: 'MAIN' }
+  const reply = container('streaming', { parentNode: thread })
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply], "button[data-testid='stop-button']": [{}] } })
+  const CHALLENGE = DEFAULT_SELECTORS.chatgpt.challenge[0]
+  const sessionChecks = () => doc.queried.filter((s) => s === CHALLENGE).length
+  const a = createAdapter({ document: doc, window: { MutationObserver: FakeMutationObserver }, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  const done = a.observe({ baselineCount: 0 })
+  assert.equal(observers.length, 1)
+  const mo = observers[0]
+  assert.equal(sessionChecks(), 1) // the initial (full) sample
+  assert.deepEqual(mo.targets.map((t) => t.target), [doc, thread]) // re-scoped as soon as the container was known
+  assert.deepEqual(mo.targets[1].opts, { childList: true, characterData: true, subtree: true, attributes: true })
+  assert.equal(mo.disconnects, 1)
+  const readsBefore = reply.reads
+  for (let i = 0; i < 5; i++) mo.cb([]) // five mutations → one throttled sample
+  await sleep(200)
+  assert.ok(reply.reads > readsBefore, 'the mutation tick sampled the thread')
+  assert.equal(sessionChecks(), 1) // …without re-checking the session
+  await sleep(200) // the 300 ms poll ran
+  assert.equal(sessionChecks(), 2)
+  delete doc.match["button[data-testid='stop-button']"]
+  const r = await done
+  assert.equal(r.doneBy, 'stop_gone')
+  assert.equal(mo.disconnects, 2) // the re-scope, then the cleanup
+})
+
+test('observe: a done marker on the last container does not count while a stop button is visible (a finished tool turn under a streaming answer); a second container appended mid-observe becomes the followed one', async () => {
+  const toolCopy = {}
+  const tool = container('', { parts: { '.markdown': { innerText: 'Searching the web…' } }, inside: [toolCopy] })
+  const doc = fakeDocument({
+    match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [tool], "button[data-testid='copy-turn-action-button']": [toolCopy], "button[data-testid='stop-button']": [{}] },
+  })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { quietMs: 100000 }) })
+  const md = { innerText: 'the ans' }
+  const answerCopy = {}
+  const answer = container('', { parts: { '.markdown': md }, inside: [answerCopy] })
+  setTimeout(() => doc.match["[data-message-author-role='assistant']"].push(answer), 200)
+  setTimeout(() => {
+    md.innerText = 'the answer'
+  }, 400)
+  setTimeout(() => {
+    delete doc.match["button[data-testid='stop-button']"]
+    doc.match["button[data-testid='copy-turn-action-button']"] = [toolCopy, answerCopy]
+  }, 700)
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0 })
+  assert.deepEqual([r.text, r.doneBy], ['the answer', 'done_selector'])
+  assert.ok(Date.now() - t0 >= 700)
+  // without a stop button at all the tool turn's marker ends the capture at once (the existing done rule)
+  doc.match["[data-message-author-role='assistant']"] = [tool]
+  doc.match["button[data-testid='copy-turn-action-button']"] = [toolCopy]
+  assert.deepEqual(await a.observe({ baselineCount: 0 }).then((x) => [x.text, x.doneBy]), ['Searching the web…', 'done_selector'])
+})
+
+test('observe: an end signal never resolves on the sample that saw it — a render landing after the done marker (or after the stop button went) still wins, the text must hold still across two samples; past the budget the latest text is returned with that doneBy, not timeout', async () => {
+  const md = { innerText: 'almost' }
+  const copy = {}
+  const reply = container('', { parts: { '.markdown': md }, inside: [copy] })
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { quietMs: 100000 }) })
+  setTimeout(() => {
+    doc.match["button[data-testid='copy-turn-action-button']"] = [copy]
+  }, 150) // seen by the poll at ~300 ms
+  setTimeout(() => {
+    md.innerText = 'almost done'
+  }, 330) // after the sample that saw the marker, before its settle sample
+  setTimeout(() => {
+    md.innerText = 'almost done.'
+  }, 430)
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0 })
+  assert.deepEqual([r.text, r.doneBy], ['almost done.', 'done_selector'])
+  assert.ok(Date.now() - t0 >= 550, `resolved after ${Date.now() - t0} ms`)
+  // stop_gone with a text that never holds still: the budget ends the settling with the latest text, not a timeout
+  const growing = container('a')
+  const doc2 = fakeDocument({ match: { "div[contenteditable='true'].ProseMirror": fakeComposer(), '.font-claude-response:not(#markdown-artifact)': [growing], "button[aria-label='Stop response']": [{}] } })
+  const b = createAdapter({ document: doc2, site: 'claude', selectors: captureSelectors('claude', { captureTimeoutMs: 700 }) })
+  const grow = setInterval(() => {
+    growing._text += 'a'
+  }, 50)
+  setTimeout(() => {
+    delete doc2.match["button[aria-label='Stop response']"]
+  }, 100)
+  try {
+    const t1 = Date.now()
+    const s = await b.observe({ baselineCount: 0 })
+    assert.equal(s.doneBy, 'stop_gone')
+    assert.ok(Date.now() - t1 >= 700)
+    assert.ok(/^a{8,}$/.test(s.text), s.text)
+    assert.equal(s.text, growing._text.slice(0, s.text.length)) // the latest read
+  } finally {
+    clearInterval(grow)
+  }
+})
+
+test('boot(): under Electron the ipc is ALWAYS require("electron").ipcRenderer — a page-defined window.__triplexFakeIpc is ignored and a broken electron require boots nothing; outside Electron the fake is the ipc, and only inside a page', async () => {
+  const calls = []
+  const ipcNamed = (name) => ({
+    invoke(channel) {
+      calls.push(`${name}:${channel}`)
+      return Promise.resolve({ site: 'chatgpt', selectors: DEFAULT_SELECTORS, dev: false })
+    },
+    on() {},
+    send() {},
+  })
+  const electronIpc = ipcNamed('electron')
+  const pageFake = ipcNamed('fake')
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer() } })
+  const electron = {
+    window: { __triplexFakeIpc: pageFake },
+    document: doc,
+    process: { versions: { electron: '44.4.1' } },
+    require: (name) => (name === 'electron' ? { ipcRenderer: electronIpc } : null),
+  }
+  assert.equal(pickIpc(electron), electronIpc)
+  assert.equal(shouldBoot(electron), true)
+  const attached = boot(electron)
+  assert.ok(attached && typeof attached.dispose === 'function')
+  assert.equal(await attached.ready, true)
+  attached.dispose()
+  assert.deepEqual(calls, ['electron:adapter:config']) // the fake was never consulted
+  assert.equal(pickIpc({ ...electron, require: () => { throw new Error('no electron module') } }), null)
+  assert.equal(pickIpc({ ...electron, require: () => ({}) }), null)
+  assert.equal(boot({ ...electron, require: () => ({}) }), null)
+  assert.equal(shouldBoot({ ...electron, window: {} }), true) // Electron boots without any page global
+  assert.deepEqual(calls, ['electron:adapter:config'])
+  // outside Electron: the fake, and only with a window AND a document
+  const chrome = { window: { __triplexFakeIpc: pageFake }, document: doc, process: { versions: { node: '22' } }, require: () => { throw new Error('unreachable') } }
+  assert.equal(pickIpc(chrome), pageFake)
+  assert.equal(shouldBoot(chrome), true)
+  assert.equal(shouldBoot({ ...chrome, window: {} }), false)
+  assert.equal(shouldBoot({ ...chrome, document: undefined }), false)
+  assert.equal(shouldBoot({ ...chrome, window: undefined }), false)
+  const b = boot(chrome)
+  assert.equal(await b.ready, true)
+  b.dispose()
+  assert.deepEqual(calls, ['electron:adapter:config', 'fake:adapter:config'])
+  assert.equal(pickIpc({ window: undefined, document: undefined, process: undefined }), null)
+  assert.equal(boot({ window: undefined, document: undefined, process: undefined }), null)
 })
 
 test('observe honours a message-level quietMs over the selectors', async () => {

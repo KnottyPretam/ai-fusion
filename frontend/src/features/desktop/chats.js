@@ -4,11 +4,16 @@
 // `triplex.openChats(convId)` navigates the three panes to the chats recorded for that conversation
 // ('navigated'), to a fresh chat when none is recorded ('new') or leaves them ('kept') — main
 // decides; the renderer only says WHICH conversation is open:
-//   * whenever the selected conversation id changes after the first render — a sidebar select, the
-//     conversation created by a first Send, a delete/clear (id → null, passed through as
-//     `openChats(null)`: the contract admits null and main decides what it means) —
-//     `openChats(id)` is called once. The first render is skipped: the panes already show their
-//     pages and the shell must not renavigate them on every renderer reload.
+//   * whenever the selected conversation id changes after the first render — a sidebar select, a
+//     delete/clear (id → null, passed through as `openChats(null)`: the contract admits null and
+//     main decides what it means) — `openChats(id)` is called once. The first render is skipped:
+//     the panes already show their pages and the shell must not renavigate them on every renderer
+//     reload. The conversation a first Send creates is NOT a switch: PromptBar dispatches
+//     `panes/sendStart` before `startTurn`, so while `panes.sending` is true a new id is only
+//     remembered — that Send's bridge requests are already in flight, and main's `openChat` would
+//     otherwise race them by loading a fresh chat under the request typing into the pane
+//     (`adapter_gone`, or a reply observed on the wrong page). Decision 12 has the send adopt
+//     whatever chat each pane currently shows; main records the link from that turn.
 //   * "New chat everywhere" (the prompt-bar button and the Ctrl+Shift+N `new-chat-all` shortcut)
 //     = `createConversation` + `openChats(newId)` (plan row). The id last handed to main is
 //     remembered so the `conversation/loaded` the create dispatches does not open the same chats a
@@ -40,6 +45,17 @@ export function useOpenChats(api, { enabled = true } = {}) {
   const anyStreaming = STREAM_KEYS.some((k) => streams[k] && streams[k].status === 'streaming')
   const streamingRef = useRef(anyStreaming)
   streamingRef.current = anyStreaming
+  // `panes.sending` spans the whole unified Send, the create round-trip included (PromptBar
+  // dispatches `panes/sendStart` before `startTurn`). `sendSeen` = "a Send has started and this
+  // hook has not yet seen it end": under React's batching a fast turn (create → stream → refetch →
+  // `panes/sendResult`) collapses into ONE render in which the id change and `sending: false`
+  // arrive together, so the instantaneous flag would miss it. Set at render time, cleared by the
+  // effect declared AFTER the id effect below, the flag still classifies that id change as the
+  // Send's own create.
+  const panes = useSlice('panes')
+  const sending = !!(panes && panes.sending)
+  const sendSeen = useRef(false)
+  if (sending) sendSeen.current = true
   // The conversation id whose chats main was last asked to open; `undefined` until the first render.
   const lastOpened = useRef(undefined)
   const busyRef = useRef(false)
@@ -62,8 +78,17 @@ export function useOpenChats(api, { enabled = true } = {}) {
     }
     if (lastOpened.current === id) return
     lastOpened.current = id
+    // The id a Send's own create produced (a Send seen and not yet ended): the panes are adopted,
+    // not renavigated — the same mark `newChatEverywhere` sets for its own conversation. A clear
+    // (id → null) still reaches main, which leaves the panes where they are.
+    if (id !== null && sendSeen.current) return
     settle(api?.openChats?.(id))
   }, [api, enabled, id])
+
+  // Declared after the id effect on purpose: in a collapsed render the id effect runs first.
+  useEffect(() => {
+    if (!sending) sendSeen.current = false
+  }, [sending])
 
   const newChatEverywhere = useCallback(async () => {
     if (busyRef.current || streamingRef.current) return null

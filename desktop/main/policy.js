@@ -14,7 +14,7 @@
 //   backstop: a webContents nobody policed (created outside views.js / main.js) gets every popup
 //             denied and every navigation prevented
 
-import { SSO_HOSTS, hostInList } from './sites.js'
+import { SSO_HOSTS, LOOPBACK_HOSTS, hostInList } from './sites.js'
 
 const WEB_PROTOCOLS = new Set(['http:', 'https:'])
 const EXTERNAL_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
@@ -66,6 +66,22 @@ export function navigationDecision(url, site, ssoHosts = SSO_HOSTS) {
 /** True only when the view may navigate to `url` itself. */
 export function isAllowedNavigation(url, site, ssoHosts = SSO_HOSTS) {
   return navigationDecision(url, site, ssoHosts) === 'allow'
+}
+
+/**
+ * True when `url` is a page main may load into a site view ITSELF (a recorded chat link, decision
+ * 12): `https:` on one of `site.hosts` (subdomains included), or plain `http:` only on a loopback
+ * host (the fake site under test). `loadURL` never fires `will-navigate`, so this is the check
+ * that stands in for the navigation matrix there; `site` null applies the scheme rule alone.
+ */
+export function isSiteUrl(url, site = null) {
+  const u = parseUrl(url)
+  if (!u) return false
+  if (u.protocol === 'http:') {
+    if (!LOOPBACK_HOSTS.includes(u.hostname)) return false
+  } else if (u.protocol !== 'https:') return false
+  if (site === null || site === undefined) return true
+  return hostInList(u.hostname, siteHosts(site))
 }
 
 /** True when `url` is something the system browser should receive (http(s) or mailto). */

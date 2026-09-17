@@ -1,7 +1,8 @@
 // The DOM-fixture lint: fails when any desktop/test/fixtures/dom/*.html carries `@`, `/c/`,
 // `/chat/`, a uuid, `googleusercontent` or `x.com/` (identity that a scrubbed snapshot must not
 // keep). The directory may be empty or absent today — the scan still runs and passes vacuously —
-// and `scrubDom`'s attribute-value scrubbing is proven to defeat every pattern.
+// and `scrubDom`'s attribute-value scrubbing is proven to defeat every pattern by removing the
+// identity token itself (the address, the handle, the chat id), not merely the delimiter.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -80,8 +81,9 @@ test('scrubDom output passes the lint although the page carried every pattern in
   assert.deepEqual(lintText(html), [], html)
   assert.ok(html.includes('id="response-uuid"'))
   assert.ok(html.includes('class="lh3.img-host.com avatar"'))
-  assert.ok(html.includes('data-testid="/c-/abc/chat-/def"'))
-  assert.ok(html.includes('aria-label="someone(at)example.com"'))
+  assert.ok(html.includes('data-testid="/c-/id/chat-/id"'))
+  assert.ok(html.includes('aria-label="email"'))
   assert.ok(!html.includes('href='))
   assert.ok(!html.includes('profile'))
+  for (const leaked of ['someone', 'example.com', 'abc', 'def', '(at)']) assert.ok(!html.includes(leaked), `leaked: ${leaked}`)
 })

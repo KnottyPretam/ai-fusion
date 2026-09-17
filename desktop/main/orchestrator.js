@@ -13,7 +13,11 @@
 //   2. `accepted{req_id, view, slot}`.
 //   3. navigation: link = chats.get(conversation_id, slot); a link that exists and differs from
 //      the view's URL → loadUrl(link) (a failed load → result `navigation`); no link → adopt
-//      whatever chat the pane shows (no navigation); `fresh:true` → newChatUrl first.
+//      whatever chat the pane shows (no navigation); `fresh:true` → newChatUrl first. Then a
+//      navigation main started elsewhere (panes:openChats, New chat, Sign out, the initial load
+//      — `pendingNavigation(slot)`) must commit before anything is asked of the page: the OLD
+//      document would answer `ready` for the new one. Bounded by NAVIGATION_WAIT_MS; a cancel
+//      ends the wait.
 //   4. `ready` (composer present, session ok, no stop button) with the composer budget.
 //   5. mutex ⟨ focus the view → insertAndSubmit ⟩: the insert phases of parallel requests never
 //      overlap; the renderer's focus is restored once the last queued insert has finished.
@@ -23,6 +27,9 @@
 //      recorded, so a matching link is never overwritten by a non-matching URL.
 //   7. capture[slot] on → `observe{baselineCount: assistantCount, quietMs, timeoutMs}` →
 //      `result ok:true captured:true {text, url, ms, done_by}`; off → `captured:false {url, ms}`.
+//      A submit result without a usable assistantCount omits baselineCount: the adapter then
+//      samples the count itself (at least "now", never "nothing" — baseline 0 on a thread with
+//      replies would capture the previous one).
 //   Failures after `accepted` are `result ok:false`: the adapter's code when it is a §1 result
 //   code, else `site_error` with "<code>: <message>"; `partial` when the adapter reported one.
 //   `panes:turn` phases: typing → submitted → replying (capture on) → done | error{code}.
@@ -42,6 +49,8 @@ export { INSERT_SETTLE_MS }
 export const TIMEOUT_GRACE_MS = 3000
 /** Decision 12: a chat link is recorded only from a matching navigation within this window after the submit. */
 export const CHAT_URL_WAIT_MS = 15000
+/** How long a request waits for a navigation main started elsewhere to commit before `ready`. */
+export const NAVIGATION_WAIT_MS = 15000
 export const TURN_PHASES = Object.freeze(['idle', 'typing', 'submitted', 'replying', 'done', 'error'])
 
 const RESULT_CODE_SET = new Set(RESULT_CODES)
@@ -140,6 +149,7 @@ function adapterFailure(e) {
  *   chats?                         {get(convId, slot), set(convId, slot, url)}
  *   currentUrl?(slot)              the view's URL now
  *   loadUrl?(slot, url)            navigate the view (rejects on a failed load)
+ *   pendingNavigation?(slot)       a promise for a navigation main started elsewhere (views.js), or null
  *   onNavigate?(slot, cb)          cb(url) on did-navigate / did-navigate-in-page; returns unsubscribe
  *   newChatUrl?(slot)              the site's newChatUrl (for `fresh:true`)
  *   onTurn?(slot, phase, code?)    `panes:turn` for the renderer
@@ -159,6 +169,7 @@ export function createOrchestrator({
   chats = null,
   currentUrl = null,
   loadUrl = null,
+  pendingNavigation = null,
   onNavigate = null,
   newChatUrl = null,
   onTurn = null,
@@ -271,6 +282,44 @@ export function createOrchestrator({
     return { url: () => recorded, stop }
   }
 
+  /**
+   * Wait for a navigation main started elsewhere on `slot` (openChats / New chat / Sign out / the
+   * initial load) to commit, so `ready` is never answered by the document about to be replaced.
+   * Bounded by NAVIGATION_WAIT_MS; the turn's abort signal ends the wait at once. Never throws.
+   */
+  async function awaitPendingNavigation(slot, signal) {
+    if (typeof pendingNavigation !== 'function') return
+    let pending = null
+    try {
+      pending = pendingNavigation(slot)
+    } catch (_e) {
+      pending = null
+    }
+    if (!pending || typeof pending.then !== 'function') return
+    info(`${slot}: a navigation is pending; waiting for it to commit before ready`)
+    let timer = null
+    let onAbort = null
+    try {
+      await Promise.race([
+        pending.then(
+          () => {},
+          () => {},
+        ),
+        new Promise((resolve) => {
+          timer = setT(resolve, NAVIGATION_WAIT_MS)
+        }),
+        new Promise((resolve) => {
+          onAbort = resolve
+          if (signal.aborted) resolve()
+          else signal.addEventListener('abort', onAbort, { once: true })
+        }),
+      ])
+    } finally {
+      if (timer !== null) clearT(timer)
+      if (onAbort) signal.removeEventListener('abort', onAbort)
+    }
+  }
+
   async function underMutex(fn) {
     insertsQueued += 1
     const release = await mutex.lock()
@@ -319,6 +368,9 @@ export function createOrchestrator({
         }
         cancelled()
       }
+      // 3b. a navigation main started elsewhere must commit first (the old document would answer)
+      await awaitPendingNavigation(slot, signal)
+      cancelled()
       // 4. ready
       await client.request('ready', { timeoutMs: readyMs }, { timeoutMs: readyMs + TIMEOUT_GRACE_MS, signal })
       cancelled()
@@ -339,8 +391,10 @@ export function createOrchestrator({
       }
       cancelled()
       phase(slot, 'replying')
-      const baselineCount = Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0 ? submitted.assistantCount : 0
-      const observed = await client.request('observe', { baselineCount, quietMs, timeoutMs: captureTimeoutMs }, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
+      const observePayload = { quietMs, timeoutMs: captureTimeoutMs }
+      if (Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0) observePayload.baselineCount = submitted.assistantCount
+      else warn(`${slot}: the submit result carried no usable assistantCount; the adapter samples the baseline itself`)
+      const observed = await client.request('observe', observePayload, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
       return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: (typeof observed.url === 'string' && observed.url) || resultUrl(), ms: elapsed(), done_by: doneBy }

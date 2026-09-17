@@ -8,15 +8,19 @@
 //
 // Before ready:  TRIPLEX_USER_DATA_DIR → app.setPath('userData'); TRIPLEX_CHROMIUM_FLAGS /
 //                TRIPLEX_DISABLE_GPU (allow-listed; anything else exits 2); TRIPLEX_SITES_JSON /
-//                TRIPLEX_GROK_SURFACE; TRIPLEX_E2E_APP=1 refuses non-loopback site URLs and
-//                trusted hosts (exit 3) and treats SSO_HOSTS as empty; single-instance lock;
+//                TRIPLEX_GROK_SURFACE; TRIPLEX_BACKEND_URL (a non-loopback host exits 2 unless
+//                TRIPLEX_ALLOW_REMOTE_BACKEND=1); TRIPLEX_E2E_APP=1 refuses non-loopback site URLs
+//                and trusted hosts (exit 3) and treats SSO_HOSTS as empty; single-instance lock;
 //                `web-contents-created` backstop (any webContents nobody policed opens nothing
 //                and stays put; the Bluetooth chooser is cancelled everywhere).
 // After ready:   settings.json (window bounds clamped to the matching display, zoom, capture),
-//                chats.json, the selectors override (+ fs.watch hot reload → {op:'config'} to every
-//                view), the backend — attached (`TRIPLEX_BACKEND_URL` + `BRIDGE_TOKEN`) or spawned
-//                (`.venv/bin/python -m backend.main` on TRIPLEX_BACKEND_PORT with a per-launch
-//                random token, logs in <userData>/logs/backend.log, restart ≤3/min, SIGTERM on quit)
+//                chats.json (links off the site's hosts dropped), the selectors override (+ fs.watch
+//                hot reload → {op:'config'} to every view), the backend — attached
+//                (`TRIPLEX_BACKEND_URL` + `BRIDGE_TOKEN`) or spawned (`.venv/bin/python -m
+//                backend.main` on TRIPLEX_BACKEND_PORT with a per-launch random token, logs in
+//                <userData>/logs/backend.log, restart ≤3/min, SIGTERM then SIGKILL on quit — the
+//                quit is held until the child is gone; a port that already answers is refused and
+//                reported in the bridge banner as `panes:bridge {connected:false, error}`)
 //                — the renderer window (preload/renderer.cjs, sandbox, pinned to the renderer URL's
 //                origin), the three site views (views.js), the orchestrator (one bridge request →
 //                one turn), the bridge client (hello{token} → hello_ack → request/result, capture /
@@ -44,7 +48,7 @@ import { buildMenuTemplate } from './menu.js'
 import { isMainFrameOf } from './adapter-client.js'
 import { createChats } from './chats.js'
 import { createBridgeClient, bridgeUrlFor } from './bridge-client.js'
-import { buildSpawnSpec, attachSpec, createBackend, randomToken, DEFAULT_PORT } from './backend.js'
+import { buildSpawnSpec, attachSpec, createBackend, randomToken, DEFAULT_PORT, STOP_GRACE_MS } from './backend.js'
 
 const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -93,6 +97,8 @@ function rendererOrigin() {
 
 /** @type {Record<string, {url:string,newChatUrl:string,partition:string,hosts:string[]}>|null} */
 let sites = null
+/** The attach spec from TRIPLEX_BACKEND_URL (decided in preflight; null = spawn). */
+let attached = null
 
 /** Everything that must be decided before `ready`. Returns false after scheduling app.exit(). */
 function preflight() {
@@ -101,6 +107,11 @@ function preflight() {
   applyFlags(app.commandLine, flags.flags)
   try {
     sites = resolveSites(env)
+  } catch (e) {
+    return fail(2, e.message)
+  }
+  try {
+    attached = attachSpec(env, { log: console }) // a non-loopback TRIPLEX_BACKEND_URL is a config error
   } catch (e) {
     return fail(2, e.message)
   }
@@ -230,9 +241,8 @@ function replayToRenderer() {
   sendToRenderer('panes:bridge', bridgeState)
 }
 
-/** Decide where the backend is: attach to TRIPLEX_BACKEND_URL, else prepare a spawn on TRIPLEX_BACKEND_PORT. */
+/** Decide where the backend is: attach to TRIPLEX_BACKEND_URL (decided in preflight), else prepare a spawn on TRIPLEX_BACKEND_PORT. */
 function resolveBackend(userData) {
-  const attached = attachSpec(env, { log: console })
   if (attached) {
     backendInfo = { port: attached.port, url: attached.url }
     console.log(`[backend] attaching to ${attached.url} (TRIPLEX_BACKEND_URL)`)
@@ -256,7 +266,7 @@ function start() {
   settings = createSettings({ dir: userData, screen })
   settings.load()
 
-  chats = createChats({ dir: userData })
+  chats = createChats({ dir: userData, sites })
   chats.load()
 
   selectors = createSelectorsLoader({ filePath: env.TRIPLEX_SELECTORS_FILE || path.join(userData, SELECTORS_FILE) })
@@ -298,6 +308,7 @@ function start() {
     chats,
     currentUrl: (slot) => views.currentUrl(slot),
     loadUrl: (slot, url) => views.loadUrl(slot, url),
+    pendingNavigation: (slot) => views.pendingNavigation(slot),
     onNavigate: (slot, cb) => views.onNavigate(slot, cb),
     newChatUrl: (slot) => sites[slot].newChatUrl,
     onTurn: (slot, phase, code) => sendToRenderer('panes:turn', code === undefined ? { slot, phase } : { slot, phase, code }),
@@ -347,7 +358,7 @@ function start() {
   // Bridge client: hello carries the capture switches; Stage 2 announces no analyst (the hidden
   // analyst view arrives with Stage 3, which passes settings.getAnalyst() here instead).
   bridge = createBridgeClient({
-    url: bridgeUrlFor(backendInfo.url),
+    url: bridgeUrlFor(backendInfo.url, { allowRemote: env.TRIPLEX_ALLOW_REMOTE_BACKEND === '1' }),
     token: resolved.token,
     version: PKG.version,
     getCapture: () => settings.getCapture(),
@@ -399,7 +410,15 @@ function start() {
       .start()
       .then(() => bridge.connect())
       .catch((e) => {
-        console.error(`[backend] ${(e && e.message) || e}; the bridge keeps retrying`)
+        const message = String((e && e.message) || e)
+        // The banner shows why there is no bridge; a later hello_ack (onState) replaces it.
+        bridgeState = { connected: false, error: message }
+        sendToRenderer('panes:bridge', bridgeState)
+        if (e && e.code === 'port_in_use') {
+          console.error(`[backend] ${message}; not connecting to a backend that is not ours`)
+          return
+        }
+        console.error(`[backend] ${message}; the bridge keeps retrying`)
         bridge.connect()
       })
   } else {
@@ -438,11 +457,24 @@ app.on('web-contents-created', (_event, contents) => {
   }
 })
 
-app.on('before-quit', () => {
+let quitting = false
+app.on('before-quit', (event) => {
   if (settings) settings.flushWindowBounds()
-  if (stopSelectorsWatch) stopSelectorsWatch()
+  if (stopSelectorsWatch) {
+    stopSelectorsWatch()
+    stopSelectorsWatch = null
+  }
   if (bridge) bridge.close()
-  if (backend) backend.stop().catch(() => {})
+  if (backend && !quitting) {
+    // stop() sends SIGTERM now and SIGKILL after STOP_GRACE_MS; hold the quit until the child is
+    // gone (bounded), otherwise the SIGKILL timer dies with this process and a backend that
+    // ignores SIGTERM outlives the app and squats on the port for the next launch.
+    quitting = true
+    event.preventDefault()
+    const stopped = backend.stop().catch(() => {})
+    const bound = new Promise((resolve) => setTimeout(resolve, STOP_GRACE_MS + 1000))
+    Promise.race([stopped, bound]).then(() => app.quit())
+  }
 })
 
 app.on('window-all-closed', () => {

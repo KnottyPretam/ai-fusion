@@ -73,6 +73,19 @@ RETRY_USER_MESSAGE = (
     "Your previous output failed validation: {error}. Return only the corrected JSON."
 )
 
+
+def validation_summary(e: ValidationError) -> str:
+    """`loc: type` per error and nothing else -- the log-safe rendering of a failed validation.
+
+    `str(e)` renders every error with `input_value=<the model's own text>`; that full text is
+    what the model needs in the correction message, but it must never reach a log line (the
+    desktop pipes stdout into backend.log, and a captured reply fragment is site content)."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc']) or '<root>'}: {err['type']}"
+        for err in e.errors(include_input=False, include_url=False)
+    )
+
+
 # --------------------------------------------------------------------------- payload / headers
 
 
@@ -858,13 +871,17 @@ async def complete_json(
         value, perr = extract_json(raw_text)
         if value is None:
             error = f"{PARSE_ERROR}: {perr}"
+            log_error = error  # extract_json's messages never quote the text
         else:
             try:
                 parsed = schema_model.model_validate(value)
                 usage.set_wall_clock(int((time.monotonic() - started) * 1000))
                 return parsed, raw_text, usage, None
             except ValidationError as e:
+                # The full rendering (with `input_value=`) is for the model only; the log line
+                # gets locations and error types, never a fragment of the reply.
                 error = str(e)
+                log_error = f"{e.error_count()} validation error(s): {validation_summary(e)}"
         if attempt + 1 < attempts:
             log.info(
                 "complete_json retry %d/%d role=%s purpose=%s model=%s: %.200s",
@@ -873,7 +890,7 @@ async def complete_json(
                 role,
                 purpose,
                 model,
-                error,
+                log_error,
             )
             follow_up: list[dict[str, Any]] = [
                 {"role": "user", "content": RETRY_USER_MESSAGE.format(error=error)}
@@ -899,4 +916,5 @@ __all__ = [
     "stream_completion",
     "structured_response_format",
     "transport_kind",
+    "validation_summary",
 ]

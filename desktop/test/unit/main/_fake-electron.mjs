@@ -375,8 +375,11 @@ async function probe() {
   probes.adapterConfigView = await settle(ipcMain.invoke('adapter:config', mainFrameEvent(views[1].webContents)))
   probes.adapterConfigPopup = await settle(ipcMain.invoke('adapter:config', { sender: { id: 987654 }, senderFrame: { parent: null } }))
   probes.badSlot = await settle(ipcMain.invoke('panes:reload', renderer, 'bing'))
-  probes.promptSend = await settle(ipcMain.invoke('prompt:send', renderer, { targets: ['claude'], text: 'x' }))
-  probes.promptSendForeign = await settle(ipcMain.invoke('prompt:send', mainFrameEvent(views[0].webContents), { targets: ['claude'], text: 'x' }))
+  probes.promptSendHandled = ipcMain.handlers.has('prompt:send')
+  probes.newChatForeign = await settle(ipcMain.invoke('panes:newChat', mainFrameEvent(views[0].webContents), ['claude']))
+  // the three initial loads commit (the fake loadURL fires no events itself): every view's
+  // pendingNavigation settles, as it does in Electron once the site page is up
+  for (const v of views.slice(0, 3)) v.webContents.emit('did-navigate', {}, v.webContents.getURL(), 200, 'OK')
 
   ipcMain.emit('panes:layout', renderer, { claude: { x: 0, y: 100.4, width: 500, height: 600 }, chatgpt: null, grok: { x: 500, y: 100, width: 500, height: 600 } })
   probes.layout = views.map((v) => ({ bounds: v.getBounds(), visible: v.getVisible() }))
@@ -462,16 +465,34 @@ async function probe() {
   await sleep(10)
   probes.cancelResult = ws ? ws.frames('result').find((f) => f.req_id === cancelReq.req_id) || null : null
 
-  // Stage 2 IPC: openChats (recorded link → navigated; no link → new / kept), signOut, snapshot
+  // Stage 2 IPC: openChats (recorded link → navigated; no link → kept when already on newChatUrl;
+  // null → every pane kept, nothing loaded), signOut, snapshot
   probes.openChats = await settle(ipcMain.invoke('panes:openChats', renderer, CONV))
   probes.openChatsLoads = { claude: v0.loads.slice(-1)[0], chatgpt: views[1].webContents.loads.length, grok: v2.loads.length }
+  const loadsBeforeNull = views.slice(0, 3).map((v) => v.webContents.loads.length)
   probes.openChatsNull = await settle(ipcMain.invoke('panes:openChats', renderer, null))
+  probes.openChatsNullLoads = views.slice(0, 3).map((v, i) => v.webContents.loads.length - loadsBeforeNull[i])
+
+  // a navigation main started elsewhere (New chat on the chatgpt pane) holds a request's `ready`
+  // until that document commits (did-navigate); the bridge still sees `accepted` at once
+  const v1 = views[1].webContents
+  await settle(ipcMain.invoke('panes:newChat', renderer, ['chatgpt']))
+  const pendingReq = { ...REQUEST, req_id: '7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d', slot: 'chatgpt', model: 'web:chatgpt', role: 'chatgpt' }
+  if (ws) ws.receive(pendingReq)
+  await sleep(30)
+  const readyOps = () => v1.sent.filter(([c, m]) => c === 'triplex:adapter' && m && m.op === 'ready')
+  const readyBeforeCommit = readyOps().length
+  v1.emit('did-navigate', {}, v1.getURL(), 200, 'OK')
+  await sleep(10)
+  probes.pendingNavigation = { accepted: ws ? ws.frames('accepted').some((f) => f.req_id === pendingReq.req_id) : null, readyBeforeCommit, readyAfterCommit: readyOps().length }
+  if (readyOps().length) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v1), { reqId: readyOps().at(-1)[1].reqId, ok: false, op: 'ready', code: 'timeout', message: 'no composer' })
+  await sleep(10)
+
   probes.signOut = await settle(ipcMain.invoke('panes:signOut', renderer, 'grok'))
   probes.signOutCleared = { grok: sessions.get('persist:grok') ? sessions.get('persist:grok').cleared : null, claude: sessions.get('persist:claude') ? sessions.get('persist:claude').cleared : null }
   probes.signOutLoad = v2.loads.slice(-1)[0]
   const snapshotP = ipcMain.invoke('panes:snapshot', renderer, 'chatgpt')
   await sleep(10)
-  const v1 = views[1].webContents
   const snapMsg = v1.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'snapshot')
   if (snapMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v1), { reqId: snapMsg[1].reqId, ok: true, op: 'snapshot', html: '<html><body>…</body></html>' })
   probes.snapshot = await settle(snapshotP)

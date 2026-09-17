@@ -8,11 +8,16 @@
 // zoom kept per view (`webContents.setZoomFactor`, re-applied on every navigation so a cross-host
 // hop inside one view never inherits Chromium's per-origin level; persisted in settings.json);
 // `render-process-gone` → the view is recreated and the renderer gets a health object whose
-// `matched.error` is `view_crashed`. No electron import: `WebContentsView`, the session lookup and
-// the window's `contentView` are injected, so node --test drives the manager with fakes.
+// `matched.error` is `view_crashed`. Every navigation main starts itself (the initial load, New
+// chat, Sign out, Reload, a recorded chat link) is tracked per view until the main frame commits
+// (`did-navigate`), the load fails, or NAVIGATION_WAIT_MS elapse: `pendingNavigation(slot)` hands
+// that promise to the orchestrator so a bridge request never answers `ready` on the OLD document.
+// `loadUrl` accepts only the site's own pages (policy.isSiteUrl — `loadURL` never fires
+// `will-navigate`). No electron import: `WebContentsView`, the session lookup and the window's
+// `contentView` are injected, so node --test drives the manager with fakes.
 
 import { SLOTS, SSO_HOSTS } from './sites.js'
-import { attachPolicy } from './policy.js'
+import { attachPolicy, isSiteUrl } from './policy.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
 import { stepZoom, clampZoom } from './settings.js'
@@ -23,6 +28,8 @@ export const LOAD_RETRY_MAX = 30
 export const RECREATE_DELAY_MS = 1000
 export const CRASH_WINDOW_MS = 60000
 export const CRASH_LIMIT = 5
+/** A navigation main started stays "pending" (pendingNavigation) at most this long without a commit. */
+export const NAVIGATION_WAIT_MS = 15000
 
 /** webPreferences for one site view (the pure option-builder the views test asserts on). */
 export function buildViewOptions(site, { preload, zoomFactor = 1 } = {}) {
@@ -64,6 +71,16 @@ export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex' } =
   if (typeof bounds.x === 'number') out.x = bounds.x
   if (typeof bounds.y === 'number') out.y = bounds.y
   return out
+}
+
+/** `scheme://host` of a URL for a log line (never the path). */
+function describeUrl(url) {
+  try {
+    const u = new URL(String(url))
+    return `${u.protocol}//${u.host}`
+  } catch (_e) {
+    return 'unparseable URL'
+  }
 }
 
 /** The Health object main publishes for a crashed view (§1 shape; `matched.error = 'view_crashed'`). */
@@ -147,7 +164,9 @@ export function loadWithRetry(wc, url, { tag = 'view', log = console, setTimeout
  *   manager.onCreated(cb) → unsubscribe               cb(slot, webContents) for every (re)created view
  *   manager.createAll() / destroyAll()
  *   Stage 2:
- *   manager.loadUrl(slot, url) → Promise             a recorded chat link (rejects `navigation` on a failed load)
+ *   manager.loadUrl(slot, url) → Promise             a recorded chat link (rejects `navigation` on a failed load
+ *                                                     or a URL off the site's hosts — never even loaded)
+ *   manager.pendingNavigation(slot) → Promise|null   a navigation main started that has not committed yet
  *   manager.onNavigate(slot, cb) → unsubscribe        cb(url, {inPage}) on did-navigate / did-navigate-in-page (main frame)
  *   manager.pushConfig(selectors) → count             {op:'config', selectors} to every live view (hot reload)
  *   manager.signOut(slot) → Promise<boolean>          clearStorageData on THAT partition only, then newChatUrl
@@ -177,7 +196,7 @@ export function createViewManager({
   if (!contentView || typeof contentView.addChildView !== 'function') throw new Error('createViewManager: contentView is required')
   if (!sites || !settings || !ipcMain) throw new Error('createViewManager: sites, settings and ipcMain are required')
 
-  const entries = {} // slot -> {view, wc, client, cancelLoad, disposed, crashes: number[]}
+  const entries = {} // slot -> {view, wc, client, cancelLoad, pending, disposed, crashes: number[]}
   const health = {}
   const created = new Set()
   const partitionsDone = new Set()
@@ -206,6 +225,53 @@ export function createViewManager({
     }
   }
 
+  /**
+   * Track a navigation main just started on `entry`: `tracker.promise` resolves (never rejects)
+   * once the main frame commits (`did-navigate`), the load fails (`did-fail-load`, main frame,
+   * not ERR_ABORTED — a superseding navigation commits on its own), the view is disposed, or
+   * NAVIGATION_WAIT_MS elapse; `tracker.settle()` ends it early (loadUrl once loadURL resolved).
+   * A newer navigation on the same view settles the older tracker: only the latest is pending.
+   */
+  function trackNavigation(entry, url) {
+    if (entry.pending) entry.pending.settle()
+    const wc = entry.wc
+    const tracker = { url, promise: null, settle: null }
+    let done = false
+    let resolveFn = () => {}
+    let timer = null
+    tracker.promise = new Promise((resolve) => {
+      resolveFn = resolve
+    })
+    const onNavigate = () => tracker.settle()
+    const onFail = (_event, code, _description, _failedUrl, isMainFrame) => {
+      if (isMainFrame === false || code === -3) return
+      tracker.settle()
+    }
+    tracker.settle = () => {
+      if (done) return
+      done = true
+      if (timer !== null) clearT(timer)
+      timer = null
+      if (typeof wc.removeListener === 'function') {
+        wc.removeListener('did-navigate', onNavigate)
+        wc.removeListener('did-fail-load', onFail)
+      }
+      if (entry.pending === tracker) entry.pending = null
+      resolveFn()
+    }
+    if (typeof wc.on === 'function') {
+      wc.on('did-navigate', onNavigate)
+      wc.on('did-fail-load', onFail)
+    }
+    timer = setT(() => {
+      timer = null
+      tracker.settle()
+    }, NAVIGATION_WAIT_MS)
+    if (timer && typeof timer.unref === 'function') timer.unref()
+    entry.pending = tracker
+    return tracker
+  }
+
   function create(slot) {
     const site = sites[slot]
     if (!site) throw new Error(`createViewManager: no site for ${slot}`)
@@ -217,7 +283,7 @@ export function createViewManager({
     const view = new WebContentsView(buildViewOptions(site, { preload, zoomFactor: zoom }))
     const wc = view.webContents
     const tag = `view ${slot}`
-    const entry = { slot, view, wc, client: null, cancelLoad: null, disposed: false, crashes: entries[slot] ? entries[slot].crashes : [] }
+    const entry = { slot, view, wc, client: null, cancelLoad: null, pending: null, disposed: false, crashes: entries[slot] ? entries[slot].crashes : [] }
     entries[slot] = entry
 
     attachPolicy(wc, site, { openExternal, childWindowOptions, log, ssoHosts })
@@ -241,6 +307,7 @@ export function createViewManager({
     applyZoom(entry, zoom)
     applyLayoutToViews({ [slot]: view }, lastLayout)
     entry.cancelLoad = loadWithRetry(wc, site.url, { tag, log, setTimeout: setT })
+    trackNavigation(entry, site.url)
     for (const cb of created) {
       try {
         cb(slot, wc)
@@ -255,6 +322,7 @@ export function createViewManager({
     if (entry.disposed) return
     entry.disposed = true
     if (entry.cancelLoad) entry.cancelLoad()
+    if (entry.pending) entry.pending.settle()
     if (entry.client) entry.client.dispose()
     try {
       if (typeof contentView.removeChildView === 'function') contentView.removeChildView(entry.view)
@@ -376,16 +444,18 @@ export function createViewManager({
       }
       try {
         e.wc.reload()
-        return true
       } catch (_err) {
         return false
       }
+      trackNavigation(e, manager.currentUrl(slot))
+      return true
     },
     newChat(slot) {
       const e = live(requireSlot(slot))
       if (!e) return false
       if (e.cancelLoad) e.cancelLoad()
       e.cancelLoad = loadWithRetry(e.wc, sites[slot].newChatUrl, { tag: `view ${slot}`, log, setTimeout: setT })
+      trackNavigation(e, sites[slot].newChatUrl)
       return true
     },
     currentUrl(slot) {
@@ -405,19 +475,35 @@ export function createViewManager({
         throw err
       }
       if (typeof url !== 'string' || url === '') throw new Error('loadUrl: url is required')
+      const site = sites[slot]
+      if (url !== site.url && url !== site.newChatUrl && !isSiteUrl(url, site)) {
+        // loadURL bypasses will-navigate: a link off the site's hosts (a tampered chats.json) is
+        // refused here, before anything is loaded into the logged-in partition.
+        const out = new Error(`${slot}: refusing to open a URL off the site's hosts (${describeUrl(url)})`)
+        out.code = 'navigation'
+        throw out
+      }
       if (e.cancelLoad) e.cancelLoad()
       e.cancelLoad = null
+      const tracker = trackNavigation(e, url)
       try {
         await e.wc.loadURL(url)
       } catch (err) {
         // ERR_ABORTED (-3): a newer navigation superseded this one (the site's own redirect); the
-        // adapter's `ready` decides what the page ended up as. Anything else is a failed load.
+        // adapter's `ready` decides what the page ended up as — the tracker stays pending until
+        // that navigation commits. Anything else is a failed load.
         if (err && (err.errno === -3 || err.code === 'ERR_ABORTED')) return true
+        tracker.settle()
         const out = new Error(`${slot}: could not open ${url} (${(err && err.message) || err})`)
         out.code = 'navigation'
         throw out
       }
+      tracker.settle()
       return true
+    },
+    pendingNavigation(slot) {
+      const e = live(requireSlot(slot))
+      return e && e.pending ? e.pending.promise : null
     },
     onNavigate(slot, cb) {
       const e = live(requireSlot(slot))

@@ -84,14 +84,15 @@ export function installFakeIpc({ site, selectors, dev }) {
  * Open a fake-site page with the fake IPC + site.cjs installed. `site` is the page's look-alike;
  * `ipcSite` what adapter:config answers (null = inert). The fake site's own query keys are passed
  * through: state, thread, sendDelayMs, composer (grok only), and Stage 2 replyMs / reply / nostop /
- * nodone / blockAfterMs. `path` picks the page path (the SPA fallback serves index.html for /c/<id>).
+ * nodone / blockAfterMs / doneLagMs / twoTurns. `path` picks the page path (the SPA fallback serves
+ * index.html for /c/<id>).
  */
 export async function open(page, opts = {}) {
   const { site, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site, path: pagePath = '/', ...query } = opts
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  for (const key of ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs']) {
+  for (const key of ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns']) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
   await page.goto(`${pagePath}?${q.toString()}`)
@@ -101,7 +102,17 @@ export const request = (page, msg) => page.evaluate((m) => window.__triplexFakeI
 export const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
 /** The fake site's Stage 2 reply state. */
 export const replyState = (page) =>
-  page.evaluate(() => ({ replying: window.__fake.replying, done: window.__fake.done, renders: window.__fake.renders, rewinds: window.__fake.rewinds, replyText: window.__fake.replyText() }))
+  page.evaluate(() => ({
+    replying: window.__fake.replying,
+    done: window.__fake.done,
+    renders: window.__fake.renders,
+    rewinds: window.__fake.rewinds,
+    containers: window.__fake.containers,
+    doneSignalAt: window.__fake.doneSignalAt,
+    lastRenderAt: window.__fake.lastRenderAt,
+    rendersAfterSignal: window.__fake.rendersAfterSignal,
+    replyText: window.__fake.replyText(),
+  }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
 export const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)
 export const withOverride = (site, override) => mergeSelectors(DEFAULT_SELECTORS, { [site]: override }).merged

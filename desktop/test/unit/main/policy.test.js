@@ -15,6 +15,7 @@ import {
   frameOriginMatches,
   originOf,
   isPoliced,
+  isSiteUrl,
 } from '../../../main/policy.js'
 import { SITES } from '../../../main/sites.js'
 import { fakeWebContents, fakeChildWindow, navEvent, fakeLog } from './_fakes.js'
@@ -275,4 +276,27 @@ test('attachDefaultDenyPolicy: a webContents nobody policed opens nothing and st
   assert.equal(same.prevented, false)
   assert.equal(attachDefaultDenyPolicy(null), null)
   assert.equal(attachDefaultDenyPolicy({}), null)
+})
+
+test('isSiteUrl (loadURL bypasses will-navigate): https on the site\'s hosts, http only on loopback, never another scheme', () => {
+  const chatgpt = SITES.chatgpt
+  assert.equal(isSiteUrl('https://chatgpt.com/c/abc', chatgpt), true)
+  assert.equal(isSiteUrl('https://chat.openai.com/c/abc', chatgpt), true)
+  assert.equal(isSiteUrl('https://sub.chatgpt.com/', chatgpt), true, 'subdomains')
+  assert.equal(isSiteUrl('http://chatgpt.com/c/abc', chatgpt), false, 'plain http on a real host')
+  assert.equal(isSiteUrl('https://chatgpt.com.evil.example/', chatgpt), false)
+  assert.equal(isSiteUrl('https://claude.ai/chat/1', chatgpt), false, 'another site')
+  assert.equal(isSiteUrl('https://accounts.google.com/', chatgpt), false, 'SSO hosts are not chat pages')
+  for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/hostname', 'about:blank', 'chrome://settings', 'ws://chatgpt.com/', '', null, 42, 'not a url']) {
+    assert.equal(isSiteUrl(bad, chatgpt), false, String(bad))
+  }
+  const fake = { hosts: ['127.0.0.1', 'localhost'] }
+  assert.equal(isSiteUrl('http://127.0.0.1:5199/c/1?site=claude', fake), true, 'the fake site: http on loopback')
+  assert.equal(isSiteUrl('http://localhost:5199/c/1', fake), true)
+  assert.equal(isSiteUrl('https://127.0.0.1:5199/c/1', fake), true)
+  assert.equal(isSiteUrl('http://evil.example/', fake), false)
+  assert.equal(isSiteUrl('http://127.0.0.1:5199/', { hosts: ['chatgpt.com'] }), false, 'loopback still has to be a listed host')
+  assert.equal(isSiteUrl('https://anything.example/', null), true, 'no site: the scheme rule alone')
+  assert.equal(isSiteUrl('http://anything.example/', null), false)
+  assert.equal(isSiteUrl('http://localhost/', null), true)
 })

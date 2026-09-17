@@ -4,13 +4,23 @@
 //                         `~/.local/bin/uv run python -m backend.main` fallback when the venv is
 //                         missing) and the env of §6: PORT=8021 HOST=127.0.0.1 DATA_DIR=<userData>/data
 //                         TRIPLEX_DESKTOP=1 BRIDGE_TOKEN=<random> MOCK_OPENROUTER=0 SLOT_*_MODEL=web:*
-//                         SLOT_*_EFFORT=off ANALYST_MODEL=web:<settings.analyst>:analyst (omitted when
+//                         SLOT_*_EFFORT=off ANALYST_MODEL=web:<settings.analyst>:analyst ('' when
 //                         null) TRIPLEX_APP_DIR=<repo>/frontend/dist LOG_LEVEL (+ OLLAMA_* only under
 //                         TRIPLEX_OLLAMA=1). OPENROUTER_API_KEY, every MOCK_* and every SLOT_* /
-//                         ANALYST_MODEL of the parent environment are dropped: a desktop backend can
-//                         never route a live OpenRouter call with the user's key.
-//   attachSpec(env)       `TRIPLEX_BACKEND_URL` → {url, port, token: BRIDGE_TOKEN} (nothing spawned)
-//   createBackend(deps)   start() spawns and polls `GET /` every START_POLL_MS up to START_TIMEOUT_MS;
+//                         ANALYST_MODEL of the parent environment are dropped, and OPENROUTER_API_KEY
+//                         (plus ANALYST_MODEL when no analyst is chosen) is PINNED to '' rather than
+//                         omitted: python-dotenv only fills variables that are absent, so the repo
+//                         `.env` can never re-supply them — a desktop backend never routes a live
+//                         OpenRouter call with the user's key ('' reads as "no key" / "no analyst").
+//   attachSpec(env)       `TRIPLEX_BACKEND_URL` → {url, port, token: BRIDGE_TOKEN} (nothing spawned);
+//                         a non-loopback host is refused (the token, every prompt and every captured
+//                         reply would leave the machine) unless TRIPLEX_ALLOW_REMOTE_BACKEND=1, which
+//                         warns loudly. main.js turns the refusal into a config error (exit 2).
+//   createBackend(deps)   start() first probes `GET /`: a port that already answers belongs to
+//                         another server (an orphaned backend, a dev server) and is refused with
+//                         `code: 'port_in_use'` — spawning onto it would "succeed" on the foreign
+//                         process, fail the hello 4003 and loop the real child through bind errors.
+//                         Then it spawns and polls `GET /` every START_POLL_MS up to START_TIMEOUT_MS;
 //                         stdout/stderr → <userData>/logs/backend.log; an unexpected exit restarts
 //                         the process at most RESTART_LIMIT times per RESTART_WINDOW_MS, then gives
 //                         up; stop() sends SIGTERM (SIGKILL after STOP_GRACE_MS). The bridge client
@@ -24,7 +34,7 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { SLOTS } from './sites.js'
+import { SLOTS, LOOPBACK_HOSTS } from './sites.js'
 
 export const DEFAULT_PORT = 8021
 export const START_TIMEOUT_MS = 45000
@@ -37,6 +47,10 @@ export const LOG_FILE = 'backend.log'
 /** Parent-environment keys never handed to the spawned backend (§6: never OPENROUTER_API_KEY). */
 export const ENV_DENYLIST = Object.freeze(['OPENROUTER_API_KEY', 'PORT', 'BACKEND_PORT', 'HOST', 'DATA_DIR', 'TRIPLEX_DESKTOP', 'BRIDGE_TOKEN', 'ANALYST_MODEL', 'TRIPLEX_APP_DIR', 'LOG_LEVEL'])
 export const ENV_DENY_PREFIXES = Object.freeze(['MOCK_', 'SLOT_'])
+/** Keys pinned to '' in the spawn env so the repo `.env` (dotenv, override=False) cannot fill them in. */
+export const ENV_PINNED_EMPTY = Object.freeze(['OPENROUTER_API_KEY'])
+/** The env var that lets TRIPLEX_BACKEND_URL name a host other than loopback. */
+export const ALLOW_REMOTE_BACKEND_VAR = 'TRIPLEX_ALLOW_REMOTE_BACKEND'
 
 export function randomToken() {
   return randomBytes(32).toString('hex')
@@ -99,14 +113,24 @@ export function buildSpawnSpec({ repoDir, userData, port = DEFAULT_PORT, token, 
   out.SLOT_CHATGPT_EFFORT = 'off'
   out.SLOT_GROK_EFFORT = 'off'
   const analyst = analystOf(settings)
-  if (analyst) out.ANALYST_MODEL = `web:${analyst}:analyst`
+  out.ANALYST_MODEL = analyst ? `web:${analyst}:analyst` : '' // '' = no analyst chosen; never a .env slug
+  for (const k of ENV_PINNED_EMPTY) out[k] = ''
   out.TRIPLEX_APP_DIR = appDir || path.join(repoDir, 'frontend', 'dist')
   out.LOG_LEVEL = logLevel || (env && (env.TRIPLEX_BACKEND_LOG_LEVEL || env.LOG_LEVEL)) || 'INFO'
 
   return { command, args, cwd: repoDir, env: out, port: portNum, url: `http://127.0.0.1:${portNum}`, via, available }
 }
 
-/** `TRIPLEX_BACKEND_URL` set → attach spec `{url, port, token, attached: true}`; unset/blank → null. */
+/** True when `hostname` (as `new URL(...).hostname` reports it) is a loopback address. */
+export function isLoopbackHost(hostname) {
+  return typeof hostname === 'string' && LOOPBACK_HOSTS.includes(hostname.toLowerCase().replace(/\.$/, ''))
+}
+
+/**
+ * `TRIPLEX_BACKEND_URL` set → attach spec `{url, port, token, attached: true}`; unset/blank → null.
+ * A URL whose host is not loopback throws unless `TRIPLEX_ALLOW_REMOTE_BACKEND=1` (then a loud
+ * warning): the bridge token, every prompt and every captured reply would travel to that host.
+ */
 export function attachSpec(env = process.env, { log = console } = {}) {
   const raw = env && env.TRIPLEX_BACKEND_URL
   if (typeof raw !== 'string' || raw.trim() === '') return null
@@ -115,6 +139,12 @@ export function attachSpec(env = process.env, { log = console } = {}) {
     u = new URL(raw.trim())
   } catch (e) {
     throw new Error(`TRIPLEX_BACKEND_URL is not a URL: ${e.message}`)
+  }
+  if (!isLoopbackHost(u.hostname)) {
+    if (env[ALLOW_REMOTE_BACKEND_VAR] !== '1') {
+      throw new Error(`TRIPLEX_BACKEND_URL names the non-loopback host ${u.hostname}; the desktop attaches only to a backend on this machine (127.0.0.1 / localhost). Set ${ALLOW_REMOTE_BACKEND_VAR}=1 to override — the bridge token, every prompt and every captured reply then leave this machine`)
+    }
+    if (log && typeof log.warn === 'function') log.warn(`[backend] WARNING: ${ALLOW_REMOTE_BACKEND_VAR}=1 — attaching to the REMOTE backend host ${u.hostname}${u.protocol === 'http:' ? ' over cleartext http' : ''}: the bridge token, every prompt and every captured reply leave this machine, and that host can drive the three signed-in site views`)
   }
   const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80
   let token = typeof env.BRIDGE_TOKEN === 'string' ? env.BRIDGE_TOKEN : ''
@@ -260,6 +290,18 @@ export function createBackend({
     if (child) return waitReady()
     stopping = false
     gaveUp = false
+    if (await probe()) {
+      // Someone already answers on our port: an orphaned backend from an earlier session, a dev
+      // server on 8021, … Spawning would only look successful (the poll hits the foreign process).
+      const err = new Error(`${spec.url}/ already answers: another server owns port ${spec.port}. Stop it, or set TRIPLEX_BACKEND_URL=${spec.url} (with its BRIDGE_TOKEN) to attach to it`)
+      err.code = 'port_in_use'
+      error(err.message)
+      if (logStream || logDir) {
+        openLog()
+        if (logStream) logStream.write(`[triplex-desktop ${new Date(now()).toISOString()}] refusing to spawn: ${err.message}\n`)
+      }
+      throw err
+    }
     if (spec.available === false) warn(`${spec.command} not found; the spawn will fail (create .venv with \`uv sync --frozen\`)`)
     spawnChild()
     try {

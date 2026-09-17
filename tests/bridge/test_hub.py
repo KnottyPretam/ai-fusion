@@ -262,6 +262,59 @@ async def test_ping_for_a_stale_connection_is_false(attached: FakeConnection):
     assert attached.sent("ping") == []
 
 
+# --------------------------------------------------------------------------- connection scope
+async def test_frames_from_a_superseded_connection_are_ignored(attached: FakeConnection):
+    """`dispatch(conn, frame)` (the router's form) drops frames from a socket that is no longer
+    the client: the old socket keeps delivering until its 4002 close lands."""
+    new = FakeConnection()
+    assert hub.attach(new, hello()) is attached
+    await asyncio.sleep(0)  # the supersede close runs as a task
+    assert attached.closed == (4002, "superseded")
+    before = hub.status()
+    health = {
+        "composer": True,
+        "send": True,
+        "reply": False,
+        "stop": False,
+        "session": "ok",
+        "matched": {"composer": "#p", "send": "b", "reply": None, "stop": None, "error": None},
+        "url": "https://site.example/c/old",
+        "host": "site.example",
+        "title": "Old",
+        "ts": 1710000000000,
+    }
+    # Cache frames from the old socket leave status() alone.
+    hub.dispatch(attached, {"type": "capture", "capture": {s: False for s in SLOT_IDS}})
+    hub.dispatch(attached, {"type": "analyst", "analyst": None})
+    hub.dispatch(attached, {"type": "health", "slot": "grok", "health": health})
+    assert hub.status() == before
+    # A stale pong never answers the new client's ping.
+    assert await hub.ping(new) is True
+    ts = new.sent("ping")[-1]["ts"]
+    hub.dispatch(attached, {"type": "pong", "ts": ts})
+    assert hub._awaiting_pong is True
+    hub.dispatch(new, {"type": "pong", "ts": ts})
+    assert hub._awaiting_pong is False and hub._missed_pongs == 0
+    # Replies from the old socket never settle the new client's requests.
+    task = asyncio.create_task(run(req("x")))
+    await asyncio.sleep(0)
+    hub.dispatch(attached, accepted("x"))
+    hub.dispatch(attached, result_ok("x", "stale"))
+    await asyncio.sleep(0)
+    assert not task.done() and hub.status()["inflight"] == 1
+    hub.dispatch(new, accepted("x"))
+    hub.dispatch(new, result_ok("x", "fresh"))
+    replies = await task
+    assert [r["type"] for r in replies] == ["accepted", "result"] and replies[1]["text"] == "fresh"
+    # The unscoped form (contract section 6) still routes, and a malformed frame still raises
+    # regardless of scope.
+    hub.dispatch({"type": "analyst", "analyst": {"slot": "grok"}})
+    assert hub.status()["analyst"] == "grok"
+    with pytest.raises(ValueError):
+        hub.dispatch(attached, {"type": "pong"})
+    assert attached.sent("cancel") == [] and new.sent("cancel") == []
+
+
 # --------------------------------------------------------------------------- status caches
 async def test_status_reflects_hello_and_later_cache_frames(attached: FakeConnection):
     st = hub.status()

@@ -1,18 +1,20 @@
 // ipc.js — validation (unknown slot / non-string / bad targets / non-renderer sender rejected),
-// every panes:* channel incl. the Stage 2 ones (getCapture / setCapture / openChats / signOut /
-// snapshot), prompt:send answering prompt_send_removed, adapter:config by sender, health
-// forwarding, the cached health + zoom + bridge state replayed after panes:getInfo, getInfo.backend.
+// every panes:* channel incl. the Stage 2 ones (getCapture / setCapture / openChats — null leaves
+// the panes, the three loads run in parallel and each is bounded / signOut / snapshot), no
+// prompt:send handler at all (§2: removed in Stage 2), adapter:config by sender, health
+// forwarding, the cached health + zoom + bridge state (with its error text) replayed after
+// panes:getInfo, getInfo.backend.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, annotateHealth, snapshotFileName, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS } from '../../../main/ipc.js'
-import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites } from './_fakes.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 
-function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>' } = {}) {
+function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
   const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
@@ -35,10 +37,12 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     newChat: (s) => calls.push(['newChat', s]),
     reload: (s) => calls.push(['reload', s]),
     currentUrl: (s) => current[s],
-    loadUrl: async (s, u) => {
+    loadUrl: (s, u) => {
       calls.push(['loadUrl', s, u])
-      if (u.includes('fail')) throw new Error('ERR_CONNECTION_REFUSED')
+      if (u.includes('hang')) return new Promise(() => {}) // a page that never finishes loading
+      if (u.includes('fail')) return Promise.reject(new Error('ERR_CONNECTION_REFUSED'))
       current[s] = u
+      return Promise.resolve(true)
     },
     signOut: async (s) => calls.push(['signOut', s]),
     adapterFor: (s) => (s === 'grok' ? null : adapters[s]),
@@ -91,6 +95,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     sendToRenderer: (channel, ...args) => sent.push([channel, ...args]),
     now: () => 1710000000000,
     log: fakeLog(),
+    ...(timers ? { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout } : {}),
   })
   const fromRenderer = eventFrom(renderer)
   return { ipcMain, renderer, siteWc, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current }
@@ -135,7 +140,6 @@ test('every renderer channel rejects bad_request for a non-renderer sender (a si
     await rejects(ipcMain.invoke('panes:inspect', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:focus', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:zoom', ev, 'claude', 'in'))
-    await rejects(ipcMain.invoke('prompt:send', ev, { targets: ['claude'], text: 'x' }))
     await rejects(ipcMain.invoke('panes:getCapture', ev))
     await rejects(ipcMain.invoke('panes:setCapture', ev, 'claude', true))
     await rejects(ipcMain.invoke('panes:openChats', ev, null))
@@ -170,10 +174,10 @@ test('single-slot channels reject an unknown slot; zoom rejects a bad direction;
   assert.deepEqual(calls, [], 'nothing reached the views or settings')
 })
 
-test('prompt:send is gone: the renderer gets a clear prompt_send_removed error (Stage 1 sendPrompt callers)', async () => {
-  const { ipcMain, fromRenderer, calls } = setup()
-  await assert.rejects(ipcMain.invoke('prompt:send', fromRenderer, { targets: ['claude'], text: 'hi' }), /prompt_send_removed/)
-  assert.deepEqual(calls, [])
+test('prompt:send is gone (§2, removed in Stage 2): no handler is registered on that channel', () => {
+  const { ipcMain } = setup()
+  assert.equal(ipcMain.handlers.has('prompt:send'), false)
+  assert.equal(ipcMain.listeners.has('prompt:send'), false)
 })
 
 test('panes:getInfo reports version, dev, public sites, the layout once known and the backend when one is known', async () => {
@@ -222,6 +226,13 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
   const off = setup({ bridge: { connected: false } })
   await off.ipcMain.invoke('panes:getInfo', off.fromRenderer)
   assert.deepEqual(off.sent.filter(([c]) => c === 'panes:bridge'), [['panes:bridge', { connected: false }]])
+  // a backend that could not be spawned (a port already in use): the error text travels with the state
+  const failed = setup({ bridge: { connected: false, error: 'http://127.0.0.1:8021/ already answers: another server owns port 8021' } })
+  await failed.ipcMain.invoke('panes:getInfo', failed.fromRenderer)
+  assert.deepEqual(failed.sent.filter(([c]) => c === 'panes:bridge'), [['panes:bridge', { connected: false, error: 'http://127.0.0.1:8021/ already answers: another server owns port 8021' }]])
+  assert.deepEqual(publicBridgeState({ connected: true, since: 5, error: 'stale' }), { connected: true, since: 5 }, 'connected: no error text')
+  assert.deepEqual(publicBridgeState({ connected: false, error: '' }), { connected: false })
+  assert.deepEqual(publicBridgeState({ connected: false, error: 42 }), { connected: false })
 })
 
 test('panes:layout normalizes and applies; panes:active validates and stores', () => {
@@ -268,7 +279,7 @@ test('panes:getCapture / panes:setCapture read and write the settings switches',
   assert.equal(capture.grok, false)
 })
 
-test('panes:openChats: a differing link → navigated; the same link → kept; no link → new (or kept when already on newChatUrl); a busy view is kept; null opens new chats', async () => {
+test('panes:openChats: a differing link → navigated; the same link → kept; no link → new (or kept when already on newChatUrl); a busy view is kept; null leaves every pane where it is', async () => {
   const { ipcMain, fromRenderer, calls, sent } = setup({
     links: { claude: 'https://claude.test/c/old', chatgpt: 'https://chatgpt.test/c/1' },
     urls: { grok: 'http://127.0.0.1:5199/?site=grok' },
@@ -282,7 +293,13 @@ test('panes:openChats: a differing link → navigated; the same link → kept; n
   assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, 'unknown-conv'), { claude: 'new', chatgpt: 'new', grok: 'kept' })
   assert.deepEqual(calls, [['newChat', 'claude'], ['newChat', 'chatgpt']])
   calls.length = 0
-  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, null), { claude: 'new', chatgpt: 'new', grok: 'kept' })
+  sent.length = 0
+  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept' }, '§2: null = the open conversation was cleared — main leaves the panes where they are')
+  assert.deepEqual(calls, [], 'no newChat / loadUrl for null')
+  assert.deepEqual(sent, [], 'no panes:turn for null')
+  const onChats = setup({ links: { claude: 'https://claude.test/c/1', chatgpt: 'https://chatgpt.test/c/1' } })
+  assert.deepEqual(await onChats.ipcMain.invoke('panes:openChats', onChats.fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept' }, 'panes sitting on chats stay on them after a delete')
+  assert.deepEqual(onChats.calls, [])
 
   const busy = setup({ links: { claude: 'https://claude.test/c/old' }, inflight: { claude: true } })
   assert.equal((await busy.ipcMain.invoke('panes:openChats', busy.fromRenderer, CONV)).claude, 'kept', 'a turn in flight is never navigated away')
@@ -290,6 +307,36 @@ test('panes:openChats: a differing link → navigated; the same link → kept; n
 
   const failing = setup({ links: { claude: 'https://claude.test/c/fail' } })
   assert.equal((await failing.ipcMain.invoke('panes:openChats', failing.fromRenderer, CONV)).claude, 'kept', 'a failed load is reported as kept, not thrown')
+})
+
+test('panes:openChats opens the three panes in parallel and bounds each load: a pane still loading after OPEN_CHATS_LOAD_TIMEOUT_MS is reported kept while the others answer', async () => {
+  const timers = fakeTimers()
+  const { ipcMain, fromRenderer, calls, sent } = setup({
+    timers,
+    links: { claude: 'https://claude.test/c/hang-1', chatgpt: 'https://chatgpt.test/c/hang-2', grok: 'https://grok.test/c/ok' },
+    urls: { grok: 'https://grok.test/' },
+  })
+  const invoked = ipcMain.invoke('panes:openChats', fromRenderer, CONV)
+  let settled = null
+  invoked.then((v) => {
+    settled = v
+  })
+  for (let i = 0; i < 4; i++) await tick()
+  assert.deepEqual(calls, [
+    ['loadUrl', 'claude', 'https://claude.test/c/hang-1'],
+    ['loadUrl', 'chatgpt', 'https://chatgpt.test/c/hang-2'],
+    ['loadUrl', 'grok', 'https://grok.test/c/ok'],
+  ], 'all three loads are issued before any of them settles (no serial await)')
+  assert.equal(settled, null, 'two panes are still loading')
+  assert.deepEqual(sent, [['panes:turn', { slot: 'grok', phase: 'idle' }]], 'the pane that loaded already reported')
+  timers.advance(OPEN_CHATS_LOAD_TIMEOUT_MS - 1)
+  for (let i = 0; i < 4; i++) await tick()
+  assert.equal(settled, null)
+  timers.advance(1)
+  for (let i = 0; i < 4; i++) await tick()
+  assert.deepEqual(settled, { claude: 'kept', chatgpt: 'kept', grok: 'navigated' }, 'a load that never finishes within the bound is kept (the load itself goes on)')
+  assert.equal(timers.pending(), 0, 'the bounds are cleared')
+  assert.equal(sent.length, 1, 'no panes:turn for the panes that were kept')
 })
 
 test('panes:signOut drives views.signOut for that slot only', async () => {

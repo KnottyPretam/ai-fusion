@@ -10,8 +10,9 @@
 // Inspect buttons). The renderer owns the persisted layout keys (`triplex.panes.mode|active|
 // targets`, contract §5): the slice starts from localStorage and every change is written back.
 // Stage 2: ONE ./chats.js instance per shell keeps the panes on the open conversation's chats
-// (`openChats(id)` on every id change) and implements "New chat everywhere", shared by the
-// prompt-bar button and the Ctrl+Shift+N shortcut handled in PaneDeck.
+// (`openChats(id)` on every id change except the one a Send's own create produces, which the panes
+// adopt — Decision 12) and implements "New chat everywhere", shared by the prompt-bar button and
+// the Ctrl+Shift+N shortcut handled in PaneDeck.
 import { useEffect, useRef, useState } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'

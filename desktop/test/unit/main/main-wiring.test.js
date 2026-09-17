@@ -5,11 +5,13 @@
 // shortcut path, health forwarding (renderer + bridge), the bridge handshake over a fake WebSocket
 // (hello with the attach token, hello_ack, capture / health frames, one request → accepted →
 // ready → insertAndSubmit → observe → result, the chat link recorded in chats.json, a cancel, the
-// banner state on a drop), prompt:send answering prompt_send_removed, openChats / signOut /
-// snapshot, the renderer's origin guard + foreign-frame IPC refusal, child-window / redirect /
-// backstop policy, the Bluetooth chooser, the health + zoom + bridge replay, crash recreation and
-// the bounds → settings.json flush on close. The fake forces TRIPLEX_BACKEND_URL (attach mode):
-// a wiring run never spawns a backend and never opens a real socket.
+// banner state on a drop), no prompt:send handler, openChats (null → every pane kept) / signOut /
+// snapshot, a request holding `ready` until a New-chat navigation commits, the renderer's origin
+// guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the Bluetooth
+// chooser, the health + zoom + bridge replay, crash recreation and the bounds → settings.json
+// flush on close; TRIPLEX_BACKEND_URL on a non-loopback host refused (exit 2) unless
+// TRIPLEX_ALLOW_REMOTE_BACKEND=1. The fake forces TRIPLEX_BACKEND_URL (attach mode): a wiring run
+// never spawns a backend and never opens a real socket.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -83,11 +85,12 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   })
   assert.deepEqual([...report.sessions].sort(), ['default', 'persist:chatgpt', 'persist:claude', 'persist:grok'])
 
-  // every §2 channel is registered once (prompt:send stays registered only to answer prompt_send_removed)
+  // every §2 channel is registered once; prompt:send (removed in Stage 2) is not registered at all
   const handles = report.ipcHandles
-  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'prompt:send', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot']) {
+  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot']) {
     assert.equal(handles.filter((h) => h === c).length, 1, c)
   }
+  assert.equal(handles.includes('prompt:send'), false, 'prompt:send is gone')
   for (const c of ['panes:layout', 'panes:active', 'triplex:adapter:health', 'triplex:adapter:result']) assert.ok(report.ipcOns.includes(c), c)
 
   // the application menu: the accelerator table + the Site menu
@@ -116,8 +119,8 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.adapterConfigView.value.dev, true)
   assert.equal(p.adapterConfigPopup.value.site, null)
   assert.deepEqual(p.badSlot, { ok: false, error: 'bad_request' })
-  assert.deepEqual(p.promptSend, { ok: false, error: 'prompt_send_removed' }, 'Stage 1 sendPrompt gets a clear error')
-  assert.deepEqual(p.promptSendForeign, { ok: false, error: 'bad_request' })
+  assert.equal(p.promptSendHandled, false, 'no prompt:send handler')
+  assert.deepEqual(p.newChatForeign, { ok: false, error: 'bad_request' }, 'a site view is not the renderer')
 
   assert.deepEqual(p.layout, [
     { bounds: { x: 0, y: 100, width: 500, height: 600 }, visible: true },
@@ -199,10 +202,14 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.cancelResult.ok, false)
   assert.equal(p.cancelResult.code, 'cancelled')
 
-  // Stage 2 IPC: openChats navigates claude to its recorded link, the others stay on newChatUrl
+  // Stage 2 IPC: openChats navigates claude to its recorded link, the others stay on newChatUrl;
+  // null (the open conversation was cleared) leaves every pane where it is — claude stays on /c/1
   assert.deepEqual(p.openChats, { ok: true, value: { claude: 'navigated', chatgpt: 'kept', grok: 'kept' } })
   assert.equal(p.openChatsLoads.claude, 'http://127.0.0.1:5199/c/1?site=claude')
-  assert.deepEqual(p.openChatsNull, { ok: true, value: { claude: 'new', chatgpt: 'kept', grok: 'kept' } })
+  assert.deepEqual(p.openChatsNull, { ok: true, value: { claude: 'kept', chatgpt: 'kept', grok: 'kept' } })
+  assert.deepEqual(p.openChatsNullLoads, [0, 0, 0], 'nothing loaded for null')
+  // a request that arrives while a New-chat load is pending on its pane: accepted at once, `ready` only after the commit
+  assert.deepEqual(p.pendingNavigation, { accepted: true, readyBeforeCommit: 0, readyAfterCommit: 1 })
   assert.equal(p.signOut.ok, true)
   assert.deepEqual(p.signOutCleared, { grok: 1, claude: 0 }, 'clearStorageData on the grok partition only')
   assert.equal(p.signOutLoad, `${FAKE_BASE}/?site=grok`)
@@ -328,6 +335,23 @@ test('TRIPLEX_E2E_APP=1 also refuses a non-loopback trusted host (exit 3): loopb
   const partial = run({ TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: JSON.stringify(one), TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
   assert.equal(partial.status, 3)
   assert.match(partial.stderr, /grok\.hosts=grok\.com/)
+})
+
+test('TRIPLEX_BACKEND_URL on a non-loopback host is refused before any window (exit 2) unless TRIPLEX_ALLOW_REMOTE_BACKEND=1, which warns loudly and never logs the token', () => {
+  const refused = run({ TRIPLEX_BACKEND_URL: 'http://10.0.0.5:8021', BRIDGE_TOKEN: 'remote-secret', TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
+  assert.equal(refused.status, 2)
+  assert.equal(refused.report.exit, 2)
+  assert.equal(refused.report.windows.length, 0)
+  assert.equal(refused.report.sockets.length, 0, 'no socket, so the token never left')
+  assert.match(refused.stderr, /TRIPLEX_BACKEND_URL names the non-loopback host 10\.0\.0\.5.*TRIPLEX_ALLOW_REMOTE_BACKEND=1/)
+  assert.equal(refused.stderr.includes('remote-secret'), false)
+
+  const allowed = run({ TRIPLEX_BACKEND_URL: 'http://10.0.0.5:8021', BRIDGE_TOKEN: 'remote-secret', TRIPLEX_ALLOW_REMOTE_BACKEND: '1', TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
+  assert.equal(allowed.status, 0, allowed.stderr)
+  assert.equal(allowed.report.windows.length, 1)
+  assert.equal(allowed.report.sockets[0].url, 'ws://10.0.0.5:8021/api/bridge')
+  assert.match(allowed.stderr, /WARNING: TRIPLEX_ALLOW_REMOTE_BACKEND=1 .*REMOTE backend host 10\.0\.0\.5.*cleartext http/)
+  assert.equal(allowed.stderr.includes('remote-secret'), false, 'the token is never logged')
 })
 
 test('a broken TRIPLEX_SITES_JSON is a config error (exit 2)', () => {

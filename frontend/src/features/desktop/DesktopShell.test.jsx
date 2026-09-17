@@ -137,12 +137,13 @@ describe('DesktopShell: shortcuts through the composed shell', () => {
     expect(screen.getByTestId('pane-chatgpt')).not.toBeVisible()
     expect(screen.getByTestId('prompt-result-grok')).toHaveTextContent('✗ logged_out')
     expect(screen.getByTestId('prompt-result-claude')).toHaveTextContent('sent ✓ captured · 0.9 s')
-    // the conversation created by the first Send is what the panes are pointed at, once
-    await waitFor(() => expect(fake.openChats).toHaveBeenCalledWith('c1'))
-    expect(fake.openChats).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
+    // the conversation created by the first Send is adopted by the panes (Decision 12): the shell's
+    // one useOpenChats instance never calls openChats under that Send's own in-flight requests,
+    // nor once the turn has settled and the refetch re-dispatched the same id
+    expect(fake.openChats).not.toHaveBeenCalled()
     act(() => fake.emit.health('grok', health({ session: 'logged_out', composer: false, send: false })))
     expect(screen.getByTestId('pane-grok-session')).toHaveTextContent('SIGN IN')
-    await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
   })
 
   test('Ctrl+Shift+N (new-chat-all) through the shell creates a conversation and opens its chats exactly once, like the button', async () => {

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 
 import httpx
 import pytest
@@ -15,6 +16,7 @@ from backend.config import settings
 from backend.llm import bridge, metering, mock
 from backend.llm import client as client_mod
 from backend.llm.client import stream_completion, transport_kind
+from backend.schemas import Extraction
 from tests.bridge.conftest import FakeConnection, hello
 from tests.llm.conftest import CHAT_URL, GENERATION_URL, chunk, collect, kinds, sse_body, usage_obj
 
@@ -96,6 +98,94 @@ async def test_web_model_without_a_desktop_is_bridge_unavailable_not_a_mock_miss
     assert kinds(deltas) == ["error"]
     assert deltas[0].code == "bridge_unavailable" and deltas[0].error_type == "triplex"
     assert mock.calls == []
+
+
+# --------------------------------------------------------------------------- log hygiene
+SECRET = "SECRET-REPLY-FRAGMENT"
+
+
+async def test_validation_failure_log_lines_never_quote_the_reply(caplog):
+    """A captured reply that fails schema validation goes back to the model in full (the
+    correction message), but a log line only ever carries `loc: type`: the desktop pipes
+    stdout into backend.log on disk, and a reply fragment is site content (the anon/ToS rule:
+    frame bodies and captured text never reach a log line)."""
+    caplog.set_level(logging.DEBUG)
+    conn = FakeConnection()
+    bridge.hub.attach(conn, hello())
+    bad = json.dumps(
+        {
+            "agreements": [],
+            "divergences": [
+                {
+                    "id": "d1",
+                    "topic": "range",
+                    "materiality": "high",
+                    "positions": [{"model": SECRET, "claim": f"{SECRET} as a claim"}],
+                }
+            ],
+        }
+    )
+    task = asyncio.create_task(
+        client_mod.complete_json(
+            role="analyst",
+            purpose="extraction",
+            model="web:chatgpt:analyst",
+            messages=[
+                {"role": "system", "content": "Compare the replies."},
+                {"role": "user", "content": "Question and quoted replies."},
+            ],
+            schema_model=Extraction,
+            effort="off",
+            max_tokens=100,
+            retries=1,
+        )
+    )
+
+    async def answer(n: int) -> dict:
+        while len(conn.sent("request")) < n:
+            await asyncio.sleep(0.005)
+        req = conn.sent("request")[-1]
+        rid = req["req_id"]
+        bridge.hub.dispatch(
+            conn, {"type": "accepted", "req_id": rid, "view": "analyst", "slot": "chatgpt"}
+        )
+        bridge.hub.dispatch(
+            conn,
+            {
+                "type": "result",
+                "req_id": rid,
+                "ok": True,
+                "captured": True,
+                "text": bad,
+                "url": "https://site.example/c/1",
+                "ms": 3,
+                "done_by": "quiet",
+            },
+        )
+        return req
+
+    await asyncio.wait_for(answer(1), 5)
+    correction = await asyncio.wait_for(answer(2), 5)
+    parsed, raw, _usage, error = await asyncio.wait_for(task, 5)
+    assert parsed is None and raw == bad
+    assert error is not None and SECRET in error  # the full rendering, for the model...
+    assert "failed validation" in correction["text"] and SECRET in correction["text"]
+    for record in caplog.records:  # ...and never a log line
+        assert SECRET not in record.getMessage(), record.getMessage()
+        assert SECRET not in str(record.args or "")
+    retry = [r.getMessage() for r in caplog.records if "complete_json retry" in r.getMessage()]
+    assert len(retry) == 1
+    assert "1 validation error(s): divergences.0.positions.0.model: literal_error" in retry[0]
+    assert mock.calls == []
+
+
+def test_validation_summary_is_loc_and_type_only():
+    with pytest.raises(client_mod.ValidationError) as ei:
+        Extraction.model_validate({"agreements": "nope", "divergences": [{"id": SECRET}]})
+    summary = client_mod.validation_summary(ei.value)
+    assert SECRET in str(ei.value) and SECRET not in summary
+    assert summary.startswith("agreements: list_type; divergences.0.topic: missing")
+    assert "input_value" not in summary and "http" not in summary
 
 
 # --------------------------------------------------------------------------- desktop guard

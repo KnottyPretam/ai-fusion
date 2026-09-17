@@ -2,10 +2,11 @@
 // touching the adapter, accepted before any DOM write, navigation rule (decision 12), insert
 // phases serialized by the mutex (decision 13), chat-URL recording, capture off → captured:false
 // without observe, capture on → observe with baselineCount, cancel aborts the in-flight op,
-// failure mapping, budgets, every emitted frame passes protocol.validate().
+// failure mapping, budgets, a navigation main started elsewhere holds `ready` until it commits,
+// every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
@@ -65,7 +66,7 @@ function okHealth(extra = {}) {
  * links {slot: url} for CONV, urls {slot: current url}, pattern, timeouts (undefined → the small
  * test budget; null → the orchestrator's defaults), analyst (an analystAdapterFor fn).
  */
-function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs, setHealth } = {}) {
+function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs, setHealth, pendingNavigation } = {}) {
   const trace = []
   const table = {}
   for (const slot of clients) table[slot] = scriptedClient(slot, trace)
@@ -105,6 +106,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
       if (url.includes('fail')) throw new Error('ERR_CONNECTION_REFUSED')
       current[slot] = url
     },
+    ...(pendingNavigation ? { pendingNavigation } : {}),
     onNavigate: (slot, cb) => {
       navCbs[slot] = cb
       return () => {
@@ -301,7 +303,7 @@ test('capture on: observe is called with baselineCount = the submit result assis
   assert.equal(phases.at(-1), 'claude:done')
 })
 
-test('a missing / bogus assistantCount observes from baseline 0; an unknown doneBy is reported as quiet; an empty text is still ok', async () => {
+test('a missing / bogus assistantCount omits baselineCount from observe (the adapter samples its own baseline; 0 would capture the previous reply); an unknown doneBy is reported as quiet; an empty text is still ok', async () => {
   const { orch, table, emit } = setup({ capture: { grok: true } })
   const done = orch.run(request('grok'), emit)
   await settleAll()
@@ -309,7 +311,9 @@ test('a missing / bogus assistantCount observes from baseline 0; an unknown done
   await settleAll()
   table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: -1 })
   await settleAll()
-  assert.equal(table.grok.last().payload.baselineCount, 0)
+  assert.equal(table.grok.last().op, 'observe')
+  assert.deepEqual(table.grok.last().payload, { quietMs: 250, timeoutMs: 4000 }, 'no baselineCount at all')
+  assert.equal('baselineCount' in table.grok.last().payload, false)
   table.grok.last().resolve({ ok: true, op: 'observe', text: '', doneBy: 'weird', ms: 1 })
   const final = await done
   assert.equal(final.captured, true)
@@ -435,6 +439,84 @@ test('a failed navigation to the recorded chat → result navigation (after acce
   await settleAll()
   fresh.table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
   assert.equal((await run2).ok, true)
+})
+
+test('a navigation main started elsewhere (openChats / New chat / the initial load) holds ready until it commits: bounded by NAVIGATION_WAIT_MS, ended by a cancel, skipped after the turn\'s own navigation', async () => {
+  let commit
+  const pending = { chatgpt: new Promise((r) => (commit = r)) }
+  const { orch, table, trace, emitted, emit, timers } = setup({ pendingNavigation: (slot) => pending[slot] || null, urls: { chatgpt: 'https://x.test/' } })
+  const done = orch.run(request('chatgpt'), emit)
+  await settleAll()
+  assert.deepEqual(emitted.map((f) => f.type), ['accepted'], 'accepted goes out at once')
+  assert.deepEqual(table.chatgpt.ops(), [], 'no ready while the navigation is pending: the old document would answer it')
+  assert.equal(timers.pending(), 1, 'the wait is bounded')
+  commit()
+  await settleAll()
+  assert.deepEqual(table.chatgpt.ops(), ['ready'], 'ready right after the commit')
+  assert.equal(timers.pending(), 0, 'the bound is cleared')
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, url: 'https://x.test/' })
+  assert.equal((await done).ok, true)
+  assert.deepEqual(trace.filter((t) => t.includes('ready')), ['chatgpt:ready:start', 'chatgpt:ready:end'])
+
+  // a slot with nothing pending is not delayed at all
+  const other = orch.run(request('grok'), emit)
+  await settleAll()
+  assert.deepEqual(table.grok.ops(), ['ready'])
+  table.grok.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await other).ok, true)
+
+  // bounded: a navigation that never commits releases the turn after NAVIGATION_WAIT_MS
+  const slow = setup({ pendingNavigation: () => new Promise(() => {}) })
+  const run2 = slow.orch.run(request('grok'), slow.emit)
+  await settleAll()
+  assert.deepEqual(slow.table.grok.ops(), [])
+  slow.timers.advance(NAVIGATION_WAIT_MS - 1)
+  await settleAll()
+  assert.deepEqual(slow.table.grok.ops(), [])
+  slow.timers.advance(1)
+  await settleAll()
+  assert.deepEqual(slow.table.grok.ops(), ['ready'], 'ready after the bound')
+  slow.table.grok.last().reject(new AdapterRequestError('timeout', 'no composer'))
+  assert.equal((await run2).code, 'timeout')
+
+  // a cancel during the wait ends it: nothing is ever asked of the page
+  const c = setup({ pendingNavigation: () => new Promise(() => {}) })
+  const run3 = c.orch.run(request('claude'), c.emit)
+  await settleAll()
+  assert.equal(c.orch.cancel('req-claude'), true)
+  const f3 = await run3
+  assert.equal(f3.code, 'cancelled')
+  assert.deepEqual(c.table.claude.ops(), [], 'no op after the cancel')
+  assert.equal(c.timers.pending(), 0)
+  assertValid(f3)
+
+  // the turn's own navigation (a differing recorded link) comes first; whatever is pending afterwards is awaited
+  let commit2
+  const pending2 = { chatgpt: new Promise((r) => (commit2 = r)) }
+  const own = setup({ pendingNavigation: (slot) => pending2[slot] || null, links: { chatgpt: 'https://x.test/c/old' }, urls: { chatgpt: 'https://x.test/' } })
+  const run4 = own.orch.run(request('chatgpt'), own.emit)
+  await settleAll()
+  assert.deepEqual(own.loads, [['chatgpt', 'https://x.test/c/old']], 'own navigation issued')
+  assert.deepEqual(own.table.chatgpt.ops(), [], 'then the pending one is awaited')
+  commit2()
+  await settleAll()
+  assert.deepEqual(own.table.chatgpt.ops(), ['ready'])
+  own.table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  own.table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
+  assert.equal((await run4).ok, true)
+
+  // a pendingNavigation that throws or answers junk never blocks the turn
+  const junk = setup({ pendingNavigation: () => { throw new Error('boom') } })
+  const run5 = junk.orch.run(request('claude'), junk.emit)
+  await settleAll()
+  assert.deepEqual(junk.table.claude.ops(), ['ready'])
+  junk.table.claude.last().reject(new AdapterRequestError('timeout', 't'))
+  await run5
 })
 
 // --- parallel requests, the mutex, focus --------------------------------------------------------

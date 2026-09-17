@@ -18,6 +18,14 @@
  *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt)
  *   ?blockAfterMs=N  N ms after a submit the "Unusual activity" alert appears and the reply freezes
  *                    (a blocked session mid-observe)
+ *   ?doneLagMs=N     the END SIGNAL lands early: N ms before the last render the done marker is mounted
+ *                    (chatgpt's copy button) and the stop button dropped (every site) while the text keeps
+ *                    re-rendering — a capture that resolves on the first end signal reads a pre-final text
+ *                    (window.__fake.doneSignalAt < lastRenderAt, rendersAfterSignal > 0)
+ *   ?twoTurns=1      the reply is TWO assistant containers: a first "tool" container (a fixed
+ *                    'Searching the web…', marked done at once — chatgpt gets its copy button — while the
+ *                    stop button stays up) and, TWO_TURNS_LAG_MS later, the answer container streaming as
+ *                    usual; a capture must follow the LAST container and never end on the tool turn
  *
  * Reply DOM — matches the selectors v2 `assistant` / `assistantText` / `stop` / `done` cascades
  * (site.cjs DEFAULT_SELECTORS, contract §4) with their FIRST entries:
@@ -58,10 +66,13 @@
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
  * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
- *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs}, replying, done,
- *                  renders, rewinds, replyText()} (the site's own debug surface; `helperText()` is the
- * hidden helper textarea's value, null when there is none; `replyText()` the current reply text, null
- * before any reply).
+ *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs, doneLagMs, twoTurns}, replying,
+ *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
+ *                  replyText()} (the site's own debug surface; `helperText()` is the hidden helper
+ * textarea's value, null when there is none; `replyText()` the current reply text, null before any
+ * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
+ * ms of the end signal and the last text render, null before; `rendersAfterSignal` the renders that
+ * landed after the end signal).
  */
 ;(() => {
   'use strict'
@@ -79,6 +90,9 @@
   const RENDER_MS = 40
   const REWIND_EVERY = 5
   const REWIND_FACTOR = 0.6
+  /** ?twoTurns=1: the answer container follows the tool container after this many ms. */
+  const TWO_TURNS_LAG_MS = 300
+  const TOOL_TEXT = 'Searching the web…'
 
   // Canned JSON for ?reply=json — the assembled `content` of the planted_factual fixtures, verbatim
   // (analyst.extraction.1, <slot>.defense.1, analyst.convergence.1). observe.spec.js re-derives these
@@ -108,6 +122,8 @@
     nostop: params.get('nostop') === '1',
     nodone: params.get('nodone') === '1',
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
+    doneLagMs: params.has('doneLagMs') ? Math.max(0, Number(params.get('doneLagMs')) || 0) : null,
+    twoTurns: params.get('twoTurns') === '1',
   }
 
   const app = document.getElementById('app')
@@ -137,6 +153,10 @@
     done: false,
     renders: 0,
     rewinds: 0,
+    containers: 0,
+    doneSignalAt: null,
+    lastRenderAt: null,
+    rendersAfterSignal: 0,
     replyText: () => (reply ? reply.textEl.textContent : null),
   }
   window.__fake = fake
@@ -314,6 +334,8 @@
   function renderReply(s) {
     reply.textEl.replaceChildren(document.createTextNode(s))
     fake.renders += 1
+    fake.lastRenderAt = Date.now()
+    if (reply.ended) fake.rendersAfterSignal += 1
   }
 
   function endReply() {
@@ -325,27 +347,60 @@
     actions.streaming(false)
   }
 
-  function startReply(text) {
-    const built = buildAssistant()
-    reply = { ...built, full: replyFor(text), timer: null }
+  /** Append an assistant container to the thread (counted in window.__fake.containers). */
+  function appendAssistant(built) {
     thread.appendChild(built.container)
+    fake.containers += 1
+  }
+
+  function startReply(text) {
+    if (replyOpts.twoTurns) {
+      // ?twoTurns=1: a finished "tool" turn first — its text static, its done marker mounted at once
+      // (chatgpt) — under the stop button, then the answer container after TWO_TURNS_LAG_MS.
+      const tool = buildAssistant()
+      tool.textEl.replaceChildren(document.createTextNode(TOOL_TEXT))
+      appendAssistant(tool)
+      tool.markDone()
+      fake.replying = true
+      fake.done = false
+      if (!replyOpts.nostop) actions.streaming(true)
+      setTimeout(() => streamReply(text), TWO_TURNS_LAG_MS)
+      return
+    }
+    streamReply(text)
+  }
+
+  function streamReply(text) {
+    const built = buildAssistant()
+    reply = { ...built, full: replyFor(text), timer: null, ended: false }
+    appendAssistant(built)
     fake.replying = true
     fake.done = false
     if (!replyOpts.nostop) actions.streaming(true)
     const t0 = Date.now()
     let ticks = 0
+    /** The end signal — the done marker (chatgpt) mounted, the stop button gone — once; under ?doneLagMs it lands BEFORE the last render. */
+    const signalEnd = () => {
+      if (reply.ended) return
+      reply.ended = true
+      reply.markDone()
+      actions.streaming(false)
+      fake.doneSignalAt = Date.now()
+    }
     const finish = () => {
       renderReply(reply.full)
-      reply.markDone()
+      signalEnd()
       endReply()
       fake.done = true
     }
     const step = () => {
-      const p = replyOpts.ms === 0 ? 1 : Math.min(1, (Date.now() - t0) / replyOpts.ms)
+      const elapsed = Date.now() - t0
+      const p = replyOpts.ms === 0 ? 1 : Math.min(1, elapsed / replyOpts.ms)
       if (p >= 1) {
         finish()
         return
       }
+      if (replyOpts.doneLagMs !== null && replyOpts.ms - elapsed <= replyOpts.doneLagMs) signalEnd()
       ticks += 1
       const n = Math.floor(reply.full.length * p)
       const rewind = ticks % REWIND_EVERY === 0 && n > 8

@@ -5,20 +5,45 @@
 // Keyed (conversation_id, slot). Main is the only writer: the orchestrator records a link only
 // after a navigation matching the site's `chatUrlPattern` (≤15 s after the submit) and never
 // overwrites a matching link with a non-matching URL — that rule lives in orchestrator.js; this
-// store is a plain, atomically written map. A missing file is empty; a corrupt file is moved
-// aside (`chats.json.corrupt-<ts>`) with a warning and the store starts empty, so the next
+// store is a plain, atomically written map. A link is accepted (on load and on `set`) only when
+// it is an `https:` URL on `sites[slot].hosts` (plain `http:` only on a loopback host — the fake
+// site); anything else — a foreign host, `javascript:`, `file:` — is dropped with a warning, so a
+// tampered chats.json can never steer a logged-in view (`views.loadUrl` refuses the same URLs
+// again, because `loadURL` bypasses `will-navigate`). A missing file is empty; a corrupt file is
+// moved aside (`chats.json.corrupt-<ts>`) with a warning and the store starts empty, so the next
 // write yields a valid document again. No electron import: `fs` and the clock are injected.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SLOTS } from './sites.js'
+import { isSiteUrl } from './policy.js'
 
 export const CHATS_FILE = 'chats.json'
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
-/** Keep only `{convId: {slot: url}}` entries with non-empty string ids and urls for known slots. */
-export function sanitizeChats(raw) {
+/** `scheme://host` of a link for a log line (never the path: chat ids stay out of the logs). */
+function describeLink(url) {
+  try {
+    const u = new URL(String(url))
+    return `${u.protocol}//${u.host}`
+  } catch (_e) {
+    return typeof url === 'string' ? `${url.slice(0, 16)}… (unparseable)` : typeof url
+  }
+}
+
+/** True when `url` may be stored as the `slot` link: an http(s) URL on the site's hosts (see isSiteUrl). */
+export function isChatLink(url, sites, slot) {
+  if (typeof url !== 'string' || url === '') return false
+  return isSiteUrl(url, sites && sites[slot] ? sites[slot] : null)
+}
+
+/**
+ * Keep only `{convId: {slot: url}}` entries with non-empty string ids and, for known slots, links
+ * that pass `isChatLink` (`sites` null → the scheme rule alone). `onDrop(convId, slot, url)` is
+ * called for every string link that was refused.
+ */
+export function sanitizeChats(raw, { sites = null, onDrop = null } = {}) {
   const out = {}
   if (!isPlainObject(raw)) return out
   for (const [convId, links] of Object.entries(raw)) {
@@ -26,7 +51,9 @@ export function sanitizeChats(raw) {
     const clean = {}
     for (const slot of SLOTS) {
       const url = links[slot]
-      if (typeof url === 'string' && url !== '') clean[slot] = url
+      if (typeof url !== 'string' || url === '') continue
+      if (isChatLink(url, sites, slot)) clean[slot] = url
+      else if (typeof onDrop === 'function') onDrop(convId, slot, url)
     }
     if (Object.keys(clean).length) out[convId] = clean
   }
@@ -34,18 +61,21 @@ export function sanitizeChats(raw) {
 }
 
 /**
- * createChats({dir, fs, now, log}) → chats
- *   load()                    read the file (missing → {}, corrupt → moved aside + {})
+ * createChats({dir, sites, fs, now, log}) → chats
+ *   sites                     the resolved site table: links must sit on `sites[slot].hosts`
+ *                             (absent → only the scheme rule applies; main always passes it)
+ *   load()                    read the file (missing → {}, corrupt → moved aside + {}; off-site links dropped)
  *   get(convId, slot)         url | null
  *   links(convId)             {slot: url} (a copy; {} when unknown)
- *   set(convId, slot, url)    record + save; returns true when the document changed
+ *   set(convId, slot, url)    record + save; returns true when the document changed; throws for
+ *                             a link that is not an http(s) URL on the site's hosts
  *   forget(convId)            drop a conversation's links + save; returns true when it existed
  *   forgetSlot(convId, slot)  drop one link + save
  *   all()                     a deep copy of the document
  *   save()                    atomic write now
  *   file                      the absolute path
  */
-export function createChats({ dir, fs = nodeFs, now = Date.now, log = console } = {}) {
+export function createChats({ dir, sites = null, fs = nodeFs, now = Date.now, log = console } = {}) {
   if (typeof dir !== 'string' || dir === '') throw new Error('createChats: dir is required')
   const file = path.join(dir, CHATS_FILE)
   let doc = {}
@@ -53,6 +83,7 @@ export function createChats({ dir, fs = nodeFs, now = Date.now, log = console } 
   const warn = (m) => {
     if (log && typeof log.warn === 'function') log.warn(`[chats] ${m}`)
   }
+  const onDrop = (convId, slot, url) => warn(`${file}: dropped the ${slot} link of ${convId} (${describeLink(url)} is not an http(s) URL on the site's hosts)`)
 
   function moveAside(reason) {
     const aside = `${file}.corrupt-${Number(now()).toString(36)}`
@@ -86,7 +117,7 @@ export function createChats({ dir, fs = nodeFs, now = Date.now, log = console } 
       doc = {}
       return all()
     }
-    doc = sanitizeChats(parsed)
+    doc = sanitizeChats(parsed, { sites, onDrop })
     return all()
   }
 
@@ -138,6 +169,7 @@ export function createChats({ dir, fs = nodeFs, now = Date.now, log = console } 
     requireConv(convId)
     requireSlot(slot)
     if (typeof url !== 'string' || url === '') throw new Error('chats: url must be a non-empty string')
+    if (!isChatLink(url, sites, slot)) throw new Error(`chats: the ${slot} link must be an http(s) URL on the site's hosts (got ${describeLink(url)})`)
     if (doc[convId] && doc[convId][slot] === url) return false
     doc[convId] = { ...(doc[convId] || {}), [slot]: url }
     save()

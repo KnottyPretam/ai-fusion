@@ -1,5 +1,5 @@
 'use strict'
-// desktop/preload/renderer.cjs — exposes `window.triplex` to the renderer (contract §2, Stage 1 + Stage 2 surface).
+// desktop/preload/renderer.cjs — exposes `window.triplex` to the renderer (contract §2, Stage 1–3 surface).
 //
 // Sandboxed preload (`sandbox:true`, `contextIsolation:true`): only 'electron' is requirable.
 // `ipcRenderer` itself is never exposed; every method maps to exactly one channel:
@@ -24,6 +24,10 @@
 //   invoke 'panes:openChats'    (convId|null)             → {[slot]: 'navigated'|'new'|'kept'}
 //   invoke 'panes:signOut'      (slot)                   clearStorageData for that partition only, then newChatUrl
 //   invoke 'panes:snapshot'     (slot)                   → {path}   (scrubbed HTML under userData/snapshots/)
+//   Stage 3:
+//   invoke 'panes:setAnalyst'   (slot|null)              choose the hidden analyst page's login (null = none)
+//   invoke 'panes:showAnalyst'  (visible:boolean)        reveal / hide the analyst view as a fourth tab
+//   on     'panes:analyst'      cb({slot, visible, health})
 //
 // Main validates every payload and rejects violations with Error('bad_request').
 
@@ -73,6 +77,10 @@ const api = Object.freeze({
   openChats: (convId) => ipcRenderer.invoke('panes:openChats', convId),
   signOut: (slot) => ipcRenderer.invoke('panes:signOut', slot),
   saveDomSnapshot: (slot) => ipcRenderer.invoke('panes:snapshot', slot),
+  // Stage 3 (handlers arrive with analyst-view; until then main rejects them as unregistered):
+  setAnalyst: (slot) => ipcRenderer.invoke('panes:setAnalyst', slot),
+  showAnalyst: (visible) => ipcRenderer.invoke('panes:showAnalyst', visible),
+  onAnalyst: subscribe('panes:analyst'),
 })
 
 contextBridge.exposeInMainWorld('triplex', api)

@@ -73,6 +73,62 @@ for (const site of SLOTS) {
   })
 }
 
+test.describe('Stage 2 reply options the capture specs lean on', () => {
+  const sel = DEFAULT_SELECTORS.chatgpt
+  const replyState = (page) =>
+    page.evaluate(() => ({
+      replying: window.__fake.replying,
+      done: window.__fake.done,
+      containers: window.__fake.containers,
+      doneSignalAt: window.__fake.doneSignalAt,
+      lastRenderAt: window.__fake.lastRenderAt,
+      rendersAfterSignal: window.__fake.rendersAfterSignal,
+      replyText: window.__fake.replyText(),
+    }))
+  const submit = async (page, text) => {
+    await page.locator(sel.composer[0]).click()
+    await page.keyboard.type(text)
+    await page.keyboard.press('Enter')
+  }
+
+  test('?doneLagMs: the copy marker mounts and the stop button goes while the reply is still re-rendering; the last render lands after the end signal', async ({ page }) => {
+    await page.goto('/?site=chatgpt&replyMs=1500&doneLagMs=700')
+    await submit(page, 'lag')
+    await expect(page.locator(sel.stop[0])).toHaveCount(1)
+    await expect.poll(async () => (await replyState(page)).doneSignalAt !== null).toBe(true)
+    const mid = await replyState(page)
+    expect(mid.replying).toBe(true) // the end signal is up, the stream is not over
+    expect(mid.done).toBe(false)
+    await expect(page.locator(sel.stop[0])).toHaveCount(0)
+    await expect(page.locator(sel.done[0])).toHaveCount(1)
+    await expect.poll(async () => (await replyState(page)).done).toBe(true)
+    const end = await replyState(page)
+    expect(end.replyText).toBe('Echo: lag')
+    expect(end.rendersAfterSignal).toBeGreaterThan(1)
+    expect(end.lastRenderAt).toBeGreaterThan(end.doneSignalAt)
+    await expect(page.locator(sel.done[0])).toHaveCount(1) // mounted once, not again at the end
+  })
+
+  test('?twoTurns=1: a finished tool container (its copy marker up, the stop button up) first, the answer container 300 ms later; both stay', async ({ page }) => {
+    await page.goto('/?site=chatgpt&replyMs=600&twoTurns=1')
+    await submit(page, 'two')
+    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
+    await expect(page.locator(sel.assistant[0]).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
+    await expect(page.locator(sel.done[0])).toHaveCount(1)
+    await expect(page.locator(sel.stop[0])).toHaveCount(1)
+    expect((await replyState(page)).containers).toBe(1)
+    await expect(page.locator(sel.assistant[0])).toHaveCount(2)
+    await expect.poll(async () => (await replyState(page)).done).toBe(true)
+    const end = await replyState(page)
+    expect(end.containers).toBe(2)
+    expect(end.replyText).toBe('Echo: two')
+    await expect(page.locator(sel.assistant[0]).nth(1).locator(sel.assistantText[0])).toHaveText('Echo: two')
+    await expect(page.locator(sel.assistant[0]).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
+    await expect(page.locator(sel.done[0])).toHaveCount(2)
+    await expect(page.locator(sel.stop[0])).toHaveCount(0)
+  })
+})
+
 test('chatgpt: an innerHTML write is reconciled away and never enables send', async ({ page }) => {
   await page.goto('/?site=chatgpt')
   const composer = page.locator('#prompt-textarea')

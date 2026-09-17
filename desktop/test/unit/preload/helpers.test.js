@@ -12,6 +12,7 @@ const {
   isBlank,
   nonNegativeInt,
   isVisible,
+  isClickable,
   isEnabled,
   isTextField,
   readText,
@@ -120,6 +121,29 @@ test('isEnabled honours :disabled inheritance (a disabled <fieldset>) and a bare
   assert.ok(isEnabled({ hasAttribute: () => false, getAttribute: () => null }))
   assert.ok(isEnabled({ matches: () => { throw new Error('unsupported pseudo-class') } }))
   assert.ok(!isEnabled({ matches: () => { throw new Error('boom') }, getAttribute: (n) => (n === 'aria-disabled' ? 'true' : null) })) // the later checks still run
+})
+
+test('isVisible: opacity:0 is hidden (a hover-revealed action bar, the grok helper textarea); isClickable also rejects pointer-events:none; the element\'s own view is used without a win', () => {
+  const win = (style) => ({ getComputedStyle: () => style })
+  const box = { getClientRects: () => [{}], getBoundingClientRect: () => ({ width: 20, height: 20 }) }
+  assert.ok(!isVisible(box, win({ display: 'block', visibility: 'visible', opacity: '0' })))
+  assert.ok(!isVisible(box, win({ opacity: 0 })))
+  assert.ok(isVisible(box, win({ opacity: '0.35' })))
+  assert.ok(isVisible(box, win({ opacity: '1' })))
+  assert.ok(isVisible(box, win({})))
+  assert.ok(isVisible(box, win({ opacity: '' })))
+  assert.ok(!isClickable(box, win({ opacity: '0' })))
+  assert.ok(!isClickable(box, win({ pointerEvents: 'none' })))
+  assert.ok(isVisible(box, win({ pointerEvents: 'none' }))) // painted, just not pressable
+  assert.ok(isClickable(box, win({ pointerEvents: 'auto' })))
+  assert.ok(isClickable(box, win({})))
+  assert.ok(isClickable({}))
+  assert.ok(!isClickable(null))
+  const owned = { ...box, ownerDocument: { defaultView: { getComputedStyle: () => ({ opacity: '0' }) } } }
+  assert.ok(!isVisible(owned))
+  assert.ok(!isClickable(owned))
+  const throwing = { ...box, ownerDocument: { defaultView: { getComputedStyle: () => { throw new Error('detached') } } } }
+  assert.ok(isVisible(throwing) && isClickable(throwing))
 })
 
 test('isVisible: no client rects → hidden; display:none / visibility:hidden → hidden; no layout APIs → visible', () => {

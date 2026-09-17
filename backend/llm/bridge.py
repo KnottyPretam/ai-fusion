@@ -359,10 +359,28 @@ class BridgeHub:
             _settle(p.result, exc=BridgeError(code, message))
 
     # ------------------------------------------------------------------ inbound frames
-    def dispatch(self, frame: bp.ClientFrame | dict[str, Any]) -> None:
-        """Route one parsed client frame (a dict is parsed first; malformed -> ValueError)."""
+    def dispatch(
+        self,
+        conn_or_frame: BridgeConnection | bp.ClientFrame | dict[str, Any],
+        frame: bp.ClientFrame | dict[str, Any] | None = None,
+    ) -> None:
+        """Route one parsed client frame (a dict is parsed first; malformed -> ValueError).
+
+        `dispatch(frame)` is the contract's unscoped form (tests, fakes); the router calls
+        `dispatch(conn, frame)`, which drops the frame when `conn` is not the current client:
+        a superseded socket keeps delivering until its 4002 close lands, and its pongs and
+        cache frames must never touch the new client's liveness bookkeeping or `status()`.
+        """
+        if frame is None:
+            conn: BridgeConnection | None = None
+            frame = conn_or_frame  # type: ignore[assignment]
+        else:
+            conn = conn_or_frame  # type: ignore[assignment]
         if isinstance(frame, dict):
             frame = bp.parse_client_frame(frame)
+        if conn is not None and conn is not self._conn:
+            log.debug("bridge: %s from a stale connection ignored", frame.type)
+            return
         kind = frame.type
         if kind == "pong":
             self._awaiting_pong = False

@@ -1,9 +1,10 @@
 // desktop/test/adapters/observe.spec.js — Stage 2 capture against the fake site (project `adapters`):
 // the `observe` op (done by done-selector / stop-gone / quiet, the rewinding stream, timeout with a
 // partial, reply_not_found, a blocked session mid-reply, cancel, busy), `?reply=json` (the
-// planted_factual texts, verbatim), `snapshot` (passes the fixture lint), the `config` re-merge and
-// `ready` after a loadURL to /c/<id>. The real desktop/preload/site.cjs is injected through the fake
-// IPC exactly as in adapter.spec.js (see _harness.js).
+// planted_factual texts, verbatim), an end signal that lands before the last render (?doneLagMs), a
+// second assistant container mid-observe (?twoTurns), `snapshot` (passes the fixture lint), the
+// `config` re-merge and `ready` after a loadURL to /c/<id>. The real desktop/preload/site.cjs is
+// injected through the fake IPC exactly as in adapter.spec.js (see _harness.js).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -189,6 +190,38 @@ test.describe('?reply=json', () => {
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
       expectObserved(res, DEFENSE[site], 'stop_gone')
       expect(JSON.parse(DEFENSE[site].slice('```json\n'.length, -'\n```'.length)).stance).toBe('defend')
+    })
+  }
+})
+
+test.describe('the end signal before the last render (?doneLagMs) and a second container mid-observe (?twoTurns)', () => {
+  for (const site of SLOTS) {
+    test(`${site}: ?doneLagMs=300 — the done marker / stop removal lands 300 ms before the last render; observe still returns the final text (${DONE_BY[site]})`, async ({ page }) => {
+      await open(page, { site, replyMs: 1500, doneLagMs: 300 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: LONG })
+      expect(sent.ok).toBe(true)
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, 'Echo: ' + LONG, DONE_BY[site])
+      const r = await replyState(page)
+      expect(r.done).toBe(true)
+      expect(r.doneSignalAt).not.toBeNull()
+      expect(r.lastRenderAt).toBeGreaterThan(r.doneSignalAt) // the site really rendered after its end signal
+      expect(r.rendersAfterSignal).toBeGreaterThan(1) // several times, rewinds included
+      expect(res.text).toBe(r.replyText)
+      await expect(page.locator(STOP[site])).toHaveCount(0)
+    })
+
+    test(`${site}: ?twoTurns=1 — a finished tool container (marked done under the stop button), then the answer container: observe follows the LAST container and never ends on the tool turn`, async ({ page }) => {
+      await open(page, { site, replyMs: 1200, twoTurns: 1 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: 'two turns' })
+      expect(sent.ok).toBe(true)
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, 'Echo: two turns', DONE_BY[site])
+      expect(res.text).not.toContain('Searching')
+      expect((await replyState(page)).containers).toBe(2)
+      await expect(page.locator(DEFAULT_SELECTORS[site].assistant[0])).toHaveCount(2)
+      if (site === 'chatgpt') await expect(page.locator(CHATGPT_DONE)).toHaveCount(2) // the tool turn's marker was up the whole time
+      expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
     })
   }
 })

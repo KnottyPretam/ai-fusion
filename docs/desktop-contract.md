@@ -23,8 +23,7 @@ is unchanged; its desktop addendum is at the end of `docs/api-contract.md`.
 
 Electron → backend
 - `{"type":"hello","protocol":1,"token":"<hex>","version":"0.1.0","sites":["claude","chatgpt","grok"],"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":null|{"slot":"chatgpt"}}`
-  — MUST be the first frame within 10 s (else close 4004); bad token → close 4003 before any
-  ack; malformed → 4001.
+  — MUST be the first frame within 10 s (else close 4004); bad token, or a browser `Origin` header whose host is not loopback (127.0.0.1 / localhost / ::1; a missing Origin is fine — Electron's Node WebSocket sends none) → close 4003 before any ack; malformed → 4001.
 - `{"type":"capture","capture":{...}}` on toggle; `{"type":"analyst","analyst":null|{"slot"}}` on change.
 - `{"type":"health","slot":"chatgpt","health":Health}` on change.
 - `{"type":"accepted","req_id":"<uuid>","view":"pane"|"analyst","slot":"chatgpt"}` — before any DOM write.
@@ -82,7 +81,7 @@ onZoom(cb:({slot,factor})=>void): ()=>void                               // on '
 sendPrompt({targets, text}): Promise<{results:{[slot]:{ok, code?, message?, ms, url?, composerSelector?, sendSelector?}}}>   // invoke 'prompt:send'
 // Stage 2:
 getCapture(): Promise<{[slot]:boolean}>; setCapture(slot, on): Promise<void>            // invoke 'panes:getCapture'|'panes:setCapture'
-onBridge(cb:({connected, since?})=>void): ()=>void                                     // on 'panes:bridge' (main emits the CURRENT state on the renderer's did-finish-load and after getInfo, like health/zoom)
+onBridge(cb:({connected, since?, error?})=>void): ()=>void                             // on 'panes:bridge' (main emits the CURRENT state on the renderer's did-finish-load and after getInfo, like health/zoom; `error` names why a backend could not be spawned, e.g. port_in_use)
 onTurn(cb:({slot, phase:'idle'|'typing'|'submitted'|'replying'|'done'|'error', code?})=>void): ()=>void   // on 'panes:turn'
 openChats(convId:string|null): Promise<{[slot]:'navigated'|'new'|'kept'}>              // invoke 'panes:openChats' ('kept' also while a turn is in flight on that view or when a recorded link fails to load; null = the open conversation was cleared — main leaves the panes where they are; a navigated pane emits panes:turn {phase:'idle'})
 signOut(slot): Promise<void>                                                            // invoke 'panes:signOut' (clearStorageData for that partition only, then newChatUrl)
@@ -206,7 +205,7 @@ denied via `setPermissionRequestHandler`/`setPermissionCheckHandler`;
 `TRIPLEX_DISABLE_GPU=1` = `--disable-gpu`; anything else refuses to start.
 
 Desktop env: `TRIPLEX_RENDERER_URL` (dev; default `http://127.0.0.1:<backend>/app/`),
-`TRIPLEX_BACKEND_PORT` (8021), `TRIPLEX_BACKEND_URL` (attach, no spawn), `TRIPLEX_DATA_DIR`
+`TRIPLEX_BACKEND_PORT` (8021), `TRIPLEX_BACKEND_URL` (attach, no spawn; must name a loopback host — 127.0.0.1 / localhost / ::1 — else exit 2 unless `TRIPLEX_ALLOW_REMOTE_BACKEND=1`, which warns loudly), `TRIPLEX_DATA_DIR`
 (default `<userData>/data`), `TRIPLEX_USER_DATA_DIR` (→ `app.setPath('userData')` before
 ready), `TRIPLEX_SITES_JSON`, `TRIPLEX_GROK_SURFACE`, `TRIPLEX_SELECTORS_FILE`,
 `TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_E2E_APP=1` (exposes
@@ -214,7 +213,7 @@ ready), `TRIPLEX_SITES_JSON`, `TRIPLEX_GROK_SURFACE`, `TRIPLEX_SELECTORS_FILE`,
 `TRIPLEX_FAKE_PORT` (5199), `TRIPLEX_OLLAMA=1` (export `OLLAMA_*` to the backend).
 Files under `userData` (`~/.config/triplex-desktop/`): `settings.json`
 `{"version":1,"window":{"x","y","width","height","maximized"},"zoom":{"claude":1,"chatgpt":1,"grok":1},"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":"chatgpt","analystVisible":false}`,
-`chats.json` `{"<convId>":{"claude":"https://claude.ai/chat/…","chatgpt":"…","grok":"…"}}`,
+`chats.json` `{"<convId>":{"claude":"https://claude.ai/chat/…","chatgpt":"…","grok":"…"}}` (a link is stored, loaded or navigated only when it is an https URL on `sites[slot].hosts` — plain http only on a loopback host, i.e. the fake site; anything else is dropped with a warning and `views.loadUrl` refuses it with code `navigation`, since `loadURL` bypasses `will-navigate`),
 `selectors.json`, `snapshots/`, `logs/backend.log`, `Partitions/`. Renderer `localStorage`:
 `triplex.panes.mode|active|targets|drawerOpen`, `triplex.desktop.analyst`.
 
@@ -234,8 +233,7 @@ WARNING), `BRIDGE_TIMEOUT_S`=600, `BRIDGE_ACCEPT_TIMEOUT_S`=15, `BRIDGE_PING_S`=
 `TRIPLEX_DESKTOP`=0, `TRIPLEX_APP_DIR` (static renderer dir; unset → `/app/*` 404),
 `OLLAMA_BASE_URL`=`http://127.0.0.1:11434/v1`, `OLLAMA_MODELS`=`hermes3`. Electron spawn env:
 `PORT=8021 HOST=127.0.0.1 DATA_DIR=<userData>/data TRIPLEX_DESKTOP=1 BRIDGE_TOKEN=<random> MOCK_OPENROUTER=0 SLOT_CLAUDE_MODEL=web:claude SLOT_CHATGPT_MODEL=web:chatgpt SLOT_GROK_MODEL=web:grok SLOT_*_EFFORT=off ANALYST_MODEL=web:<settings.analyst>:analyst TRIPLEX_APP_DIR=<repo>/frontend/dist LOG_LEVEL`
-(+ `OLLAMA_*` when `TRIPLEX_OLLAMA=1`; `ANALYST_MODEL` omitted when `settings.analyst` is null;
-never `OPENROUTER_API_KEY`).
+(+ `OLLAMA_*` when `TRIPLEX_OLLAMA=1`; `ANALYST_MODEL` is pinned to the empty string when `settings.analyst` is null and `OPENROUTER_API_KEY` is pinned to the empty string — dotenv never overrides a present variable, so the repo `.env` cannot re-supply either; the backend reads '' as no key / no analyst).
 
 `backend/llm/client.py` (the only edit; everything after `async for d in gen` untouched):
 ```python
@@ -278,7 +276,7 @@ the producer task is created inside the first `__anext__` and inherits it);
 `current_conversation()`; `parse_web_model(model) -> (slot, view)` (`ValueError` →
 `error{code:"bridge_bad_model"}`); `text_for`; `build_request(*, req_id, model, messages, role, purpose, conversation_id, timeout_s) -> dict`;
 `class BridgeConnection(Protocol): async send_json(obj); async close(code:int, reason:str)`;
-`class BridgeHub: attach(conn, hello) -> supersedes; detach(conn); dispatch(frame); async request(frame, *, accept_timeout_s, timeout_s) -> AsyncIterator[dict]`
+`class BridgeHub: attach(conn, hello) -> supersedes; detach(conn); dispatch(frame) | dispatch(conn, frame) (the scoped form drops frames from a socket that is no longer the client; the router uses it); async request(frame, *, accept_timeout_s, timeout_s) -> AsyncIterator[dict]`
 (registers `req_id`, per-request `asyncio.Future`s on the running loop, sends `cancel` on
 timeout/`aclose`); `status() -> {"connected","protocol","version","since","sites":{slot:{"capture","health","health_ts"}},"analyst","inflight"}`;
 `hub = BridgeHub()`; `async def stream(*, role, purpose, model, messages, max_tokens) -> AsyncIterator[Delta]`.
@@ -290,8 +288,7 @@ HealthFrame, Health, Accepted, Rejected, Result, Pong, HelloAck, Request, Cancel
 `{"protocol":1,"frames":{"<type>":{"direction":"client|server","examples":[...],"invalid":[...]}}}`,
 ≥2 examples per type.
 
-Endpoints: `WS /api/bridge` (`routers/bridge.py`: accept → first frame within 10 s → token
-check → `hub.attach` → `hello_ack` → receive loop → `hub.detach` on disconnect; ping task);
+Endpoints: `WS /api/bridge` (`routers/bridge.py`: accept → Origin check → first frame within 10 s → token check → `hello_ack` → `hub.attach` → receive loop → `hub.detach` on disconnect; ping task; attach onward inside one try/finally, a failed ack send never attaches);
 `GET /api/bridge/status` → `hub.status()`; `GET /app`, `/app/`, `/app/{path:path}`
 (`routers/desktop_app.py`: serves `TRIPLEX_APP_DIR`, resolved-path containment, `index.html`
 for extension-less paths, 404 otherwise/unset); `POST /api/conversations/{id}/send` body
