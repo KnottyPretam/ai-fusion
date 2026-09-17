@@ -151,3 +151,69 @@ Notable integrator decisions during the build:
   guaranteed 400): `complete_json` and Analyze's own retry both send the correction message
   alone, and Analyze re-sends the identical request when there was no output at all (a
   transport error or an empty stream).
+
+---
+
+## Desktop pivot (2026-09-16)
+
+**Why.** Stage 4 (live OpenRouter validation) stalled: the OpenRouter account is unfunded (HTTP 402 on
+every live call), and the user then rejected pay-per-token altogether — they want Triplex to use the
+ChatGPT, Claude and Grok subscriptions they already pay for, in a desktop GUI that keeps each site's own
+interface (switch between the three, or see all three in one window) with one unified prompt bar. The plan
+of record is rev 3 (`~/.claude/plans/i-already-have-a-frolicking-dusk.md`, "Triplex Desktop — three
+subscriptions, one window, one prompt"); its frozen contracts §1–§8, architecture diagram and decision
+list are copied verbatim into `docs/desktop-contract.md`. OpenRouter code, mock mode, every fixture and
+the whole offline suite stay as the offline path; live OpenRouter runs are out of scope from here on.
+Tauri was ruled out on this box (no `libwebkit2gtk-4.1` on focal, no Rust, multi-webview unstable);
+Electron 44 runs (three Electron apps already do; Chromium builds against glibc 2.31).
+
+**User decisions (2026-09-16).**
+1. **Grok pane = `grok.com`** — the same page Chrome's "install app" turns into a standalone PWA; an
+   embedded pane is that page with the same standalone look. `TRIPLEX_GROK_SURFACE=x.com` is kept as an
+   unverified escape hatch to `https://x.com/i/grok`.
+2. **Scope = the full pipeline, with capture behind a per-site switch**: shell first (nothing read back),
+   then reply capture that is off until the user flips it for that site, then Analyze and Fusion through
+   the logins. Chosen with the terms of service stated: typing into the real composer is the least
+   exposed act; reading the reply out of the DOM is what OpenAI's "programmatically extract Output" and
+   Anthropic's "automated means" clauses name, and that is what Analyze/Fusion need.
+3. **Analyst = a hidden page on the ChatGPT login** (`web:chatgpt:analyst`), switchable in the config bar
+   to Claude, Grok or local Ollama `hermes3` (zero ToS exposure for the analyst step).
+
+**Decisions taken** (the plan's numbered list, one line each; full text in `docs/desktop-contract.md`
+Appendix B):
+1. Shell-first staging: `S5` = shippable backend-free shell; `S6` capture + bridge; `S7` Analyze/Fusion + analyst + Ollama; `S8` logged-in calibration; tags `S1–S3` stay.
+2. Electron 44 (`^44.4.1`, `@electron-internal/extract-zip >=1.0.4` override), `WebContentsView`, `sandbox:true` everywhere, one self-contained site preload (`site.cjs`) that also boots under a fake IPC and exports its pure functions; nothing exposed to the pages.
+3. Capture off by default per site, persisted in `settings.json`, switched from the pane header next to the ToS wording (the three switches are the first-run notice).
+4. Analyst default `chatgpt` (`settings.analyst`); the config bar offers `web:<slot>:analyst` ×3 and `ollama:<name>`; `null` is legal (Analyze disabled with a hint, bridge answers `analyst_not_chosen`).
+5. Grok = `grok.com`; `TRIPLEX_GROK_SURFACE=x.com` → `https://x.com/i/grok` with the same cascades, not verified in Stage 4.
+6. Stock UA (never set, never changed), no stealth, per-partition permission deny handlers, `will-navigate` policy, allow-listed `TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_USER_DATA_DIR` isolation for e2e.
+7. Health carries `session: ok|logged_out|challenge|blocked` from Stage 1; a request on a non-`ok` view is rejected before any DOM write and the pane (or the analyst tab) is auto-revealed.
+8. Bridge auth = per-launch random token in the `hello` frame, never the URL (uvicorn logs query strings); machine-checked contract `desktop/protocol/bridge-v1.json` validated by pydantic and by the JS validator.
+9. `web:` routing precedes the mock branch in `client.py`; `ollama:` reuses `_live_stream(base_url=, headers=, cost_lookup=False)`; `TRIPLEX_DESKTOP=1` refuses any other model with `transport_disabled`; the desktop backend runs on 8021 with `DATA_DIR=<userData>/data`, so a pre-pivot conversation can never route live with the `.env` key.
+10. `backend/config.py` stays frozen: the new keys are private `os.environ` reads inside `bridge.py` / `ollama.py` / `webmodels.py`.
+11. Subset sends are real from Stage 1's per-target toggles (IPC in `S5`; `PromptBody.slots` + `run_send(conv_id, prompt, *, slots=None)` in `S6`).
+12. Site chat links are recorded by main, keyed `(conversation_id, slot)`, only after a navigation matching `chatUrlPattern` (≤15 s), never overwriting a matching link with a non-matching URL; a send with no link adopts the pane's current chat; "New chat everywhere" = new conversation + all panes to `newChatUrl`.
+13. Insert phase serialized across views (main-side mutex around focus → insert → verify; observe in parallel); explicit `Range` before `execCommand`; hidden-view insertion spiked in Stage 0 with a recorded fallback order.
+14. Zoom, keyboard shortcuts and window-bounds persistence in Stage 1; shortcuts handled once in main (`before-input-event` on every webContents + hidden menu accelerators).
+15. Single owner per persisted key: layout mode / active tab / targets / drawer / analyst mirror → renderer `localStorage`; window bounds / zoom / capture / analyst / chat links → main `settings.json` / `chats.json`.
+16. Final-text capture only (one `text` delta at done; streaming markdown re-renders are non-monotonic); a `delta` frame type is reserved.
+17. Renderer served two ways: dev = Vite 5184 (`TRIPLEX_RENDERER_URL`); built = `frontend/dist` at `/app/` from the backend (`VITE_BASE=/app/`), so `main.py` CORS and `http.js` stay frozen; no custom scheme.
+18. Electron spawns the backend from Stage 2 (`.venv/bin/python -m backend.main`, `uv run` fallback) unless `TRIPLEX_BACKEND_URL` attaches to an external one; Stage 1 needs no backend.
+19. Tests: desktop unit tests = `node --test 'test/unit/**/*.test.js'` (quoted glob) over pure modules with injected fakes, no extra npm deps; bridge flow tests use an in-loop fake connection; the app Playwright project has its own ports (Vite 5184, backend 8021, fake site 5199).
+
+**Tag plan.** `S4` Stage 0 — scaffold, contracts, spike (integrator only) → `S5` Stage 1 — shell v1:
+three logged-in sites, tabs + split, one prompt, no backend (live checks 1–14) → `S6` Stage 2 — capture
+and bridge: the unified prompt becomes a Triplex Send (live checks 15–22) → `S7` Stage 3 —
+Analyze/Fusion in the desktop, hidden analyst view, Ollama, capture hardening (live checks 23–28) →
+`S8` Stage 4 — logged-in verification and selector calibration (all 28, `docs/desktop-verification.md`).
+The gate per stage is unchanged from rev 2: clean tree → `check_freeze.sh` per branch → merge
+largest-first → full offline suite → app spec on `DISPLAY=:1` → live checks with the user → tag →
+worktree cleanup → adversarial review (3 lenses) whose fixes land before the next merge. Worktree
+agents additionally run `cd desktop && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci`, never launch Electron,
+and start no server except the fake site on 5199.
+
+### Build log (desktop)
+
+| Tag | Commit | What merged |
+|---|---|---|
+| `S4` | _pending_ | Stage 0: desktop scaffold (`desktop/` package + Electron 44, `main/main.js` + `sites.js` stubs, `preload/renderer.cjs` Stage 1 surface, `preload/site.cjs` stub, `protocol/bridge-v1.json`, fake site skeleton, `backend/llm/bridge_protocol.py` + `tests/bridge`, `frontend/src/main.jsx` switch + `DesktopApp.*` + `features/desktop` placeholder, `vite.config.js` `base`), frozen contracts (`docs/desktop-contract.md`), checklist skeleton, `check_freeze.sh --list`, `scripts/desktop_dev.sh`. **GPU (2026-09-16):** Electron 44.4.1 / Chromium 152.0.7977.78 on NVIDIA 390.157 reports every feature `disabled_software` (`gpu_compositing`, `rasterization`, `2d_canvas`, `webgl` off); `--ignore-gpu-blocklist`, `--use-gl=angle --use-angle=gl` and `--use-gl=egl` change nothing, so `TRIPLEX_CHROMIUM_FLAGS` stays empty and software rendering is accepted (tabs mode hides two views; per-pane zoom). **Hidden-view spike (2026-09-16):** on a `WebContentsView` attached with `setVisible(false)` all four methods inserted and read back on the fake ProseMirror composer — `webContents.focus()` + Range + `execCommand('insertText')`, Range + `execCommand` without focus, `webContents.insertText`, and 1×1 px on-screen bounds — winner `wcFocus+range+execCommand`, no fallback needed (visible control also ok). **Live sign-in:** _pending_ (all three sites, which one via the Google popup, still signed in after restart, pane `navigator.userAgent` contains `Electron/44`). |

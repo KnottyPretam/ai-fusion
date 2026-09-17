@@ -321,3 +321,57 @@ response_format, plugins, max_tokens, fixture}` — dicts, so `mock.calls[i]["fi
 `mock.reset()` clears counters and calls.
 `MOCK_SCENARIO` and `MOCK_FIXTURES_DIR` are read from `settings()` on every lookup; tests switch
 scenario with `monkeypatch.setenv("MOCK_SCENARIO", "stalemate")`.
+
+
+## Desktop addendum (Stage 2+)
+
+Additive, written at Stage 0 (tag `S4`) so the Stage 2 `bridge-backend` workstream builds against text
+that exists. The wire shapes live in `docs/desktop-contract.md` (§1 bridge protocol, §6 backend keys /
+routing / endpoints). Nothing above changes: the OpenRouter and mock paths stay byte-identical, and the
+web app never sends the new field.
+
+- **`POST /api/conversations/{id}/send` body gains `slots: list[str] | null` (optional)** — the body is
+  `{prompt: str, slots?: list[str] | null}`. Omitted or `null` = all three slots (identical to today's
+  run); an unknown slot → 404 `{detail:{error:"not_found", what:"slot"}}` via `not_found("slot")`;
+  `[]` → 422 `{detail:{error:"empty_slots"}}` via `unprocessable("empty_slots")`; duplicates are
+  removed and the list is ordered as `SLOT_IDS` (`claude, chatgpt, grok`). `turn_start.slots` lists the
+  subset, exactly one `slot_start` … `slot_done|slot_error` follows per listed slot, and the persisted
+  `SendTurn.responses` (and `errors/partial/reasoning/citations/truncated/effort_applied`) holds only
+  those slots, so Analyze reports the unlisted ones as `409 incomplete_send_turn{missing:[…]}`.
+  Signature: `run_send(conv_id, prompt, *, slots=None)` → `_stream_turn(conv, prompt, "send", slots
+  or SLOT_IDS, started)`; `…/slots/{slot}/continue` is unchanged. (`docs/desktop-contract.md` §6.)
+- **`slot_error.code` gains the desktop codes**, each with `error_type` `triplex` or `site`.
+  `error_type:"triplex"` (minted by `backend/llm/bridge.py`, same shape as `cost_cap_exceeded`):
+  `not_captured` (capture is off for that site — the reply stayed in the pane; nothing appended,
+  `responses[slot]=None`, message "capture is off for <slot>; the reply is in the site pane"),
+  `bridge_unavailable` (no Electron client connected), `bridge_disconnected` (the client dropped or was
+  superseded mid-request), `bridge_no_ack` (no `accepted`/`rejected` within `BRIDGE_ACCEPT_TIMEOUT_S`),
+  `timeout` (the existing code; no `result` within `timeout_s`, `cancel` sent), `transport_disabled`
+  (`TRIPLEX_DESKTOP=1` and the model is neither `web:*` nor `ollama:*`; message asks to choose an
+  analyst in the config bar), `bridge_bad_model` (unparseable `web:` slug). `error_type:"site"`
+  (reported by Electron about the site view, passed through verbatim with `message` and, when the site
+  produced text before failing, `partial`): the `rejected` codes sent before any DOM write —
+  `view_busy`, `logged_out`, `challenge`, `blocked`, `analyst_not_chosen`, `unknown_site`,
+  `view_crashed` — and the `result ok:false` codes `composer_not_found`, `send_not_found`,
+  `not_submitted`, `reply_not_found`, `site_error`, `navigation`, `cancelled`, `adapter_gone`,
+  `view_crashed` (and `timeout` from the adapter, also `site`). `complete_json` returns any of these as
+  its `error` string exactly as it returns `cost_cap_exceeded` (no retry on a transport delta);
+  Fusion marks the exchange `unavailable`; the UI treats every code it does not know as a plain
+  failure. `max_tokens`, `response_format`, `plugins` and `reasoning` are ignored by the web transport
+  (the site decides), so `slot_start.effort` is `off` for `web:*` models. (§1 delta mapping, §6.)
+- **`WS /api/bridge`** (`backend/routers/bridge.py`) — the single Electron client: first frame
+  `hello{protocol:1, token, version, sites, capture, analyst}` within 10 s (else close 4004; bad token
+  4003; malformed 4001; a second valid hello supersedes with 4002), then `hello_ack{ping_s}`,
+  `request` → `accepted|rejected` → `result`, `cancel`, `ping`/`pong`; frames and rules in
+  `docs/desktop-contract.md` §1 and `desktop/protocol/bridge-v1.json`. The token never appears in a URL
+  or a log line.
+- **`GET /api/bridge/status`** → 200 `{connected, protocol, version, since, sites:{<slot>:{capture,
+  health, health_ts}}, analyst, inflight}` = `bridge.hub.status()` (§6); the desktop renderer's
+  `bridge-banner` keys on `connected`.
+- **`GET /app`, `/app/`, `/app/{path}`** (`backend/routers/desktop_app.py`) → the built renderer from
+  `TRIPLEX_APP_DIR` (`frontend/dist` built with `VITE_BASE=/app/`): `index.html` for extension-less
+  paths, resolved-path containment, 404 for a missing asset and for every path when `TRIPLEX_APP_DIR`
+  is unset (§6). Same origin as `/api`, so `main.py` CORS and `http.js` stay frozen.
+- **`GET /api/models`** under `TRIPLEX_DESKTOP=1` returns `webmodels.desktop_catalog()` (`web:<slot>`,
+  `web:<slot>:analyst` ×3, `ollama:<name>` per `OLLAMA_MODELS`; all `efforts=["off"]`,
+  `structured_outputs=False`) instead of the OpenRouter catalog (Stage 3, §6); otherwise byte-identical.

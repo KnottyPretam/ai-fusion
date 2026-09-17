@@ -1,0 +1,1354 @@
+{
+  "protocol": 1,
+  "frames": {
+    "hello": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "9f86d081884c7d659a2feaa0c55ad015",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "a3f5c2e1d4b6a7980c1d2e3f4a5b6c7d",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": true,
+            "grok": false
+          },
+          "analyst": {
+            "slot": "chatgpt"
+          }
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "e2e",
+          "version": "0.2.0-dev",
+          "sites": [
+            "chatgpt",
+            "claude",
+            "grok"
+          ],
+          "capture": {
+            "claude": true,
+            "chatgpt": true,
+            "grok": true
+          },
+          "analyst": {
+            "slot": "grok"
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "type": "hello",
+          "protocol": 1,
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 2,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": "1",
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null,
+          "user_agent": "Chrome"
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": {
+            "slot": "gemini"
+          }
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": "chatgpt"
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "gemini"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          }
+        },
+        {
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        }
+      ]
+    },
+    "capture": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "capture",
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": true,
+            "chatgpt": false,
+            "grok": true
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "type": "capture",
+          "capture": {
+            "claude": true,
+            "chatgpt": false
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": "yes",
+            "chatgpt": false,
+            "grok": false
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": true,
+            "chatgpt": false,
+            "grok": true,
+            "gemini": true
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "capture"
+        }
+      ]
+    },
+    "analyst": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "analyst",
+          "analyst": null
+        },
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "grok"
+          }
+        },
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "claude"
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "ollama:hermes3"
+          }
+        },
+        {
+          "type": "analyst",
+          "analyst": "chatgpt"
+        },
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "chatgpt",
+            "visible": true
+          }
+        },
+        {
+          "type": "analyst"
+        }
+      ]
+    },
+    "health": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "claude",
+          "health": {
+            "composer": false,
+            "send": false,
+            "reply": null,
+            "stop": null,
+            "session": "logged_out",
+            "matched": {
+              "composer": null,
+              "send": null,
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://claude.ai/login",
+            "host": "claude.ai",
+            "title": "Claude",
+            "ts": 1710000001000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "grok",
+          "health": {
+            "composer": false,
+            "send": false,
+            "reply": null,
+            "stop": null,
+            "session": "challenge",
+            "matched": {
+              "composer": null,
+              "send": null,
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://grok.com/",
+            "host": "grok.com",
+            "title": "Just a moment...",
+            "ts": 1710000002000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "claude",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": true,
+            "stop": false,
+            "session": "ok",
+            "matched": {
+              "composer": "div[contenteditable='true'].ProseMirror",
+              "send": "button[aria-label='Send message']",
+              "reply": ".font-claude-response:not(#markdown-artifact)",
+              "stop": "button[aria-label='Stop response']",
+              "error": null
+            },
+            "url": "https://claude.ai/chat/0f1e2d3c-4b5a-4968-8776-5544332211ff",
+            "host": "claude.ai",
+            "title": "Claude",
+            "ts": 1710000003000
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "expired",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "gemini",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": "now"
+          }
+        },
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": null,
+              "send": null,
+              "reply": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000,
+            "zoom": 1.0
+          }
+        },
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "slot": "chatgpt",
+          "health": {
+            "composer": "yes",
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        },
+        {
+          "type": "health",
+          "health": {
+            "composer": true,
+            "send": true,
+            "reply": null,
+            "stop": null,
+            "session": "ok",
+            "matched": {
+              "composer": "#prompt-textarea",
+              "send": "button[data-testid='send-button']",
+              "reply": null,
+              "stop": null,
+              "error": null
+            },
+            "url": "https://chatgpt.com/c/abc123",
+            "host": "chatgpt.com",
+            "title": "ChatGPT",
+            "ts": 1710000000000
+          }
+        }
+      ]
+    },
+    "accepted": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "accepted",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "view": "pane",
+          "slot": "chatgpt"
+        },
+        {
+          "type": "accepted",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "view": "analyst",
+          "slot": "chatgpt"
+        },
+        {
+          "type": "accepted",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "view": "pane",
+          "slot": "grok"
+        }
+      ],
+      "invalid": [
+        {
+          "type": "accepted",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "view": "hidden",
+          "slot": "chatgpt"
+        },
+        {
+          "type": "accepted",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "view": "pane"
+        },
+        {
+          "type": "accepted",
+          "req_id": 42,
+          "view": "pane",
+          "slot": "chatgpt"
+        },
+        {
+          "type": "accepted",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "view": "pane",
+          "slot": "chatgpt",
+          "code": "ok"
+        }
+      ]
+    },
+    "rejected": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "view_busy",
+          "message": "a turn is already in flight on chatgpt"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "logged_out",
+          "message": "claude is signed out; sign in from the pane"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "challenge",
+          "message": "grok is showing a verification challenge"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "blocked",
+          "message": "chatgpt reported unusual activity"
+        },
+        {
+          "type": "rejected",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "code": "analyst_not_chosen",
+          "message": "no analyst site is selected"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "unknown_site",
+          "message": "no view for that slot"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "view_crashed",
+          "message": "the site view crashed and is being recreated"
+        }
+      ],
+      "invalid": [
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "timeout",
+          "message": "x"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "view_busy"
+        },
+        {
+          "type": "rejected",
+          "req_id": 7,
+          "code": "view_busy",
+          "message": "x"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "message": "x"
+        },
+        {
+          "type": "rejected",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "code": "view_busy",
+          "message": "x",
+          "partial": ""
+        }
+      ]
+    },
+    "result": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "At sea level water boils at 100 °C (212 °F).",
+          "url": "https://chatgpt.com/c/abc123",
+          "ms": 12345,
+          "done_by": "done_selector"
+        },
+        {
+          "type": "result",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "ok": true,
+          "captured": true,
+          "text": "## Summary\n\nIt boils at 100 °C at 1 atm.",
+          "url": "https://claude.ai/chat/0f1e2d3c-4b5a-4968-8776-5544332211ff",
+          "ms": 20480,
+          "done_by": "stop_gone"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "",
+          "url": "https://grok.com/c/xyz789",
+          "ms": 900,
+          "done_by": "quiet"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": false,
+          "url": "https://chatgpt.com/c/abc123",
+          "ms": 1234
+        },
+        {
+          "type": "result",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "ok": true,
+          "captured": false,
+          "url": "https://grok.com/",
+          "ms": 0
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "composer_not_found",
+          "message": "no composer matched within 15000 ms",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "send_not_found",
+          "message": "no enabled send button within 18000 ms",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "not_submitted",
+          "message": "the composer still holds the text after click and Enter",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "reply_not_found",
+          "message": "no assistant message appeared within 90000 ms",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "timeout",
+          "message": "capture timed out after 300000 ms",
+          "partial": "At sea level water boils at 100 °C, but"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "cancelled",
+          "message": "cancelled by the backend",
+          "partial": "At sea level"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "adapter_gone",
+          "message": "the page navigated while the turn was in flight",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "site_error",
+          "message": "Something went wrong",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "navigation",
+          "message": "could not open the recorded chat",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "view_crashed",
+          "message": "renderer process gone (crashed)",
+          "partial": null
+        }
+      ],
+      "invalid": [
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "message": "x"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "url": "https://chatgpt.com/c/abc123",
+          "ms": 1,
+          "done_by": "quiet"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "url": "https://chatgpt.com/",
+          "ms": 1
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": false,
+          "text": "t",
+          "url": "https://chatgpt.com/",
+          "ms": 1
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": "true",
+          "captured": false,
+          "url": "https://chatgpt.com/",
+          "ms": 1
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "view_busy",
+          "message": "x",
+          "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "t",
+          "url": "https://chatgpt.com/",
+          "ms": 1,
+          "done_by": "magic"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "t",
+          "url": "https://chatgpt.com/",
+          "ms": 1,
+          "done_by": "quiet",
+          "partial": "t"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "t",
+          "url": "https://chatgpt.com/",
+          "ms": -5,
+          "done_by": "quiet"
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": true,
+          "captured": true,
+          "text": "t",
+          "url": "https://chatgpt.com/",
+          "ms": "12",
+          "done_by": "quiet"
+        },
+        {
+          "type": "result",
+          "ok": true,
+          "captured": false,
+          "url": "https://chatgpt.com/",
+          "ms": 1
+        },
+        {
+          "type": "result",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "ok": false,
+          "code": "timeout"
+        }
+      ]
+    },
+    "pong": {
+      "direction": "client",
+      "examples": [
+        {
+          "type": "pong",
+          "ts": 1710000000000
+        },
+        {
+          "type": "pong",
+          "ts": 0
+        }
+      ],
+      "invalid": [
+        {
+          "type": "pong",
+          "ts": "1710000000000"
+        },
+        {
+          "type": "pong"
+        },
+        {
+          "type": "pong",
+          "ts": 1,
+          "echo": true
+        }
+      ]
+    },
+    "hello_ack": {
+      "direction": "server",
+      "examples": [
+        {
+          "type": "hello_ack",
+          "protocol": 1,
+          "backend_version": "0.1.0",
+          "ping_s": 20
+        },
+        {
+          "type": "hello_ack",
+          "protocol": 1,
+          "backend_version": "0.2.0",
+          "ping_s": 5
+        }
+      ],
+      "invalid": [
+        {
+          "type": "hello_ack",
+          "protocol": 2,
+          "backend_version": "0.1.0",
+          "ping_s": 20
+        },
+        {
+          "type": "hello_ack",
+          "protocol": 1,
+          "backend_version": "0.1.0",
+          "ping_s": 0
+        },
+        {
+          "type": "hello_ack",
+          "protocol": 1,
+          "ping_s": 20
+        },
+        {
+          "type": "hello_ack",
+          "protocol": 1,
+          "backend_version": "0.1.0",
+          "ping_s": 20,
+          "token": "abc"
+        }
+      ]
+    },
+    "request": {
+      "direction": "server",
+      "examples": [
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "model": "web:chatgpt:analyst",
+          "slot": "chatgpt",
+          "view": "analyst",
+          "fresh": true,
+          "text": "You are the analyst.\n\nCompare the three positions below.",
+          "role": "analyst",
+          "purpose": "extraction",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+          "model": "web:chatgpt:analyst",
+          "slot": "chatgpt",
+          "view": "analyst",
+          "fresh": false,
+          "text": "Your previous reply was not valid JSON: ...",
+          "role": "analyst",
+          "purpose": "extraction",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 300
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:claude",
+          "slot": "claude",
+          "view": "pane",
+          "fresh": false,
+          "text": "A peer disagrees with your claim. Defend or revise.",
+          "role": "claude",
+          "purpose": "defense",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:grok:analyst",
+          "slot": "grok",
+          "view": "analyst",
+          "fresh": true,
+          "text": "Answer resolved or standing for each item.",
+          "role": "analyst",
+          "purpose": "convergence",
+          "conversation_id": null,
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:grok",
+          "slot": "grok",
+          "view": "pane",
+          "fresh": false,
+          "text": "Hello from the unified prompt",
+          "role": "grok",
+          "purpose": "chat",
+          "conversation_id": null,
+          "timeout_s": 600
+        }
+      ],
+      "invalid": [
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "openai/gpt-5",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:claude",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "analyst",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt:analyst",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 0
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "summary",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "gemini",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "hidden",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": "no",
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:chatgpt",
+          "slot": "chatgpt",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "chatgpt",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600,
+          "max_tokens": 8000
+        }
+      ]
+    },
+    "cancel": {
+      "direction": "server",
+      "examples": [
+        {
+          "type": "cancel",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c"
+        },
+        {
+          "type": "cancel",
+          "req_id": "0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d"
+        }
+      ],
+      "invalid": [
+        {
+          "type": "cancel"
+        },
+        {
+          "type": "cancel",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "reason": "timeout"
+        },
+        {
+          "type": "cancel",
+          "req_id": ""
+        }
+      ]
+    },
+    "ping": {
+      "direction": "server",
+      "examples": [
+        {
+          "type": "ping",
+          "ts": 1710000000000
+        },
+        {
+          "type": "ping",
+          "ts": 1710000020000
+        }
+      ],
+      "invalid": [
+        {
+          "type": "ping",
+          "ts": "soon"
+        },
+        {
+          "type": "ping"
+        },
+        {
+          "type": "ping",
+          "ts": 1,
+          "seq": 2
+        }
+      ]
+    }
+  }
+}

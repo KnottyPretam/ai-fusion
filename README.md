@@ -24,11 +24,48 @@ The offline demo replays a committed scenario through the real code paths. Every
 and the exact per-role call sequence. In mock mode R1=claude, R2=chatgpt, R3=grok. Screenshots of
 the flow and of every scenario are in `docs/screenshots/`.
 
+## Desktop app (your own ChatGPT / Claude / Grok logins)
+
+`desktop/` is an Electron 44 app that embeds the real chatgpt.com, claude.ai and grok.com web apps —
+each signed in with your own consumer subscription, no API key, no OpenRouter credits — in **tabs**
+(one site at a time) or **split** (all three side by side), with **one prompt bar** that types the same
+request into every selected site and submits it. The Triplex pipeline is kept: from Stage 2 the unified
+prompt is a Triplex Send whose transport is the site page (`web:chatgpt` …, a WebSocket bridge from the
+backend to Electron; the site's own chat is the per-slot thread), and from Stage 3 Analyze and Fusion run
+through the same logins with a hidden analyst page (ChatGPT by default; Claude, Grok or local Ollama
+`hermes3` selectable). OpenRouter is not removed: it stays the mock/offline path and the web app above is
+unchanged. Contracts: `docs/desktop-contract.md`; live checklist: `docs/desktop-verification.md`;
+rationale and stage log: `docs/decisions.md` ("Desktop pivot").
+
+**Terms of service.** Capture — reading a reply out of the page into Triplex — is **off by default, per
+site**, and is switched on from each pane's header next to this wording. Typing a prompt into a site's own
+composer is the least exposed act; reading the reply out of the DOM is what the consumer terms name
+(OpenAI: "automatically or programmatically extract data or Output"; Anthropic: no access "through
+automated or non-human means" outside the API; xAI: no automated access beyond a conventional browser).
+Triplex keeps the stock Electron user agent, uses no stealth scripts, no CDP and no private APIs, makes one
+human-paced request per pane through the real UI, never retries on its own, and stops with a coded error on
+a Cloudflare challenge or an "Unusual activity" notice. Analyze and Fusion need capture on for the sites
+they read; the Ollama analyst keeps that step local. Flip the switches knowing this.
+
+```bash
+scripts/desktop_dev.sh              # dev: Vite on :5184 + Electron (needs DISPLAY; Stage 0/1: no backend, nothing read back)
+scripts/desktop.sh                  # built (Stage 2): frontend/dist served by the desktop backend at http://127.0.0.1:8021/app/
+cd desktop && npm test              # unit tests;  npx playwright test --project adapters → fake site on :5199, system Chrome
+```
+
+Sessions and settings live in `~/.config/triplex-desktop/` (`Partitions/` per site, `settings.json`,
+`chats.json`, a `selectors.json` override with hot reload, `snapshots/` — the last three arrive with Stages 1–2). Ports: desktop backend 8021,
+Vite 5184, fake site 5199 — the web app keeps 8001/5173 (and 8011/5174 for its Playwright run).
+
+**Stage status: Stage 0 (S4): scaffold** — Electron shell with the three login pages, frozen contracts,
+hidden-insert spike. Next: Stage 1 (S5) shell v1, Stage 2 (S6) capture + bridge, Stage 3 (S7)
+Analyze/Fusion + analyst + Ollama, Stage 4 (S8) logged-in verification and selector calibration.
+
 ## Test
 
 ```bash
-uv run pytest -q                                   # 1102 offline tests; outbound HTTP blocked
-cd frontend && npm test && npm run build           # vitest (255) + production build
+uv run pytest -q                                   # 1279 offline tests; outbound HTTP blocked
+cd frontend && npm test && npm run build           # vitest (268) + production build
 cd frontend && npx playwright test                 # browser flow in mock mode, system Chrome, ports 8011/5174
 ```
 

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fake site</title>
+    <!-- absolute paths: the SPA fallback serves this file at /c/<id>, /auth/login, ... -->
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <div id="app" data-fake-site></div>
+
+    <!-- Composer skeletons: site.js clones the one for ?site= and wires the editing model.
+         Template content is inert, so none of these match querySelector until mounted. -->
+    <template id="tpl-chatgpt">
+      <form class="composer">
+        <div id="prompt-textarea" class="ProseMirror" contenteditable="true" translate="no" data-virtualkeyboard="true"></div>
+        <button id="composer-submit-button" class="send" type="submit" data-testid="send-button" aria-label="Send prompt" disabled>Send</button>
+      </form>
+    </template>
+    <template id="tpl-claude">
+      <div class="composer">
+        <div class="ProseMirror" contenteditable="true"></div>
+        <button class="send" type="button" aria-label="Send message" disabled>Send</button>
+      </div>
+    </template>
+    <template id="tpl-grok">
+      <div class="composer">
+        <textarea aria-label="Ask Grok anything" rows="1"></textarea>
+        <button class="send" type="button" aria-label="Submit" disabled>Send</button>
+      </div>
+    </template>
+    <template id="tpl-login">
+      <div class="login-wall">
+        <h1>Welcome back</h1>
+        <p>Log in to continue.</p>
+        <a href="/">Log in</a>
+      </div>
+    </template>
+
+    <script src="/site.js"></script>
+  </body>
+</html>

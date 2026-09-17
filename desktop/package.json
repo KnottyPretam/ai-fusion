@@ -1,0 +1,20 @@
+{
+  "name": "triplex-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test 'test/unit/**/*.test.js'",
+    "test:adapters": "playwright test --project adapters",
+    "test:app": "TRIPLEX_E2E_APP=1 playwright test --project app"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "@playwright/test": "^1.63.0"
+  },
+  "overrides": {
+    "@electron-internal/extract-zip": ">=1.0.4"
+  }
+}

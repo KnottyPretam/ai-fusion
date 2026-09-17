@@ -6,6 +6,8 @@ const backendPort = process.env.BACKEND_PORT || process.env.PORT || '8001'
 const vitePort = Number(process.env.VITE_PORT || 5173)
 
 export default defineConfig({
+  // The desktop build is served by the backend under /app/ (VITE_BASE=/app/); the web build stays at /.
+  base: process.env.VITE_BASE || '/',
   plugins: [react()],
   server: {
     port: vitePort,
