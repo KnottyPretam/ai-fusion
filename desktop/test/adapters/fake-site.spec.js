@@ -1,7 +1,8 @@
 // desktop/test/adapters/fake-site.spec.js — Stage 0 smoke for the fake site (project `adapters`).
 // Proves the v1 cascades' FIRST entries match each look-alike, the login walls carry no composer,
 // and the editing model behaves (typing enables send, submit records the text, foreign writes are
-// reconciled away). Stage 1's site-adapters agent replaces this with the full adapter suite.
+// reconciled away). Kept as the fake site's own smoke next to adapter.spec.js, which drives the real
+// site.cjs through the fake IPC (Stage 1, site-adapters).
 
 import { createRequire } from 'node:module'
 import { test, expect } from '@playwright/test'

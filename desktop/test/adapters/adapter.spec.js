@@ -1,0 +1,375 @@
+// desktop/test/adapters/adapter.spec.js — the site adapter against the fake site (project `adapters`).
+//
+// Every test injects the REAL desktop/preload/site.cjs (read from disk, the very file Electron
+// loads as the site preload) into a system-Chrome page with `page.addInitScript`, right after an
+// init script that installs `window.__triplexFakeIpc` (the shape documented at the top of
+// site.cjs). Ops are then driven exactly as main would drive them: a `{reqId, op, ...}` message on
+// 'triplex:adapter', the answer read back from 'triplex:adapter:result'. The prompt text is always
+// a message field — it is never spliced into code.
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+import { test, expect } from '@playwright/test'
+
+const require = createRequire(import.meta.url)
+const SITE_CJS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'preload', 'site.cjs')
+const { DEFAULT_SELECTORS, SLOTS, mergeSelectors } = require(SITE_CJS)
+const SITE_SRC = fs.readFileSync(SITE_CJS, 'utf8')
+
+const CONFIRMED_BY = ['stop_button', 'composer_cleared', 'assistant_count']
+
+/** Backticks, quotes, ${}, a backslash-n literal, newlines (incl. a blank line), a tab, two spaces, unicode, markup. */
+const TRICKY = 'hello `x` "y" \'z\' ${z} \\n\n  line2 with  two spaces\n\n\tline4 — ünïcödé 日本語 🚀 <b>&amp;</b>\nend'
+
+/** ≥ 4 KB (UTF-8 bytes) of numbered tricky lines, ending with a newline. */
+function fourKb() {
+  const line = 'line `code` "quoted" \'single\' ${tpl} — ünï 日本 🚀  double-space\n'
+  let s = ''
+  let i = 0
+  while (Buffer.byteLength(s, 'utf8') < 4096) s += `${i++}: ${line}`
+  return s
+}
+const FOUR_KB = fourKb()
+
+/**
+ * Installed by addInitScript BEFORE site.cjs. The three members site.cjs uses are `invoke`, `on`
+ * and `send` (see the boot comment in site.cjs); the rest is the test's own driving surface.
+ */
+function installFakeIpc({ site, selectors, dev }) {
+  const handlers = new Map()
+  const pending = new Map()
+  let seq = 0
+  const ipc = {
+    site,
+    selectors,
+    dev: !!dev,
+    invoked: [],
+    sent: [],
+    results: [],
+    healths: [],
+    invoke(channel, ...args) {
+      ipc.invoked.push({ channel, args })
+      if (channel === 'adapter:config') return Promise.resolve({ site: ipc.site, selectors: ipc.selectors, dev: ipc.dev })
+      return Promise.reject(new Error(`fake ipc: unknown channel ${channel}`))
+    },
+    on(channel, handler) {
+      if (!handlers.has(channel)) handlers.set(channel, [])
+      handlers.get(channel).push(handler)
+    },
+    send(channel, payload) {
+      ipc.sent.push({ channel, payload })
+      if (channel === 'triplex:adapter:result') {
+        ipc.results.push(payload)
+        const resolve = pending.get(payload && payload.reqId)
+        if (resolve) {
+          pending.delete(payload.reqId)
+          resolve(payload)
+        }
+      } else if (channel === 'triplex:adapter:health') {
+        ipc.healths.push(payload)
+      }
+    },
+    // --- test side ---
+    emit(channel, msg) {
+      for (const h of handlers.get(channel) || []) h({ senderId: 0 }, msg)
+    },
+    request(msg) {
+      const reqId = typeof msg.reqId === 'string' ? msg.reqId : `req-${++seq}`
+      return new Promise((resolve) => {
+        pending.set(reqId, resolve)
+        ipc.emit('triplex:adapter', { ...msg, reqId })
+      })
+    },
+    handlerCount(channel) {
+      return (handlers.get(channel) || []).length
+    },
+  }
+  window.__triplexFakeIpc = ipc
+}
+
+async function open(page, { site, state, sendDelayMs, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site } = {}) {
+  await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
+  await page.addInitScript({ content: SITE_SRC })
+  const q = new URLSearchParams({ site })
+  if (state) q.set('state', state)
+  if (sendDelayMs) q.set('sendDelayMs', String(sendDelayMs))
+  await page.goto(`/?${q.toString()}`)
+}
+
+const request = (page, msg) => page.evaluate((m) => window.__triplexFakeIpc.request(m), msg)
+const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
+const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
+const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)
+const withOverride = (site, override) => mergeSelectors(DEFAULT_SELECTORS, { [site]: override }).merged
+
+function expectSubmitted(res, sel) {
+  expect(res).toMatchObject({ ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: sel.composer[0], sendSelector: sel.send[0] })
+  expect(Number.isInteger(res.assistantCount)).toBe(true)
+  expect(res.assistantCount).toBeGreaterThanOrEqual(0)
+  expect(CONFIRMED_BY).toContain(res.confirmedBy)
+  expect(Number.isInteger(res.ms)).toBe(true)
+  expect(res.ms).toBeGreaterThanOrEqual(0)
+  expect(res.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
+}
+
+for (const site of SLOTS) {
+  const sel = DEFAULT_SELECTORS[site]
+
+  test.describe(site, () => {
+    test('boots under the fake IPC: asks adapter:config once, registers one handler, publishes health', async ({ page }) => {
+      await open(page, { site })
+      const st = await ipcState(page)
+      expect(st.invoked.filter((i) => i.channel === 'adapter:config')).toHaveLength(1)
+      expect(await page.evaluate(() => window.__triplexFakeIpc.handlerCount('triplex:adapter'))).toBe(1)
+      await expect.poll(async () => (await ipcState(page)).healths.some((h) => h.session === 'ok' && h.composer && h.send)).toBe(true)
+      // nothing of the adapter leaks into the page
+      expect(await page.evaluate(() => Object.keys(window).filter((k) => /^(SLOTS|DEFAULT_SELECTORS|createAdapter|attachIpc|boot)$/.test(k)))).toEqual([])
+    })
+
+    test('insertAndSubmit types backticks / quotes / ${} / newlines / unicode byte-for-byte and confirms', async ({ page }) => {
+      await open(page, { site })
+      const res = await request(page, { op: 'insertAndSubmit', text: TRICKY })
+      expectSubmitted(res, sel)
+      const f = await fake(page)
+      expect(f.submitted).toEqual([TRICKY])
+      expect(f.text).toBe('')
+      await expect(page).toHaveURL(/\/c\/[A-Za-z0-9-]+/)
+    })
+
+    test('insertAndSubmit types a 4 KB text byte-for-byte', async ({ page }) => {
+      await open(page, { site })
+      const res = await request(page, { op: 'insertAndSubmit', text: FOUR_KB })
+      expectSubmitted(res, sel)
+      const f = await fake(page)
+      expect(f.submitted).toHaveLength(1)
+      expect(f.submitted[0]).toBe(FOUR_KB)
+      expect(Buffer.byteLength(f.submitted[0], 'utf8')).toBeGreaterThanOrEqual(4096)
+    })
+
+    test('health: composer/send true, matched names the first cascade entries, session ok, error null', async ({ page }) => {
+      await open(page, { site })
+      const res = await request(page, { op: 'health' })
+      expect(res).toMatchObject({ ok: true, op: 'health' })
+      expect(res.health).toMatchObject({
+        composer: true,
+        send: true,
+        reply: null,
+        stop: null,
+        session: 'ok',
+        matched: { composer: sel.composer[0], send: sel.send[0], reply: null, stop: null, error: null },
+        host: '127.0.0.1',
+      })
+      expect(Number.isInteger(res.health.ts)).toBe(true)
+      expect(res.health.url).toContain(`site=${site}`)
+      expect(typeof res.health.title).toBe('string')
+      expect(Object.keys(res.health).sort()).toEqual(['composer', 'host', 'matched', 'reply', 'send', 'session', 'stop', 'title', 'ts', 'url'])
+    })
+
+    test('ready resolves with the matched composer selector', async ({ page }) => {
+      await open(page, { site })
+      const res = await request(page, { op: 'ready', timeoutMs: 2000 })
+      expect(res).toEqual({ reqId: res.reqId, ok: true, op: 'ready', composerSelector: sel.composer[0] })
+    })
+
+    test('state=loggedout: insertAndSubmit and ready answer logged_out with no DOM write; health session logged_out', async ({ page }) => {
+      await open(page, { site, state: 'loggedout' })
+      const before = await outerHtml(page)
+      const res = await request(page, { op: 'insertAndSubmit', text: 'must never be typed' })
+      expect(res).toMatchObject({ ok: false, op: 'insertAndSubmit', code: 'logged_out' })
+      expect(typeof res.message).toBe('string')
+      expect(await outerHtml(page)).toBe(before)
+      expect((await fake(page)).submitted).toEqual([])
+      const ready = await request(page, { op: 'ready', timeoutMs: 500 })
+      expect(ready).toMatchObject({ ok: false, op: 'ready', code: 'logged_out' })
+      const h = await request(page, { op: 'health' })
+      expect(h.health).toMatchObject({ composer: false, send: false, session: 'logged_out' })
+      expect(h.health.matched.composer).toBeNull()
+      await expect.poll(async () => (await ipcState(page)).healths.some((x) => x.session === 'logged_out')).toBe(true)
+    })
+
+    test('state=challenge: challenge, no DOM write', async ({ page }) => {
+      await open(page, { site, state: 'challenge' })
+      const before = await outerHtml(page)
+      const res = await request(page, { op: 'insertAndSubmit', text: 'must never be typed' })
+      expect(res).toMatchObject({ ok: false, op: 'insertAndSubmit', code: 'challenge' })
+      expect(await outerHtml(page)).toBe(before)
+      const h = await request(page, { op: 'health' })
+      expect(h.health.session).toBe('challenge')
+      expect((await request(page, { op: 'ready', timeoutMs: 300 })).code).toBe('challenge')
+    })
+
+    test('state=blocked: blocked although a composer is present; the composer is untouched', async ({ page }) => {
+      await open(page, { site, state: 'blocked' })
+      const before = await outerHtml(page)
+      const res = await request(page, { op: 'insertAndSubmit', text: 'must never be typed' })
+      expect(res).toMatchObject({ ok: false, op: 'insertAndSubmit', code: 'blocked' })
+      expect(await outerHtml(page)).toBe(before)
+      const f = await fake(page)
+      expect(f.text).toBe('')
+      expect(f.submitted).toEqual([])
+      const h = await request(page, { op: 'health' })
+      expect(h.health).toMatchObject({ composer: true, session: 'blocked' })
+      expect((await request(page, { op: 'ready', timeoutMs: 300 })).code).toBe('blocked')
+    })
+  })
+}
+
+test('state=slow: ready waits for the composer to mount, then insertAndSubmit works', async ({ page }) => {
+  await open(page, { site: 'grok', state: 'slow' })
+  expect((await request(page, { op: 'health' })).health).toMatchObject({ composer: false, session: 'unknown' })
+  const t0 = Date.now()
+  const ready = await request(page, { op: 'ready', timeoutMs: 8000 })
+  expect(ready).toMatchObject({ ok: true, op: 'ready', composerSelector: DEFAULT_SELECTORS.grok.composer[0] })
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(2000)
+  const res = await request(page, { op: 'insertAndSubmit', text: 'after the slow mount' })
+  expectSubmitted(res, DEFAULT_SELECTORS.grok)
+  expect((await fake(page)).submitted).toEqual(['after the slow mount'])
+})
+
+test('state=slow: a short ready timeout answers composer_not_found without touching the page', async ({ page }) => {
+  await open(page, { site: 'claude', state: 'slow' })
+  const res = await request(page, { op: 'ready', timeoutMs: 400 })
+  expect(res).toMatchObject({ ok: false, op: 'ready', code: 'composer_not_found' })
+  expect((await fake(page)).submitted).toEqual([])
+})
+
+test('sendDelayMs=1000: the send cascade is polled until the button enables, then submits', async ({ page }) => {
+  await open(page, { site: 'chatgpt', sendDelayMs: 1000 })
+  const res = await request(page, { op: 'insertAndSubmit', text: 'slow button' })
+  expectSubmitted(res, DEFAULT_SELECTORS.chatgpt)
+  expect(res.ms).toBeGreaterThanOrEqual(900)
+  expect((await fake(page)).submitted).toEqual(['slow button'])
+})
+
+test('technique regression guard: an innerHTML write is reconciled away by the fake site, so an adapter using it fails and never submits', async ({ page }) => {
+  await open(page, { site: 'chatgpt', selectors: withOverride('chatgpt', { sendWaitMs: 800, submitVerifyMs: 300 }) })
+  // Replace the browser's insertText command with the wrong technique. site.cjs still runs its
+  // whole cascade (focus, Range, "execCommand", InputEvent, verify, paste fallback, verify).
+  await page.evaluate(() => {
+    document.execCommand = (cmd, _ui, value) => {
+      if (cmd !== 'insertText') return false
+      const el = document.querySelector('#prompt-textarea')
+      el.innerHTML = `<p>${value}</p>`
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }))
+      return true
+    }
+  })
+  const res = await request(page, { op: 'insertAndSubmit', text: 'written with innerHTML' })
+  expect(res.ok).toBe(false)
+  expect(['site_error', 'send_not_found', 'not_submitted']).toContain(res.code)
+  expect(res.message).toMatch(/execCommand|send/)
+  const f = await fake(page)
+  expect(f.text).toBe('') // the site's model never saw the text
+  expect(f.submitted).toEqual([])
+  await expect(page.locator('#prompt-textarea')).toHaveText('') // reconciled away
+  await expect(page.locator(DEFAULT_SELECTORS.chatgpt.send[0])).toBeDisabled()
+})
+
+test('the composer is never cleared on failure: text stays when the send button never enables', async ({ page }) => {
+  const text = 'kept in the composer `a` ${b}\nline 2'
+  await open(page, { site: 'chatgpt', sendDelayMs: 60000, selectors: withOverride('chatgpt', { sendWaitMs: 900, submitVerifyMs: 300 }) })
+  const t0 = Date.now()
+  const res = await request(page, { op: 'insertAndSubmit', text })
+  expect(res).toMatchObject({ ok: false, op: 'insertAndSubmit' })
+  expect(['send_not_found', 'not_submitted']).toContain(res.code)
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(900)
+  const f = await fake(page)
+  expect(f.text).toBe(text) // model intact
+  expect(f.submitted).toEqual([])
+  await expect(page.locator('#prompt-textarea')).toContainText('kept in the composer')
+  await expect(page).not.toHaveURL(/\/c\//)
+})
+
+test('Enter fallback: with no send button in the cascade, one Enter on the composer submits (sendSelector null)', async ({ page }) => {
+  await open(page, { site: 'claude', selectors: withOverride('claude', { send: ['button.does-not-exist'], sendWaitMs: 400 }) })
+  const res = await request(page, { op: 'insertAndSubmit', text: 'submitted by Enter' })
+  expect(res).toMatchObject({ ok: true, submitted: true, composerSelector: DEFAULT_SELECTORS.claude.composer[0], sendSelector: null })
+  expect(CONFIRMED_BY).toContain(res.confirmedBy)
+  expect((await fake(page)).submitted).toEqual(['submitted by Enter'])
+})
+
+test('busy: a second op while insertAndSubmit is in flight answers busy; the first still completes', async ({ page }) => {
+  await open(page, { site: 'claude', sendDelayMs: 1000 })
+  const [first, second, third] = await page.evaluate(async () => {
+    const ipc = window.__triplexFakeIpc
+    const p1 = ipc.request({ reqId: 'first', op: 'insertAndSubmit', text: 'in flight' })
+    const p2 = ipc.request({ reqId: 'second', op: 'ready', timeoutMs: 100 })
+    const p3 = ipc.request({ reqId: 'third', op: 'insertAndSubmit', text: 'also rejected' })
+    return Promise.all([p1, p2, p3])
+  })
+  expect(second).toMatchObject({ reqId: 'second', ok: false, op: 'ready', code: 'busy' })
+  expect(second.message).toContain('first')
+  expect(third).toMatchObject({ reqId: 'third', ok: false, op: 'insertAndSubmit', code: 'busy' })
+  expectSubmitted(first, DEFAULT_SELECTORS.claude)
+  expect((await fake(page)).submitted).toEqual(['in flight'])
+  // the slot is free again
+  expect((await request(page, { op: 'ready', timeoutMs: 1000 })).ok).toBe(true)
+})
+
+test('cancel: aborts the in-flight op (cancelled), keeps the composer text, frees the slot; unknown target → cancelled:false', async ({ page }) => {
+  await open(page, { site: 'grok', sendDelayMs: 3000 })
+  const [op, cancel] = await page.evaluate(async () => {
+    const ipc = window.__triplexFakeIpc
+    const p1 = ipc.request({ reqId: 'op-1', op: 'insertAndSubmit', text: 'to be cancelled' })
+    await new Promise((r) => setTimeout(r, 400))
+    const p2 = ipc.request({ reqId: 'c-1', op: 'cancel', target: 'op-1' })
+    return Promise.all([p1, p2])
+  })
+  expect(cancel).toEqual({ reqId: 'c-1', ok: true, op: 'cancel', cancelled: true })
+  expect(op).toMatchObject({ reqId: 'op-1', ok: false, op: 'insertAndSubmit', code: 'cancelled' })
+  const f = await fake(page)
+  expect(f.text).toBe('to be cancelled')
+  expect(f.submitted).toEqual([])
+  expect(await request(page, { op: 'cancel', target: 'nope' })).toMatchObject({ ok: true, op: 'cancel', cancelled: false })
+  expect((await request(page, { op: 'ready', timeoutMs: 500 })).ok).toBe(true)
+})
+
+test('site:null from adapter:config keeps the preload inert: no health, no answers', async ({ page }) => {
+  await open(page, { site: 'chatgpt', ipcSite: null })
+  await page.evaluate(() => window.__triplexFakeIpc.emit('triplex:adapter', { reqId: 'h-1', op: 'health' }))
+  await page.waitForTimeout(400)
+  const st = await ipcState(page)
+  expect(st.healths).toEqual([])
+  expect(st.results).toEqual([])
+})
+
+test('config op hot-reloads the selectors (no reply) and health follows; open shadow roots are searched', async ({ page }) => {
+  await open(page, { site: 'chatgpt' })
+  // a composer look-alike that only exists inside an open shadow root
+  await page.evaluate(() => {
+    const host = document.createElement('div')
+    host.id = 'shadow-host'
+    const root = host.attachShadow({ mode: 'open' })
+    const inner = document.createElement('div')
+    inner.setAttribute('role', 'textbox')
+    inner.setAttribute('aria-label', 'Chat with ChatGPT')
+    inner.setAttribute('contenteditable', 'true')
+    root.appendChild(inner)
+    document.body.appendChild(host)
+  })
+  const shadowOnly = withOverride('chatgpt', { composer: ["div[role='textbox'][aria-label='Chat with ChatGPT']"] })
+  const before = (await ipcState(page)).results.length
+  await page.evaluate((selectors) => window.__triplexFakeIpc.emit('triplex:adapter', { op: 'config', selectors }), shadowOnly)
+  expect((await ipcState(page)).results.length).toBe(before) // no reply to config
+  const h = await request(page, { op: 'health' })
+  expect(h.health).toMatchObject({ composer: true, session: 'ok', matched: { composer: "div[role='textbox'][aria-label='Chat with ChatGPT']" } })
+  const none = withOverride('chatgpt', { composer: ['#does-not-exist'] })
+  await page.evaluate((selectors) => window.__triplexFakeIpc.emit('triplex:adapter', { op: 'config', selectors }), none)
+  const h2 = await request(page, { op: 'health' })
+  expect(h2.health).toMatchObject({ composer: false, session: 'unknown', matched: { composer: null } })
+  const last = (await ipcState(page)).healths.at(-1)
+  expect(last).toMatchObject({ composer: false, session: 'unknown' }) // published on the change
+})
+
+test('protocol edges: unknown op → site_error; observe/snapshot → site_error before stage 2; a message without reqId is ignored', async ({ page }) => {
+  await open(page, { site: 'grok' })
+  expect(await request(page, { op: 'frobnicate' })).toMatchObject({ ok: false, op: 'frobnicate', code: 'site_error' })
+  expect(await request(page, { op: 'observe', baselineCount: 0 })).toMatchObject({ ok: false, op: 'observe', code: 'site_error' })
+  expect(await request(page, { op: 'snapshot' })).toMatchObject({ ok: false, op: 'snapshot', code: 'site_error' })
+  const before = (await ipcState(page)).results.length
+  await page.evaluate(() => window.__triplexFakeIpc.emit('triplex:adapter', { op: 'health' }))
+  await page.waitForTimeout(100)
+  expect((await ipcState(page)).results.length).toBe(before)
+})

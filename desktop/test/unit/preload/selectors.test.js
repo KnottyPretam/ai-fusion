@@ -1,0 +1,170 @@
+// site.cjs pure exports: SLOTS, DEFAULT_SELECTORS shape (every chatUrlPattern compiles),
+// mergeSelectors({merged, warnings}), siteFor, hostMatches, siteSelectors. Plain node:test.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const { SLOTS, DEFAULT_SELECTORS, mergeSelectors, siteFor, hostMatches, siteSelectors, SESSION_STATES, REJECT_STATES, RESULT_CODES } = require('../../../preload/site.cjs')
+
+const LIST_KEYS = ['composer', 'send', 'loggedOut', 'loggedOutUrl', 'challenge', 'challengeTitle', 'errorText']
+const MS_KEYS = ['composerWaitMs', 'sendWaitMs', 'submitVerifyMs']
+const SAMPLE_CHAT_URL = {
+  chatgpt: 'https://chatgpt.com/c/68c1a2b3-4d5e-6f70-8a9b-0c1d2e3f4a5b',
+  claude: 'https://claude.ai/chat/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b',
+  grok: 'https://grok.com/c/8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d',
+}
+const SAMPLE_HOME_URL = { chatgpt: 'https://chatgpt.com/', claude: 'https://claude.ai/new', grok: 'https://grok.com/' }
+
+const isStringList = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x !== '')
+
+test('SLOTS is the frozen slot order and the states/codes match contract §1/§2', () => {
+  assert.deepEqual(SLOTS, ['claude', 'chatgpt', 'grok'])
+  assert.ok(Object.isFrozen(SLOTS))
+  assert.deepEqual(SESSION_STATES, ['ok', 'logged_out', 'challenge', 'blocked', 'unknown'])
+  assert.deepEqual(REJECT_STATES, ['logged_out', 'challenge', 'blocked'])
+  assert.deepEqual(
+    [...RESULT_CODES].sort(),
+    ['blocked', 'busy', 'cancelled', 'challenge', 'composer_not_found', 'logged_out', 'not_submitted', 'reply_not_found', 'send_not_found', 'site_error', 'timeout'],
+  )
+})
+
+test('DEFAULT_SELECTORS is version 1 with exactly the three sites', () => {
+  assert.equal(DEFAULT_SELECTORS.version, 1)
+  assert.deepEqual(Object.keys(DEFAULT_SELECTORS).sort(), ['chatgpt', 'claude', 'grok', 'version'])
+})
+
+for (const site of SLOTS) {
+  test(`DEFAULT_SELECTORS.${site}: composer/send cascades, wall detection lists, timeouts`, () => {
+    const s = DEFAULT_SELECTORS[site]
+    assert.deepEqual(Object.keys(s).sort(), ['chatUrlPattern', ...LIST_KEYS, ...MS_KEYS].sort())
+    for (const k of LIST_KEYS) assert.ok(isStringList(s[k]), `${site}.${k} must be a non-empty-string list`)
+    assert.ok(s.composer.length >= 1 && s.send.length >= 1, `${site}: composer and send must have entries`)
+    for (const k of MS_KEYS) assert.ok(Number.isInteger(s[k]) && s[k] > 0, `${site}.${k} must be a positive integer`)
+    assert.equal(new Set(s.composer).size, s.composer.length, `${site}.composer has duplicates`)
+    assert.equal(new Set(s.send).size, s.send.length, `${site}.send has duplicates`)
+  })
+
+  test(`DEFAULT_SELECTORS.${site}.chatUrlPattern compiles, matches a chat URL and not the home URL`, () => {
+    const re = new RegExp(DEFAULT_SELECTORS[site].chatUrlPattern)
+    assert.ok(re.test(SAMPLE_CHAT_URL[site]), `${site}: ${re} should match ${SAMPLE_CHAT_URL[site]}`)
+    assert.ok(!re.test(SAMPLE_HOME_URL[site]), `${site}: ${re} must not match ${SAMPLE_HOME_URL[site]}`)
+  })
+}
+
+test('the chatgpt/claude/grok cascades start with the entries the fake site is built around', () => {
+  assert.equal(DEFAULT_SELECTORS.chatgpt.composer[0], '#prompt-textarea')
+  assert.equal(DEFAULT_SELECTORS.chatgpt.send[0], "button[data-testid='send-button']")
+  assert.equal(DEFAULT_SELECTORS.claude.composer[0], "div[contenteditable='true'].ProseMirror")
+  assert.equal(DEFAULT_SELECTORS.claude.send[0], "button[aria-label='Send message']")
+  assert.equal(DEFAULT_SELECTORS.grok.composer[0], "textarea[aria-label='Ask Grok anything']")
+  assert.equal(DEFAULT_SELECTORS.grok.send[0], "button[aria-label='Submit']")
+})
+
+test('mergeSelectors: no override → an equal deep copy, no warnings, defaults untouched', () => {
+  const snapshot = JSON.stringify(DEFAULT_SELECTORS)
+  for (const override of [undefined, null]) {
+    const { merged, warnings } = mergeSelectors(DEFAULT_SELECTORS, override)
+    assert.deepEqual(merged, DEFAULT_SELECTORS)
+    assert.notEqual(merged, DEFAULT_SELECTORS)
+    assert.notEqual(merged.chatgpt, DEFAULT_SELECTORS.chatgpt)
+    assert.notEqual(merged.chatgpt.composer, DEFAULT_SELECTORS.chatgpt.composer)
+    assert.deepEqual(warnings, [])
+  }
+  assert.equal(JSON.stringify(DEFAULT_SELECTORS), snapshot)
+})
+
+test('mergeSelectors: an override REPLACES per site per key (arrays and numbers), other keys and sites stay', () => {
+  const snapshot = JSON.stringify(DEFAULT_SELECTORS)
+  const { merged, warnings } = mergeSelectors(DEFAULT_SELECTORS, {
+    version: 1,
+    chatgpt: { composer: ['#mine'], sendWaitMs: 1234 },
+    grok: { errorText: [] },
+  })
+  assert.deepEqual(warnings, [])
+  assert.deepEqual(merged.chatgpt.composer, ['#mine'])
+  assert.equal(merged.chatgpt.sendWaitMs, 1234)
+  assert.deepEqual(merged.chatgpt.send, DEFAULT_SELECTORS.chatgpt.send)
+  assert.deepEqual(merged.grok.errorText, [])
+  assert.deepEqual(merged.claude, DEFAULT_SELECTORS.claude)
+  assert.equal(merged.version, 1)
+  assert.equal(JSON.stringify(DEFAULT_SELECTORS), snapshot)
+})
+
+test('mergeSelectors: unknown sites/keys, type mismatches, non-string lists and a wrong version warn and are skipped', () => {
+  const { merged, warnings } = mergeSelectors(DEFAULT_SELECTORS, {
+    version: 2,
+    gemini: { composer: ['x'] },
+    chatgpt: { stop: ['button.stop'], composer: '#not-a-list', sendWaitMs: '5', send: ['ok', 42] },
+    claude: 'nope',
+  })
+  assert.deepEqual(merged, DEFAULT_SELECTORS)
+  assert.deepEqual(warnings.sort(), [
+    'chatgpt.composer: expected array, got string',
+    'chatgpt.send: expected a list of strings',
+    'chatgpt.sendWaitMs: expected number, got string',
+    'chatgpt.stop: unknown key',
+    'claude: expected an object',
+    'gemini: unknown site',
+    'version: expected 1, got 2',
+  ])
+})
+
+test('mergeSelectors: a non-object override warns and keeps the defaults; merged never aliases the override', () => {
+  for (const bad of [42, 'x', [1], true]) {
+    const { merged, warnings } = mergeSelectors(DEFAULT_SELECTORS, bad)
+    assert.deepEqual(merged, DEFAULT_SELECTORS)
+    assert.deepEqual(warnings, ['override: expected a JSON object'])
+  }
+  const override = { grok: { composer: ['textarea#g'] } }
+  const { merged } = mergeSelectors(DEFAULT_SELECTORS, override)
+  override.grok.composer.push('mutated later')
+  assert.deepEqual(merged.grok.composer, ['textarea#g'])
+})
+
+const SITES = {
+  chatgpt: { hosts: ['chatgpt.com', 'chat.openai.com', 'auth.openai.com', 'auth0.openai.com'] },
+  claude: { hosts: ['claude.ai'] },
+  grok: { hosts: ['grok.com', 'accounts.x.ai', 'x.com'] },
+}
+
+test('siteFor maps hosts and their subdomains to slots, case-insensitively, null when unknown', () => {
+  assert.equal(siteFor('chatgpt.com', SITES), 'chatgpt')
+  assert.equal(siteFor('www.chatgpt.com', SITES), 'chatgpt')
+  assert.equal(siteFor('auth0.openai.com', SITES), 'chatgpt')
+  assert.equal(siteFor('claude.ai', SITES), 'claude')
+  assert.equal(siteFor('CLAUDE.AI.', SITES), 'claude')
+  assert.equal(siteFor('grok.com', SITES), 'grok')
+  assert.equal(siteFor('accounts.x.ai', SITES), 'grok')
+  assert.equal(siteFor('x.com', SITES), 'grok')
+  assert.equal(siteFor('example.com', SITES), null)
+  assert.equal(siteFor('notclaude.ai', SITES), null) // suffix without a dot boundary is not a subdomain
+  assert.equal(siteFor('accounts.google.com', SITES), null)
+})
+
+test('siteFor tolerates bad input and honours the fake-site table', () => {
+  assert.equal(siteFor(undefined, SITES), null)
+  assert.equal(siteFor('chatgpt.com', null), null)
+  assert.equal(siteFor('chatgpt.com', { chatgpt: {} }), null)
+  const fake = { chatgpt: { hosts: ['127.0.0.1'] }, claude: { hosts: ['127.0.0.1'] }, grok: { hosts: ['127.0.0.1'] } }
+  assert.equal(siteFor('127.0.0.1', fake), 'claude') // SLOTS order decides a tie
+  assert.equal(siteFor('localhost', { extra: { hosts: ['localhost'] } }), 'extra')
+})
+
+test('hostMatches: exact or subdomain, never a bare suffix, never non-strings', () => {
+  assert.ok(hostMatches('a.b.example.com', 'example.com'))
+  assert.ok(hostMatches('Example.COM', 'example.com'))
+  assert.ok(!hostMatches('badexample.com', 'example.com'))
+  assert.ok(!hostMatches(null, 'example.com'))
+  assert.ok(!hostMatches('example.com', undefined))
+})
+
+test('siteSelectors picks the site block from a full config, accepts a bare block, falls back to the defaults', () => {
+  assert.equal(siteSelectors(DEFAULT_SELECTORS, 'grok'), DEFAULT_SELECTORS.grok)
+  const block = { composer: ['#x'], send: ['#y'] }
+  assert.equal(siteSelectors(block, 'chatgpt'), block)
+  assert.equal(siteSelectors(undefined, 'claude'), DEFAULT_SELECTORS.claude)
+  assert.equal(siteSelectors({ version: 1 }, 'claude'), DEFAULT_SELECTORS.claude)
+  assert.equal(siteSelectors(undefined, 'gemini'), null)
+  assert.equal(siteSelectors(undefined, null), null)
+})
