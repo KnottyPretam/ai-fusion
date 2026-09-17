@@ -1,30 +1,39 @@
-// Stage 0 placeholder (integrator); renderer-desktop owns features/desktop/** from Stage 1 and
-// replaces this shell with PaneDeck + PromptBar (docs/desktop-contract.md §7 test ids).
-// Registers the `panes` slice at module scope and exports DesktopShell, which DesktopApp.jsx
-// imports by convention from features/desktop/index.jsx.
+// DesktopShell (renderer-desktop, Stage 1). Registers the `panes` slice at module scope and
+// exports the shell that DesktopApp.jsx imports by convention: PaneDeck (deck bar + three panes,
+// the layout reporter) above PromptBar (the unified prompt). Test ids desktop-shell / pane-deck /
+// prompt-bar are the Stage 0 ones (contract §7; desktop-smoke.test.jsx mounts this with a stub).
 //
 // `window.triplex` is the contextBridge surface of desktop/preload/renderer.cjs. Every call is
 // optional-chained: the shell must render under a partial stub (tests) and under the web app,
-// where the object is absent altogether.
-import { useEffect, useState } from 'react'
+// where the object is absent altogether. `getInfo()` supplies the version line and `dev` (the
+// Inspect buttons). The renderer owns the persisted layout keys (`triplex.panes.mode|active|
+// targets`, contract §5): the slice starts from localStorage and every change is written back.
+import { useEffect, useRef, useState } from 'react'
 import { registerSlice } from '../../state/registry.js'
-import { initialPanes, panesReducer } from './slice.js'
+import { useSlice } from '../../state/store.jsx'
+import PaneDeck, { desktopApi } from './PaneDeck.jsx'
+import PromptBar from './PromptBar.jsx'
+import { initialPanes, loadPersistedPanes, panesReducer, persistPanes } from './slice.js'
+import css from './desktop.module.css'
 
-registerSlice('panes', panesReducer, initialPanes)
-
-function desktopApi() {
-  return typeof window !== 'undefined' && window.triplex ? window.triplex : null
-}
+registerSlice('panes', panesReducer, () => initialPanes(loadPersistedPanes()))
 
 export default function DesktopShell() {
+  const api = desktopApi()
+  const panes = useSlice('panes')
   const [info, setInfo] = useState(null)
+  const promptRef = useRef(null)
 
   useEffect(() => {
-    const api = desktopApi()
     if (!api || typeof api.getInfo !== 'function') return undefined
     let alive = true
-    Promise.resolve()
-      .then(() => api.getInfo())
+    let reply
+    try {
+      reply = api.getInfo()
+    } catch {
+      return undefined
+    }
+    Promise.resolve(reply)
       .then((result) => {
         if (alive && result && typeof result === 'object') setInfo(result)
       })
@@ -32,22 +41,25 @@ export default function DesktopShell() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [api])
 
-  const api = desktopApi()
-  const version = info?.version ?? api?.version ?? null
-  const slots = Array.isArray(api?.slots) ? api.slots : []
+  const mode = panes ? panes.mode : undefined
+  const active = panes ? panes.active : undefined
+  const targets = panes ? panes.targets : undefined
+  useEffect(() => {
+    if (panes) persistPanes(undefined, panes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the persisted keys matter
+  }, [mode, active, targets])
+
+  const version = (info && info.version) || (api && api.version) || null
 
   return (
-    <div className="desktop-shell" data-testid="desktop-shell" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div data-testid="pane-deck" style={{ flex: 1, minHeight: 0, padding: 12 }}>
-        <div>Triplex desktop — Stage 0 placeholder</div>
-        {version ? <div style={{ color: 'var(--fg-muted)', fontSize: 12 }}>desktop v{version}{info?.dev ? ' (dev)' : ''}</div> : null}
-        {slots.length ? <div style={{ color: 'var(--fg-muted)', fontSize: 12 }}>panes: {slots.join(', ')}</div> : null}
-      </div>
-      <div data-testid="prompt-bar" style={{ flex: '0 0 auto', borderTop: '1px solid var(--border)', padding: '6px 12px', color: 'var(--fg-muted)', fontSize: 12 }}>
-        unified prompt bar (Stage 1)
-      </div>
+    <div className={css.shell} data-testid="desktop-shell">
+      <PaneDeck api={api} info={info} version={version} promptRef={promptRef} />
+      <PromptBar api={api} composerRef={promptRef} />
+      <span className={css.srOnly}>
+        Triplex desktop shell: the three site pages are native views positioned over the pane viewports (this shell replaced the Stage 0 placeholder).
+      </span>
     </div>
   )
 }

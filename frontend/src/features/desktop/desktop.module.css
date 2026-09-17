@@ -1,0 +1,84 @@
+/* renderer-desktop (Stage 1). Desktop chrome around the native site views. Palette tokens come from
+   the frozen index.css. Nothing here may overlap a viewport: the deck bar sits above the panes,
+   every pane header above its viewport, the prompt bar below — no modals, no overlays. The
+   viewport itself is an empty placeholder; Electron paints the site view over that rect. */
+
+.shell { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--bg); color: var(--fg); }
+
+/* ---- deck ------------------------------------------------------------------------------- */
+.deck { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.deckBar { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg-muted); font-size: 13px; }
+.tabs { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); border-bottom-width: 3px; }
+.tab:hover { color: var(--fg); }
+.tab[aria-selected='true'] { color: var(--fg); font-weight: 600; background: var(--primary-soft); }
+.tab[data-slot='claude'] { border-bottom-color: var(--claude); }
+.tab[data-slot='chatgpt'] { border-bottom-color: var(--chatgpt); }
+.tab[data-slot='grok'] { border-bottom-color: var(--grok); }
+.tab[data-attention='true'] { border-color: var(--warn); }
+.modes { display: inline-flex; align-items: center; gap: 0; flex: 0 0 auto; }
+.modes button { padding: 3px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted); }
+.modes button:first-child { border-radius: 4px 0 0 4px; }
+.modes button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+.modes button[aria-pressed='true'] { background: var(--primary); border-color: var(--primary); color: #fff; }
+.version { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; }
+
+/* health dot + badges (deck tabs and pane headers) */
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex: 0 0 auto; }
+.dot[data-level='ok'] { background: var(--ok); }
+.dot[data-level='warn'] { background: var(--warn); }
+.dot[data-level='bad'] { background: var(--err); }
+.badge { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; line-height: 16px; color: #fff; background: var(--err); }
+.badge[data-session='logged_out'] { background: var(--warn); }
+.badge[data-session='challenge'] { background: var(--err); }
+.badge[data-session='blocked'] { background: var(--err); }
+.attention { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: #fff; font-size: 10px; font-weight: 700; line-height: 1; }
+
+/* ---- panes ------------------------------------------------------------------------------ */
+.panes { display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; min-width: 0; gap: 4px; padding: 4px; }
+.pane { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); border-top: 3px solid var(--border); overflow: hidden; }
+.pane[hidden] { display: none; }
+.pane[data-slot='claude'] { border-top-color: var(--claude); }
+.pane[data-slot='chatgpt'] { border-top-color: var(--chatgpt); }
+.pane[data-slot='grok'] { border-top-color: var(--grok); }
+.paneHeader { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 3px 6px; border-bottom: 1px solid var(--border); background: var(--bg-muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.paneName { font-weight: 700; flex: 0 0 auto; }
+.pane[data-slot='claude'] .paneName { color: var(--claude); }
+.pane[data-slot='chatgpt'] .paneName { color: var(--chatgpt); }
+.pane[data-slot='grok'] .paneName { color: var(--grok); }
+.health { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-muted); font-family: var(--mono); font-size: 11px; }
+.session { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; }
+.session[data-session='ok'] { color: var(--ok); }
+.actions { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.actions button { padding: 0 6px; height: 20px; font-size: 11px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg-muted); line-height: 18px; }
+.actions button:hover { color: var(--fg); }
+.zoom { display: inline-flex; align-items: center; margin-left: 4px; }
+.zoom button { min-width: 22px; padding: 0 4px; }
+.zoom button:first-child { border-radius: 3px 0 0 3px; }
+.zoom button:nth-child(2) { border-radius: 0; margin-left: -1px; font-family: var(--mono); }
+.zoom button:last-child { border-radius: 0 3px 3px 0; margin-left: -1px; }
+.viewport { flex: 1 1 auto; min-height: 0; min-width: 0; background: var(--bg-muted); }
+
+/* ---- prompt bar ------------------------------------------------------------------------- */
+.promptBar { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; padding: 6px 8px; border-top: 1px solid var(--border); background: var(--bg); }
+.promptRow { display: flex; align-items: flex-end; gap: 8px; }
+.composer { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 160px; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.composer:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+.sendBtn { flex: 0 0 auto; padding: 6px 14px; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; }
+.promptMeta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--fg-muted); }
+.targets { display: inline-flex; align-items: center; gap: 10px; }
+.target { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.target[data-slot='claude'] { color: var(--claude); }
+.target[data-slot='chatgpt'] { color: var(--chatgpt); }
+.target[data-slot='grok'] { color: var(--grok); }
+.newChat { padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); font-size: 12px; }
+.newChat:hover { color: var(--fg); }
+.results { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
+.result { color: var(--fg-muted); }
+.result[data-ok='true'] { color: var(--ok); }
+.result[data-ok='false'] { color: var(--err); }
+.result[data-ok='pending'] { color: var(--fg-muted); font-style: italic; }
+.hint { font-size: 11px; color: var(--fg-muted); }
+
+/* text kept for assistive tech (and the frozen smoke test) without taking any space */
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
