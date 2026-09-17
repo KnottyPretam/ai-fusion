@@ -137,9 +137,27 @@ export function createSettings({
   let doc = defaultSettings()
   let pendingBounds = null
   let timer = null
+  const listeners = new Set()
 
   const warn = (m) => {
     if (log && typeof log.warn === 'function') log.warn(`[settings] ${m}`)
+  }
+
+  /** subscribe(cb) → unsubscribe; cb({key, value}) after every explicit setter has saved (Stage 2: capture → bridge frame). */
+  function subscribe(cb) {
+    if (typeof cb !== 'function') return () => {}
+    listeners.add(cb)
+    return () => listeners.delete(cb)
+  }
+
+  function notify(key, value) {
+    for (const cb of [...listeners]) {
+      try {
+        cb({ key, value })
+      } catch (e) {
+        warn(`listener for ${key} failed: ${(e && e.message) || e}`)
+      }
+    }
   }
 
   function load() {
@@ -199,6 +217,7 @@ export function createSettings({
     const f = clampZoom(factor)
     doc.zoom[requireSlot(slot)] = f
     save()
+    notify('zoom', { slot, factor: f })
     return f
   }
 
@@ -209,6 +228,7 @@ export function createSettings({
   function setCapture(slot, on) {
     doc.capture[requireSlot(slot)] = !!on
     save()
+    notify('capture', getCapture())
     return doc.capture[slot]
   }
 
@@ -220,12 +240,14 @@ export function createSettings({
     if (slot !== null && !SLOTS.includes(slot)) throw new Error(`settings: unknown analyst ${String(slot)}`)
     doc.analyst = slot
     save()
+    notify('analyst', doc.analyst)
     return doc.analyst
   }
 
   function setAnalystVisible(visible) {
     doc.analystVisible = !!visible
     save()
+    notify('analystVisible', doc.analystVisible)
     return doc.analystVisible
   }
 
@@ -304,5 +326,6 @@ export function createSettings({
     queueWindowBounds,
     flushWindowBounds,
     hasPendingBounds: () => pendingBounds !== null,
+    subscribe,
   }
 }

@@ -1,21 +1,36 @@
-// desktop/main/ipc.js — every `panes:*` channel, `prompt:send` and the site-preload channels
-// (contract §2). Validation first, always: `slot ∈ SLOTS`, `text` string ≤ 32768 chars,
-// `targets ⊆ SLOTS`, `direction ∈ in|out|reset`, and the sender must be the renderer's main
-// frame; a violation rejects `Error('bad_request')` (fire-and-forget channels drop it silently).
-// `adapter:config` is resolved by the sender's webContents id: a site view gets its slot and the
-// FULL merged selectors object, anything else (SSO popup, unknown page) gets `site: null` and
-// stays inert. `panes:getInfo` also replays the cached health and the zoom factor of every view
-// (`panes:health` / `panes:zoom`): the renderer calls it once its listeners exist, so nothing sent
-// while the page was still loading stays lost. No electron import: `ipcMain`, the view manager and
-// the renderer test are injected.
+// desktop/main/ipc.js — every `panes:*` channel and the site-preload channels (contract §2).
+// Validation first, always: `slot ∈ SLOTS`, `targets ⊆ SLOTS`, `direction ∈ in|out|reset`,
+// `on` a boolean, `convId` a string ≤ 200 chars or null, and the sender must be the renderer's
+// main frame; a violation rejects `Error('bad_request')` (fire-and-forget channels drop it
+// silently). `adapter:config` is resolved by the sender's webContents id: a site view gets its
+// slot and the FULL merged selectors object, anything else (SSO popup, unknown page) gets
+// `site: null` and stays inert. `panes:getInfo` also replays the cached health, the zoom factor
+// of every view and the bridge state (`panes:health` / `panes:zoom` / `panes:bridge`): the
+// renderer calls it once its listeners exist, so nothing sent while the page was still loading
+// stays lost.
+//
+// Stage 2: `panes:getCapture` / `panes:setCapture` (settings.json; the bridge `capture` frame is
+// re-sent by main's settings subscription), `panes:openChats(convId|null)` → per slot
+// 'navigated' (a recorded link that differs) | 'new' (no link → newChatUrl) | 'kept' (already
+// there, or a turn is in flight on that view), `panes:signOut(slot)` (clearStorageData on that
+// partition only, then newChatUrl), `panes:snapshot(slot)` (adapter `snapshot` → scrubbed HTML
+// under `<userData>/snapshots/<slot>-<ts>.html` → {path}). `prompt:send` is GONE: the unified
+// prompt is a Triplex Send over HTTP; the handler only answers `Error('prompt_send_removed')`
+// until the integrator drops `sendPrompt` from renderer.cjs.
+// No electron import: `ipcMain`, the view manager, settings, chats and `fs` are injected.
 
+import nodeFs from 'node:fs'
+import path from 'node:path'
 import { SLOTS, publicSites } from './sites.js'
 import { normalizeLayout } from './layout.js'
 import { isExternalUrl } from './policy.js'
 
 export const MAX_PROMPT_CHARS = 32768
+export const MAX_CONV_ID_CHARS = 200
+export const SNAPSHOT_TIMEOUT_MS = 15000
 export const ZOOM_DIRECTIONS = Object.freeze(['in', 'out', 'reset'])
 export const MODES = Object.freeze(['tabs', 'split'])
+export const OPEN_CHATS_RESULTS = Object.freeze(['navigated', 'new', 'kept'])
 
 export function badRequest() {
   return new Error('bad_request')
@@ -44,17 +59,23 @@ export function requireDirection(direction) {
   return direction
 }
 
+export function requireBoolean(v) {
+  if (typeof v !== 'boolean') throw badRequest()
+  return v
+}
+
+/** A conversation id for `panes:openChats`: null, or a non-empty string ≤ 200 chars. */
+export function requireConvId(v) {
+  if (v === null || v === undefined) return null
+  if (typeof v !== 'string' || v === '' || v.length > MAX_CONV_ID_CHARS) throw badRequest()
+  return v
+}
+
 /** `{mode, active}` for 'panes:active' (both required). */
 export function requireActive(state) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) throw badRequest()
   if (typeof state.mode !== 'string' || !MODES.includes(state.mode)) throw badRequest()
   return { mode: state.mode, active: requireSlot(state.active) }
-}
-
-/** The `prompt:send` body: `{targets, text}` → `{targets (normalized), text}`. */
-export function requirePrompt(req) {
-  if (req === null || typeof req !== 'object' || Array.isArray(req)) throw badRequest()
-  return { targets: requireTargets(req.targets), text: requireText(req.text) }
 }
 
 /** Stamp the selectors loader's error into a health object's `matched.error` when the adapter reported none. */
@@ -65,20 +86,71 @@ export function annotateHealth(health, selectorsError) {
   return { ...health, matched: { ...matched, error: String(selectorsError) } }
 }
 
+/** The file name a DOM snapshot is written under: `<slot>-<ts>.html` (ts = integer ms). */
+export function snapshotFileName(slot, ts) {
+  return `${requireSlot(slot)}-${Math.round(Number(ts) || 0)}.html`
+}
+
 /**
- * registerIpc(deps) → {dispose}
+ * saveDomSnapshot({views, snapshotsDir, fs, now}, slot) → {path}: the adapter's `snapshot` op
+ * (scrubbed HTML) written under `<snapshotsDir>/<slot>-<ts>.html`. Shared by `panes:snapshot`
+ * and the Site menu.
+ */
+export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = Date.now }, slot) {
+  requireSlot(slot)
+  const client = views && typeof views.adapterFor === 'function' ? views.adapterFor(slot) : null
+  if (!client) throw new Error('view_crashed')
+  if (!snapshotsDir) throw new Error('snapshots_unavailable')
+  const res = await client.request('snapshot', {}, { timeoutMs: SNAPSHOT_TIMEOUT_MS })
+  if (!res || typeof res.html !== 'string') throw new Error('site_error')
+  fs.mkdirSync(snapshotsDir, { recursive: true })
+  const file = path.join(snapshotsDir, snapshotFileName(slot, now()))
+  fs.writeFileSync(file, res.html, 'utf8')
+  return { path: file }
+}
+
+/**
+ * registerIpc(deps) → {state, dispose}
  *   ipcMain             {handle, on, removeHandler, removeListener}
  *   isRenderer(event)   true only for the renderer window's main frame
  *   views               the view manager (views.js)
  *   layoutState         mutable {mode, active} shared with shortcuts (updated from 'panes:active')
- *   orchestrator        {submitAll}
+ *   orchestrator        {inflight(slot)} (Stage 2: `run` is driven by the bridge client, not IPC)
  *   selectors           {current, reload, lastError}
+ *   settings            {getCapture, setCapture}
+ *   chats               {get(convId, slot)}
  *   sites               the resolved site table
  *   version, dev        for 'panes:getInfo' / 'adapter:config'
+ *   getBackend()        {port, url} | null for 'panes:getInfo'
+ *   getBridgeState()    {connected, since?} replayed as 'panes:bridge'
+ *   snapshotsDir        <userData>/snapshots
+ *   onHealth(slot, h)   called after an adapter health report is cached (main → bridge `health` frame)
  *   openExternal(url)   shell.openExternal
  *   sendToRenderer(channel, ...args)
+ *   fs, now, log
  */
-export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestrator, selectors, sites, version, dev = false, openExternal, sendToRenderer, log = console } = {}) {
+export function registerIpc({
+  ipcMain,
+  isRenderer,
+  views,
+  layoutState,
+  orchestrator = null,
+  selectors,
+  settings = null,
+  chats = null,
+  sites,
+  version,
+  dev = false,
+  getBackend = null,
+  getBridgeState = null,
+  snapshotsDir = null,
+  onHealth = null,
+  openExternal,
+  sendToRenderer,
+  fs = nodeFs,
+  now = Date.now,
+  log = console,
+} = {}) {
   if (!ipcMain || typeof ipcMain.handle !== 'function' || typeof ipcMain.on !== 'function') throw new Error('registerIpc: ipcMain is required')
   if (typeof isRenderer !== 'function') throw new Error('registerIpc: isRenderer is required')
   if (!views) throw new Error('registerIpc: views is required')
@@ -97,27 +169,62 @@ export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestra
   const requireRenderer = (event) => {
     if (!isRenderer(event)) throw badRequest()
   }
+  const warn = (m) => log && typeof log.warn === 'function' && log.warn(`[ipc] ${m}`)
   const emit = (channel, ...args) => {
     try {
       if (typeof sendToRenderer === 'function') sendToRenderer(channel, ...args)
     } catch (e) {
-      if (log && typeof log.warn === 'function') log.warn(`[ipc] send ${channel} failed: ${(e && e.message) || e}`)
+      warn(`send ${channel} failed: ${(e && e.message) || e}`)
     }
   }
 
-  /** Cached health + zoom of every view, re-sent to the renderer (a view manager without the getters is skipped). */
+  /** Cached health + zoom of every view and the bridge state, re-sent to the renderer. */
   const replayState = () => {
-    if (typeof views.slots !== 'function') return
-    for (const slot of views.slots()) {
-      if (typeof views.getHealth === 'function') {
-        const h = views.getHealth(slot)
-        if (h) emit('panes:health', slot, h)
-      }
-      if (typeof views.zoomFactor === 'function') {
-        const factor = views.zoomFactor(slot)
-        if (typeof factor === 'number') emit('panes:zoom', { slot, factor })
+    if (typeof views.slots === 'function') {
+      for (const slot of views.slots()) {
+        if (typeof views.getHealth === 'function') {
+          const h = views.getHealth(slot)
+          if (h) emit('panes:health', slot, h)
+        }
+        if (typeof views.zoomFactor === 'function') {
+          const factor = views.zoomFactor(slot)
+          if (typeof factor === 'number') emit('panes:zoom', { slot, factor })
+        }
       }
     }
+    if (typeof getBridgeState === 'function') {
+      const b = getBridgeState()
+      if (b && typeof b.connected === 'boolean') emit('panes:bridge', b.connected && b.since != null ? { connected: true, since: b.since } : { connected: b.connected })
+    }
+  }
+
+  const inflight = (slot) => !!(orchestrator && typeof orchestrator.inflight === 'function' && orchestrator.inflight(slot))
+
+  /** One pane for `panes:openChats`: 'navigated' | 'new' | 'kept'. */
+  async function openChat(slot, convId) {
+    if (inflight(slot)) {
+      warn(`openChats: ${slot} has a turn in flight; kept`)
+      return 'kept'
+    }
+    const current = typeof views.currentUrl === 'function' ? views.currentUrl(slot) : ''
+    const link = convId && chats && typeof chats.get === 'function' ? chats.get(convId, slot) : null
+    if (link) {
+      if (current === link) return 'kept'
+      if (typeof views.loadUrl !== 'function') return 'kept'
+      try {
+        await views.loadUrl(slot, link)
+        emit('panes:turn', { slot, phase: 'idle' })
+        return 'navigated'
+      } catch (e) {
+        warn(`openChats: ${slot} could not open the recorded chat: ${(e && e.message) || e}`)
+        return 'kept'
+      }
+    }
+    const fresh = sites && sites[slot] ? sites[slot].newChatUrl : null
+    if (fresh && current === fresh) return 'kept'
+    views.newChat(slot)
+    emit('panes:turn', { slot, phase: 'idle' })
+    return 'new'
   }
 
   // --- renderer → main -------------------------------------------------------------------------
@@ -125,7 +232,12 @@ export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestra
     requireRenderer(event)
     const layout = state.mode && state.active ? { mode: state.mode, active: state.active } : null
     replayState()
-    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend: null, layout }
+    let backend = null
+    if (typeof getBackend === 'function') {
+      const b = getBackend()
+      if (b && typeof b.url === 'string' && Number.isInteger(b.port)) backend = { port: b.port, url: b.url }
+    }
+    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend, layout }
   })
 
   on('panes:layout', (event, layout) => {
@@ -185,11 +297,47 @@ export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestra
     return { factor }
   })
 
-  handle('prompt:send', async (event, req) => {
+  // Stage 1's IPC prompt is gone (the unified prompt is POST /api/conversations/{id}/send);
+  // renderer.cjs still exposes sendPrompt until the integrator removes it — answer clearly.
+  handle('prompt:send', async (event) => {
     requireRenderer(event)
-    const { targets, text } = requirePrompt(req)
-    if (!orchestrator || typeof orchestrator.submitAll !== 'function') throw new Error('prompt_unavailable')
-    return orchestrator.submitAll({ targets, text })
+    throw new Error('prompt_send_removed')
+  })
+
+  // --- Stage 2 ---------------------------------------------------------------------------------
+  handle('panes:getCapture', (event) => {
+    requireRenderer(event)
+    if (!settings || typeof settings.getCapture !== 'function') throw new Error('capture_unavailable')
+    return settings.getCapture()
+  })
+
+  handle('panes:setCapture', async (event, slot, on) => {
+    requireRenderer(event)
+    requireSlot(slot)
+    requireBoolean(on)
+    if (!settings || typeof settings.setCapture !== 'function') throw new Error('capture_unavailable')
+    settings.setCapture(slot, on)
+  })
+
+  handle('panes:openChats', async (event, convId) => {
+    requireRenderer(event)
+    const id = requireConvId(convId)
+    const out = {}
+    for (const slot of SLOTS) out[slot] = await openChat(slot, id)
+    return out
+  })
+
+  handle('panes:signOut', async (event, slot) => {
+    requireRenderer(event)
+    requireSlot(slot)
+    if (typeof views.signOut !== 'function') throw new Error('sign_out_unavailable')
+    await views.signOut(slot)
+  })
+
+  handle('panes:snapshot', async (event, slot) => {
+    requireRenderer(event)
+    requireSlot(slot)
+    return saveDomSnapshot({ views, snapshotsDir, fs, now }, slot)
   })
 
   // --- site preload → main ---------------------------------------------------------------------
@@ -205,10 +353,18 @@ export function registerIpc({ ipcMain, isRenderer, views, layoutState, orchestra
     const annotated = annotateHealth(health, selectors && typeof selectors.lastError === 'function' ? selectors.lastError() : null)
     views.setHealth(slot, annotated)
     emit('panes:health', slot, annotated)
+    if (typeof onHealth === 'function') {
+      try {
+        onHealth(slot, annotated) // Stage 2: main forwards it to the bridge as a `health` frame
+      } catch (e) {
+        warn(`onHealth failed: ${(e && e.message) || e}`)
+      }
+    }
   })
 
   return {
     state,
+    replayState,
     dispose() {
       for (const channel of handled) if (typeof ipcMain.removeHandler === 'function') ipcMain.removeHandler(channel)
       for (const [channel, fn] of listened) if (typeof ipcMain.removeListener === 'function') ipcMain.removeListener(channel, fn)

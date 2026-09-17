@@ -1,10 +1,15 @@
 // main.js wiring — the real desktop/main/main.js run under Node with a fake `electron` module
 // (test/unit/main/_fake-electron.mjs, substituted by a module.register resolve hook). Proves the
 // preflight (flags, TRIPLEX_USER_DATA_DIR, loopback refusal of URLs and trusted hosts), the window
-// + three views with the hardened webPreferences, every IPC channel, the shortcut path, health
-// forwarding, one full prompt:send round trip, the renderer's origin guard + foreign-frame IPC
-// refusal, child-window / redirect / backstop policy, the Bluetooth chooser, the health + zoom
-// replay, crash recreation and the bounds → settings.json flush on close.
+// + three views with the hardened webPreferences, every IPC channel (Stage 1 + Stage 2), the
+// shortcut path, health forwarding (renderer + bridge), the bridge handshake over a fake WebSocket
+// (hello with the attach token, hello_ack, capture / health frames, one request → accepted →
+// ready → insertAndSubmit → observe → result, the chat link recorded in chats.json, a cancel, the
+// banner state on a drop), prompt:send answering prompt_send_removed, openChats / signOut /
+// snapshot, the renderer's origin guard + foreign-frame IPC refusal, child-window / redirect /
+// backstop policy, the Bluetooth chooser, the health + zoom + bridge replay, crash recreation and
+// the bounds → settings.json flush on close. The fake forces TRIPLEX_BACKEND_URL (attach mode):
+// a wiring run never spawns a backend and never opens a real socket.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -19,6 +24,8 @@ const MAIN = path.join(DESKTOP, 'main', 'main.js')
 const REGISTER = path.join(HERE, '_register-fake-electron.mjs')
 const FAKE_BASE = 'http://127.0.0.1:5199'
 const SLOTS = ['claude', 'chatgpt', 'grok']
+const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
+const ATTACH_URL = 'http://127.0.0.1:1'
 
 function sitesJson(base = FAKE_BASE) {
   const sites = {}
@@ -26,16 +33,23 @@ function sitesJson(base = FAKE_BASE) {
   return JSON.stringify(sites)
 }
 
+/** A selectors override pointing every chatUrlPattern at the fake site (the wiring probe records a chat link). */
+function writeSelectorsOverride(userData) {
+  const override = {}
+  for (const slot of SLOTS) override[slot] = { chatUrlPattern: '^http://127\\.0\\.0\\.1:5199/c/[A-Za-z0-9]+' }
+  fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+}
+
 function run(env) {
   const clean = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR }
-  for (const k of Object.keys(process.env)) if (k.startsWith('TRIPLEX_')) delete clean[k]
-  const r = spawnSync(process.execPath, ['--import', REGISTER, MAIN], { cwd: DESKTOP, env: { ...clean, ...env }, encoding: 'utf8', timeout: 30000 })
+  const r = spawnSync(process.execPath, ['--import', REGISTER, MAIN], { cwd: DESKTOP, env: { ...clean, TRIPLEX_BACKEND_URL: ATTACH_URL, BRIDGE_TOKEN: 'wiring', ...env }, encoding: 'utf8', timeout: 30000 })
   const line = (r.stdout || '').split('\n').find((l) => l.startsWith('FAKE_ELECTRON_REPORT '))
   return { status: r.status, report: line ? JSON.parse(line.slice('FAKE_ELECTRON_REPORT '.length)) : null, stderr: r.stderr, stdout: r.stdout }
 }
 
-test('happy path: userData, window, three hardened views, IPC, shortcuts, health, prompt:send, crash recreate, bounds flush', () => {
+test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, crash recreate, bounds flush', () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-'))
+  writeSelectorsOverride(userData)
   const { status, report, stderr } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson(), TRIPLEX_RENDERER_URL: 'http://localhost:5184' })
   assert.equal(status, 0, stderr)
   assert.ok(report, 'report printed')
@@ -69,17 +83,21 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   })
   assert.deepEqual([...report.sessions].sort(), ['default', 'persist:chatgpt', 'persist:claude', 'persist:grok'])
 
-  // every §2 channel is registered once
+  // every §2 channel is registered once (prompt:send stays registered only to answer prompt_send_removed)
   const handles = report.ipcHandles
-  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'prompt:send', 'adapter:config']) {
+  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'prompt:send', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot']) {
     assert.equal(handles.filter((h) => h === c).length, 1, c)
   }
   for (const c of ['panes:layout', 'panes:active', 'triplex:adapter:health', 'triplex:adapter:result']) assert.ok(report.ipcOns.includes(c), c)
 
-  // hidden menu with the accelerator table
+  // the application menu: the accelerator table + the Site menu
   assert.ok(report.menu)
+  assert.deepEqual(report.menu.labels, ['Triplex', 'Panes', 'Site', 'Edit'])
   for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
+  }
+  for (const label of ['Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
+    assert.ok(report.menu.items.includes(label), label)
   }
 
   const p = report.probes
@@ -88,15 +106,18 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.getInfo.value.version, '0.1.0')
   assert.equal(p.getInfo.value.dev, true)
   assert.equal(p.getInfo.value.layout, null)
+  assert.deepEqual(p.getInfo.value.backend, { port: 1, url: ATTACH_URL }, 'getInfo().backend = the attached backend')
   assert.deepEqual(p.getInfo.value.sites.claude, { url: `${FAKE_BASE}/?site=claude`, newChatUrl: `${FAKE_BASE}/?site=claude`, partition: 'persist:claude' })
   assert.deepEqual(p.getInfoFromView, { ok: false, error: 'bad_request' }, 'a site view is not the renderer')
   assert.equal(p.adapterConfigView.ok, true)
   assert.equal(p.adapterConfigView.value.site, 'chatgpt')
   assert.deepEqual(Object.keys(p.adapterConfigView.value.selectors), ['version', 'chatgpt', 'claude', 'grok'])
+  assert.equal(p.adapterConfigView.value.selectors.claude.chatUrlPattern, '^http://127\\.0\\.0\\.1:5199/c/[A-Za-z0-9]+', 'the override is merged')
   assert.equal(p.adapterConfigView.value.dev, true)
   assert.equal(p.adapterConfigPopup.value.site, null)
   assert.deepEqual(p.badSlot, { ok: false, error: 'bad_request' })
-  assert.deepEqual(p.oversize, { ok: false, error: 'bad_request' })
+  assert.deepEqual(p.promptSend, { ok: false, error: 'prompt_send_removed' }, 'Stage 1 sendPrompt gets a clear error')
+  assert.deepEqual(p.promptSendForeign, { ok: false, error: 'bad_request' })
 
   assert.deepEqual(p.layout, [
     { bounds: { x: 0, y: 100, width: 500, height: 600 }, visible: true },
@@ -115,21 +136,88 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.shortcutZoom.activeZoom, 1.2, 'Ctrl+= zooms the ACTIVE pane (grok, from panes:active)')
   assert.deepEqual(p.shortcutZoom.sent.at(-1), ['panes:zoom', { slot: 'grok', factor: 1.2 }])
 
+  // --- the bridge: attach mode → ws://127.0.0.1:1/api/bridge, hello with BRIDGE_TOKEN, nothing before open
+  assert.deepEqual(p.socket, { url: 'ws://127.0.0.1:1/api/bridge', sentBeforeOpen: 0 })
+  assert.equal(p.bridgeBeforeAck, 'connecting')
+  assert.deepEqual(p.hello, { type: 'hello', protocol: 1, token: 'wiring', version: '0.1.0', sites: SLOTS, capture: { claude: false, chatgpt: false, grok: false }, analyst: null })
+  assert.equal(p.bridgeAfterAck.connected, true)
+  assert.equal(p.bridgeAfterAck.pingS, 20)
+  // every panes:getInfo before the ack replayed {connected:false}; the ack itself sent exactly one connected:true
+  const replays = p.bridgeSentToRenderer.filter((s) => !s.connected)
+  assert.ok(replays.length >= 1, 'the pre-ack getInfo probes replayed the bridge state')
+  for (const r of replays) assert.deepEqual(r, { connected: false })
+  assert.equal(p.bridgeSentToRenderer.filter((s) => s.connected).length, 1)
+  assert.equal(p.bridgeSentToRenderer.at(-1).connected, true)
+  assert.equal(typeof p.bridgeSentToRenderer.at(-1).since, 'number')
+
+  // capture switch → settings + a capture frame; a bad payload is refused
+  assert.deepEqual(p.getCapture, { ok: true, value: { claude: false, chatgpt: false, grok: false } })
+  assert.equal(p.setCapture.ok, true)
+  assert.deepEqual(p.setCaptureBad, { ok: false, error: 'bad_request' })
+  assert.deepEqual(p.captureFrames, [{ type: 'capture', capture: { claude: true, chatgpt: false, grok: false } }])
+
+  // health → renderer AND bridge
   assert.equal(p.health.length, 1)
   assert.equal(p.health[0][1], 'claude')
   assert.equal(p.health[0][2].matched.composer, '#x')
+  assert.equal(p.healthFrames.length, 1)
+  assert.equal(p.healthFrames[0].slot, 'claude')
+  assert.equal(p.healthFrames[0].health.matched.composer, '#x')
 
-  assert.ok(p.readyMsg, 'prompt:send sent a ready op to the claude view')
-  assert.equal(p.readyMsg.op, 'ready')
+  // request → accepted → ready → insertAndSubmit (focused under the mutex) → observe (capture on for claude) → result
+  assert.deepEqual(p.accepted, [{ type: 'accepted', req_id: '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c', view: 'pane', slot: 'claude' }])
+  assert.ok(p.readyMsg, 'a ready op reached the claude view')
   assert.equal(p.readyMsg.timeoutMs, 15000)
   assert.ok(p.insertMsg, 'then insertAndSubmit')
   assert.equal(p.insertMsg.text, 'hi `x`')
   assert.equal(p.viewFocusedDuringInsert, 1, 'the view was focused under the mutex before the insert')
-  assert.equal(p.promptSend.ok, true)
-  assert.equal(p.promptSend.value.results.claude.ok, true)
-  assert.equal(p.promptSend.value.results.claude.composerSelector, '#c')
-  assert.equal(p.promptSend.value.results.claude.url, 'http://127.0.0.1:5199/c/1')
+  assert.ok(p.observeMsg, 'capture on → observe')
+  assert.equal(p.observeMsg.baselineCount, 0)
+  assert.equal(p.observeMsg.quietMs, 2500)
+  assert.equal(p.observeMsg.timeoutMs, 300000)
+  assert.equal(p.results.length, 1)
+  const result = p.results[0]
+  assert.equal(result.req_id, '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c')
+  assert.equal(result.ok, true)
+  assert.equal(result.captured, true)
+  assert.equal(result.text, 'Echo: hi `x`')
+  assert.equal(result.done_by, 'stop_gone')
+  assert.ok(Number.isInteger(result.ms) && result.ms >= 0)
+  assert.deepEqual(p.turnEvents.slice(0, 4), [
+    { slot: 'claude', phase: 'typing' },
+    { slot: 'claude', phase: 'submitted' },
+    { slot: 'claude', phase: 'replying' },
+    { slot: 'claude', phase: 'done' },
+  ])
   assert.equal(p.rendererFocusedAfterSend, 1, 'renderer focus restored once')
+  assert.deepEqual(p.chatsFile, { [CONV]: { claude: 'http://127.0.0.1:5199/c/1?site=claude' } }, 'the matching navigation after the submit is recorded in chats.json')
+
+  // a bridge cancel aborts the in-flight op (adapter cancel) and the result is `cancelled`
+  assert.ok(p.cancelMsg, 'a cancel op reached the grok view')
+  assert.equal(p.cancelMsg.op, 'cancel')
+  assert.ok(p.cancelResult, 'the cancelled turn answered')
+  assert.equal(p.cancelResult.ok, false)
+  assert.equal(p.cancelResult.code, 'cancelled')
+
+  // Stage 2 IPC: openChats navigates claude to its recorded link, the others stay on newChatUrl
+  assert.deepEqual(p.openChats, { ok: true, value: { claude: 'navigated', chatgpt: 'kept', grok: 'kept' } })
+  assert.equal(p.openChatsLoads.claude, 'http://127.0.0.1:5199/c/1?site=claude')
+  assert.deepEqual(p.openChatsNull, { ok: true, value: { claude: 'new', chatgpt: 'kept', grok: 'kept' } })
+  assert.equal(p.signOut.ok, true)
+  assert.deepEqual(p.signOutCleared, { grok: 1, claude: 0 }, 'clearStorageData on the grok partition only')
+  assert.equal(p.signOutLoad, `${FAKE_BASE}/?site=grok`)
+  assert.equal(p.snapshot.ok, true, JSON.stringify(p.snapshot))
+  assert.ok(p.snapshot.value.path.startsWith(path.join(userData, 'snapshots', 'chatgpt-')), p.snapshot.value.path)
+  assert.ok(p.snapshot.value.path.endsWith('.html'))
+  assert.equal(p.snapshotFile, '<html><body>…</body></html>')
+
+  // a socket drop → the banner state reaches the renderer; the client is scheduling a reconnect
+  assert.equal(p.bridgeAfterDrop, 'closed')
+  assert.deepEqual(p.bridgeSentAfterDrop.at(-1), { connected: false })
+  // the probe keeps running for >1 s after the drop, so the 0.5 s backoff has opened the reconnect socket by the time the report is printed
+  assert.ok(report.sockets.length >= 1)
+  assert.deepEqual(report.sockets[0].closed, { code: 1006, reason: '' })
+  for (const s of report.sockets) assert.equal(s.url, 'ws://127.0.0.1:1/api/bridge', 'every (re)connect targets the attached backend')
 
   // the renderer window is pinned to the origin of TRIPLEX_RENDERER_URL; popups go to the system browser
   assert.deepEqual(p.rendererNav, {
@@ -159,12 +247,13 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // select-bluetooth-device: prevented + cancelled on the renderer, every view and stray contents; one listener each
   for (const kind of ['view', 'window', 'stray']) assert.deepEqual(p.bluetooth[kind], { prevented: true, chosen: '', listeners: 1 }, kind)
 
-  // cached health + zoom replayed on did-finish-load and after panes:getInfo
+  // cached health + zoom + bridge state replayed on did-finish-load and after panes:getInfo
   const expectedReplay = [
     ['panes:health', 'claude', p.health[0][2]],
     ['panes:zoom', { slot: 'claude', factor: 1 }],
     ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
     ['panes:zoom', { slot: 'grok', factor: 1.2 }],
+    ['panes:bridge', { connected: false }],
   ]
   assert.deepEqual(p.replay, expectedReplay)
   assert.deepEqual(p.replayOnGetInfo, expectedReplay)
@@ -175,9 +264,12 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
 
   assert.deepEqual(p.settingsFile.window, { x: 10, y: 20, width: 900, height: 700, maximized: false })
   assert.deepEqual(p.settingsFile.zoom, { claude: 1, chatgpt: 1, grok: 1.2 })
-  assert.deepEqual(p.settingsFile.capture, { claude: false, chatgpt: false, grok: false })
+  assert.deepEqual(p.settingsFile.capture, { claude: true, chatgpt: false, grok: false }, 'the capture switch persisted')
   assert.equal(p.settingsFile.analyst, 'chatgpt')
-  for (const key of ['views', 'orchestrator', 'settings']) assert.ok(p.testGlobal.includes(key), key)
+  for (const key of ['views', 'orchestrator', 'settings', 'bridge', 'chats', 'backend']) assert.ok(p.testGlobal.includes(key), key)
+
+  // the token never reaches a log line
+  assert.equal(stderr.includes('wiring'), false, 'BRIDGE_TOKEN is never logged')
 })
 
 test('saved window bounds are restored (clamped) on the next launch and maximized is honoured', () => {
@@ -198,16 +290,18 @@ test('TRIPLEX_CHROMIUM_FLAGS: a flag outside the allow-list refuses to start (ex
   assert.equal(report.exit, 2)
   assert.equal(report.windows.length, 0)
   assert.equal(report.views.length, 0)
+  assert.equal(report.sockets.length, 0)
   assert.match(stderr, /--remote-debugging-port=9222.*not allow-listed/)
 })
 
-test('allowed flags and TRIPLEX_DISABLE_GPU=1 are appended to the command line', () => {
-  const { status, report } = run({ TRIPLEX_CHROMIUM_FLAGS: '--ignore-gpu-blocklist --use-gl=egl', TRIPLEX_DISABLE_GPU: '1', TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
+test('allowed flags and TRIPLEX_DISABLE_GPU=1 are appended to the command line; the default renderer URL is the backend /app/', () => {
+  const { status, report } = run({ TRIPLEX_CHROMIUM_FLAGS: '--ignore-gpu-blocklist --use-gl=egl', TRIPLEX_DISABLE_GPU: '1', TRIPLEX_BACKEND_URL: 'http://127.0.0.1:8021', TRIPLEX_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-')) })
   assert.equal(status, 0)
   assert.deepEqual(report.switches, [['ignore-gpu-blocklist'], ['use-gl', 'egl'], ['disable-gpu']])
   assert.equal(report.windows.length, 1)
   assert.equal(report.views[0].loads[0], 'https://claude.ai/new', 'the real sites without TRIPLEX_SITES_JSON')
   assert.deepEqual(report.windows[0].loads, ['http://127.0.0.1:8021/app/'], 'default renderer URL = the backend /app/')
+  assert.equal(report.sockets[0].url, 'ws://127.0.0.1:8021/api/bridge')
 })
 
 test('TRIPLEX_E2E_APP=1 refuses a non-loopback site URL (exit 3) before any window', () => {

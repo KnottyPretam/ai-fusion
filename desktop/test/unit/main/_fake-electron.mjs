@@ -1,17 +1,25 @@
 // A fake `electron` module for main-wiring.test.js: enough of app / BrowserWindow /
 // WebContentsView / session / shell / ipcMain / screen / Menu for main/main.js to run its
 // preflight and `start()` under plain Node. After `ready` it probes the wiring (IPC handlers,
-// layout, zoom, a shortcut, health forwarding, a full prompt:send round trip, the renderer's
-// origin guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the
-// Bluetooth chooser, the health + zoom replay, window-bounds persistence) and prints ONE line
-// `FAKE_ELECTRON_REPORT <json>` before exiting; `app.exit(code)` prints the report and exits with
-// that code at once (the refusal paths). Every FakeWebContents emits `web-contents-created` on
-// `app` as Electron does, synchronously in its constructor.
+// layout, zoom, a shortcut, health forwarding, the bridge handshake + one request → result round
+// trip over a fake WebSocket, the Stage 2 IPC channels, the renderer's origin guard + foreign-frame
+// IPC refusal, child-window / redirect / backstop policy, the Bluetooth chooser, the health + zoom
+// + bridge replay, window-bounds persistence) and prints ONE line `FAKE_ELECTRON_REPORT <json>`
+// before exiting; `app.exit(code)` prints the report and exits with that code at once (the refusal
+// paths). Every FakeWebContents emits `web-contents-created` on `app` as Electron does,
+// synchronously in its constructor.
+//
+// Two guards so a wiring run never touches the network: `TRIPLEX_BACKEND_URL` is forced to an
+// attach URL (main.js then never spawns a backend) and `globalThis.WebSocket` is replaced by a
+// recording fake the probes drive by hand.
 
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+
+if (!process.env.TRIPLEX_BACKEND_URL) process.env.TRIPLEX_BACKEND_URL = 'http://127.0.0.1:1'
+if (!process.env.BRIDGE_TOKEN) process.env.BRIDGE_TOKEN = 'wiring'
 
 const report = {
   paths: {},
@@ -25,6 +33,7 @@ const report = {
   exit: null,
   quit: false,
   singleInstanceRequested: false,
+  sockets: [],
   probes: null,
 }
 let nextId = 1
@@ -37,11 +46,52 @@ function finish(code) {
     ...report,
     windows: report.windows.map((w) => ({ options: w.options, loads: w.webContents.loads, sent: w.webContents.sent, bounds: w.bounds, menuBarVisible: w.menuBarVisible })),
     views: report.views.map((v) => ({ options: v.options, loads: v.webContents.loads, bounds: v.getBounds(), visible: v.getVisible(), zoom: v.webContents.zoom, id: v.webContents.id })),
-    menu: report.menu ? { labels: report.menu.template.map((m) => m.label), accelerators: report.menu.template.flatMap((m) => (m.submenu || []).map((i) => i.accelerator).filter(Boolean)) } : null,
+    menu: report.menu ? { labels: report.menu.template.map((m) => m.label), items: report.menu.template.flatMap((m) => (m.submenu || []).map((i) => i.label).filter(Boolean)), accelerators: report.menu.template.flatMap((m) => (m.submenu || []).map((i) => i.accelerator).filter(Boolean)) } : null,
+    sockets: FakeWebSocket.instances.map((s) => ({ url: s.url, sent: s.sent, closed: s.closed })),
   }
   process.stdout.write(`FAKE_ELECTRON_REPORT ${JSON.stringify(out)}\n`)
   process.exit(code)
 }
+
+// --- the bridge socket -----------------------------------------------------------------------------
+class FakeWebSocket {
+  static instances = []
+  constructor(url) {
+    this.url = url
+    this.readyState = 0
+    this.sent = []
+    this.closed = null
+    this.listeners = {}
+    FakeWebSocket.instances.push(this)
+  }
+  addEventListener(name, fn) {
+    ;(this.listeners[name] ||= []).push(fn)
+  }
+  fire(name, event) {
+    for (const fn of this.listeners[name] || []) fn(event)
+  }
+  send(text) {
+    if (this.readyState !== 1) throw new Error('socket not open')
+    this.sent.push(JSON.parse(text))
+  }
+  close(code, reason) {
+    if (this.closed) return
+    this.closed = { code, reason }
+    this.readyState = 3
+    this.fire('close', { code, reason })
+  }
+  open() {
+    this.readyState = 1
+    this.fire('open', {})
+  }
+  receive(frame) {
+    this.fire('message', { data: JSON.stringify(frame) })
+  }
+  frames(type) {
+    return this.sent.filter((f) => f.type === type)
+  }
+}
+globalThis.WebSocket = FakeWebSocket
 
 class FakeWebContents extends EventEmitter {
   constructor(kind) {
@@ -188,6 +238,7 @@ export class BrowserWindow extends EventEmitter {
 class FakeSession {
   constructor(partition) {
     this.partition = partition
+    this.cleared = 0
     report.sessions.push(partition)
   }
   setPermissionRequestHandler(fn) {
@@ -198,6 +249,10 @@ class FakeSession {
   }
   setDevicePermissionHandler(fn) {
     this.deviceHandler = fn
+  }
+  clearStorageData() {
+    this.cleared += 1
+    return Promise.resolve()
   }
 }
 const sessions = new Map()
@@ -300,6 +355,9 @@ app.quit = () => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const mainFrameEvent = (wc) => ({ sender: wc, senderFrame: { parent: null } })
+const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
+const HELLO_ACK = { type: 'hello_ack', protocol: 1, backend_version: '0.1.0', ping_s: 20 }
+const REQUEST = { type: 'request', req_id: '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c', model: 'web:claude', slot: 'claude', view: 'pane', fresh: false, text: 'hi `x`', role: 'claude', purpose: 'chat', conversation_id: CONV, timeout_s: 600 }
 
 async function probe() {
   const probes = {}
@@ -317,7 +375,8 @@ async function probe() {
   probes.adapterConfigView = await settle(ipcMain.invoke('adapter:config', mainFrameEvent(views[1].webContents)))
   probes.adapterConfigPopup = await settle(ipcMain.invoke('adapter:config', { sender: { id: 987654 }, senderFrame: { parent: null } }))
   probes.badSlot = await settle(ipcMain.invoke('panes:reload', renderer, 'bing'))
-  probes.oversize = await settle(ipcMain.invoke('prompt:send', renderer, { targets: ['claude'], text: 'x'.repeat(32769) }))
+  probes.promptSend = await settle(ipcMain.invoke('prompt:send', renderer, { targets: ['claude'], text: 'x' }))
+  probes.promptSendForeign = await settle(ipcMain.invoke('prompt:send', mainFrameEvent(views[0].webContents), { targets: ['claude'], text: 'x' }))
 
   ipcMain.emit('panes:layout', renderer, { claude: { x: 0, y: 100.4, width: 500, height: 600 }, chatgpt: null, grok: { x: 500, y: 100, width: 500, height: 600 } })
   probes.layout = views.map((v) => ({ bounds: v.getBounds(), visible: v.getVisible() }))
@@ -335,15 +394,35 @@ async function probe() {
   win.webContents.emit('before-input-event', zoomEv, { type: 'keyDown', key: '=', code: 'Equal', control: true, shift: false, alt: false, meta: false, isAutoRepeat: false })
   probes.shortcutZoom = { prevented: zoomEv.prevented, activeZoom: views[2].webContents.zoom, sent: win.webContents.sent.filter(([c]) => c === 'panes:zoom') }
 
+  // --- bridge: the socket main opened, the handshake, capture / health frames, one request → result
+  const ws = FakeWebSocket.instances[0]
+  probes.socket = ws ? { url: ws.url, sentBeforeOpen: ws.sent.length } : null
+  const t = globalThis.__triplexTest
+  probes.bridgeBeforeAck = t && t.bridge ? t.bridge.status().state : null
+  if (ws) {
+    ws.open()
+    probes.hello = ws.sent[0] || null
+    ws.receive(HELLO_ACK)
+  }
+  probes.bridgeAfterAck = t && t.bridge ? t.bridge.status() : null
+  probes.bridgeSentToRenderer = win.webContents.sent.filter(([c]) => c === 'panes:bridge').map(([, s]) => s)
+
+  probes.getCapture = await settle(ipcMain.invoke('panes:getCapture', renderer))
+  probes.setCapture = await settle(ipcMain.invoke('panes:setCapture', renderer, 'claude', true))
+  probes.setCaptureBad = await settle(ipcMain.invoke('panes:setCapture', renderer, 'claude', 'yes'))
+  probes.captureFrames = ws ? ws.frames('capture') : null
+
   const health = { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: '#x', send: 'b', reply: null, stop: null, error: null }, url: 'u', host: 'h', title: 't', ts: 1 }
   ipcMain.emit('triplex:adapter:health', mainFrameEvent(views[0].webContents), health)
   probes.health = win.webContents.sent.filter(([c]) => c === 'panes:health')
+  probes.healthFrames = ws ? ws.frames('health') : null
 
-  // full prompt:send round trip through the orchestrator and the adapter client
+  // one request → accepted → ready → insertAndSubmit (view focused under the mutex) → result; chat URL recorded
   const v0 = views[0].webContents
   const focusedBefore = win.webContents.focused
-  const sendP = ipcMain.invoke('prompt:send', renderer, { targets: ['claude'], text: 'hi `x`' })
+  if (ws) ws.receive(REQUEST)
   await sleep(10)
+  probes.accepted = ws ? ws.frames('accepted') : null
   const readyMsg = v0.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'ready')
   probes.readyMsg = readyMsg ? readyMsg[1] : null
   if (readyMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v0), { reqId: readyMsg[1].reqId, ok: true, op: 'ready', composerSelector: '#c' })
@@ -351,9 +430,62 @@ async function probe() {
   const insertMsg = v0.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'insertAndSubmit')
   probes.insertMsg = insertMsg ? insertMsg[1] : null
   probes.viewFocusedDuringInsert = v0.focused
-  if (insertMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v0), { reqId: insertMsg[1].reqId, ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#c', sendSelector: 'b', assistantCount: 0, confirmedBy: 'composer_cleared', ms: 3, url: 'http://127.0.0.1:5199/c/1' })
-  probes.promptSend = await settle(sendP)
+  if (insertMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v0), { reqId: insertMsg[1].reqId, ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#c', sendSelector: 'b', assistantCount: 0, confirmedBy: 'composer_cleared', ms: 3, url: 'http://127.0.0.1:5199/?site=claude' })
+  await sleep(10)
+  const observeMsg = v0.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'observe')
+  probes.observeMsg = observeMsg ? observeMsg[1] : null
+  if (observeMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v0), { reqId: observeMsg[1].reqId, ok: true, op: 'observe', text: 'Echo: hi `x`', doneBy: 'stop_gone', ms: 40, url: 'http://127.0.0.1:5199/?site=claude' })
+  await sleep(10)
+  probes.results = ws ? ws.frames('result') : null
+  probes.turnEvents = win.webContents.sent.filter(([c]) => c === 'panes:turn').map(([, e]) => e)
   probes.rendererFocusedAfterSend = win.webContents.focused - focusedBefore
+  // the fake site pushes /c/<id> after the submit: the orchestrator records it once it matches the override pattern
+  v0.emit('did-navigate-in-page', {}, 'http://127.0.0.1:5199/c/1?site=claude', true, 1, 1)
+  await sleep(10)
+  try {
+    probes.chatsFile = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'chats.json'), 'utf8'))
+  } catch (e) {
+    probes.chatsFile = { error: String(e.message) }
+  }
+
+  // the cancel path: a request whose ready op is aborted by a bridge cancel
+  const cancelReq = { ...REQUEST, req_id: '0b9a8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d', slot: 'grok', model: 'web:grok', role: 'grok' }
+  const v2 = views[2].webContents
+  if (ws) ws.receive(cancelReq)
+  await sleep(10)
+  if (ws) ws.receive({ type: 'cancel', req_id: cancelReq.req_id })
+  await sleep(10)
+  const cancelMsg = v2.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'cancel')
+  probes.cancelMsg = cancelMsg ? cancelMsg[1] : null
+  const grokReady = v2.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'ready')
+  if (grokReady) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v2), { reqId: grokReady[1].reqId, ok: false, op: 'ready', code: 'cancelled', message: 'cancelled' })
+  await sleep(10)
+  probes.cancelResult = ws ? ws.frames('result').find((f) => f.req_id === cancelReq.req_id) || null : null
+
+  // Stage 2 IPC: openChats (recorded link → navigated; no link → new / kept), signOut, snapshot
+  probes.openChats = await settle(ipcMain.invoke('panes:openChats', renderer, CONV))
+  probes.openChatsLoads = { claude: v0.loads.slice(-1)[0], chatgpt: views[1].webContents.loads.length, grok: v2.loads.length }
+  probes.openChatsNull = await settle(ipcMain.invoke('panes:openChats', renderer, null))
+  probes.signOut = await settle(ipcMain.invoke('panes:signOut', renderer, 'grok'))
+  probes.signOutCleared = { grok: sessions.get('persist:grok') ? sessions.get('persist:grok').cleared : null, claude: sessions.get('persist:claude') ? sessions.get('persist:claude').cleared : null }
+  probes.signOutLoad = v2.loads.slice(-1)[0]
+  const snapshotP = ipcMain.invoke('panes:snapshot', renderer, 'chatgpt')
+  await sleep(10)
+  const v1 = views[1].webContents
+  const snapMsg = v1.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === 'snapshot')
+  if (snapMsg) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v1), { reqId: snapMsg[1].reqId, ok: true, op: 'snapshot', html: '<html><body>…</body></html>' })
+  probes.snapshot = await settle(snapshotP)
+  try {
+    probes.snapshotFile = probes.snapshot.ok ? fs.readFileSync(probes.snapshot.value.path, 'utf8') : null
+  } catch (e) {
+    probes.snapshotFile = { error: String(e.message) }
+  }
+
+  // a socket drop → banner state to the renderer; the client schedules a reconnect (a new socket)
+  if (ws) ws.close(1006, '')
+  await sleep(10)
+  probes.bridgeAfterDrop = t && t.bridge ? t.bridge.status().state : null
+  probes.bridgeSentAfterDrop = win.webContents.sent.filter(([c]) => c === 'panes:bridge').map(([, s]) => s)
 
   // renderer window: pinned to the origin of TRIPLEX_RENDERER_URL; popups external; IPC from a
   // foreign document in the same webContents refused
@@ -412,7 +544,7 @@ async function probe() {
   }
   probes.bluetooth = { view: bluetooth(views[0].webContents), window: bluetooth(win.webContents), stray: bluetooth(stray) }
 
-  // cached health + zoom replayed on the renderer's did-finish-load and after panes:getInfo
+  // cached health + zoom + bridge state replayed on the renderer's did-finish-load and after panes:getInfo
   let sentFrom = win.webContents.sent.length
   win.webContents.emit('did-finish-load')
   probes.replay = win.webContents.sent.slice(sentFrom)

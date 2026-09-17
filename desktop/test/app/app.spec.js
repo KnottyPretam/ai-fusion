@@ -1,15 +1,27 @@
 // desktop/test/app/app.spec.js — Playwright drives the real Electron app (project `app`).
 //
 // Integrator-only (`TRIPLEX_E2E_APP=1 npx playwright test --project app` on DISPLAY=:1): the
-// config's webServers start the fake site (5199), Vite (5184) and the backend (8021). Every launch
-// gets a temp TRIPLEX_USER_DATA_DIR, TRIPLEX_SITES_JSON pointing all three sites at the fake site,
-// TRIPLEX_RENDERER_URL=http://localhost:5184 and the inherited DISPLAY. Views are reached through
-// `global.__triplexTest = {views, orchestrator, settings}` (main.js under TRIPLEX_E2E_APP=1).
+// config's webServers start the fake site (5199), Vite (5184) and the backend (8021, with
+// TRIPLEX_DESKTOP=1 BRIDGE_TOKEN=e2e SLOT_*_MODEL=web:*). Every launch gets a temp
+// TRIPLEX_USER_DATA_DIR, TRIPLEX_SITES_JSON pointing all three sites at the fake site,
+// TRIPLEX_RENDERER_URL=http://localhost:5184, the inherited DISPLAY and — from Stage 2 —
+// TRIPLEX_BACKEND_URL=http://127.0.0.1:8021 + BRIDGE_TOKEN=e2e so the app ATTACHES to the config's
+// backend instead of spawning one. Views are reached through `global.__triplexTest =
+// {views, orchestrator, settings, selectors, bridge, chats, backend}` (main.js under TRIPLEX_E2E_APP=1).
 //
-// Covers the plan's Stage 1 app-spec row: split → getBounds() = viewport rects ±1 px; tabs → two
-// views hidden; one Send with backtick / quotes / ${} / newline → every fake page's
-// window.__fake.submitted[0] byte-equal, all three in one Send; zoom button → 1.1; Ctrl+2 switches
-// the tab; Reload / New chat navigate; window bounds restored after a relaunch.
+// Two Playwright facts learned on this box: WebContentsViews are reported as windows (pick the
+// renderer page by URL), and CDP-dispatched keys never reach before-input-event (use
+// webContents.sendInputEvent — `sendKey`).
+//
+// Stage 1 rows: split → getBounds() = viewport rects ±1 px; tabs → two views hidden; one Send with
+// backtick / quotes / ${} / newline → every fake page's window.__fake.submitted[0] byte-equal;
+// zoom button → 1.1; Ctrl+2 switches the tab; Reload / New chat navigate; window bounds restored
+// after a relaunch. Stage 2 rows (describe 'desktop send (bridge)'): the app attaches to the
+// backend (GET /api/bridge/status connected, no banner); a Send from the PromptBar persists a
+// SendTurn with not_captured errors; capture on for all three (pane-<slot>-capture) → the next
+// Send persists the three fake replies; the fake page URLs land in chats.json; selecting the
+// older conversation in the sidebar navigates the views back; the bridge banner appears when the
+// socket is closed from inside (__triplexTest.bridge.close()) and clears on reconnect.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -24,15 +36,21 @@ const require = createRequire(import.meta.url)
 const DESKTOP_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const FAKE_BASE = `http://127.0.0.1:${process.env.TRIPLEX_FAKE_PORT || '5199'}`
 const RENDERER_URL = process.env.TRIPLEX_RENDERER_URL || 'http://localhost:5184'
+const BACKEND_URL = process.env.TRIPLEX_BACKEND_URL || 'http://127.0.0.1:8021'
+const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'e2e'
 const SLOTS = ['claude', 'chatgpt', 'grok']
 // A real backtick, double quotes, a dollar-brace and a newline — the text every composer must receive verbatim.
 const PROMPT = 'hello `x` "y" ${z}\nline2'
 const BOUNDS_DEBOUNCE_MS = 500
+/** The fake site's chat URLs (`/c/<id>?site=…`) for the selectors override the Stage 2 block installs. */
+const FAKE_CHAT_URL_PATTERN = '^http://127\\.0\\.0\\.1:5199/c/[A-Za-z0-9]+'
 
-function sitesJson() {
+/** `query` is appended to every site URL (Stage 2: `replyMs=150` makes the fake site stream `Echo: <text>`). */
+function sitesJson(query = '') {
   const sites = {}
   for (const slot of SLOTS) {
-    sites[slot] = { url: `${FAKE_BASE}/?site=${slot}`, newChatUrl: `${FAKE_BASE}/?site=${slot}`, hosts: ['127.0.0.1', 'localhost'] }
+    const url = `${FAKE_BASE}/?site=${slot}${query}`
+    sites[slot] = { url, newChatUrl: url, hosts: ['127.0.0.1', 'localhost'] }
   }
   return JSON.stringify(sites)
 }
@@ -45,7 +63,6 @@ function electronBinary() {
   }
 }
 
-/** Launch the app on `userData`; resolves once the renderer shell, __triplexTest and the three fake pages are up. */
 /** The renderer's page. Playwright's Electron driver also reports every WebContentsView (the three site
  *  pages) as a "window", so firstWindow() can hand back a fake-site page; pick the one served by Vite. */
 async function rendererWindow(app) {
@@ -57,7 +74,8 @@ async function rendererWindow(app) {
   throw new Error(`renderer window (${RENDERER_URL}) not found among: ${app.windows().map((p) => p.url()).join(', ')}`)
 }
 
-async function launch(userData, logs) {
+/** Launch the app on `userData`; resolves once the renderer shell, __triplexTest and the three fake pages are up. */
+async function launch(userData, logs, { sites = sitesJson() } = {}) {
   const app = await electron.launch({
     args: ['.'],
     cwd: DESKTOP_DIR,
@@ -66,9 +84,11 @@ async function launch(userData, logs) {
     env: {
       ...process.env,
       TRIPLEX_E2E_APP: '1',
-      TRIPLEX_SITES_JSON: sitesJson(),
+      TRIPLEX_SITES_JSON: sites,
       TRIPLEX_RENDERER_URL: RENDERER_URL,
       TRIPLEX_USER_DATA_DIR: userData,
+      TRIPLEX_BACKEND_URL: BACKEND_URL, // attach to the config's backend (never spawn one under Playwright)
+      BRIDGE_TOKEN,
     },
   })
   const proc = app.process()
@@ -149,10 +169,9 @@ function windowBounds(app) {
   return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds())
 }
 
-async function ensureTargetChecked(page, slot) {
-  const t = page.getByTestId(`prompt-target-${slot}`)
-  await expect(t).toBeVisible()
-  const state = await t.evaluate((el) => {
+/** 'on' | 'off' for a checkbox-like control (an <input>, or aria-checked / aria-pressed on the element). */
+function toggleState(locator) {
+  return locator.evaluate((el) => {
     const input = el.tagName === 'INPUT' ? el : el.querySelector('input[type="checkbox"]')
     if (input) return input.checked ? 'on' : 'off'
     const aria = el.getAttribute('aria-checked') || el.getAttribute('aria-pressed')
@@ -160,10 +179,51 @@ async function ensureTargetChecked(page, slot) {
     if (aria === 'false') return 'off'
     return 'on'
   })
-  if (state === 'off') await t.click()
+}
+
+async function ensureTargetChecked(page, slot) {
+  const t = page.getByTestId(`prompt-target-${slot}`)
+  await expect(t).toBeVisible()
+  if ((await toggleState(t)) === 'off') await t.click()
 }
 
 const readSettings = (userData) => JSON.parse(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8'))
+const readChats = (userData) => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(userData, 'chats.json'), 'utf8'))
+  } catch (_e) {
+    return {}
+  }
+}
+
+/** The backend, from the test process (the app attaches to the same one). */
+async function backend(pathname, init) {
+  const res = await fetch(`${BACKEND_URL}${pathname}`, init)
+  if (!res.ok) throw new Error(`${init && init.method ? init.method : 'GET'} ${pathname} → ${res.status}`)
+  return res.json()
+}
+
+/** Type a prompt into the PromptBar and click Send. */
+async function sendFromPromptBar(page, text) {
+  const composer = page.getByTestId('prompt-composer')
+  await expect(composer).toBeEditable({ timeout: 30_000 })
+  await composer.fill(text)
+  expect(await composer.inputValue()).toBe(text)
+  await page.getByTestId('prompt-send').click()
+}
+
+/** The newest conversation whose first Send turn typed `prompt` (null until the backend has it). */
+async function conversationByFirstPrompt(prompt) {
+  const list = await backend('/api/conversations')
+  for (const summary of list) {
+    const conv = await backend(`/api/conversations/${summary.id}`)
+    const first = (conv.turns || []).find((t) => t.type === 'send')
+    if (first && first.prompt === prompt) return conv
+  }
+  return null
+}
+
+const lastSendTurn = (conv) => [...(conv.turns || [])].reverse().find((t) => t.type === 'send') || null
 
 // ---------------------------------------------------------------------------------------------
 
@@ -243,10 +303,7 @@ test.describe('desktop shell', () => {
     for (const slot of SLOTS) await ensureTargetChecked(page, slot)
     for (const slot of SLOTS) expect((await fakeState(app, slot)).submitted).toEqual([])
 
-    const composer = page.getByTestId('prompt-composer')
-    await composer.fill(PROMPT)
-    expect(await composer.inputValue()).toBe(PROMPT)
-    await page.getByTestId('prompt-send').click()
+    await sendFromPromptBar(page, PROMPT)
 
     for (const slot of SLOTS) {
       await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted), { timeout: 45_000 }).toEqual([PROMPT])
@@ -285,6 +342,150 @@ test.describe('desktop shell', () => {
     await page.getByTestId('pane-chatgpt-newchat').click()
     await expect.poll(() => fakeState(app, 'chatgpt').then((s) => s && s.url), { timeout: 20_000 }).toBe(`${FAKE_BASE}/?site=chatgpt`)
     expect((await fakeState(app, 'chatgpt')).submitted).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Stage 2: the unified prompt is a Triplex Send over the bridge
+// ---------------------------------------------------------------------------------------------
+
+test.describe('desktop send (bridge)', () => {
+  test.describe.configure({ mode: 'serial', timeout: 180_000 })
+  const logs = []
+  const FIRST = 'first prompt'
+  const SECOND = 'second prompt'
+  let userData
+  let app
+  let page
+  let convId = null
+
+  test.beforeAll(async () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-bridge-'))
+    // chats.json records a link only for a navigation matching chatUrlPattern: point it at the fake site
+    const override = {}
+    for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
+    fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+    ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150') }))
+  })
+
+  test.afterAll(async () => {
+    if (app) await app.close().catch(() => {})
+  })
+
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+      await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+    }
+  })
+
+  test('the app attaches to the backend: GET /api/bridge/status is connected, no bridge banner', async () => {
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => app.evaluate(() => globalThis.__triplexTest.bridge.status().connected), { timeout: 5_000 }).toBe(true)
+    await expect(page.getByTestId('bridge-banner')).toBeHidden({ timeout: 10_000 })
+    const info = await page.evaluate(() => window.triplex.getInfo())
+    expect(info.backend).toEqual({ port: 8021, url: BACKEND_URL })
+  })
+
+  test('a Send from the PromptBar persists a SendTurn with not_captured errors (capture off by default)', async () => {
+    await page.getByTestId('deck-mode-split').click()
+    for (const slot of SLOTS) await ensureTargetChecked(page, slot)
+    expect(readSettings(userData).capture).toEqual({ claude: false, chatgpt: false, grok: false })
+    await sendFromPromptBar(page, FIRST)
+
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted), { timeout: 45_000 }).toEqual([FIRST])
+    }
+    let conv = null
+    await expect
+      .poll(async () => {
+        conv = await conversationByFirstPrompt(FIRST)
+        const turn = conv && lastSendTurn(conv)
+        return turn ? SLOTS.filter((s) => turn.errors && turn.errors[s]).length : -1
+      }, { timeout: 60_000 })
+      .toBe(3)
+    convId = conv.id
+    const turn = lastSendTurn(conv)
+    for (const slot of SLOTS) {
+      expect(turn.responses[slot], slot).toBeNull()
+      expect(turn.errors[slot], slot).toMatch(/capture is off/)
+      expect(conv.threads[slot], `${slot} thread stays empty`).toEqual([])
+    }
+    for (const slot of SLOTS) {
+      const line = page.getByTestId(`prompt-result-${slot}`)
+      await expect(line).toBeVisible({ timeout: 15_000 })
+      await expect(line).not.toContainText('✗')
+    }
+  })
+
+  test('toggling capture on for all three via the pane headers → the next Send persists the three fake replies', async () => {
+    for (const slot of SLOTS) {
+      const sw = page.getByTestId(`pane-${slot}-capture`)
+      await expect(sw).toBeVisible({ timeout: 10_000 })
+      if ((await toggleState(sw)) === 'off') await sw.click()
+    }
+    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true })
+    await expect.poll(() => backend('/api/bridge/status').then((s) => SLOTS.every((x) => s.sites && s.sites[x] && s.sites[x].capture === true)), { timeout: 10_000 }).toBe(true)
+
+    await sendFromPromptBar(page, SECOND)
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted), { timeout: 45_000 }).toEqual([FIRST, SECOND])
+    }
+    let conv = null
+    await expect
+      .poll(async () => {
+        conv = await backend(`/api/conversations/${convId}`)
+        const turn = lastSendTurn(conv)
+        if (!turn || turn.prompt !== SECOND) return 'no turn yet'
+        return SLOTS.map((s) => (turn.responses[s] === null ? 'pending' : 'done')).join(',')
+      }, { timeout: 120_000 })
+      .toBe('done,done,done')
+    const turn = lastSendTurn(conv)
+    for (const slot of SLOTS) {
+      expect(turn.responses[slot], slot).toBe(`Echo: ${SECOND}`)
+      expect(turn.errors[slot], slot).toBeUndefined()
+      expect(conv.threads[slot].map((m) => m.role), `${slot} thread`).toEqual(['user', 'assistant'])
+      expect(conv.threads[slot][1].content, slot).toBe(`Echo: ${SECOND}`)
+    }
+  })
+
+  test('the fake page URLs land in chats.json under the conversation id', async () => {
+    await expect.poll(() => Object.keys(readChats(userData)[convId] || {}).sort(), { timeout: 20_000 }).toEqual([...SLOTS].sort())
+    const links = readChats(userData)[convId]
+    for (const slot of SLOTS) {
+      expect(links[slot], slot).toMatch(/\/c\/[A-Za-z0-9]+/)
+      expect(links[slot], `${slot} = the pane's chat`).toBe((await fakeState(app, slot)).url)
+    }
+  })
+
+  test('New chat everywhere opens fresh chats; selecting the older conversation in the sidebar navigates the views back', async () => {
+    const links = readChats(userData)[convId]
+    await page.getByTestId('prompt-newchat').click()
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.url), { timeout: 20_000 }).toBe(`${FAKE_BASE}/?site=${slot}&replyMs=150`)
+    }
+    const sidebar = page.getByTestId('sidebar')
+    await expect(sidebar).toBeVisible()
+    const older = sidebar.getByTestId('conv-row').filter({ hasText: FIRST }).first()
+    await expect(older).toBeVisible({ timeout: 15_000 })
+    await older.getByTestId('conv-select').click()
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.url), { timeout: 20_000 }).toBe(links[slot])
+    }
+    // the recorded chats show their two prompts again (the fake site renders /c/<id> from scratch, so
+    // only the URL round-trips); the link itself is untouched by the navigation
+    expect(readChats(userData)[convId]).toEqual(links)
+  })
+
+  test('the bridge banner appears when the socket drops and clears on reconnect', async () => {
+    // The backend is the Playwright webServer (out of reach from here), so the drop is simulated
+    // from inside: close the bridge client's socket, then let it connect again.
+    await app.evaluate(() => globalThis.__triplexTest.bridge.close())
+    await expect(page.getByTestId('bridge-banner')).toBeVisible({ timeout: 10_000 })
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 10_000 }).toBe(false)
+    await app.evaluate(() => globalThis.__triplexTest.bridge.connect())
+    await expect.poll(() => app.evaluate(() => globalThis.__triplexTest.bridge.status().connected), { timeout: 15_000 }).toBe(true)
+    await expect(page.getByTestId('bridge-banner')).toBeHidden({ timeout: 10_000 })
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 10_000 }).toBe(true)
   })
 })
 
