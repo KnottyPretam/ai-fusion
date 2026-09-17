@@ -147,7 +147,7 @@ Submit: poll the `send` cascade every 150 ms up to `sendWaitMs` for a visible, e
 (document + open shadow roots), click; confirm within `submitVerifyMs` by stop button |
 composer emptied | `countAssistant()` grew; else one `Enter` keydown/keypress/keyup
 (`composed:true`) on the composer, else `not_submitted`. `ready`/`insertAndSubmit` first check
-`sessionState()`; not `ok` → `{ok:false, code:<state>}` with no DOM write.
+`sessionState()`; not `ok` → `{ok:false, code:<state>}` with no DOM write. `sendSelector` is `null` when the Enter fallback confirmed the submission (no send-cascade entry matched a visible enabled button); `submit()` also returns `assistantCount`, the `countAssistant()` sample taken immediately before the confirming action; an insertion whose verification fails on every method is reported as `site_error` with message `insertText: …`; `ready` answers `timeout` when the stop button never disappears within `timeoutMs`.
 
 ### 4. Selector config
 
@@ -314,7 +314,7 @@ actions `panes/mode`, `panes/active`, `panes/target`, `panes/health`, `panes/sen
 `panes/analyst`. Test ids: `desktop-shell`, `pane-deck`, `deck-mode-tabs`, `deck-mode-split`,
 `deck-tab-<slot>`, `deck-tab-analyst` (S3), `pane-<slot>`, `pane-<slot>-viewport`,
 `pane-<slot>-health`, `pane-<slot>-session`, `pane-<slot>-reload`, `pane-<slot>-newchat`,
-`pane-<slot>-open`, `pane-<slot>-zoom-in|out|reset`, `pane-<slot>-capture` (S2),
+`pane-<slot>-open`, `pane-<slot>-zoom-in|out|reset`, `pane-<slot>-inspect` (dev only), `pane-<slot>-capture` (S2),
 `pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`,
 `prompt-newchat`, `prompt-result-<slot>`, `bridge-banner` (S2), `capture-notice` (S2),
 `desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),

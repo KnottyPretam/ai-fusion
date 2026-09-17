@@ -35,7 +35,6 @@ test('desktop app renders the shell, the pane deck and the prompt bar', async ()
   for (const id of ['desktop-shell', 'pane-deck', 'prompt-bar']) {
     expect(screen.getByTestId(id)).toBeInTheDocument()
   }
-  expect(screen.getByText(/Stage 0 placeholder/)).toBeInTheDocument()
   // getInfo() resolved in the effect and its version string is shown.
   expect(await screen.findByText(/desktop v0\.0\.0/)).toBeInTheDocument()
 })

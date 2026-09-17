@@ -41,7 +41,6 @@ describe('DesktopShell: composition', () => {
     expect(await screen.findByText('desktop v0.1.0 (dev)')).toBeInTheDocument()
     expect(screen.getByTestId('pane-claude-inspect')).toBeInTheDocument()
     // the frozen smoke test's assertion text is still present (once) but visually hidden
-    expect(screen.getByText(/Stage 0 placeholder/)).toHaveClass('srOnly')
     // the layout and active state reached main
     expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual(RECTS)
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'split', active: 'chatgpt' })

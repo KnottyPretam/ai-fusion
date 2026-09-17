@@ -46,6 +46,17 @@ function electronBinary() {
 }
 
 /** Launch the app on `userData`; resolves once the renderer shell, __triplexTest and the three fake pages are up. */
+/** The renderer's page. Playwright's Electron driver also reports every WebContentsView (the three site
+ *  pages) as a "window", so firstWindow() can hand back a fake-site page; pick the one served by Vite. */
+async function rendererWindow(app) {
+  const deadline = Date.now() + 45_000
+  while (Date.now() < deadline) {
+    for (const p of app.windows()) if (p.url().startsWith(RENDERER_URL)) return p
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  throw new Error(`renderer window (${RENDERER_URL}) not found among: ${app.windows().map((p) => p.url()).join(', ')}`)
+}
+
 async function launch(userData, logs) {
   const app = await electron.launch({
     args: ['.'],
@@ -65,7 +76,7 @@ async function launch(userData, logs) {
     proc.stdout?.on('data', (d) => logs.push(`[stdout] ${d}`))
     proc.stderr?.on('data', (d) => logs.push(`[stderr] ${d}`))
   }
-  const page = await app.firstWindow()
+  const page = await rendererWindow(app)
   page.on('console', (m) => logs && logs.push(`[renderer ${m.type()}] ${m.text()}\n`))
   await page.waitForSelector('[data-testid="desktop-shell"]', { timeout: 45_000 })
   await expect.poll(() => app.evaluate(() => !!(globalThis.__triplexTest && globalThis.__triplexTest.views)), { timeout: 20_000 }).toBe(true)
@@ -73,6 +84,23 @@ async function launch(userData, logs) {
     await expect.poll(() => fakeState(app, slot).then((s) => (s && s.site === slot ? 'ready' : JSON.stringify(s))), { timeout: 30_000 }).toBe('ready')
   }
   return { app, page }
+}
+
+/** Ctrl+<key> through Electron's own input path on the renderer ('renderer') or a site view's webContents. */
+function sendKey(app, target, key) {
+  return app.evaluate(({ BrowserWindow }, { target, key }) => {
+    let wc
+    if (target === 'renderer') wc = BrowserWindow.getAllWindows()[0].webContents
+    else {
+      const views = globalThis.__triplexTest.views
+      const view = typeof views.get === 'function' ? views.get(target) : views.all()[target]
+      wc = view && view.webContents
+    }
+    if (!wc) throw new Error(`no webContents for ${target}`)
+    wc.focus()
+    wc.sendInputEvent({ type: 'keyDown', keyCode: key, modifiers: ['control'] })
+    wc.sendInputEvent({ type: 'keyUp', keyCode: key, modifiers: ['control'] })
+  }, { target, key })
 }
 
 /** {url, site, submitted} straight from a site view's page (null while the view is still loading). */
@@ -197,11 +225,17 @@ test.describe('desktop shell', () => {
     await page.getByTestId('deck-tab-claude').click()
     await expect.poll(() => viewState(app, 'claude').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
     await expect.poll(() => viewState(app, 'chatgpt').then((v) => v && v.visible)).toBe(false)
-    await page.getByTestId('prompt-composer').click() // the renderer holds the keyboard focus
-    await page.keyboard.press('Control+2')
+    // Playwright's page.keyboard goes through CDP Input.dispatchKeyEvent, which Chromium marks as
+    // skip-in-browser: it never reaches Electron's before-input-event (verified on this box), so the
+    // shortcut path is exercised with webContents.sendInputEvent — first from the renderer, then
+    // from a site view, which is the case main handles shortcuts for in the first place.
+    await sendKey(app, 'renderer', '2')
     await expect.poll(() => viewState(app, 'chatgpt').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
     await expect.poll(() => viewState(app, 'claude').then((v) => v && v.visible)).toBe(false)
     await expect.poll(() => boundsMatch(app, page, 'chatgpt'), { timeout: 15_000 }).toBe('ok')
+    await sendKey(app, 'chatgpt', '3') // typed while the ChatGPT view holds the keyboard focus
+    await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => viewState(app, 'chatgpt').then((v) => v && v.visible)).toBe(false)
   })
 
   test('one Send types the exact text into all three fake composers and submits each once', async () => {
@@ -227,7 +261,8 @@ test.describe('desktop shell', () => {
       const s = await fakeState(app, slot)
       expect(s.submitted, slot).toHaveLength(1)
       expect(Buffer.from(s.submitted[0], 'utf8').equals(Buffer.from(PROMPT, 'utf8')), `${slot} byte-equal`).toBe(true)
-      expect(s.url, slot).toMatch(/\/c\/[A-Za-z0-9]+/)
+      // the fake site pushes /c/<id> 500 ms after the submit: poll, do not read once
+      await expect.poll(() => fakeState(app, slot).then((st) => st && st.url), { timeout: 10_000 }).toMatch(/\/c\/[A-Za-z0-9]+/)
     }
   })
 
@@ -269,15 +304,18 @@ test.describe('window bounds persistence', () => {
       }, wanted)
       await expect.poll(() => windowBounds(app).then((b) => b.width), { timeout: 5_000 }).toBeGreaterThanOrEqual(wanted.width - 2)
       const applied = await windowBounds(app)
+      // The defaults file already says maximized:false at launch, so wait for the debounced save
+      // to carry the APPLIED size before reading it back.
       await expect
         .poll(() => {
           try {
-            return readSettings(userData).window
+            const w = readSettings(userData).window
+            return Math.abs(w.width - applied.width) <= 2 && Math.abs(w.height - applied.height) <= 2 && w.maximized === false
           } catch (_e) {
-            return null
+            return false
           }
         }, { timeout: BOUNDS_DEBOUNCE_MS + 5_000 })
-        .toMatchObject({ maximized: false })
+        .toBe(true)
       const saved = readSettings(userData).window
       expect(Math.abs(saved.width - applied.width)).toBeLessThanOrEqual(2)
       expect(Math.abs(saved.height - applied.height)).toBeLessThanOrEqual(2)

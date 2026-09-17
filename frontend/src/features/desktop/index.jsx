@@ -57,9 +57,6 @@ export default function DesktopShell() {
     <div className={css.shell} data-testid="desktop-shell">
       <PaneDeck api={api} info={info} version={version} promptRef={promptRef} />
       <PromptBar api={api} composerRef={promptRef} />
-      <span className={css.srOnly}>
-        Triplex desktop shell: the three site pages are native views positioned over the pane viewports (this shell replaced the Stage 0 placeholder).
-      </span>
     </div>
   )
 }
