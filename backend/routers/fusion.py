@@ -11,7 +11,9 @@
 
 Every pre-check runs inside `run_fusion` before its first yield; `sse_response` awaits that
 first event so those HTTPExceptions stay plain JSON errors in FastAPI's `{detail:{error}}`
-envelope.
+envelope. The call runs inside `bridge.conversation_scope(conv_id)` (desktop addendum): the
+producer task -- and the Analyze producer it may spawn for the auto-run -- inherits the
+conversation id for its bridge requests.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ..config import MAX_ITERATIONS_CAP
 from ..features.fusion import run_fusion
+from ..llm.bridge import conversation_scope
 from ..sse import sse_response
 
 router = APIRouter(prefix="/api/conversations", tags=["fusion"])
@@ -35,4 +38,5 @@ class FusionBody(BaseModel):
 @router.post("/{conv_id}/fusion")
 async def fusion(conv_id: str, body: FusionBody) -> StreamingResponse:
     gen = run_fusion(conv_id, of_analyze=body.of_analyze, max_iterations=body.max_iterations)
-    return await sse_response(gen)
+    with conversation_scope(conv_id):
+        return await sse_response(gen)

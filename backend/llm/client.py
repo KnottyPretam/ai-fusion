@@ -24,6 +24,16 @@ the open httpx response / client and the record tee are released before `aclose(
 The INFO line of a live call also names its cost source (`cost_source=chunk|generation|catalog`)
 so a live check can prove `usage.cost` really arrived in the usage chunk; the mock transport
 carries no such field.
+
+Transports (docs/desktop-contract.md section 6, bridge-backend S2): `transport_kind(model)` routes
+`web:<slot>[:analyst]` models to `bridge.stream` BEFORE the mock branch (a desktop session is
+never replayed from fixtures, and the root conftest's `MOCK_OPENROUTER=1` keeps the fixed
+R1/R2/R3 map for bridge tests); under `TRIPLEX_DESKTOP=1` every other model is refused with
+`transport_disabled` before the cost-cap / key checks so nothing can reach OpenRouter from the
+desktop. The `ollama:` branch is Stage 3 (desktop-catalog-and-ollama): until it lands an
+`ollama:` model is refused under the desktop like any non-web model and otherwise handed to the
+mock / OpenRouter path unchanged. `_live_stream` takes `base_url=`, `headers=`, `cost_lookup=`
+for that stage; the defaults reproduce today's behaviour byte for byte.
 """
 
 from __future__ import annotations
@@ -31,19 +41,20 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from ..config import settings
 from ..schemas import Delta, Effort, FeatureUsage, canonical_request_key, strict_json_schema
-from . import catalog, metering, mock
+from . import bridge, catalog, metering, mock
 from . import reasoning as reasoning_mod
 from .errors import (
     COST_CAP_EXCEEDED,
@@ -96,6 +107,21 @@ def build_headers(api_key: str, http_referer: str, app_title: str) -> dict[str, 
         "HTTP-Referer": http_referer,
         "X-OpenRouter-Title": app_title,
     }
+
+
+def transport_kind(model: str) -> Literal["web", "ollama", "openrouter"]:
+    """`web:x` / `web:x:analyst` -> "web"; `ollama:x` -> "ollama"; everything else "openrouter"."""
+    if isinstance(model, str):
+        if model.startswith("web:"):
+            return "web"
+        if model.startswith("ollama:"):
+            return "ollama"
+    return "openrouter"
+
+
+def desktop_mode() -> bool:
+    """`TRIPLEX_DESKTOP=1` (private env read; config.py is frozen)."""
+    return os.environ.get("TRIPLEX_DESKTOP", "0").strip() == "1"
 
 
 def structured_response_format(purpose: str, schema_model: type[BaseModel]) -> dict[str, Any]:
@@ -355,15 +381,26 @@ async def _live_stream(
     messages: list[dict[str, Any]],
     payload: dict[str, Any],
     trace: dict[str, Any] | None = None,
+    base_url: str | None = None,
+    headers: dict[str, str] | None = None,
+    cost_lookup: bool = True,
 ) -> AsyncIterator[Delta]:
     """The httpx transport. `trace`, when given, receives `cost_source` for the INFO line:
     `chunk` (the usage chunk carried a numeric `cost`), `generation` (filled from
-    `GET /generation`) or `catalog` (price x tokens, also for a synthesised usage)."""
+    `GET /generation`) or `catalog` (price x tokens, also for a synthesised usage).
+
+    `base_url=None` -> `settings().openrouter_base_url`; `headers=None` -> `build_headers(...)`
+    from the settings; `cost_lookup=False` skips the `GET /generation` cost fallback (an
+    OpenAI-compatible local server has no such endpoint). The defaults are today's behaviour."""
     trace = trace if trace is not None else {}
     s = settings()
-    base = s.openrouter_base_url.rstrip("/")
+    base = (base_url if base_url else s.openrouter_base_url).rstrip("/")
     url = base + "/chat/completions"
-    headers = build_headers(s.openrouter_api_key or "", s.http_referer, s.app_title)
+    headers = (
+        dict(headers)
+        if headers is not None
+        else build_headers(s.openrouter_api_key or "", s.http_referer, s.app_title)
+    )
     gen_timeout = min(GENERATION_TIMEOUT_S, s.request_timeout_s)
     parser = SSEParser(
         model=model, role=role, purpose=purpose, prompt_text=_messages_text(messages)
@@ -400,7 +437,7 @@ async def _live_stream(
                             if parser.usage_cost_missing:
                                 trace["cost_source"] = "catalog"
                                 gid = gen_id or d.generation_id
-                                if gid:
+                                if cost_lookup and gid:
                                     cost = await _fetch_generation_cost(
                                         client, base, gid, headers, gen_timeout
                                     )
@@ -483,8 +520,45 @@ async def stream_completion(
             plugins=plugins,
         )
         is_mock = s.mock_openrouter
+        kind = transport_kind(model)
 
-        if is_mock:
+        if kind == "web":  # Stage 2 -- BEFORE the mock branch: a web session is never a fixture
+            is_mock = False  # the bridge's zero usage is real usage, not a replayed chunk
+            gen = bridge.stream(
+                role=role, purpose=purpose, model=model, messages=messages, max_tokens=max_tokens
+            )
+        # elif kind == "ollama":  # Stage 3 (desktop-catalog-and-ollama) -- placeholder:
+        #     gen = _live_stream(role=role, purpose=purpose, model=ollama.model_name(model),
+        #                        messages=messages, payload=ollama.sanitize_payload(payload, model),
+        #                        trace=trace, base_url=os.environ.get("OLLAMA_BASE_URL", ...),
+        #                        headers=ollama.headers(), cost_lookup=False)
+        #     Until then `ollama:` falls through: refused under the desktop (below), otherwise
+        #     the mock / OpenRouter path unchanged.
+        elif desktop_mode():  # Stage 2 guard: never OpenRouter from the desktop
+            terminal = True
+            msg = (
+                "desktop mode: only web:<slot> and ollama:<name> models are allowed; "
+                "choose an analyst in the config bar"
+            )
+            log.warning(
+                metering.format_error_log_line(
+                    role=role,
+                    purpose=purpose,
+                    model=model,
+                    code=bridge.TRANSPORT_DISABLED,
+                    error_type=ERROR_TYPE_TRIPLEX,
+                    message=msg,
+                    latency_ms=0,
+                )
+            )
+            yield Delta(
+                kind="error",
+                code=bridge.TRANSPORT_DISABLED,
+                message=msg,
+                error_type=ERROR_TYPE_TRIPLEX,
+            )
+            return
+        elif is_mock:
             gen = mock.stream(
                 role=role,
                 purpose=purpose,
@@ -820,7 +894,9 @@ __all__ = [
     "build_headers",
     "build_payload",
     "complete_json",
+    "desktop_mode",
     "extract_json",
     "stream_completion",
     "structured_response_format",
+    "transport_kind",
 ]
