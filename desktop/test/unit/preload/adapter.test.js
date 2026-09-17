@@ -1,13 +1,16 @@
 // createAdapter over a fake document (no jsdom): health shape, the session-state order, the
 // selector fallbacks, waitForComposer / ready / insertAndSubmit gates, countAssistant, the
 // insertion cascade's verification and "never innerHTML/textContent", submit's confirmation rules
-// and error codes. Timeouts are shortened through a selectors block; timers are real.
+// and error codes; Stage 2: observe (first token, done-selector / stop-gone / quiet, timeout with
+// a partial, banner → site_error with the phrase only, wall, cancel, document order, text rules),
+// snapshot and the config re-merge. Timeouts are shortened through a selectors block; timers are
+// real (no MutationObserver under node: observe runs on its 300 ms poll alone).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS } = require('../../../preload/site.cjs')
+const { createAdapter, AdapterError, DEFAULT_SELECTORS, MESSAGE_SELECTORS, ASSISTANT_SELECTORS, ALERT_SELECTORS, scrubDom, OBSERVE_POLL_MS, OBSERVE_THROTTLE_MS } = require('../../../preload/site.cjs')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -120,8 +123,8 @@ test('health(): the contract §1 shape, matched.error null, integer ts from the 
   assert.deepEqual(h, {
     composer: true,
     send: true,
-    reply: null,
-    stop: null,
+    reply: false, // selectors v2: an assistant container exists (none here)
+    stop: false, // selectors v2: a visible stop button (none here); null only without a stop cascade
     session: 'ok',
     matched: { composer: '#prompt-textarea', send: "button[data-testid='send-button']", reply: null, stop: null, error: null },
     url: 'https://chatgpt.com/',
@@ -463,10 +466,21 @@ test('insertAndSubmit end to end over the fake document: integer ms, composerSel
   assert.deepEqual(Object.keys(r).sort(), ['assistantCount', 'composerSelector', 'confirmedBy', 'ms', 'sendSelector', 'submitted'])
 })
 
-test('observe and snapshot are stage 2: they reject site_error', async () => {
-  const a = createAdapter({ document: fakeDocument(), site: 'chatgpt' })
-  await rejects(a.observe({ baselineCount: 0 }), 'site_error', /stage 2/)
-  await rejects(a.snapshot(), 'site_error', /stage 2/)
+test('health(): reply/stop reflect the v2 cascades — reply true with an assistant container (matched.reply names the entry), stop true with a visible stop button, stop null without a stop cascade', () => {
+  const composer = fakeComposer()
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer } })
+  const a = createAdapter({ document: doc, site: 'chatgpt' })
+  assert.deepEqual([a.health().reply, a.health().stop], [false, false])
+  doc.match["[data-message-author-role='assistant']"] = [{}]
+  doc.match["button[aria-label='Stop streaming']"] = [{}]
+  const h = a.health()
+  assert.deepEqual([h.reply, h.stop], [true, true])
+  assert.deepEqual([h.matched.reply, h.matched.stop], ["[data-message-author-role='assistant']", "button[aria-label='Stop streaming']"])
+  doc.match["button[aria-label='Stop streaming']"] = [{ getClientRects: () => [] }] // hidden: not a visible stop button
+  assert.equal(a.health().stop, false)
+  const b = createAdapter({ document: doc, site: 'chatgpt', selectors: { composer: ['#prompt-textarea'], send: [] } }) // a bare block without a stop cascade
+  assert.equal(b.health().stop, null)
+  assert.equal(b.health().reply, true) // ASSISTANT_SELECTORS still count without a v2 cascade
 })
 
 test('setSelectors swaps the cascade in place (config hot reload) and ignores garbage', () => {
@@ -801,4 +815,277 @@ test('grok: the submit button that exists only once the editor holds text is fou
   assert.equal(r.confirmedBy, 'composer_cleared')
   assert.equal(submitButton.clicks, 1)
   assert.equal(a.health().send, false) // the editor is empty again: the voice button holds the slot
+})
+
+// ---------------------------------------------------------------------------------------------
+// Stage 2 (capture-adapters): observe / snapshot / config re-merge over the fake document
+// ---------------------------------------------------------------------------------------------
+
+/** An assistant container: `text` is its innerText; `parts` maps an assistantText selector to an inner element; `inside` lists the elements it contains. */
+function container(text, { parts = {}, inside = [] } = {}) {
+  const el = {
+    tagName: 'DIV',
+    _text: text,
+    get innerText() {
+      return el._text
+    },
+    querySelector: (s) => parts[s] || null,
+    contains: (x) => inside.includes(x),
+  }
+  return el
+}
+/** Short capture timings: first token 250 ms, quiet 120 ms, budget 1500 ms (the poll runs every 300 ms). */
+const CAPTURE = { firstTokenMs: 250, quietMs: 120, captureTimeoutMs: 1500 }
+const captureSelectors = (site, extra = {}) => fastSelectors(site, { ...CAPTURE, ...extra })
+
+test('observe constants: mutations are throttled to 100 ms and the poll runs every 300 ms', () => {
+  assert.equal(OBSERVE_THROTTLE_MS, 100)
+  assert.equal(OBSERVE_POLL_MS, 300)
+})
+
+test('observe: no container beyond the baseline within firstTokenMs → reply_not_found without a partial; a missing baseline means the current count; the message firstTokenMs is capped by the budget', async () => {
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer() } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  const t0 = Date.now()
+  const err = await rejects(a.observe({ baselineCount: 0 }), 'reply_not_found', /beyond 0 within 250 ms/)
+  assert.ok(Date.now() - t0 >= 200)
+  assert.ok(!('partial' in err))
+  doc.match["[data-message-author-role='assistant']"] = [container('an old reply')]
+  await rejects(a.observe({ baselineCount: 1 }), 'reply_not_found', /beyond 1/)
+  await rejects(a.observe({}), 'reply_not_found', /beyond 1/) // omitted = the current count
+  await rejects(a.observe({ baselineCount: 'nonsense' }), 'reply_not_found', /beyond 1/)
+  const t1 = Date.now()
+  await rejects(a.observe({ baselineCount: 1, firstTokenMs: 5000, timeoutMs: 100 }), 'reply_not_found', /within 100 ms/)
+  assert.ok(Date.now() - t1 < 1000)
+})
+
+test('observe: done_selector — a visible done match on or after the last container ends the capture; the text is the first assistantText match; an older turn\'s marker never counts', async () => {
+  const md = { tagName: 'DIV', innerText: 'the reply\nline 2' }
+  const copy = {}
+  const reply = container('the reply\nline 2\nCopy', { parts: { '.markdown': md }, inside: [copy] })
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [container('older'), reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  setTimeout(() => {
+    doc.match["button[data-testid='copy-turn-action-button']"] = [copy]
+  }, 150)
+  const r = await a.observe({ baselineCount: 1 })
+  assert.deepEqual(Object.keys(r).sort(), ['doneBy', 'ms', 'text'])
+  assert.equal(r.text, 'the reply\nline 2') // the .markdown part, not the container's own innerText
+  assert.equal(r.doneBy, 'done_selector')
+  assert.ok(Number.isInteger(r.ms) && r.ms >= 100)
+  // a done match that is not the last container, inside it or after it (an older turn's copy button) is ignored
+  const olderCopy = {}
+  doc.match["button[data-testid='copy-turn-action-button']"] = [olderCopy]
+  const stale = container('streaming…', { parts: { '.markdown': { innerText: 'streaming…' } } })
+  doc.match["[data-message-author-role='assistant']"].push(stale)
+  const err = await rejects(a.observe({ baselineCount: 2, quietMs: 100000, timeoutMs: 400 }), 'timeout', /400 ms/)
+  assert.equal(err.partial, 'streaming…')
+  // a hidden done match does not count either
+  doc.match["button[data-testid='copy-turn-action-button']"] = [{ getClientRects: () => [] }]
+  stale.contains = () => true
+  await rejects(a.observe({ baselineCount: 2, quietMs: 100000, timeoutMs: 400 }), 'timeout')
+})
+
+test('observe: stop_gone — the stop button seen then gone; the text is the container\'s innerText when assistantText is empty (claude); a rewinding text is harmless', async () => {
+  const reply = container('')
+  const doc = fakeDocument({ match: { "div[contenteditable='true'].ProseMirror": fakeComposer(), '.font-claude-response:not(#markdown-artifact)': [reply], "button[aria-label='Stop response']": [{}] } })
+  const a = createAdapter({ document: doc, site: 'claude', selectors: captureSelectors('claude') })
+  const frames = ['Hel', 'Hello wo', 'Hello', 'Hello world'] // the third frame rewinds
+  frames.forEach((s, i) =>
+    setTimeout(() => {
+      reply._text = s
+    }, 50 + i * 80),
+  )
+  setTimeout(() => {
+    delete doc.match["button[aria-label='Stop response']"]
+  }, 450)
+  const r = await a.observe({ baselineCount: 0 })
+  assert.equal(r.text, 'Hello world')
+  assert.equal(r.doneBy, 'stop_gone')
+  assert.ok(r.ms >= 400)
+})
+
+test('observe: quiet — with no stop button and no done marker the text unchanged for quietMs ends the capture; blank text never counts as quiet', async () => {
+  const md = { innerText: '' }
+  const reply = container('', { parts: { '.response-content-markdown': md } })
+  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), "div[id^='response-']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'grok', selectors: captureSelectors('grok', { stop: [], done: [] }) })
+  setTimeout(() => {
+    md.innerText = 'final answer'
+  }, 500) // blank for 500 ms, well beyond quietMs: still waiting
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0 })
+  assert.deepEqual([r.text, r.doneBy], ['final answer', 'quiet'])
+  assert.ok(Date.now() - t0 >= 500 + 120)
+  assert.equal(a.health().stop, null) // an empty stop cascade: no stop signal at all
+})
+
+test('observe: a visible stop button suppresses quiet (the site is still replying) even when the text is stable', async () => {
+  const reply = container('stable text')
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply], "button[data-testid='stop-button']": [{}] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  setTimeout(() => {
+    delete doc.match["button[data-testid='stop-button']"]
+  }, 700)
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0 })
+  assert.equal(r.doneBy, 'stop_gone') // not quiet at 120 ms
+  assert.equal(r.text, 'stable text')
+  assert.ok(Date.now() - t0 >= 700)
+})
+
+test('observe: the budget (timeoutMs, default captureTimeoutMs) → timeout carrying the partial text while the text keeps changing under a stop button', async () => {
+  const reply = container('a')
+  const doc = fakeDocument({ match: { "div[contenteditable='true'].ProseMirror": fakeComposer(), '.font-claude-response:not(#markdown-artifact)': [reply], "button[aria-label='Stop response']": [{}] } })
+  const a = createAdapter({ document: doc, site: 'claude', selectors: captureSelectors('claude', { captureTimeoutMs: 400 }) })
+  const grow = setInterval(() => {
+    reply._text += 'a'
+  }, 50)
+  try {
+    const t0 = Date.now()
+    const err = await rejects(a.observe({ baselineCount: 0 }), 'timeout', /400 ms/)
+    assert.ok(Date.now() - t0 >= 400)
+    assert.ok(typeof err.partial === 'string' && err.partial.length > 1 && /^a+$/.test(err.partial))
+    const t1 = Date.now()
+    const err2 = await rejects(a.observe({ baselineCount: 0, timeoutMs: 150 }), 'timeout', /150 ms/)
+    assert.ok(Date.now() - t1 < 400)
+    assert.ok(err2.partial.length >= err.partial.length)
+  } finally {
+    clearInterval(grow)
+  }
+})
+
+test('observe: a banner mid-reply → site_error whose message is ONLY the configured phrase (never the banner text); a wall → logged_out; a challenge → challenge; each with the partial', async () => {
+  const reply = container('half a reply')
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply], "button[data-testid='stop-button']": [{}] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt') })
+  setTimeout(() => {
+    doc.match["[role='alert']"] = [{ innerText: 'Oops: UNUSUAL ACTIVITY HAS BEEN DETECTED from your device (user 4711). Try again later.' }]
+  }, 100)
+  const err = await rejects(a.observe({ baselineCount: 0 }), 'site_error')
+  assert.equal(err.message, 'Unusual activity has been detected') // the config phrase in the config's case
+  assert.equal(err.partial, 'half a reply')
+  delete doc.match["[role='alert']"]
+  setTimeout(() => {
+    doc.match["button[data-testid='login-button']"] = [{}]
+  }, 100)
+  const wall = await rejects(a.observe({ baselineCount: 0 }), 'logged_out', /login wall/)
+  assert.equal(wall.partial, 'half a reply')
+  delete doc.match["button[data-testid='login-button']"]
+  setTimeout(() => {
+    doc.match['#challenge-form'] = [{}]
+  }, 100)
+  assert.equal((await rejects(a.observe({ baselineCount: 0 }), 'challenge')).partial, 'half a reply')
+  delete doc.match['#challenge-form']
+  // a blank partial is omitted
+  reply._text = ''
+  doc.match["[role='status']"] = [{ innerText: "You've reached the message limit", querySelector: () => null, contains: () => false }]
+  const blank = await rejects(a.observe({ baselineCount: 0 }), 'site_error')
+  assert.equal(blank.message, "You've reached")
+  assert.ok(!('partial' in blank))
+})
+
+test('observe: an abort → cancelled with the partial text; an already-aborted signal is answered at once; the poll stops afterwards', async () => {
+  const reply = container('partial so far')
+  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), "div[id^='response-']": [reply], "button[aria-label='Stop']": [{}] } })
+  let polls = 0
+  const timers = {
+    setTimeout: (fn, ms) => {
+      polls += 1
+      return setTimeout(fn, ms)
+    },
+    clearTimeout,
+  }
+  const a = createAdapter({ document: doc, site: 'grok', selectors: captureSelectors('grok'), timers })
+  const ac = new AbortController()
+  setTimeout(() => ac.abort(), 120)
+  const err = await rejects(a.observe({ baselineCount: 0, signal: ac.signal }), 'cancelled')
+  assert.equal(err.partial, 'partial so far')
+  const after = polls
+  await sleep(700)
+  assert.equal(polls, after) // no poll scheduled after the settle
+  const done = new AbortController()
+  done.abort()
+  await rejects(a.observe({ baselineCount: 0, signal: done.signal }), 'cancelled')
+})
+
+test('observe: the LAST container in document order is followed (compareDocumentPosition), whatever cascade entry matched it', async () => {
+  const first = container('newest')
+  const second = container('older')
+  first.compareDocumentPosition = (other) => (other === second ? 2 : 0) // second PRECEDES first
+  second.compareDocumentPosition = (other) => (other === first ? 4 : 0) // first FOLLOWS second
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [first], '.font-claude-response': [second] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
+  assert.equal(a.countAssistant(), 2)
+  assert.deepEqual(a.assistantContainers(), [second, first])
+  const r = await a.observe({ baselineCount: 1 })
+  assert.deepEqual([r.text, r.doneBy], ['newest', 'quiet'])
+  first.compareDocumentPosition = (other) => (other === second ? 4 : 0)
+  second.compareDocumentPosition = (other) => (other === first ? 2 : 0)
+  assert.deepEqual(a.assistantContainers(), [first, second])
+  assert.equal((await a.observe({ baselineCount: 1 })).text, 'older')
+})
+
+test('observe / replyText: the first assistantText match wins, else the container; CRLF → LF and NBSP → space, nothing trimmed; a throwing querySelector is skipped', async () => {
+  const md = { innerText: 'a\r\nb\u00a0c ' }
+  const reply = container('outer text', { parts: { '.whitespace-pre-wrap': md } }) // no .markdown: the second entry matches
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
+  const r = await a.observe({ baselineCount: 0 })
+  assert.equal(r.text, 'a\nb c ')
+  assert.equal(r.doneBy, 'quiet')
+  assert.equal(a.replyText(container('plain')), 'plain')
+  assert.equal(a.replyText(container('plain', { parts: { '.markdown': { textContent: 'from textContent' } } })), 'from textContent')
+  const throwing = container('fallback')
+  throwing.querySelector = () => {
+    throw new SyntaxError('bad selector')
+  }
+  assert.equal(a.replyText(throwing), 'fallback')
+})
+
+test('observe honours a message-level quietMs over the selectors', async () => {
+  const reply = container('settled')
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [], quietMs: 100000 }) })
+  const t0 = Date.now()
+  const r = await a.observe({ baselineCount: 0, quietMs: 100 })
+  assert.equal(r.doneBy, 'quiet')
+  assert.ok(Date.now() - t0 < 1400)
+})
+
+test('snapshot returns {html} from scrubDom over the adapter\'s document and honours an aborted signal', async () => {
+  const doc = fakeDocument({ match: {} })
+  doc.documentElement = {
+    nodeType: 1,
+    localName: 'html',
+    attributes: [],
+    childNodes: [{ nodeType: 1, localName: 'body', attributes: [{ name: 'class', value: 'x' }], childNodes: [{ nodeType: 3, data: 'secret' }] }],
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt' })
+  assert.deepEqual(await a.snapshot(), { html: '<!doctype html>\n<html><body class="x">…</body></html>\n' })
+  assert.equal((await a.snapshot()).html, scrubDom(doc))
+  const ac = new AbortController()
+  ac.abort()
+  await rejects(a.snapshot({ signal: ac.signal }), 'cancelled')
+})
+
+test('createAdapter / setSelectors re-merge a full config onto the defaults (every v1 and v2 key present, unknown keys dropped, override replaces per key); a bare block is taken as-is', () => {
+  const el = fakeComposer()
+  const doc = fakeDocument({ match: { '#prompt-textarea': el, '#other': el, 'button.stop': [{}] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: { version: 1, chatgpt: { composer: ['#other'], bogus: ['x'] } } })
+  assert.equal(a.findComposer().selector, '#other')
+  assert.equal(a.health().stop, false) // the default stop cascade survived the merge: present, nothing visible
+  a.setSelectors({ version: 1, chatgpt: { stop: ['button.stop'] } })
+  assert.equal(a.findComposer().selector, '#prompt-textarea') // composer back to the default: only `stop` was overridden
+  assert.equal(a.health().stop, true)
+  assert.equal(a.health().matched.stop, 'button.stop')
+  a.setSelectors({ composer: ['#other'], send: [] }) // a bare block: no stop cascade at all
+  assert.equal(a.findComposer().selector, '#other')
+  assert.equal(a.health().stop, null)
+  a.setSelectors({ version: 1, claude: { composer: ['#nope'] } }) // no block for this site and not a bare block: ignored, the current block stays
+  assert.equal(a.findComposer().selector, '#other')
+  assert.equal(a.health().stop, null)
+  a.setSelectors(null)
+  a.setSelectors(['#list'])
+  assert.equal(a.findComposer().selector, '#other')
 })

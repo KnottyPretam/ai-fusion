@@ -7,6 +7,32 @@
  * Paths (SPA fallback): /c/<id> (after a submit), /auth/login|/login|/sign-in (login walls),
  * /challenges.cloudflare.com/* (the local stand-in for the Turnstile iframe; nothing leaves the box).
  *
+ * Stage 2 — replies (OPT-IN: without these a page behaves exactly as in Stage 1, no reply, no stop button):
+ *   ?replyMs=N       after a submit, stream an assistant reply "Echo: <typed text>" over N ms (0 = at once)
+ *   ?reply=json      canned JSON instead of the echo, fenced ```json … ```, keyed on the typed text —
+ *                    "YOUR CLAIM" → this site's DefenseReply, "<<<DIVERGENCES>>>" → the ConvergenceCheck,
+ *                    "<<<R1>>>" → the Extraction, checked in THAT order (a challenge prompt for R2/R3 also
+ *                    carries <<<R1>>> in its anonymised peer block); no key → the echo. The texts are the
+ *                    assembled `content` of backend/llm/fixtures/scenarios/planted_factual/*.jsonl, verbatim.
+ *   ?nostop=1        no stop button while streaming (the adapter's quiet detection)
+ *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt)
+ *   ?blockAfterMs=N  N ms after a submit the "Unusual activity" alert appears and the reply freezes
+ *                    (a blocked session mid-observe)
+ *
+ * Reply DOM — matches the selectors v2 `assistant` / `assistantText` / `stop` / `done` cascades
+ * (site.cjs DEFAULT_SELECTORS, contract §4) with their FIRST entries:
+ *   chatgpt  article[data-message-author-role=assistant] > div.markdown (the text)
+ *            + div.actions > button[data-testid=copy-turn-action-button] once the reply is done;
+ *            stop = button[data-testid=stop-button][aria-label="Stop streaming"]
+ *   claude   div.font-claude-response — the text is the container's whole content (assistantText is
+ *            empty for claude); stop = button[aria-label="Stop response"]; no done marker
+ *   grok     div#response-<id> > div.response-content-markdown; stop = button[aria-label="Stop"]; no done marker
+ * The stop button takes the send button's slot (grok: the voice/submit slot) while streaming, as on
+ * the real pages, and the slot is restored when the reply ends. Streaming re-renders the text element
+ * from scratch every 40 ms with a growing prefix; every 5th render shows a SHORTER prefix — the
+ * markdown re-render "rewind" (counted in window.__fake.rewinds) — so a capture that accumulates
+ * deltas is wrong and only the final text, read at the end, is right (Decision 16).
+ *
  * The v1 selector cascades (site.cjs DEFAULT_SELECTORS) match their FIRST entry here:
  *   chatgpt  div#prompt-textarea.ProseMirror[contenteditable=true][translate=no] in a <form>,
  *            button[data-testid=send-button]#composer-submit-button (disabled until input)
@@ -31,8 +57,11 @@
  *     instance-level `value` setter keeps the tracker in sync (so `el.value = x` + a synthetic
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
- * window.__fake = {submitted: [], site, state, variant, getText(), helperText()} (the site's own
- * debug surface; `helperText()` is the hidden helper textarea's value, null when there is none).
+ * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
+ *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs}, replying, done,
+ *                  renders, rewinds, replyText()} (the site's own debug surface; `helperText()` is the
+ * hidden helper textarea's value, null when there is none; `replyText()` the current reply text, null
+ * before any reply).
  */
 ;(() => {
   'use strict'
@@ -46,6 +75,22 @@
   const CHALLENGE_TITLE = 'Just a moment...'
   const BLOCKED_TEXT = 'Unusual activity has been detected from your device. Try again later.'
 
+  /** Streaming cadence and the rewind rule (see the header). */
+  const RENDER_MS = 40
+  const REWIND_EVERY = 5
+  const REWIND_FACTOR = 0.6
+
+  // Canned JSON for ?reply=json — the assembled `content` of the planted_factual fixtures, verbatim
+  // (analyst.extraction.1, <slot>.defense.1, analyst.convergence.1). observe.spec.js re-derives these
+  // from the .jsonl files and asserts byte equality.
+  const CANNED_EXTRACTION = `{"agreements": [{"topic": "Upper gyroscope range", "statement": "The gyroscope's highest selectable full-scale range is 2000 deg/s.", "models": ["R1", "R3"]}], "divergences": [{"id": "d1", "topic": "Maximum gyroscope full-scale range", "positions": [{"model": "R1", "claim": "The gyroscope full-scale range is selectable up to 2000 deg/s.", "evidence_cited": null}, {"model": "R2", "claim": "The gyroscope tops out at 1000 deg/s full scale.", "evidence_cited": null}, {"model": "R3", "claim": "The gyroscope supports selectable ranges from 125 deg/s up to 2000 deg/s.", "evidence_cited": null}], "materiality": "high"}, {"id": "d2", "topic": "Lowest selectable gyroscope range", "positions": [{"model": "R1", "claim": "Does not state a lower bound; describes the range only as selectable up to 2000 deg/s.", "evidence_cited": null}, {"model": "R2", "claim": "Does not state a lower bound.", "evidence_cited": null}, {"model": "R3", "claim": "The lowest selectable range is 125 deg/s.", "evidence_cited": null}], "materiality": "low"}]}`
+  const CANNED_DEFENSE = {
+    chatgpt: `{"stance": "revise", "justification": "Both peers state the gyroscope range is selectable up to 2000 deg/s, and the datasheet's GYRO_RANGE register (0x0F) confirms codes 0x00 through 0x04 for 2000, 1000, 500, 250 and 125 deg/s. I had quoted the 1000 deg/s intermediate setting as the maximum, which is incorrect.", "revised_claim": "The gyroscope full-scale range is selectable up to 2000 deg/s.", "confidence": 0.9, "persuaded_by": "the specific GYRO_RANGE register codes and the 2000 deg/s maximum cited by both peers"}`,
+    claude: `{"stance": "defend", "justification": "The BMI088 datasheet's GYRO_RANGE register (0x0F) lists five selectable full-scale ranges: 125, 250, 500, 1000 and 2000 deg/s, with 2000 deg/s the power-on default. The 1000 deg/s figure is one of the intermediate settings, not the maximum.", "revised_claim": null, "confidence": 0.95, "persuaded_by": null}`,
+    grok: `{"stance": "defend", "justification": "The datasheet's gyroscope specification table gives the full-scale range as +/-125, +/-250, +/-500, +/-1000 and +/-2000 deg/s selected through GYRO_RANGE; 1000 deg/s is a mid-scale setting and the maximum is 2000 deg/s.", "revised_claim": null, "confidence": 0.93, "persuaded_by": null}`,
+  }
+  const CANNED_CONVERGENCE = `{"statuses": [{"divergence_id": "d1", "status": "resolved"}]}`
+
   const params = new URLSearchParams(location.search)
   const site = Object.prototype.hasOwnProperty.call(SITES, params.get('site')) ? params.get('site') : 'chatgpt'
   const cfg = SITES[site]
@@ -55,6 +100,15 @@
   const sendDelayMs = Math.max(0, Number(params.get('sendDelayMs')) || 0)
   /** Composer variant: 'tiptap' (grok default), 'textarea' (grok&composer=textarea), 'prosemirror' (chatgpt/claude). */
   const variant = site === 'grok' ? (params.get('composer') === 'textarea' ? 'textarea' : 'tiptap') : 'prosemirror'
+  /** Stage 2 reply options (opt-in). */
+  const replyOpts = {
+    enabled: params.has('replyMs') || params.has('reply'),
+    ms: Math.max(0, Number(params.get('replyMs')) || 0),
+    kind: params.get('reply') === 'json' ? 'json' : 'echo',
+    nostop: params.get('nostop') === '1',
+    nodone: params.get('nodone') === '1',
+    blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
+  }
 
   const app = document.getElementById('app')
   app.setAttribute('data-site', site)
@@ -63,11 +117,12 @@
   const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true)
 
   let composer = null // {el, getText(), clear()}
-  let actions = null // {apply(on)}: how "send enabled" is rendered — a disabled toggle, or grok's button swap
+  let actions = null // {apply(on), streaming(on)}: how the action slot renders send / voice / stop
   let sendEnabled = false
   let sendTimer = null
+  let reply = null // {container, textEl, full, timer, markDone()}
 
-  window.__fake = {
+  const fake = {
     submitted: [],
     site,
     state,
@@ -77,7 +132,14 @@
       const helper = document.querySelector('textarea.helper')
       return helper ? helper.value : null
     },
+    reply: replyOpts,
+    replying: false,
+    done: false,
+    renders: 0,
+    rewinds: 0,
+    replyText: () => (reply ? reply.textEl.textContent : null),
   }
+  window.__fake = fake
 
   // --- the Turnstile stand-in (only ever rendered inside the challenge iframe) ---------------
   if (path.startsWith('/challenges.cloudflare.com/')) {
@@ -113,14 +175,20 @@
     return
   }
 
-  if (state === 'blocked') {
+  /** The "unusual activity" banner: an alert-like container outside the thread (the errorText scope). */
+  function showBlockedAlert() {
     const alert = document.createElement('div')
     alert.setAttribute('role', 'alert')
     alert.textContent = BLOCKED_TEXT
-    app.appendChild(alert)
+    app.insertBefore(alert, thread || null)
+    app.setAttribute('data-state', 'blocked')
+    fake.state = 'blocked'
   }
 
-  const thread = document.createElement('main')
+  let thread = null
+  if (state === 'blocked') showBlockedAlert()
+
+  thread = document.createElement('main')
   thread.className = 'thread'
   app.appendChild(thread)
 
@@ -166,7 +234,7 @@
     if (!composer || !sendEnabled) return
     const text = composer.getText()
     if (text.trim() === '') return
-    window.__fake.submitted.push(text)
+    fake.submitted.push(text)
     const msg = document.createElement('article')
     msg.setAttribute('data-message-author-role', 'user')
     msg.textContent = text
@@ -176,28 +244,180 @@
     setTimeout(() => {
       history.pushState({}, '', '/c/' + randomId() + location.search)
     }, 500)
+    if (replyOpts.enabled) startReply(text)
   }
 
   function isSubmitKey(e) {
     return e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.isComposing
   }
 
+  // --- replies (Stage 2) --------------------------------------------------------------------
+
+  /** The canned JSON for a typed text under ?reply=json, in the documented key order; null when no key matches. */
+  function cannedFor(text) {
+    if (text.includes('YOUR CLAIM')) return CANNED_DEFENSE[site]
+    if (text.includes('<<<DIVERGENCES>>>')) return CANNED_CONVERGENCE
+    if (text.includes('<<<R1>>>')) return CANNED_EXTRACTION
+    return null
+  }
+
+  function replyFor(text) {
+    if (replyOpts.kind === 'json') {
+      const canned = cannedFor(text)
+      if (canned !== null) return '```json\n' + canned + '\n```'
+    }
+    return 'Echo: ' + text
+  }
+
+  /** The per-site assistant container: `{container, textEl, markDone()}` (see the header for the shapes). */
+  function buildAssistant() {
+    if (site === 'chatgpt') {
+      const article = document.createElement('article')
+      article.setAttribute('data-message-author-role', 'assistant')
+      const md = document.createElement('div')
+      md.className = 'markdown'
+      article.appendChild(md)
+      return {
+        container: article,
+        textEl: md,
+        markDone() {
+          if (replyOpts.nodone) return
+          const bar = document.createElement('div')
+          bar.className = 'actions'
+          const copy = document.createElement('button')
+          copy.type = 'button'
+          copy.setAttribute('data-testid', 'copy-turn-action-button')
+          copy.setAttribute('aria-label', 'Copy')
+          copy.textContent = 'Copy'
+          bar.appendChild(copy)
+          article.appendChild(bar)
+        },
+      }
+    }
+    if (site === 'claude') {
+      const box = document.createElement('div')
+      box.className = 'font-claude-response reply'
+      return { container: box, textEl: box, markDone() {} }
+    }
+    const box = document.createElement('div')
+    box.id = 'response-' + randomId()
+    box.className = 'reply'
+    const md = document.createElement('div')
+    md.className = 'response-content-markdown'
+    box.appendChild(md)
+    return { container: box, textEl: md, markDone() {} }
+  }
+
+  /** Full re-render of the reply text (what a markdown renderer does): every child replaced. */
+  function renderReply(s) {
+    reply.textEl.replaceChildren(document.createTextNode(s))
+    fake.renders += 1
+  }
+
+  function endReply() {
+    if (reply.timer !== null) {
+      clearTimeout(reply.timer)
+      reply.timer = null
+    }
+    fake.replying = false
+    actions.streaming(false)
+  }
+
+  function startReply(text) {
+    const built = buildAssistant()
+    reply = { ...built, full: replyFor(text), timer: null }
+    thread.appendChild(built.container)
+    fake.replying = true
+    fake.done = false
+    if (!replyOpts.nostop) actions.streaming(true)
+    const t0 = Date.now()
+    let ticks = 0
+    const finish = () => {
+      renderReply(reply.full)
+      reply.markDone()
+      endReply()
+      fake.done = true
+    }
+    const step = () => {
+      const p = replyOpts.ms === 0 ? 1 : Math.min(1, (Date.now() - t0) / replyOpts.ms)
+      if (p >= 1) {
+        finish()
+        return
+      }
+      ticks += 1
+      const n = Math.floor(reply.full.length * p)
+      const rewind = ticks % REWIND_EVERY === 0 && n > 8
+      if (rewind) fake.rewinds += 1
+      renderReply(reply.full.slice(0, rewind ? Math.floor(n * REWIND_FACTOR) : n))
+      reply.timer = setTimeout(step, RENDER_MS)
+    }
+    step()
+    if (replyOpts.blockAfterMs !== null && fake.replying) {
+      setTimeout(() => {
+        if (!fake.replying) return
+        endReply() // the reply freezes where it is; the banner appears
+        showBlockedAlert()
+      }, replyOpts.blockAfterMs)
+    }
+  }
+
   // --- action slot strategies ---------------------------------------------------------------
 
-  /** chatgpt / claude / grok&composer=textarea: one send button, disabled until the model holds text. */
+  /** The per-site stop button (selectors v2 `stop`, first entry). Clicking it ends the reply where it is. */
+  function makeStopButton() {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'stop'
+    if (site === 'chatgpt') {
+      b.setAttribute('data-testid', 'stop-button')
+      b.setAttribute('aria-label', 'Stop streaming')
+    } else if (site === 'claude') {
+      b.setAttribute('aria-label', 'Stop response')
+    } else {
+      b.setAttribute('aria-label', 'Stop')
+    }
+    b.textContent = 'Stop'
+    b.addEventListener('click', () => {
+      if (reply && fake.replying) {
+        endReply()
+        fake.done = true
+      }
+    })
+    return b
+  }
+
+  /** chatgpt / claude / grok&composer=textarea: one send button, disabled until the model holds text; the stop button takes its place while streaming. */
   function toggleActions(button) {
+    const stopButton = makeStopButton()
+    let hasText = false
+    let streaming = false
+    let current = button
     button.disabled = true
+    const render = () => {
+      const next = streaming ? stopButton : button
+      if (next !== current) {
+        current.replaceWith(next)
+        current = next
+      }
+      button.disabled = !hasText
+    }
     return {
       apply(on) {
-        button.disabled = !on
+        hasText = on
+        render()
+      },
+      streaming(on) {
+        streaming = on
+        render()
       },
     }
   }
 
   /**
    * grok (TipTap): like the real page, the slot renders EITHER the voice-mode button (editor
-   * empty) OR the submit button (editor holds text) — never a disabled submit button. The submit
-   * button therefore does not exist in the DOM until text is in.
+   * empty) OR the submit button (editor holds text) — never a disabled submit button — and the
+   * stop button while a reply streams. The submit button therefore does not exist in the DOM until
+   * text is in.
    */
   function swapActions(voiceButton) {
     const submitButton = document.createElement('button')
@@ -206,13 +426,24 @@
     submitButton.setAttribute('aria-label', 'Submit')
     submitButton.setAttribute('data-testid', 'chat-submit')
     submitButton.textContent = 'Send'
+    const stopButton = makeStopButton()
+    let hasText = false
+    let streaming = false
     let current = voiceButton
+    const render = () => {
+      const next = streaming ? stopButton : hasText ? submitButton : voiceButton
+      if (next === current) return
+      current.replaceWith(next)
+      current = next
+    }
     return {
       apply(on) {
-        const next = on ? submitButton : voiceButton
-        if (next === current) return
-        current.replaceWith(next)
-        current = next
+        hasText = on
+        render()
+      },
+      streaming(on) {
+        streaming = on
+        render()
       },
     }
   }
