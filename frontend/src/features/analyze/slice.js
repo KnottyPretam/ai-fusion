@@ -16,6 +16,17 @@
 export const RANK = { low: 0, medium: 1, high: 2 }
 export const LABELS = ['R1', 'R2', 'R3']
 
+/**
+ * Message prefix of the `not_captured` slot error, MIRRORED from
+ * features/desktop/slice.js (`NOT_CAPTURED_MESSAGE_PREFIX`, the same constant, minted by
+ * backend/llm/bridge.py). Features never import across each other — the codebase duplicates a
+ * shared constant instead (SLOT_VENDORS / RANK) — so this is a copy with a pointer, not a second
+ * definition: keep the two in step. The persisted SendTurn keeps only the error MESSAGE
+ * (backend/schemas.py `errors: dict[SlotId, str]`), never the code, so this prefix is the only
+ * persisted signal that a slot replied on screen with capture off (desktop) rather than failing.
+ */
+export const NOT_CAPTURED_MESSAGE_PREFIX = 'capture is off for '
+
 export function initial() {
   return { status: 'idle', turn: null, cached: false, error: null, ofTurn: null }
 }

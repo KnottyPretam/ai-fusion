@@ -8,7 +8,11 @@
 // `FAKE_ELECTRON_REPORT <json>`
 // before exiting; `app.exit(code)` prints the report and exits with that code at once (the refusal
 // paths). Every FakeWebContents emits `web-contents-created` on `app` as Electron does,
-// synchronously in its constructor.
+// synchronously in its constructor. Order matters for one thing and is recorded for it: every
+// `nativeTheme.themeSource = …` lands in `report.themeSourceSets` with the number of windows /
+// views / surfaces that existed at the time, so the wiring test can prove the theme is applied
+// before any site view is created (the site pages' first paint) — and every window and view
+// records the grounds it was given (`background` / `backgrounds`).
 //
 // Two guards so a wiring run never touches the network: `TRIPLEX_BACKEND_URL` is forced to an
 // attach URL (main.js then never spawns a backend) and `globalThis.WebSocket` is replaced by a
@@ -37,8 +41,12 @@ const report = {
   singleInstanceRequested: false,
   sockets: [],
   probes: null,
+  /** Every `nativeTheme.themeSource = …`, in order, with how much had been built when it happened. */
+  themeSourceSets: [],
 }
 let nextId = 1
+/** Monotonic counter: every BrowserWindow / WebContentsView bumps it in its constructor. */
+let surfacesCreated = 0
 let finished = false
 
 function finish(code) {
@@ -46,8 +54,8 @@ function finish(code) {
   finished = true
   const out = {
     ...report,
-    windows: report.windows.map((w) => ({ options: w.options, loads: w.webContents.loads, sent: w.webContents.sent, bounds: w.bounds, menuBarVisible: w.menuBarVisible })),
-    views: report.views.map((v) => ({ options: v.options, loads: v.webContents.loads, bounds: v.getBounds(), visible: v.getVisible(), zoom: v.webContents.zoom, id: v.webContents.id })),
+    windows: report.windows.map((w) => ({ options: w.options, loads: w.webContents.loads, sent: w.webContents.sent, bounds: w.bounds, menuBarVisible: w.menuBarVisible, background: w.background })),
+    views: report.views.map((v) => ({ options: v.options, loads: v.webContents.loads, bounds: v.getBounds(), visible: v.getVisible(), zoom: v.webContents.zoom, id: v.webContents.id, background: v.background, backgrounds: v.backgrounds })),
     menu: report.menu ? { labels: report.menu.template.map((m) => m.label), items: report.menu.template.flatMap((m) => (m.submenu || []).map((i) => i.label).filter(Boolean)), accelerators: report.menu.template.flatMap((m) => (m.submenu || []).map((i) => i.accelerator).filter(Boolean)) } : null,
     sockets: FakeWebSocket.instances.map((s) => ({ url: s.url, sent: s.sent, closed: s.closed })),
   }
@@ -151,6 +159,12 @@ class View {
     this.bounds = { x: 0, y: 0, width: 0, height: 0 }
     this.visible = true
     this.children = []
+    this.background = null
+    this.backgrounds = [] // every ground this view was given, in order (creation first)
+  }
+  setBackgroundColor(color) {
+    this.background = color
+    this.backgrounds.push(color)
   }
   setBounds(b) {
     this.bounds = { ...b }
@@ -178,6 +192,7 @@ export class WebContentsView extends View {
     super()
     this.options = options
     this.webContents = new FakeWebContents('view')
+    surfacesCreated += 1
     report.views.push(this)
   }
 }
@@ -193,8 +208,13 @@ export class BrowserWindow extends EventEmitter {
     this._maximized = false
     this.menuBarVisible = true
     this.bounds = { x: options.x ?? 0, y: options.y ?? 0, width: options.width, height: options.height }
+    this.background = options.backgroundColor ?? null
+    surfacesCreated += 1
     BrowserWindow.windows.push(this)
     report.windows.push(this)
+  }
+  setBackgroundColor(color) {
+    this.background = color
   }
   static getAllWindows() {
     return BrowserWindow.windows
@@ -319,7 +339,13 @@ export const Menu = {
   },
 }
 
-/** The renderer's palette lives in CSS; the SITE pages follow `themeSource` (main never injects CSS). */
+/**
+ * The renderer's palette lives in CSS; the SITE pages follow `themeSource` (main never injects CSS).
+ * The setter records WHEN each assignment happened (`views`/`windows` built so far, plus a shared
+ * monotonic `surfaces` counter), because the whole point of applying the theme in `start()` before
+ * `createWindow()` / `createViewManager()` is that the site pages get the right
+ * `prefers-color-scheme` on their FIRST paint: a probe that only reads the last value cannot tell.
+ */
 export const nativeTheme = {
   _themeSource: 'system',
   get themeSource() {
@@ -328,6 +354,10 @@ export const nativeTheme = {
   set themeSource(next) {
     this._themeSource = next
     report.themeSource = next
+    report.themeSourceSets.push({ theme: next, views: report.views.length, windows: report.windows.length, surfaces: surfacesCreated })
+  },
+  get shouldUseDarkColors() {
+    return this._themeSource === 'dark'
   },
 }
 

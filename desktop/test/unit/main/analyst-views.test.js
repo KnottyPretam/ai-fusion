@@ -32,7 +32,7 @@ function health(session = 'ok', extra = {}) {
 }
 
 /** A manager over fakes; `instances` collects every WebContentsView built, `states` every onState. */
-function setup({ analyst = 'chatgpt', analystVisible = false } = {}) {
+function setup({ analyst = 'chatgpt', analystVisible = false, background } = {}) {
   const instances = []
   const sessions = new Map()
   const states = []
@@ -59,9 +59,28 @@ function setup({ analyst = 'chatgpt', analystVisible = false } = {}) {
     clearTimeout: timers.clearTimeout,
     now: timers.now,
     ssoHosts: [],
+    ...(background ? { backgroundColor: background } : {}),
   })
   return { manager, instances, sessions, states, contentView, settings, sites, timers, log }
 }
+
+test('the hidden analyst view is created on the theme ground, and a theme change repaints it', async () => {
+  let ground = '#0d1117'
+  const { manager, instances } = setup({ background: () => ground })
+  assert.ok(manager.adapterFor('chatgpt'))
+  assert.equal(instances[0].background, '#0d1117', 'revealed on a challenge, it must not flash white in a dark shell')
+
+  assert.equal(manager.setBackgroundColor('#ffffff'), true)
+  assert.equal(instances[0].background, '#ffffff')
+  assert.equal(manager.setBackgroundColor(''), false, 'a junk colour is ignored')
+
+  // the ground the manager was told last is the one a later view starts on (the stale seam is gone)
+  ground = '#0d1117'
+  await manager.setAnalyst('claude')
+  await tick()
+  assert.equal(instances.length, 2, 'the partition switch recreated the view')
+  assert.equal(instances[1].background, '#ffffff')
+})
 
 test('nothing is created until something asks: adapterFor builds the view on persist:<analyst>, hidden, zoom 1, hardened', async () => {
   const { manager, instances, contentView, sessions } = setup()

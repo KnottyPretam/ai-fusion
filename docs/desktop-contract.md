@@ -137,7 +137,7 @@ createAdapter({document, window, site, selectors, now = Date.now}) → {
   insertAndSubmit(text) → Promise<{submitted:true, composerSelector, sendSelector, assistantCount, confirmedBy, ms}>,
   countMessages() → number,     // every rendered message container (user + assistant); the signal behind confirmedBy:'assistant_count'
   countAssistant() → number,    // assistant-role containers only ([data-message-author-role='assistant'], .font-claude-response, .font-claude-message, div[id^='response-'] + the v2 `assistant` cascade) — the observe baselineCount
-  observe({baselineCount, quietMs, timeoutMs, signal}) → Promise<{text, doneBy, ms}>,   // Stage 2
+  observe({baselineCount, quietMs, timeoutMs, signal}) → Promise<{text, doneBy, ms}>,   // Stage 2; also snapshots the containers present when it starts and prefers the last one NOT in that set, so a re-render cannot hand back the previous turn's text
 }
 class AdapterError extends Error { code; partial? }
 attachIpc(ipc, factory); boot()
@@ -150,7 +150,7 @@ Submit: poll the `send` cascade every 150 ms up to `sendWaitMs` for a visible, e
 (document + open shadow roots), click; confirm within `submitVerifyMs` by stop button |
 composer emptied | `countAssistant()` grew; else one `Enter` keydown/keypress/keyup
 (`composed:true`) on the composer, else `not_submitted`. `ready`/`insertAndSubmit` first check
-`sessionState()`; not `ok` → `{ok:false, code:<state>}` with no DOM write. `sendSelector` is `null` when the Enter fallback confirmed the submission (no send-cascade entry matched a visible enabled button); `submit()` also returns `assistantCount`, the `countAssistant()` sample taken immediately before the confirming action; an insertion whose verification fails on every method is reported as `site_error` with message `insertText: …`; `ready` answers `timeout` when the stop button never disappears within `timeoutMs`.
+`sessionState()`; not `ok` → `{ok:false, code:<state>}` with no DOM write. `sendSelector` is `null` when the Enter fallback confirmed the submission (no send-cascade entry matched a visible enabled button); `submit()` also returns `assistantCount`, the `countAssistant()` sample taken ONCE before the first submit attempt (never re-sampled after a confirmation window, or a container that mounted while the click was being confirmed would inflate the observe baseline); an insertion whose verification fails on every method is reported as `site_error` with message `insertText: …`; `ready` answers `timeout` when the stop button never disappears within `timeoutMs`.
 
 ### 4. Selector config
 
@@ -211,7 +211,7 @@ Desktop env: `TRIPLEX_RENDERER_URL` (dev; default `http://127.0.0.1:<backend>/ap
 `TRIPLEX_BACKEND_PORT` (8021), `TRIPLEX_BACKEND_URL` (attach, no spawn; must name a loopback host — 127.0.0.1 / localhost / ::1 — else exit 2 unless `TRIPLEX_ALLOW_REMOTE_BACKEND=1`, which warns loudly), `TRIPLEX_DATA_DIR`
 (default `<userData>/data`), `TRIPLEX_USER_DATA_DIR` (→ `app.setPath('userData')` before
 ready), `TRIPLEX_SITES_JSON`, `TRIPLEX_GROK_SURFACE`, `TRIPLEX_SELECTORS_FILE`,
-`TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_THEME` (a launch-time seed written into `settings.theme`, never a second runtime source), `TRIPLEX_E2E_APP=1` (exposes
+`TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_THEME` (a launch-time OVERRIDE for dev and screenshots: when a launch sets it to light|dark|system it is written into `settings.theme` before anything reads the theme, replacing the stored choice for that launch and the ones after it until the user picks again; it is never read again at runtime — `settings.theme` is the only source for the window, the site views and the renderer. The resolved theme is also the GROUND Electron paints before any page does: the window's `backgroundColor` and every site view's `setBackgroundColor` are `--bg` (`#ffffff` / `#0d1117`), set at creation and repainted when the theme changes), `TRIPLEX_E2E_APP=1` (exposes
 `global.__triplexTest = {views, orchestrator, settings}` and refuses non-loopback site URLs),
 `TRIPLEX_FAKE_PORT` (5199), `TRIPLEX_OLLAMA=1` (export `OLLAMA_*` to the backend).
 Files under `userData` (`~/.config/triplex-desktop/`): `settings.json`

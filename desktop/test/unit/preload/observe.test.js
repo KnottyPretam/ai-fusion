@@ -16,7 +16,13 @@
 //   2. the first-token deadline applies only until a container has been seen ONCE — a later gap is a
 //      re-render — but a page that never mounts one still answers `reply_not_found`;
 //   3. the gap is bounded by the overall budget: a placeholder that never comes back is a `timeout`
-//      carrying the last text that was on the page, never an unbounded wait.
+//      carrying the last text that was on the page, never an unbounded wait;
+//   4. (S7 review) the reply is picked by NODE IDENTITY: the containers on the page when observe starts
+//      are snapshotted, the reply is the LAST container outside that snapshot, and `length > baseline`
+//      only picks a container until one has been followed. So a container from an EARLIER turn is never
+//      reported as this turn's reply when the baseline is stale and the gap is open — and a reply that
+//      mounts while the count still equals an INFLATED baseline (the placeholder counted into it, the
+//      submit-side half of the same bug) is followed all the same.
 //
 // There is no layout and no MutationObserver here, so every sample is the OBSERVE_POLL_MS poll and every
 // element counts as visible (see the _dom.js header) — which is exactly what makes the stepping
@@ -39,7 +45,12 @@ const PAGE = `<html><head><title>ChatGPT</title></head><body><div id="app">
 
 const PLACEHOLDER = 'Placeholder…' // ~12 characters, as measured
 const ANSWER = 'The gyroscope full-scale range is selectable up to 2000 deg/s.'
+const OLD_ANSWER = 'The accelerometer full-scale range is selectable up to 16 g.' // the PREVIOUS turn, already finished
+const TOOL_TEXT = 'Searching the web…' // the finished tool container of the two-turn shape
 const CHATGPT_DONE = '<button data-testid="copy-turn-action-button" aria-label="Copy">Copy</button>'
+/** A finished assistant turn: its own text in a `.markdown` child and its own copy-turn marker. */
+const finished = (text) => `<article data-message-author-role="assistant"><div class="markdown">${text}</div>${CHATGPT_DONE}</article>`
+const streaming = (text) => `<article data-message-author-role="assistant"><div class="markdown">${text}</div></article>`
 
 /** Parse a snippet, re-own it onto `doc` and append it to `parent` (a real mount, so `isConnected` is true). */
 function mount(doc, parent, html) {
@@ -216,4 +227,74 @@ test('the same gap on a site with no stop button and no done marker (quiet detec
   assert.equal(state.done, true)
   assert.equal(state.error, null)
   assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'quiet'])
+})
+
+// ---- S7 review: WHICH container is this turn's reply (node identity, not only the count) -----------
+
+test("an EARLIER turn's container is never reported as this turn's reply: a stale baseline plus the measured gap waits for the real container instead of handing back the previous answer", async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  // the previous turn, finished and still on the page: its own text AND its own copy-turn marker
+  mount(doc, thread, finished(OLD_ANSWER))
+  assert.equal(adapter.countAssistant(), 1)
+
+  // main's baseline is STALE — 0 while the page holds one container. Measured cause: the site unmounts
+  // containers (the lifecycle above), so the `countAssistant()` sample taken at the submit can be lower
+  // than what is on the page by the time the observe message arrives.
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 20000, firstTokenMs: 5000, quietMs: 800 }))
+
+  // ~1 s: this turn's placeholder — mounted AFTER observe started, so identity marks it as ours
+  const placeholder = mount(doc, thread, `<article data-message-author-role="assistant">${PLACEHOLDER}</article>`)
+  await clock.advance(1000)
+  assert.equal(state.done, false)
+
+  // ~2 s: the placeholder is unmounted and the stop button goes while the gap is open — the moment the
+  // count rule alone (1 container > baseline 0) falls back to the OLD turn, whose own copy-turn marker
+  // then reads as a `done_selector` end signal and hands main the previous answer as this reply
+  placeholder.remove()
+  stop.remove()
+  await clock.advance(3000)
+  assert.equal(state.done, false, "the previous turn's container is not this turn's reply")
+
+  // ~13 s: the real container, the only node that mounted after observe started
+  mount(doc, thread, streaming(ANSWER))
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.text, ANSWER)
+  assert.ok(!state.value.text.includes(OLD_ANSWER), 'never the previous turn')
+  assert.equal(state.value.doneBy, 'stop_gone') // the old turn's marker is BEFORE this container: it never counts
+})
+
+test('a baseline INFLATED by the placeholder (containers === baseline) still follows the fresh container: identity, not the count', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  // main sampled 1 because chatgpt's placeholder turn appeared inside submitVerifyMs while a submit
+  // attempt was being confirmed; the page itself is empty again, and the real reply mounts AT that count
+  const state = settled(adapter.observe({ baselineCount: 1, timeoutMs: 20000, firstTokenMs: 1500, quietMs: 800 }))
+  const real = mount(doc, thread, streaming(ANSWER))
+  await clock.advance(2000) // past firstTokenMs: the count rule alone (1 > 1 is false) answers reply_not_found here
+  assert.equal(state.done, false, 'a container that mounted after observe started is the reply whatever the count says')
+  stop.remove()
+  mount(doc, real, CHATGPT_DONE)
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'done_selector'])
+})
+
+test('the two-turn (tool call) shape with a finished EARLIER turn on the page: the answer container is followed, never the tool turn and never the older turn', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  mount(doc, thread, finished(OLD_ANSWER)) // history
+  const state = settled(adapter.observe({ baselineCount: 1, timeoutMs: 20000, firstTokenMs: 2000, quietMs: 800 }))
+  // the tool turn: finished and marked done at once, under a visible stop button
+  mount(doc, thread, finished(TOOL_TEXT))
+  await clock.advance(1000)
+  assert.equal(state.done, false, 'a finished tool turn under a visible stop button is not the end')
+  mount(doc, thread, streaming(ANSWER)) // the answer container, last in document order
+  await clock.advance(600)
+  assert.equal(state.done, false)
+  stop.remove()
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.value.text, ANSWER)
+  assert.ok(!state.value.text.includes(TOOL_TEXT) && !state.value.text.includes(OLD_ANSWER))
+  assert.equal(state.value.doneBy, 'stop_gone')
 })

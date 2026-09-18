@@ -15,8 +15,10 @@
 //                `web-contents-created` backstop (any webContents nobody policed opens nothing
 //                and stays put; the Bluetooth chooser is cancelled everywhere).
 // After ready:   settings.json (window bounds clamped to the matching display, zoom, capture,
-//                theme — applied to nativeTheme.themeSource so the SITE pages switch too, seeded
-//                once from TRIPLEX_THEME when that names light|dark|system),
+//                theme — applied to nativeTheme.themeSource so the SITE pages switch too, and to
+//                the window's + every view's backgroundColor so a dark launch never flashes white;
+//                a launch that sets TRIPLEX_THEME to light|dark|system writes that value into
+//                settings.theme first, replacing the stored choice for this launch and the next),
 //                chats.json (links off the site's hosts dropped), the selectors override (+ fs.watch
 //                hot reload → {op:'config'} to every view), the backend — attached
 //                (`TRIPLEX_BACKEND_URL` + `BRIDGE_TOKEN`) or spawned (`.venv/bin/python -m
@@ -48,7 +50,7 @@ import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.
 import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
 import { createSettings, asTheme, DEFAULT_THEME } from './settings.js'
 import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
-import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
+import { createViewManager, buildWindowOptions, loadWithRetry, backgroundFor, LOAD_RETRY_MS } from './views.js'
 import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
 import { registerIpc, saveDomSnapshot } from './ipc.js'
@@ -199,7 +201,10 @@ function activeSlot() {
 
 function createWindow() {
   const bounds = settings.windowBoundsForLaunch()
-  win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: 'Triplex' }))
+  // The ground Electron paints until the renderer's first paint: the resolved theme's `--bg`, not
+  // Electron's white default (a dark launch would otherwise flash white for as long as the load
+  // takes, and `loadWithRetry` can retry for seconds against a backend that is still starting).
+  win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: 'Triplex', backgroundColor: currentBackground() }))
   if (bounds.maximized) win.maximize()
 
   // The renderer never opens windows itself and never leaves its own origin: window.open, a
@@ -276,8 +281,10 @@ function resolveBackend(userData) {
  *
  * The value always comes from settings.json (`settings.getTheme()`): one source of truth for the
  * site views, the renderer chrome (which reads it back through `panes:getInfo` / `panes:theme`)
- * and the next launch. `TRIPLEX_THEME` is a launch-time SEED for that file (dev / screenshots),
- * never a second value read at runtime.
+ * and the next launch. `TRIPLEX_THEME` is a launch-time OVERRIDE for that file (dev / screenshots):
+ * on a launch that sets it, it is written into settings.theme before anything reads the theme —
+ * replacing the stored choice, for this launch and the ones after it until the user picks again —
+ * and it is never read again at runtime (unset it and settings.json rules).
  */
 function applyTheme(theme) {
   const next = asTheme(theme, DEFAULT_THEME)
@@ -286,7 +293,32 @@ function applyTheme(theme) {
   } catch (err) {
     console.error(`[theme] could not set themeSource: ${(err && err.message) || err}`)
   }
+  // The ground under every page follows the choice too, so the next load (Reload, New chat, a
+  // recorded chat link, a recreated view) paints on the right colour instead of white.
+  const color = backgroundFor(next, { prefersDark: prefersDarkNow() })
+  try {
+    if (windowAlive() && typeof win.setBackgroundColor === 'function') win.setBackgroundColor(color)
+  } catch (err) {
+    console.warn(`[theme] window setBackgroundColor failed: ${(err && err.message) || err}`)
+  }
+  if (views && typeof views.setBackgroundColor === 'function') views.setBackgroundColor(color)
+  if (analystViews && typeof analystViews.setBackgroundColor === 'function') analystViews.setBackgroundColor(color)
   return next
+}
+
+/** `nativeTheme.shouldUseDarkColors` (what the OS prefers once themeSource is 'system'); false if unavailable. */
+function prefersDarkNow() {
+  try {
+    return nativeTheme.shouldUseDarkColors === true
+  } catch (_err) {
+    return false
+  }
+}
+
+/** The ground for the CURRENT stored theme — the one source of truth (settings.json), 'system' resolved. */
+function currentBackground() {
+  const theme = settings && typeof settings.getTheme === 'function' ? settings.getTheme() : DEFAULT_THEME
+  return backgroundFor(theme, { prefersDark: prefersDarkNow() })
 }
 
 function start() {
@@ -300,6 +332,8 @@ function start() {
 
   settings = createSettings({ dir: userData, screen })
   settings.load()
+  // A launch that carries TRIPLEX_THEME (dev / screenshots) writes it into settings.theme, so the
+  // renderer, the site views and the next launch all read ONE value; nothing reads env again.
   const seedTheme = asTheme(env.TRIPLEX_THEME)
   if (seedTheme && seedTheme !== settings.getTheme()) settings.setTheme(seedTheme)
   applyTheme(settings.getTheme())
@@ -330,6 +364,7 @@ function start() {
     },
     dev: DEV,
     ssoHosts: E2E ? [] : SSO_HOSTS, // an E2E run must never open a real SSO host, even as a popup
+    backgroundColor: currentBackground, // read per created view: a recreate after a theme change is right
   })
   win.webContents.on('did-finish-load', replayToRenderer)
 
@@ -347,6 +382,7 @@ function start() {
     onState: (state) => sendToRenderer('panes:analyst', state),
     dev: DEV,
     ssoHosts: E2E ? [] : SSO_HOSTS,
+    backgroundColor: currentBackground,
   })
 
   orchestrator = createOrchestrator({

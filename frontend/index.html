@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Both palettes exist (index.css). Declaring them lets the browser paint the right ground
+         before the bundle runs, so an Electron window whose backgroundColor is dark does not flash white. -->
+    <meta name="color-scheme" content="light dark" />
     <title>Triplex</title>
   </head>
   <body>

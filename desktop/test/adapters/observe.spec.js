@@ -514,6 +514,38 @@ test.describe('the chatgpt placeholder-then-remount lifecycle (measured live 202
     await expect(page.locator(CHATGPT_DONE)).toHaveCount(0)
   })
 
+  test("a STALE baseline never turns an earlier turn into this reply: with ?thread=noise the gap waits for the real container instead of settling on the previous answer", async ({ page }) => {
+    // ?nostop=1 + ?nodone=1 so the capture is on quiet detection — the state in which a container that
+    // is not this turn's reply settles as the answer. quietMs (400) is longer than placeholderMs (200),
+    // so the placeholder itself is never "quiet", and shorter than the gap (900), so picking the
+    // pre-existing noise answer during the gap WOULD settle: the reply has to be chosen by node
+    // identity (the noise container was on the page before this observe started), not by the count.
+    await open(page, {
+      site: 'chatgpt',
+      thread: 'noise',
+      replyMs: 300,
+      placeholderMs: 200,
+      remountMs: 900,
+      nostop: 1,
+      nodone: 1,
+      selectors: withOverride('chatgpt', { quietMs: 400 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'after the noise, through the gap' })
+    expect(sent.assistantCount).toBe(1) // the noise answer, sampled before the click
+    // main's baseline is STALE — 0 while the page holds the noise container (the site unmounts turns
+    // mid-turn, so the sample taken at the submit can be behind what is on the page)
+    const res = await request(page, { op: 'observe', baselineCount: 0, quietMs: 400 })
+    expectObserved(res, 'Echo: after the noise, through the gap', 'quiet')
+    expect(res.text).not.toContain('rate limit') // the noise answer's own text, never this reply
+    expect(res.text).not.toContain('Unusual activity')
+    const r = await replyState(page)
+    expect(res.text).not.toContain(r.placeholderText)
+    expect(r.containers).toBe(2) // the placeholder, then the real reply
+    expect(r.remountedAt - r.placeholderGoneAt).toBeGreaterThanOrEqual(800) // it waited out the whole gap
+    await expect(page.locator(ASSISTANT)).toHaveCount(2) // the noise turn is still there, and still not the answer
+    expect((await request(page, { op: 'health' })).health.session).toBe('ok')
+  })
+
   test('the recorded chat url: the placeholder /c/WEB:<uuid> matches no tightened chatUrlPattern, and the url the adapter reports after the capture is the REAL /c/<uuid>', async ({ page }) => {
     // the shape of DEFAULT_SELECTORS.chatgpt.chatUrlPattern (the id ends at the segment), pointed at the fake site
     const PATTERN = '^http://127\\.0\\.0\\.1:\\d+/c/[A-Za-z0-9-]+(?:[?#]|$)'

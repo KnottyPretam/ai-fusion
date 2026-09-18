@@ -133,6 +133,14 @@
 //      and the gap is bounded by the overall budget like any other unfinished reply.
 //      `.whitespace-pre-wrap` did NOT match anywhere on the current page — `.markdown` and `.prose`
 //      do — so `assistantText` keeps it only as a harmless last fallback.
+//      Two follow-ups from the S7 review of that fix, both about WHICH container the answer comes from
+//      when a count is no longer trustworthy: `observe` snapshots the containers present when it starts
+//      and picks the last one OUTSIDE that snapshot (`length > baselineCount` only picks a container
+//      until one has been followed), so an earlier turn — its text and its own copy-turn marker — is
+//      never reported as this turn's reply; and `submit` samples `assistantCount` ONCE, before the first
+//      attempt, lowering it if a container went away but never raising it, so the placeholder that
+//      appears while a submission is being confirmed cannot inflate that baseline and make the capture
+//      answer `reply_not_found` with the answer on screen.
 //   2. The chat URL of that first reply is a PLACEHOLDER `https://chatgpt.com/c/WEB:<uuid>`, replaced
 //      later by the real `https://chatgpt.com/c/<uuid>`; revisiting the placeholder 404s back to the
 //      home page. `chatgpt.chatUrlPattern` therefore ends the id at the segment (`(?:[?#]|$)`), so the
@@ -1913,26 +1921,34 @@
     /**
      * Submit what is in the composer (contract §3): poll the send cascade every 150 ms up to
      * `timeoutMs` (default `sendWaitMs`) for a visible, enabled button, click it and confirm within
-     * `submitVerifyMs`; else one Enter on the composer and confirm again. `assistantCount` is the
-     * `countAssistant()` sample (assistant turns only) taken immediately before the action that
-     * confirmed; the confirmation baseline is the `countMessages()` sample taken at the same time.
+     * `submitVerifyMs`; else one Enter on the composer and confirm again. The confirmation baseline
+     * is the `countMessages()` sample taken immediately before each action.
+     *
+     * `assistantCount` — the observe baseline main sends back (contract §2/§3) — is the
+     * `countAssistant()` sample taken ONCE, before the FIRST submit attempt, and it is never RAISED
+     * afterwards: chatgpt.com mounts a short placeholder assistant turn about a second after the
+     * submit (measured 2026-09-17), i.e. INSIDE `submitVerifyMs`, so re-sampling for the Enter
+     * fallback after the click's confirmation window would count that placeholder, hand main a
+     * baseline of N+1 and — because the placeholder is unmounted again and the real reply remounts at
+     * the same count — make the capture answer `reply_not_found` with the answer on screen. A second
+     * sample can only LOWER the baseline (a container unmounted while the first attempt was being
+     * confirmed must not keep the baseline high either), never lift it.
      */
     async function submit(timeoutMs, { signal } = {}) {
       const waitMs = nonNegativeInt(timeoutMs, nonNegativeInt(sel.sendWaitMs, 18000))
       const verifyMs = nonNegativeInt(sel.submitVerifyMs, 5000)
       const button = await poll(() => findSendButton(), { intervalMs: SEND_POLL_MS, timeoutMs: waitMs, signal })
-      let assistantCount = 0
+      let assistantCount = countAssistant() // before ANY submit attempt: nothing this turn mounted can be in it
       if (button) {
         const baseline = countMessages()
-        assistantCount = countAssistant()
         clickEl(button.el)
         const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
         if (confirmedBy) return { method: 'click', sendSelector: button.selector, confirmedBy, assistantCount }
       }
       const composer = findComposer()
       if (composer) {
+        assistantCount = Math.min(assistantCount, countAssistant()) // only ever lower, never raise
         const baseline = countMessages()
-        assistantCount = countAssistant()
         pressEnter(composer.el)
         const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
         if (confirmedBy) return { method: 'enter', sendSelector: button ? button.selector : null, confirmedBy, assistantCount }
@@ -1988,11 +2004,21 @@
     // ---- capture (Stage 2) ------------------------------------------------------------------
 
     /**
-     * observe op (contract §2/§3): wait for a NEW assistant container beyond `baselineCount` (the
-     * `assistantCount` main took from insertAndSubmit), then follow the LAST container until the
-     * reply is done and resolve `{text, doneBy, ms}` with its final text — one text, at the end
-     * (streaming re-renders are non-monotonic; Decision 16).
+     * observe op (contract §2/§3): wait for a NEW assistant container — one that was not on the page
+     * when this observe started, or (fallback) one beyond `baselineCount`, the `assistantCount` main
+     * took from insertAndSubmit — then follow it until the reply is done and resolve `{text, doneBy,
+     * ms}` with its final text — one text, at the end (streaming re-renders are non-monotonic;
+     * Decision 16).
      *
+     *   which node    the containers present at observe start are snapshotted by NODE IDENTITY; the
+     *                 reply is the LAST container that is not in that snapshot, and `length > baseline`
+     *                 picks the last container only until one has been followed (main's baseline is
+     *                 sampled before the submit, so the reply — or chatgpt's placeholder turn — may
+     *                 already be mounted when the observe arrives). Once a container has been followed
+     *                 only a node that mounted after this observe started replaces it, so an EARLIER
+     *                 turn's container is never reported as this turn's reply: a stale (under-sampled)
+     *                 baseline would otherwise hand back the PREVIOUS answer, done marker and all,
+     *                 while this turn's reply is between two renders
      *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
      *                 else `reply_not_found` — the deadline applies only until a container has been
      *                 seen ONCE: a container that is unmounted again (chatgpt's placeholder turn,
@@ -2027,7 +2053,8 @@
     function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, signal } = {}) {
       const t0 = clock()
       const given = nonNegativeInt(baselineCount, null)
-      const baseline = given === null ? countAssistant() : given // walked only when main sent no count
+      let known = null // the containers of EARLIER turns, by node identity; filled by the FIRST sample (same tick as this call, so it shares its one shadow-root walk)
+      let baseline = given // null until that first sample counts the page itself (walked only when main sent no count)
       const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
@@ -2038,10 +2065,15 @@
       let lastText = null
       let lastChangeAt = t0
       let seenStop = false
-      let seenContainer = false // a container existed at least once: a later gap is a re-render, not a missing reply
+      let seenContainer = false // a container has been followed at least once: a later gap is a re-render, not a missing reply, and the count rule is retired
       let endSeen = null // 'done_selector' | 'stop_gone' once the site signalled the end
       let endSeenAt = 0
       const partial = () => (isBlank(text) ? undefined : text)
+      /** The LAST container (document order) that was not already on the page when this observe started; null when every one of them was. */
+      const lastFresh = (containers) => {
+        for (let i = containers.length - 1; i >= 0; i -= 1) if (!known.has(containers[i])) return containers[i]
+        return null
+      }
 
       /** The session gate: a banner → site_error carrying ONLY the configured phrase; a wall / challenge → that state; each with the partial. */
       const sessionGate = () => {
@@ -2066,7 +2098,28 @@
           if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
           if (full) sessionGate()
           const containers = assistantContainers()
-          if (containers.length > baseline) {
+          if (known === null) {
+            // The first sample runs in the same tick as observe(): every container on the page now
+            // belongs to an EARLIER turn, and nothing this turn mounts can be in the snapshot.
+            known = new Set(containers)
+            if (baseline === null) baseline = known.size
+          }
+          // NODE IDENTITY first, the count only until a container has been followed once: the last
+          // container that was NOT on the page when this observe started is this turn's reply (the
+          // two-turn / tool-call dance mounts both fresh and the last of them is the answer; the
+          // measured chatgpt remount mounts a placeholder and then a DIFFERENT real node, and neither
+          // is in `known`). The count rule stays as the way IN because main's baseline is sampled
+          // before the submit and the reply — or the placeholder — can already be on the page when the
+          // observe message arrives, in which case it is in `known` and only `length > baseline` can
+          // point at it. It is retired once a container has been followed: from then on only a node
+          // that mounted after this observe started may replace it, so a stale (under-sampled)
+          // baseline can never make an EARLIER turn's container — text, done marker and all — the
+          // answer while this turn's reply is between two renders.
+          const fresh = lastFresh(containers)
+          if (fresh) {
+            container = fresh
+            seenContainer = true
+          } else if (!seenContainer && containers.length > baseline) {
             container = containers[containers.length - 1]
             seenContainer = true
           }

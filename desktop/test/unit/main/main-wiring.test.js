@@ -74,6 +74,9 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(win.options.autoHideMenuBar, true)
   assert.deepEqual(win.loads, ['http://localhost:5184'])
   assert.deepEqual([win.options.width, win.options.height], [1600, 900])
+  // the stored theme's ground is in the constructor options: nothing flashes white while the
+  // renderer URL loads (default theme = dark, and loadWithRetry can retry for seconds)
+  assert.equal(win.options.backgroundColor, '#0d1117', 'a dark launch paints the dark --bg, not Electron’s white')
 
   // three views, one per slot, in SLOTS order, each on its partition with the site preload, unthrottled
   // three panes + the lazily created analyst view (persist:chatgpt) + its replacement after
@@ -330,6 +333,16 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // theme: settings.json (default dark) is applied to nativeTheme at start; panes:setTheme
   // persists + applies + announces; a bad payload or a foreign sender changes nothing
   assert.equal(p.themeAtStart, 'dark', 'the shell default reaches nativeTheme.themeSource at start')
+  // WHEN it happened is the point: the site pages only get the right prefers-color-scheme on their
+  // FIRST paint if themeSource is set before any window or view exists (main.js start(), before
+  // createWindow / createViewManager). The fake records the order, so moving the call fails here.
+  assert.ok(report.themeSourceSets.length >= 1, 'themeSource was assigned')
+  assert.deepEqual(report.themeSourceSets[0], { theme: 'dark', views: 0, windows: 0, surfaces: 0 }, 'the theme is applied before the window and every site view is created')
+  assert.ok(report.themeSourceSets.slice(1).every((set) => set.surfaces > 0), 'later assignments are the runtime setTheme path')
+  // every site view is created on the same ground (a dark site page over a white view flashes too),
+  // and the runtime switch to 'light' repaints the live ones
+  for (const v of report.views.slice(0, 3)) assert.equal(v.backgrounds[0], '#0d1117', `view on ${v.options.webPreferences.partition} created on the dark ground`)
+  assert.equal(report.views[0].background, '#ffffff', 'panes:setTheme repainted the live views')
   assert.equal(p.themeInGetInfo, 'dark', 'getInfo carries the theme the renderer paints from')
   assert.deepEqual(p.setTheme, { ok: true, value: { theme: 'light' } })
   assert.equal(p.themeAfterSet, 'light', 'the SITE views follow through nativeTheme')

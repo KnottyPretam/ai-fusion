@@ -48,7 +48,7 @@ import { attachPolicy, isSiteUrl } from './policy.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
 import { createAdapterClient, REQUEST_CHANNEL } from './adapter-client.js'
-import { buildViewOptions, loadWithRetry, crashedHealth, NAVIGATION_WAIT_MS, RECREATE_DELAY_MS, CRASH_WINDOW_MS, CRASH_LIMIT } from './views.js'
+import { buildViewOptions, loadWithRetry, crashedHealth, paintBackground, BACKGROUND_LIGHT, NAVIGATION_WAIT_MS, RECREATE_DELAY_MS, CRASH_WINDOW_MS, CRASH_LIMIT } from './views.js'
 
 /** The layout key the renderer reports the analyst rect under (contract §2). */
 export const ANALYST_LAYOUT_KEY = 'analyst'
@@ -82,6 +82,7 @@ export function createAnalystViews({
   makeAdapterClient = createAdapterClient,
   childWindowOptions = { autoHideMenuBar: true },
   ssoHosts = SSO_HOSTS,
+  backgroundColor = BACKGROUND_LIGHT,
 } = {}) {
   if (typeof WebContentsView !== 'function') throw new Error('createAnalystViews: WebContentsView is required')
   if (!contentView || typeof contentView.addChildView !== 'function') throw new Error('createAnalystViews: contentView is required')
@@ -100,6 +101,18 @@ export function createAnalystViews({
   const warn = (m) => log && typeof log.warn === 'function' && log.warn(`[analyst] ${m}`)
   const error = (m) => log && typeof log.error === 'function' && log.error(`[analyst] ${m}`)
   const info = (m) => log && typeof log.log === 'function' && log.log(`[analyst] ${m}`)
+
+  /** The current ground (see views.backgroundFor); a function is re-read per created view. */
+  let background = backgroundColor
+  const groundColor = () => {
+    if (typeof background !== 'function') return background
+    try {
+      return background()
+    } catch (e) {
+      warn(`backgroundColor() failed: ${(e && e.message) || e}`)
+      return BACKGROUND_LIGHT
+    }
+  }
 
   const chosen = () => {
     const slot = typeof settings.getAnalyst === 'function' ? settings.getAnalyst() : null
@@ -196,6 +209,8 @@ export function createAnalystViews({
       partitionsDone.add(site.partition)
     }
     const view = new WebContentsView(buildViewOptions(site, { preload, zoomFactor: 1 }))
+    // The ground under the page: revealed on a challenge, it must not flash white in a dark shell.
+    paintBackground(view, groundColor(), { log })
     const wc = view.webContents
     const e = { slot, view, wc, client: null, cancelLoad: null, pending: null, disposed: false }
     entry = e
@@ -518,6 +533,13 @@ export function createAnalystViews({
       if (typeof cb !== 'function') return () => {}
       created.add(cb)
       return () => created.delete(cb)
+    },
+    /** New ground for the live view (a theme change) and for every view created from here on. */
+    setBackgroundColor(color) {
+      if (typeof color !== 'string' || color === '') return false
+      background = color
+      const e = live()
+      return e ? paintBackground(e.view, color, { log }) : false
     },
     destroy() {
       if (entry) dispose(entry)

@@ -13,14 +13,16 @@
 // (`did-navigate`), the load fails, or NAVIGATION_WAIT_MS elapse: `pendingNavigation(slot)` hands
 // that promise to the orchestrator so a bridge request never answers `ready` on the OLD document.
 // `loadUrl` accepts only the site's own pages (policy.isSiteUrl — `loadURL` never fires
-// `will-navigate`). No electron import: `WebContentsView`, the session lookup and the window's
+// `will-navigate`). Every view is also given the resolved theme's ground (`backgroundFor` →
+// `View.setBackgroundColor`) so a dark page mounting over a fresh view never flashes white.
+// No electron import: `WebContentsView`, the session lookup and the window's
 // `contentView` are injected, so node --test drives the manager with fakes.
 
 import { SLOTS, SSO_HOSTS } from './sites.js'
 import { attachPolicy, isSiteUrl } from './policy.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
-import { stepZoom, clampZoom } from './settings.js'
+import { stepZoom, clampZoom, asTheme, DEFAULT_THEME } from './settings.js'
 import { createAdapterClient, isMainFrameOf, REQUEST_CHANNEL } from './adapter-client.js'
 
 export const LOAD_RETRY_MS = 1000
@@ -30,6 +32,41 @@ export const CRASH_WINDOW_MS = 60000
 export const CRASH_LIMIT = 5
 /** A navigation main started stays "pending" (pendingNavigation) at most this long without a commit. */
 export const NAVIGATION_WAIT_MS = 15000
+
+/**
+ * The ground painted before any page has painted: the `--bg` tokens of frontend/src/index.css
+ * (light `#ffffff`, dark `#0d1117`). Electron's own default is white, so a dark-theme launch shows
+ * a full white window (and a white rect per site view) until the first paint lands — and
+ * `loadWithRetry` can keep that up for seconds against a backend that is still starting.
+ */
+export const BACKGROUND_LIGHT = '#ffffff'
+export const BACKGROUND_DARK = '#0d1117'
+
+/**
+ * The ground for a theme choice. Pure on purpose: `'system'` is resolved by the caller
+ * (main passes `nativeTheme.shouldUseDarkColors`) because views.js imports no electron.
+ */
+export function backgroundFor(theme, { prefersDark = false } = {}) {
+  const resolved = asTheme(theme, DEFAULT_THEME)
+  const dark = resolved === 'dark' || (resolved === 'system' && prefersDark === true)
+  return dark ? BACKGROUND_DARK : BACKGROUND_LIGHT
+}
+
+/**
+ * Paint a view's own ground (`View.setBackgroundColor`) so a dark page mounting over a fresh view
+ * does not flash white. Never throws: a fake (or an Electron that drops the method) just skips it.
+ */
+export function paintBackground(view, color, { log = console } = {}) {
+  if (!view || typeof view.setBackgroundColor !== 'function') return false
+  if (typeof color !== 'string' || color === '') return false
+  try {
+    view.setBackgroundColor(color)
+    return true
+  } catch (e) {
+    if (log && typeof log.warn === 'function') log.warn(`[view] setBackgroundColor(${color}) failed: ${(e && e.message) || e}`)
+    return false
+  }
+}
 
 /** webPreferences for one site view (the pure option-builder the views test asserts on). */
 export function buildViewOptions(site, { preload, zoomFactor = 1 } = {}) {
@@ -50,8 +87,11 @@ export function buildViewOptions(site, { preload, zoomFactor = 1 } = {}) {
   }
 }
 
-/** webPreferences for the renderer window (same hardening; preload/renderer.cjs). */
-export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex' } = {}) {
+/**
+ * webPreferences for the renderer window (same hardening; preload/renderer.cjs) plus the ground
+ * Electron paints before the renderer's first paint (`backgroundColor`, default light).
+ */
+export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex', backgroundColor = BACKGROUND_LIGHT } = {}) {
   if (typeof preload !== 'string' || preload === '') throw new Error('buildWindowOptions: preload is required')
   const out = {
     width: bounds.width,
@@ -59,6 +99,7 @@ export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex' } =
     title,
     autoHideMenuBar: true,
     show: true,
+    backgroundColor: typeof backgroundColor === 'string' && backgroundColor !== '' ? backgroundColor : BACKGROUND_LIGHT,
     webPreferences: {
       preload,
       sandbox: true,
@@ -162,6 +203,7 @@ export function loadWithRetry(wc, url, { tag = 'view', log = console, setTimeout
  *   manager.focus / reload / newChat / currentUrl / inspect / zoom(slot, direction) → factor / zoomFactor
  *   manager.setHealth(slot, h) / getHealth(slot)      the health cache the renderer also receives
  *   manager.onCreated(cb) → unsubscribe               cb(slot, webContents) for every (re)created view
+ *   manager.setBackgroundColor(color) → repainted     the ground under the pages (theme change; see backgroundFor)
  *   manager.createAll() / destroyAll()
  *   Stage 2:
  *   manager.loadUrl(slot, url) → Promise             a recorded chat link (rejects `navigation` on a failed load
@@ -191,6 +233,7 @@ export function createViewManager({
   makeAdapterClient = createAdapterClient,
   childWindowOptions = { autoHideMenuBar: true },
   ssoHosts = SSO_HOSTS,
+  backgroundColor = BACKGROUND_LIGHT,
 } = {}) {
   if (typeof WebContentsView !== 'function') throw new Error('createViewManager: WebContentsView is required')
   if (!contentView || typeof contentView.addChildView !== 'function') throw new Error('createViewManager: contentView is required')
@@ -222,6 +265,18 @@ export function createViewManager({
       entry.wc.setZoomFactor(factor)
     } catch (e) {
       warn(`[view ${entry.slot}] setZoomFactor(${factor}) failed: ${(e && e.message) || e}`)
+    }
+  }
+
+  /** The current ground: a function is re-read per view, so a view created after a theme change is right. */
+  let background = backgroundColor
+  const groundColor = () => {
+    if (typeof background !== 'function') return background
+    try {
+      return background()
+    } catch (e) {
+      warn(`[view] backgroundColor() failed: ${(e && e.message) || e}`)
+      return BACKGROUND_LIGHT
     }
   }
 
@@ -281,6 +336,8 @@ export function createViewManager({
     }
     const zoom = settings.getZoom(slot)
     const view = new WebContentsView(buildViewOptions(site, { preload, zoomFactor: zoom }))
+    // The view's own ground, before the site's first paint: a dark page over a white view flashes too.
+    paintBackground(view, groundColor(), { log })
     const wc = view.webContents
     const tag = `view ${slot}`
     const entry = { slot, view, wc, client: null, cancelLoad: null, pending: null, disposed: false, crashes: entries[slot] ? entries[slot].crashes : [] }
@@ -578,6 +635,17 @@ export function createViewManager({
       if (typeof cb !== 'function') return () => {}
       created.add(cb)
       return () => created.delete(cb)
+    },
+    /** New ground for every live view (a theme change) and for every view created from here on. */
+    setBackgroundColor(color) {
+      if (typeof color !== 'string' || color === '') return 0
+      background = color
+      let count = 0
+      for (const slot of SLOTS) {
+        const e = live(slot)
+        if (e && paintBackground(e.view, color, { log })) count += 1
+      }
+      return count
     },
   }
   return manager

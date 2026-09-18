@@ -3,6 +3,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import AnalyzePane from './index.jsx'
 import { applyEvents, renderWithStore } from '../../state/testing.jsx'
 import { analyzeTurn, conversation, degradedTurn, events, sendTurn } from './fixtures.js'
+import { NOT_CAPTURED_MESSAGE_PREFIX } from './slice.js'
+// Imported ONLY to pin the mirror: product code in features/analyze never imports features/desktop
+// (the constant is duplicated with a pointer, like SLOT_VENDORS), so this assertion is the guard
+// that the two copies still say the same thing.
+import { NOT_CAPTURED_MESSAGE_PREFIX as DESKTOP_NOT_CAPTURED_MESSAGE_PREFIX } from '../desktop/slice.js'
 
 const SLOT_NAMES = /claude|chatgpt|grok|anthropic|openai|x-ai/i
 
@@ -195,8 +200,7 @@ describe('AnalyzePane: button gating', () => {
     expect(screen.getByTestId('analyze-run')).toBeDisabled()
     // The slot FAILED (errors.chatgpt), so "waiting for all three responses" would send the user
     // back to the models; the hint names the slot, the reason, and the only way out (a new Send).
-    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('no reply was captured for chatgpt')
-    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('boom')
+    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('no reply came back from chatgpt: boom')
     expect(screen.getByTestId('analyze-hint')).toHaveTextContent('Send again')
   })
 
@@ -221,6 +225,83 @@ describe('AnalyzePane: button gating', () => {
   test('re-enabled once the stream ends', () => {
     renderPane(stateWith([{ type: 'sse/start', feature: 'send' }, { type: 'sse/end', feature: 'send', ok: true }]))
     expect(screen.getByTestId('analyze-run')).toBeEnabled()
+  })
+})
+
+// --- the incomplete-turn hint ----------------------------------------------------------------
+// The hint is the pane's whole explanation of a disabled Analyze button, and it is rendered in both
+// shells (the web page and the desktop drawer). Three rules it has to keep:
+//   * a LIVE Send wins over any verdict about the persisted (previous) turn — `send` is the
+//     persisted turn and the refetch only lands after the stream ends;
+//   * every failed slot gets its OWN reason, never the first slot's reason for all of them;
+//   * only the capture-off branch (a desktop-only message) may speak of "capture".
+const CAPTURE_OFF = (slot) => `capture is off for ${slot}; the reply is in the site pane` // backend/llm/bridge.py
+
+function hintFor(errors, { responses = { claude: null, chatgpt: null, grok: null }, evs = [] } = {}) {
+  const conv = conversation([sendTurn({ id: 's2', responses, errors })])
+  renderPane(stateWith(evs, { conv }))
+  return screen.getByTestId('analyze-hint')
+}
+
+describe('AnalyzePane: the incomplete-turn hint', () => {
+  test('web: one failed slot names the slot and its reason, and never says "captured"', () => {
+    const hint = hintFor({ chatgpt: 'transport_error: connection reset' }, { responses: { claude: 'a', chatgpt: null, grok: 'c' } })
+    expect(hint).toHaveTextContent('no reply came back from chatgpt: transport_error: connection reset')
+    expect(hint).toHaveTextContent('This turn cannot be analyzed — Send again.')
+    // "capture" is desktop vocabulary for an act the web product never performs.
+    expect(hint.textContent.toLowerCase()).not.toContain('captur')
+  })
+
+  test('several failed slots each get their own reason (not the first slot\'s for all of them)', () => {
+    const hint = hintFor({ claude: 'cost_cap_exceeded: session cap reached', grok: 'timeout: no reply in 300s' })
+    expect(hint).toHaveTextContent('claude: cost_cap_exceeded: session cap reached')
+    expect(hint).toHaveTextContent('grok: timeout: no reply in 300s')
+    // one tail, not one per slot
+    expect(hint.textContent.match(/Send again/g)).toHaveLength(1)
+  })
+
+  test('a blank reason degrades to "no reason given" rather than an empty clause', () => {
+    expect(hintFor({ grok: '   ' })).toHaveTextContent('no reply came back from grok: no reason given')
+  })
+
+  test('desktop, capture off for one slot: the wording is singular and points at that pane header', () => {
+    const hint = hintFor({ grok: CAPTURE_OFF('grok') }, { responses: { claude: 'a', chatgpt: 'b', grok: null } })
+    expect(hint).toHaveTextContent('grok replied on screen but capture was off, so Triplex never read it')
+    expect(hint).toHaveTextContent('Turn Capture on in that pane header and Send again: capture applies to the next Send, not this one.')
+    expect(hint.textContent).not.toContain('no reply came back')
+  })
+
+  test('desktop, capture off for all three: the wording is plural', () => {
+    const hint = hintFor({ claude: CAPTURE_OFF('claude'), chatgpt: CAPTURE_OFF('chatgpt'), grok: CAPTURE_OFF('grok') })
+    expect(hint).toHaveTextContent('claude, chatgpt, grok replied on screen but capture were off, so Triplex never read them')
+    expect(hint).toHaveTextContent('those pane headers')
+  })
+
+  test('mixed: one slot capture-off and one slot errored -> the error branch with the capture clause', () => {
+    const hint = hintFor(
+      { chatgpt: CAPTURE_OFF('chatgpt'), grok: 'site_error: reply_not_found' },
+      { responses: { claude: 'a', chatgpt: null, grok: null } },
+    )
+    expect(hint).toHaveTextContent('no reply came back from grok: site_error: reply_not_found (and capture was off for chatgpt). This turn cannot be analyzed — Send again.')
+    // the capture-off slot is not reported as a failure
+    expect(hint.textContent).not.toContain('chatgpt: capture is off')
+  })
+
+  test.each(['send', 'analyze', 'fusion'])('a live %s stream wins over a verdict about the previous turn', (feature) => {
+    // The persisted turn failed, but a stream is in flight: the refetch has not landed yet, so
+    // "Send again" would describe a turn that is no longer on screen while the user is sending.
+    const hint = hintFor({ claude: 'boom', grok: CAPTURE_OFF('grok') }, { evs: [{ type: 'sse/start', feature }] })
+    expect(hint).toHaveTextContent('a stream is running')
+    expect(hint.textContent).not.toContain('Send again')
+  })
+
+  test('an incomplete turn with no errors at all still waits for the models', () => {
+    expect(hintFor({}, { responses: { claude: 'a', chatgpt: null, grok: 'c' } })).toHaveTextContent('waiting for all three responses')
+  })
+
+  test('the not_captured prefix is the same string the desktop slice exports (mirrored constant)', () => {
+    expect(NOT_CAPTURED_MESSAGE_PREFIX).toBe(DESKTOP_NOT_CAPTURED_MESSAGE_PREFIX)
+    expect(CAPTURE_OFF('grok').startsWith(NOT_CAPTURED_MESSAGE_PREFIX)).toBe(true)
   })
 })
 

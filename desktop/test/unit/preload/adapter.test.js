@@ -418,6 +418,53 @@ test('submit: no button → one Enter (keydown/keypress/keyup, composed) on the 
   assert.equal(composer.focused, 1)
 })
 
+test('submit: the assistantCount handed to main is the sample taken BEFORE the first attempt — a container that appears while a confirmation is being awaited never RAISES the observe baseline', async () => {
+  const composer = fakeComposer({ text: 'ready' })
+  const assistant = []
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, "[data-message-author-role='assistant']": assistant } })
+  // The click lands but nothing the CONFIRMATION watches sees it within submitVerifyMs: no stop button,
+  // the composer keeps its text, and `countMessages()` — which reads `[data-message-author-role]` under
+  // this v1-shaped config (`assistant: []`, no v2 cascade) — never grows. What DOES appear is chatgpt's
+  // short placeholder assistant turn (measured ~1 s after a submit, 2026-09-17), which only
+  // `countAssistant()` reads here. It must not move the observe baseline: the placeholder is unmounted
+  // again and the real reply remounts at the SAME count, so a baseline of 1 makes the capture answer
+  // reply_not_found with the answer on screen.
+  doc.match["button[data-testid='send-button']"] = {
+    click() {
+      setTimeout(() => assistant.push({}), 20)
+    },
+  }
+  composer.dispatchEvent = (ev) => {
+    composer.events.push(ev && ev.type)
+    if (ev && ev.type === 'keydown') composer._text = '' // the Enter fallback is what finally confirms
+    return true
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt', { submitVerifyMs: 150, assistant: [] }) })
+  const r = await a.submit()
+  assert.equal(a.countAssistant(), 1) // the placeholder really is on the page by the time the Enter branch ran
+  assert.deepEqual(r, { method: 'enter', sendSelector: "button[data-testid='send-button']", confirmedBy: 'composer_cleared', assistantCount: 0 })
+})
+
+test('submit: a container that went AWAY while the click was being confirmed lowers the baseline (the sample is the minimum, never the later, higher one)', async () => {
+  const composer = fakeComposer({ text: 'ready' })
+  const assistant = [{}, {}]
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, "[data-message-author-role='assistant']": assistant } })
+  doc.match["button[data-testid='send-button']"] = {
+    click() {
+      setTimeout(() => assistant.pop(), 20) // the site unmounts a turn mid-flight (the measured lifecycle)
+    },
+  }
+  composer.dispatchEvent = (ev) => {
+    composer.events.push(ev && ev.type)
+    if (ev && ev.type === 'keydown') composer._text = ''
+    return true
+  }
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: fastSelectors('chatgpt', { submitVerifyMs: 150, assistant: [] }) })
+  const r = await a.submit()
+  assert.equal(a.countAssistant(), 1)
+  assert.equal(r.assistantCount, 1) // not the 2 sampled before the click: observe must not wait for a third container
+})
+
 test('submit: nothing confirms → send_not_found without a button, not_submitted after a click; the composer keeps its text', async () => {
   const composer = fakeComposer({ text: 'still here' })
   const doc = fakeDocument({ match: { '#prompt-textarea': composer } })

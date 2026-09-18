@@ -4,7 +4,7 @@
 // Bluetooth chooser cancelled per view, child windows policed, ssoHosts passed through.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildViewOptions, buildWindowOptions, crashedHealth, loadWithRetry, createViewManager, RECREATE_DELAY_MS, CRASH_LIMIT } from '../../../main/views.js'
+import { buildViewOptions, buildWindowOptions, crashedHealth, loadWithRetry, createViewManager, backgroundFor, paintBackground, BACKGROUND_LIGHT, BACKGROUND_DARK, RECREATE_DELAY_MS, CRASH_LIMIT } from '../../../main/views.js'
 import { SITES, SLOTS } from '../../../main/sites.js'
 import { normalizeLayout } from '../../../main/layout.js'
 import { isPoliced } from '../../../main/policy.js'
@@ -40,6 +40,36 @@ test('buildWindowOptions: the renderer window is sandboxed and isolated too, wit
   assert.deepEqual([o.width, o.height, 'x' in o, 'y' in o], [1000, 700, false, false])
   const p = buildWindowOptions({ preload: '/p', bounds: { x: 5, y: 6, width: 800, height: 600 } })
   assert.deepEqual([p.x, p.y], [5, 6])
+})
+
+test('buildWindowOptions paints a ground before the first paint: the resolved theme colour, light by default', () => {
+  // Electron's default is #FFF, so a dark-theme launch flashes white for the whole renderer load.
+  assert.equal(buildWindowOptions({ preload: '/p' }).backgroundColor, BACKGROUND_LIGHT)
+  assert.equal(buildWindowOptions({ preload: '/p', backgroundColor: BACKGROUND_DARK }).backgroundColor, BACKGROUND_DARK)
+  assert.equal(buildWindowOptions({ preload: '/p', backgroundColor: '' }).backgroundColor, BACKGROUND_LIGHT, 'a junk colour never reaches Electron')
+  assert.equal(buildWindowOptions({ preload: '/p', backgroundColor: 7 }).backgroundColor, BACKGROUND_LIGHT)
+})
+
+test("backgroundFor resolves the theme to a --bg token ('system' decided by the caller's prefersDark)", () => {
+  assert.equal(backgroundFor('light'), BACKGROUND_LIGHT)
+  assert.equal(backgroundFor('dark'), BACKGROUND_DARK)
+  assert.equal(backgroundFor('system'), BACKGROUND_LIGHT, 'no prefersDark → light')
+  assert.equal(backgroundFor('system', { prefersDark: true }), BACKGROUND_DARK)
+  assert.equal(backgroundFor('light', { prefersDark: true }), BACKGROUND_LIGHT, 'an explicit choice wins over the OS')
+  assert.equal(backgroundFor(undefined), BACKGROUND_DARK, 'an unknown value falls back to DEFAULT_THEME (dark)')
+  assert.equal(backgroundFor('chartreuse'), BACKGROUND_DARK)
+})
+
+test('paintBackground never throws: a view without the method, a junk colour or a throwing setter', () => {
+  const view = { background: null, setBackgroundColor(c) { this.background = c } }
+  assert.equal(paintBackground(view, BACKGROUND_DARK), true)
+  assert.equal(view.background, BACKGROUND_DARK)
+  assert.equal(paintBackground(null, BACKGROUND_DARK), false)
+  assert.equal(paintBackground({}, BACKGROUND_DARK), false, 'no setBackgroundColor → skipped, not thrown')
+  assert.equal(paintBackground(view, ''), false)
+  const log = fakeLog()
+  assert.equal(paintBackground({ setBackgroundColor() { throw new Error('nope') } }, BACKGROUND_DARK, { log }), false)
+  assert.ok(log.lines.some(([l, m]) => l === 'warn' && m.includes('setBackgroundColor')))
 })
 
 test('crashedHealth is a §1 Health with session unknown and matched.error view_crashed', () => {
@@ -90,7 +120,7 @@ test('loadWithRetry: retries main-frame failures every retryMs up to maxRetries,
   assert.equal(ok.listenerCount('did-fail-load'), 0)
 })
 
-function setupManager({ zoom, ssoHosts } = {}) {
+function setupManager({ zoom, ssoHosts, background } = {}) {
   const instances = []
   const WebContentsView = makeFakeWebContentsViewClass(instances)
   const sessions = {}
@@ -123,6 +153,7 @@ function setupManager({ zoom, ssoHosts } = {}) {
     clearTimeout: timers.clearTimeout,
     now: timers.now,
     ...(ssoHosts ? { ssoHosts } : {}),
+    ...(background ? { backgroundColor: background } : {}),
   })
   return { manager, instances, sessions, children, timers, ipcMain, settings, healthEvents, opened, log }
 }
@@ -311,6 +342,31 @@ test('destroyAll disposes every view and client', () => {
   assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 0)
   for (const v of instances) assert.equal(v.webContents.isDestroyed(), true)
   assert.equal(manager.get('claude'), null)
+})
+
+test('every site view is created on the theme ground; setBackgroundColor repaints the live views and the next recreate', async () => {
+  let ground = BACKGROUND_LIGHT
+  const { manager, instances, timers } = setupManager({ background: () => ground })
+  manager.createAll()
+  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'no white rect under a light page')
+
+  // the theme button: main hands the new ground to the manager, which repaints every live view
+  assert.equal(manager.setBackgroundColor(BACKGROUND_DARK), 3)
+  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_DARK, BACKGROUND_DARK, BACKGROUND_DARK])
+  assert.equal(manager.setBackgroundColor(''), 0, 'a junk colour is ignored')
+
+  // a view created later (crash recreate) starts on the current ground, not the launch one
+  instances[1].webContents.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 5 })
+  timers.advance(RECREATE_DELAY_MS)
+  await Promise.resolve()
+  assert.equal(instances.length, 4)
+  assert.equal(instances[3].background, BACKGROUND_DARK)
+
+  // a function that throws leaves the view unpainted and logs, it never breaks creation
+  const bad = setupManager({ background: () => { throw new Error('boom') } })
+  bad.manager.createAll()
+  assert.deepEqual(bad.instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'falls back to the light ground')
+  assert.ok(bad.log.lines.some(([l, m]) => l === 'warn' && m.includes('backgroundColor()')))
 })
 
 test('createViewManager validates its seams', () => {

@@ -123,6 +123,7 @@ export function fakeView() {
   return {
     bounds: null,
     visible: true,
+    background: null,
     setBounds(b) {
       this.bounds = { ...b }
     },
@@ -134,6 +135,9 @@ export function fakeView() {
     },
     getVisible() {
       return this.visible
+    },
+    setBackgroundColor(color) {
+      this.background = color
     },
   }
 }

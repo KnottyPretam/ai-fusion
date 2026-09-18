@@ -444,6 +444,11 @@ export function registerIpc({
   })
 
   // --- theme ------------------------------------------------------------------------------------
+  // Order matters, and it is what the renderer's optimistic paint relies on: every rejection
+  // (foreign sender, a value outside THEMES, no settings module) happens BEFORE settings.setTheme,
+  // so a rejected call changed nothing here and the renderer keeps what it has; once the call gets
+  // past these checks main has accepted the theme, persisted it and announced it — there is no
+  // state in which a resolved-then-failed call should be reverted in the renderer.
   handle('panes:setTheme', async (event, theme) => {
     requireRenderer(event)
     requireTheme(theme)
