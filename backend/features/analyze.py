@@ -23,6 +23,19 @@ the terminal `error{message}` event and nothing is persisted. The task releases 
 `finally` after the persistence write (nested so the final event and the queue sentinel are
 enqueued even if the release itself raised) and runs to completion even when the client
 disconnects; the generator only drains the task's queue.
+
+Web no-retry rule (desktop-catalog-and-ollama S3; docs/desktop-contract.md section 6 and the S6
+review's deferred finding "Analyze's correction retry against a site after a site error"): when the
+analyst model's `client.transport_kind` is "web" and the first attempt produced NO output -- `raw`
+empty with an error, i.e. a transport/site error delta (`site_error`, `challenge`, `bridge_no_ack`,
+...) -- the second attempt is skipped and the turn degrades immediately with that error
+(`raw_attempts == [""]`, no `analyze_retry` event): re-sending the identical request would type the
+whole prompt into a fresh hidden chat on a site that just failed. A parse/validation failure WITH
+output keeps the correction attempt exactly as before (the correction message continues in the
+same analyst chat, `fresh:false`). Reading where the contract is silent: a captured reply with no
+text at all (`parse_error: empty response`, `raw == ""` -- the bridge maps whitespace-only text to
+no text delta) is "no output" too and is not retried on a web session. Mock and OpenRouter
+analysts are untouched (goldens byte-identical).
 """
 
 from __future__ import annotations
@@ -130,6 +143,13 @@ def retry_follow_up(raw: str, error: str | None) -> list[dict[str, str]]:
     return follow_up
 
 
+def web_retry_suppressed(model: str, raw: str, error: str | None) -> bool:
+    """The web no-retry rule (module docstring): True when the analyst is a web session and the
+    attempt produced no output at all (`raw == ""` with an error), so the second attempt must not
+    run. Any output keeps the correction attempt; non-web transports always retry as before."""
+    return client.transport_kind(model) == "web" and not raw and error is not None
+
+
 async def _produce(
     conv: Conversation,
     send_turn: SendTurn,
@@ -151,7 +171,7 @@ async def _produce(
         usage.merge(attempt_usage)
         raw_attempts.append(raw)
         for _ in range(ATTEMPTS - 1):
-            if extraction is not None:
+            if extraction is not None or web_retry_suppressed(model, raw, error):
                 break
             queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
             messages = [*messages, *retry_follow_up(raw, error)]
@@ -236,4 +256,5 @@ __all__ = [
     "responses_by_label",
     "retry_follow_up",
     "run_analyze",
+    "web_retry_suppressed",
 ]
