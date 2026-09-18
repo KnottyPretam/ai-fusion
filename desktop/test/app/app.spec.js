@@ -134,7 +134,10 @@ function sendKey(app, target, key) {
 function fakeState(app, slot) {
   return app.evaluate(async (_electron, s) => {
     const wc = globalThis.__triplexTest.views.webContents(s)
-    if (!wc || wc.isDestroyed() || wc.isLoading()) return null
+    if (!wc || wc.isDestroyed() || wc.isLoading()) {
+      console.log(`[fakeState ${s}] unavailable: ${!wc ? 'no webContents' : wc.isDestroyed() ? 'destroyed' : `loading ${wc.getURL()}`}`)
+      return null
+    }
     try {
       return await wc.executeJavaScript(
         '(() => ({ url: location.href, site: window.__fake ? window.__fake.site : null, submitted: window.__fake ? window.__fake.submitted.slice() : null }))()',
@@ -698,9 +701,10 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     await expect.poll(() => analystState().then((s) => s.visible), { timeout: 10_000 }).toBe(true)
     await expect.poll(() => readSettings(userData).analystVisible, { timeout: 10_000 }).toBe(true)
 
+    // `deck-tab-analyst` is a TOGGLE (renderer-drawer: a click hides the pane). The auto-reveal
+    // already showed it, so the tab is only asserted, never clicked — clicking would hide it.
     const tab = page.getByTestId('deck-tab-analyst')
     await expect(tab).toBeVisible({ timeout: 20_000 })
-    await tab.click()
     // shown as a real view: the renderer reports an `analyst` rect and main gives it those bounds
     await expect
       .poll(async () => {

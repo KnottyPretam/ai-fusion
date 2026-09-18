@@ -1,5 +1,5 @@
 """`stream_completion` dispatch (bridge-backend S2): `web:*` reaches the hub before the mock
-branch, `TRIPLEX_DESKTOP=1` refuses everything else with `transport_disabled`, the OpenRouter
+branch, `TRIPLEX_DESKTOP=1` refuses everything but web:/ollama: with `transport_disabled`, the OpenRouter
 branch (cost cap, key check, `_live_stream` defaults) is unchanged."""
 
 from __future__ import annotations
@@ -189,7 +189,7 @@ def test_validation_summary_is_loc_and_type_only():
 
 
 # --------------------------------------------------------------------------- desktop guard
-@pytest.mark.parametrize("model", ["openai/gpt-5", "anthropic/claude-opus-5", "ollama:hermes3"])
+@pytest.mark.parametrize("model", ["openai/gpt-5", "anthropic/claude-opus-5"])
 async def test_desktop_mode_refuses_non_web_models(monkeypatch, model):
     monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
     deltas = await collect(_call(model=model))
