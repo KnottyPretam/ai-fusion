@@ -3,8 +3,8 @@
 //   Triplex  Quit
 //   Panes    the shortcut table of shortcuts.js (Pane 1/2/3, Toggle, Focus prompt, New chat
 //            everywhere, Zoom, Reload pane, Inspect pane (dev))
-//   Site     Reload selectors · Save DOM snapshot of the active pane · Sign out of ChatGPT /
-//            Claude / Grok
+//   Site     Reload selectors · Save DOM snapshot of the active pane · Show analyst page (reveals
+//            the hidden analyst view as the fourth tab) · Sign out of ChatGPT / Claude / Grok
 //   Edit     the standard roles
 //
 // `autoHideMenuBar` keeps it hidden (Alt reveals it); the accelerators are the fallback for keys
@@ -21,6 +21,7 @@ export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude',
  *   getActive() → slot           the pane the snapshot item targets
  *   actions.reloadSelectors()    re-read the override now
  *   actions.saveSnapshot(slot)   → Promise<{path}>
+ *   actions.showAnalyst()        reveal the hidden analyst view (Stage 3; omitted → no item)
  *   actions.signOut(slot)        → Promise
  */
 export function buildMenuTemplate({ shortcuts, dev = false, getActive, actions = {}, log = console } = {}) {
@@ -49,6 +50,7 @@ export function buildMenuTemplate({ shortcuts, dev = false, getActive, actions =
     submenu: [
       { label: 'Reload selectors', click: () => run('reload selectors', actions.reloadSelectors) },
       { label: 'Save DOM snapshot of the active pane', click: () => run('save DOM snapshot', actions.saveSnapshot, active()) },
+      ...(typeof actions.showAnalyst === 'function' ? [{ label: 'Show analyst page', click: () => run('show analyst page', actions.showAnalyst) }] : []),
       { type: 'separator' },
       ...SLOTS.map((slot) => ({ label: `Sign out of ${SITE_LABELS[slot]}`, click: () => run(`sign out of ${SITE_LABELS[slot]}`, actions.signOut, slot) })),
     ],

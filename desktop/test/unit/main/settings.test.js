@@ -53,6 +53,10 @@ test('round-trip: setZoom / setCapture / setAnalyst write atomically and load ba
   assert.equal(again.getZoom('claude'), 1.3)
   assert.deepEqual(again.getCapture(), { claude: false, chatgpt: false, grok: true })
   assert.equal(again.getAnalyst(), null)
+  assert.equal(again.getAnalystVisible(), true, 'the analyst view’s fourth-tab flag survives a restart')
+  assert.equal(s.setAnalystVisible(0), false, 'the setter coerces (ipc.js is what rejects a non-boolean payload)')
+  assert.equal(s.getAnalystVisible(), false)
+  assert.equal(readJson(s.file).analystVisible, false)
 })
 
 test('corrupt or foreign JSON falls back to defaults / well-typed keys only, with a warning', () => {

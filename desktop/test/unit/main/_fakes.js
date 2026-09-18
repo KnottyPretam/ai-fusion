@@ -169,11 +169,13 @@ export function fakeSession(partition) {
   }
 }
 
-/** A minimal settings-like object for the view manager (zoom per slot). */
-export function fakeSettings(zoom = { claude: 1, chatgpt: 1, grok: 1 }) {
+/** A minimal settings-like object for the view managers (zoom per slot + the Stage 3 analyst keys). */
+export function fakeSettings(zoom = { claude: 1, chatgpt: 1, grok: 1 }, { analyst = 'chatgpt', analystVisible = false } = {}) {
   return {
     zoom: { ...zoom },
     saves: 0,
+    analyst,
+    analystVisible,
     getZoom(slot) {
       return this.zoom[slot]
     },
@@ -181,6 +183,22 @@ export function fakeSettings(zoom = { claude: 1, chatgpt: 1, grok: 1 }) {
       this.zoom[slot] = f
       this.saves += 1
       return f
+    },
+    getAnalyst() {
+      return this.analyst
+    },
+    setAnalyst(slot) {
+      this.analyst = slot
+      this.saves += 1
+      return this.analyst
+    },
+    getAnalystVisible() {
+      return this.analystVisible === true
+    },
+    setAnalystVisible(v) {
+      this.analystVisible = v === true
+      this.saves += 1
+      return this.analystVisible
     },
   }
 }
