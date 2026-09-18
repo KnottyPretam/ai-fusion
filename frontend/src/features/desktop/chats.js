@@ -15,7 +15,9 @@
 //     (`adapter_gone`, or a reply observed on the wrong page). Decision 12 has the send adopt
 //     whatever chat each pane currently shows; main records the link from that turn.
 //   * "New chat everywhere" (the prompt-bar button and the Ctrl+Shift+N `new-chat-all` shortcut)
-//     = `createConversation` + `openChats(newId)` (plan row). The id last handed to main is
+//     = `createConversation` + `openChats(newId)` (plan row); from Stage 3 the conversation is
+//     created with `desktopSlotConfig()` (./analyst.js: web:* panes + the chosen analyst), like
+//     PromptBar's first-Send create. The id last handed to main is
 //     remembered so the `conversation/loaded` the create dispatches does not open the same chats a
 //     second time (a double `loadURL` would reload the panes mid-navigation).
 // It is refused while any feature stream runs (the sidebar disables New the same way: a switch
@@ -29,6 +31,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
+import { desktopSlotConfig } from './analyst.js'
 
 export const STREAM_KEYS = ['send', 'analyze', 'fusion']
 
@@ -96,7 +99,7 @@ export function useOpenChats(api, { enabled = true } = {}) {
     setBusy(true)
     setError(null)
     try {
-      const conv = await createConversation(dispatch, {})
+      const conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
       lastOpened.current = conv.id
       settle(api?.openChats?.(conv.id))
       return conv

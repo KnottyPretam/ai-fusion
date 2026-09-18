@@ -21,7 +21,8 @@
 //                                                 objects in the lastSend shape; `{}` just ends the send)
 //   panes/zoom       {slot, factor}               from triplex.onZoom / the zoom() reply
 //   panes/capture    {capture} | {slot, on}       whole map (getCapture) or one switch (setCapture)
-//   panes/bridge     {connected, since?}
+//   panes/bridge     {connected, since?, error?}   `error` (S3) is kept only while disconnected: main
+//                                                 names why a backend could not be spawned (port_in_use)
 //   panes/turn       {slot, phase}                phase string from triplex.onTurn
 //   panes/drawer     {open?}                      boolean sets, omitted toggles
 //   panes/analyst    {slot?, visible?, health?}   merges the keys present
@@ -49,9 +50,10 @@
 // malformed payloads are ignored, never thrown.
 //
 // Persistence (contract §5, "one owner per persisted key"): the renderer owns
-// `triplex.panes.mode|active|targets` in localStorage. `loadPersistedPanes(storage)` reads them
-// (used by the slice's initial-state factory in index.jsx, so the first render already has the
-// restored layout) and `persistPanes(storage, panes)` writes them; both swallow storage errors
+// `triplex.panes.mode|active|targets` (+ `triplex.panes.drawerOpen` from Stage 3) in localStorage.
+// `loadPersistedPanes(storage)` reads them (used by the slice's initial-state factory in index.jsx,
+// so the first render already has the restored layout) and `persistPanes(storage, panes)` writes
+// them; both swallow storage errors
 // (private mode, quota, a missing `localStorage` in the thumbnail/test sandbox). Stage 2 adds
 // `triplex.panes.captureNoticeSeen` = JSON `{slot: bool}` of the capture switches touched once
 // (the first-run ToS notice hides when all three are true); the switch VALUES themselves are
@@ -76,7 +78,15 @@ export const CAPTURE_NOTICE_TEXT =
   'Capture is off by default for every site. Switching it on for a pane makes Triplex read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, and xAI’s forbid automated access beyond a conventional browser. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the three switches has been set once.'
 export const CAPTURE_TITLE = 'Reads the reply out of this page, the act the site’s terms of service name. Off by default; your decision per site.'
 
-export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets' }
+export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets', drawerOpen: 'triplex.panes.drawerOpen' }
+
+/**
+ * Message prefix of the `not_captured` slot error minted by backend/llm/bridge.py
+ * ("capture is off for <slot>; the reply is in the site pane"). The persisted SendTurn keeps only
+ * the error MESSAGE (`errors[slot]`), never the code, so this prefix is the persisted signal
+ * that a slot's reply stayed in its pane (the drawer's capture hint).
+ */
+export const NOT_CAPTURED_MESSAGE_PREFIX = 'capture is off for '
 export const CAPTURE_NOTICE_KEY = 'triplex.panes.captureNoticeSeen'
 
 /** Phase words for pane-<slot>-phase (contract §2 onTurn: idle|typing|submitted|replying|done|error). */
@@ -97,7 +107,7 @@ function perSlot(value) {
 }
 
 /**
- * Initial state. `persisted` (optional) = `{mode?, active?, targets?}` as returned by
+ * Initial state. `persisted` (optional) = `{mode?, active?, targets?, drawerOpen?}` as returned by
  * loadPersistedPanes; anything invalid falls back to the defaults, key by key.
  */
 export function initialPanes(persisted) {
@@ -117,7 +127,7 @@ export function initialPanes(persisted) {
     capture: perSlot(false),
     bridge: { connected: false },
     turn: {},
-    drawerOpen: false,
+    drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : false,
     analyst: { slot: null, visible: false, health: null },
   }
 }
@@ -222,8 +232,12 @@ export function panesReducer(s = initialPanes(), a) {
     case 'panes/bridge': {
       const connected = !!a.connected
       const since = connected && a.since != null ? a.since : undefined
-      if (s.bridge.connected === connected && s.bridge.since === since) return s
-      return { ...s, bridge: since === undefined ? { connected } : { connected, since } }
+      const error = !connected && typeof a.error === 'string' && a.error ? a.error : undefined
+      if (s.bridge.connected === connected && s.bridge.since === since && s.bridge.error === error) return s
+      const bridge = { connected }
+      if (since !== undefined) bridge.since = since
+      if (error !== undefined) bridge.error = error
+      return { ...s, bridge }
     }
     case 'panes/turn':
       return isSlotId(a.slot) && typeof a.phase === 'string' ? setIn(s, 'turn', a.slot, a.phase) : s
@@ -319,6 +333,17 @@ export function allCaptureTouched(touched) {
   return SLOT_IDS.every((k) => !!(touched && touched[k]))
 }
 
+/**
+ * The slots of a persisted send turn whose reply stayed in the pane because capture was off
+ * (`errors[slot]` carries the bridge's not_captured message), in SLOT_IDS order; [] for anything
+ * that is not a send turn.
+ */
+export function notCapturedSlots(turn) {
+  if (!turn || typeof turn !== 'object' || turn.type !== 'send') return []
+  const errors = turn.errors && typeof turn.errors === 'object' ? turn.errors : {}
+  return SLOT_IDS.filter((k) => typeof errors[k] === 'string' && errors[k].startsWith(NOT_CAPTURED_MESSAGE_PREFIX))
+}
+
 // ---------------------------------------------------------------------------------------------
 // localStorage persistence (renderer-owned keys, contract §5)
 // ---------------------------------------------------------------------------------------------
@@ -333,7 +358,7 @@ function defaultStorage() {
   }
 }
 
-/** Read `{mode?, active?, targets?}` from storage; invalid or missing values are omitted. */
+/** Read `{mode?, active?, targets?, drawerOpen?}` from storage; invalid or missing values are omitted. */
 export function loadPersistedPanes(storage = defaultStorage()) {
   const out = {}
   if (!storage) return out
@@ -351,13 +376,15 @@ export function loadPersistedPanes(storage = defaultStorage()) {
         out.targets = targets
       }
     }
+    const drawer = storage.getItem(PERSIST_KEYS.drawerOpen)
+    if (drawer === 'true' || drawer === 'false') out.drawerOpen = drawer === 'true'
   } catch {
     /* a bad value or an unavailable storage means "nothing persisted" */
   }
   return out
 }
 
-/** Write mode / active / targets; never throws. */
+/** Write mode / active / targets / drawerOpen; never throws. */
 export function persistPanes(storage = defaultStorage(), panes) {
   if (!storage || !panes) return
   try {
@@ -366,6 +393,7 @@ export function persistPanes(storage = defaultStorage(), panes) {
     const targets = {}
     for (const k of SLOT_IDS) targets[k] = !!(panes.targets && panes.targets[k])
     storage.setItem(PERSIST_KEYS.targets, JSON.stringify(targets))
+    storage.setItem(PERSIST_KEYS.drawerOpen, panes.drawerOpen ? 'true' : 'false')
   } catch {
     /* quota / private mode: the in-memory state is still right */
   }

@@ -1,8 +1,11 @@
-// DesktopShell (renderer-desktop Stage 1, renderer-desktop-2 Stage 2). Registers the `panes` slice
-// at module scope and exports the shell that DesktopApp.jsx imports by convention: PaneDeck (deck
-// bar + first-run capture notice + three panes, the layout reporter) above PromptBar (the unified
-// prompt, a Triplex Send from Stage 2). Test ids desktop-shell / pane-deck / prompt-bar are the
-// Stage 0 ones (contract §7; desktop-smoke.test.jsx mounts this with a stub).
+// DesktopShell (renderer-desktop Stage 1, renderer-desktop-2 Stage 2, renderer-drawer Stage 3).
+// Registers the `panes` slice at module scope and exports the shell that DesktopApp.jsx imports by
+// convention: PaneDeck (deck bar + first-run capture notice + three panes + the analyst pane, the
+// layout reporter) above PromptBar (the unified prompt, a Triplex Send from Stage 2) above Drawer
+// (Stage 3: Analyze / Fusion / Captured / Settings, collapsible; when open the deck shrinks and the
+// viewports re-report, so the drawer never overlaps a view rect). Test ids desktop-shell /
+// pane-deck / prompt-bar are the Stage 0 ones (contract §7; desktop-smoke.test.jsx mounts this
+// with a stub); `drawerOpen` is persisted with the other renderer-owned keys.
 //
 // `window.triplex` is the contextBridge surface of desktop/preload/renderer.cjs. Every call is
 // optional-chained: the shell must render under a partial stub (tests) and under the web app,
@@ -17,6 +20,7 @@ import { useEffect, useRef, useState } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
 import { useOpenChats } from './chats.js'
+import Drawer from './Drawer.jsx'
 import PaneDeck, { desktopApi } from './PaneDeck.jsx'
 import PromptBar from './PromptBar.jsx'
 import { initialPanes, loadPersistedPanes, panesReducer, persistPanes } from './slice.js'
@@ -53,10 +57,11 @@ export default function DesktopShell() {
   const mode = panes ? panes.mode : undefined
   const active = panes ? panes.active : undefined
   const targets = panes ? panes.targets : undefined
+  const drawerOpen = panes ? panes.drawerOpen : undefined
   useEffect(() => {
     if (panes) persistPanes(undefined, panes)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the persisted keys matter
-  }, [mode, active, targets])
+  }, [mode, active, targets, drawerOpen])
 
   const version = (info && info.version) || (api && api.version) || null
 
@@ -64,6 +69,7 @@ export default function DesktopShell() {
     <div className={css.shell} data-testid="desktop-shell">
       <PaneDeck api={api} info={info} version={version} promptRef={promptRef} onNewChatAll={chats.newChatEverywhere} />
       <PromptBar api={api} composerRef={promptRef} chats={chats} />
+      <Drawer api={api} />
     </div>
   )
 }

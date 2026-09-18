@@ -2,10 +2,11 @@
 //
 // fakeTriplex()  — the `window.triplex` surface of desktop/preload/renderer.cjs (contract §2,
 //                  Stage 1 + Stage 2: getCapture/setCapture/onBridge/onTurn/openChats/signOut/
-//                  saveDomSnapshot; `sendPrompt` is gone) with vi.fn() methods; `emit.health(slot, h)`
+//                  saveDomSnapshot; `sendPrompt` is gone; Stage 3: setAnalyst/showAnalyst/onAnalyst)
+//                  with vi.fn() methods; `emit.health(slot, h)`
 //                  / `emit.shortcut(name)` / `emit.zoom({slot, factor})` / `emit.bridge({connected})`
-//                  / `emit.turn({slot, phase})` drive the subscribed callbacks; `unsubscribed`
-//                  counts the returned unsubscribe calls per channel.
+//                  / `emit.turn({slot, phase})` / `emit.analyst({slot, visible, health})` drive the
+//                  subscribed callbacks; `unsubscribed` counts the returned unsubscribe calls per channel.
 // installFakeResizeObserver() — a ResizeObserver whose instances are collected in `.instances`;
 //                  `triggerResize()` calls every live observer's callback.
 // syncFrames()   — requestAnimationFrame that runs the callback synchronously (so the
@@ -23,7 +24,10 @@ export const RECTS = {
   grok: { x: 1000, y: 40, width: 500, height: 600 },
 }
 
-export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn']
+export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst']
+
+/** A rect for the analyst viewport (tests pass `{...RECTS, analyst: ANALYST_RECT}` to pinViewportRects). */
+export const ANALYST_RECT = { x: 1500, y: 40, width: 400, height: 600 }
 
 export function fakeTriplex(over = {}) {
   const listeners = {}
@@ -64,6 +68,10 @@ export function fakeTriplex(over = {}) {
     openChats: vi.fn(async () => ({ claude: 'kept', chatgpt: 'kept', grok: 'kept' })),
     signOut: vi.fn(async () => {}),
     saveDomSnapshot: vi.fn(async () => ({ path: '/tmp/snapshot.html' })),
+    // Stage 3
+    setAnalyst: vi.fn(async () => {}),
+    showAnalyst: vi.fn(async () => {}),
+    onAnalyst: subscribe('analyst'),
     ...over,
   }
   api.listeners = listeners
@@ -83,6 +91,9 @@ export function fakeTriplex(over = {}) {
     },
     turn: (msg) => {
       for (const cb of [...listeners.turn]) cb(msg)
+    },
+    analyst: (msg) => {
+      for (const cb of [...listeners.analyst]) cb(msg)
     },
   }
   return api
@@ -150,14 +161,15 @@ export function mockRect(el, rect) {
 
 /**
  * Pin getBoundingClientRect on the prototype BEFORE render so the very first layout report already
- * measures: `pane-<slot>-viewport` elements return `rects[slot]`, everything else 0×0.
+ * measures: `pane-<slot>-viewport` elements return `rects[slot]` (the analyst viewport
+ * `rects.analyst`, S3), everything else 0×0.
  * Undone by vi.restoreAllMocks(); call again with new rects to simulate a resize.
  */
 export function pinViewportRects(rects = RECTS) {
   const zero = { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }
   return vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function measure() {
     const id = typeof this.getAttribute === 'function' ? this.getAttribute('data-testid') : null
-    const m = /^pane-(claude|chatgpt|grok)-viewport$/.exec(id || '')
+    const m = /^pane-(claude|chatgpt|grok|analyst)-viewport$/.exec(id || '')
     const rect = m && rects[m[1]]
     return rect ? { ...rect, top: rect.y, left: rect.x, right: rect.x + rect.width, bottom: rect.y + rect.height } : zero
   })

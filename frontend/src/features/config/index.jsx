@@ -5,6 +5,17 @@
 // so that only the LATEST save's server copy can land in the store). Per-column model/effort
 // controls belong to the Send pane (W9). Uses the frozen slotConfig / models / conversation
 // slices; no slice of its own.
+//
+// Stage 3 (renderer-drawer): desktop mode. `desktop` groups the analyst picker as "web sessions
+// (hidden analyst page)" — the three fixed `web:<slot>:analyst` ids (names from the desktop
+// catalog when loaded, contract §6) — and "local Ollama" — every `ollama:<name>` the catalog
+// lists — with a "none" option (plan Decision 4), and hides the grounded toggle (OpenRouter web
+// search never applies to a web session). `analyst` + `onAnalystChange(model)` make the picker the
+// DESKTOP CHOICE control: it is enabled without a conversation (its value is then `analyst`, the
+// renderer's persisted choice), shows the open conversation's analyst_model when one is selected,
+// and a change reports the new model to the caller (which mirrors it to localStorage and to
+// Electron) AND PUTs it to the open conversation as before. Without these props (the web app)
+// nothing changes.
 import { useEffect, useRef, useState } from 'react'
 import { api, loadModels, mergeSlotConfig } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -38,7 +49,27 @@ function label(m) {
   return m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id
 }
 
-export default function SlotConfigBar() {
+// Desktop (contract §6): the three web analysts are fixed ids whatever the catalog holds (offline
+// the picker still works); Ollama entries come only from GET /api/models. Mirrored from
+// backend/llm/webmodels.py (features never import across each other).
+const DESKTOP_SLOTS = ['claude', 'chatgpt', 'grok']
+const DESKTOP_SITE = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+export const WEB_ANALYST_GROUP = 'web sessions (hidden analyst page)'
+export const OLLAMA_GROUP = 'local Ollama'
+export const ANALYST_NONE_LABEL = '— none (Analyze disabled) —'
+
+export function desktopAnalystGroups(items) {
+  const byId = {}
+  for (const m of items || []) if (m && typeof m.id === 'string') byId[m.id] = m
+  const web = DESKTOP_SLOTS.map((slot) => {
+    const id = `web:${slot}:analyst`
+    return byId[id] || { id, name: `${DESKTOP_SITE[slot]} web session (hidden analyst page)` }
+  })
+  const ollama = (items || []).filter((m) => m && typeof m.id === 'string' && m.id.startsWith('ollama:')).sort(byName)
+  return { web, ollama }
+}
+
+export default function SlotConfigBar({ desktop = false, analyst: analystChoice, onAnalystChange = null }) {
   const dispatch = useDispatch()
   const conversation = useSlice('conversation')
   const slotConfig = useSlice('slotConfig')
@@ -80,33 +111,56 @@ export default function SlotConfigBar() {
     }
   }
 
-  const analyst = slotConfig ? slotConfig.analyst_model : ''
+  const controlled = typeof onAnalystChange === 'function'
+  const analyst = slotConfig ? slotConfig.analyst_model : controlled && typeof analystChoice === 'string' ? analystChoice : ''
   const items = models.items || []
-  const unknownAnalyst = Boolean(analyst) && !items.some((m) => m.id === analyst)
-  const { structured, other } = analystGroups(items)
-  const grouped = structured.length > 0 && other.length > 0
   const opt = (m) => (
     <option key={m.id} value={m.id}>
       {label(m)}
     </option>
   )
+  const onAnalyst = (e) => {
+    const value = e.target.value
+    if (controlled) onAnalystChange(value)
+    save({ analyst_model: value }) // a no-op without a conversation
+  }
+  let analystSelect
+  if (desktop) {
+    const { web, ollama } = desktopAnalystGroups(items)
+    const known = analyst === '' || web.some((m) => m.id === analyst) || ollama.some((m) => m.id === analyst)
+    analystSelect = (
+      <select data-testid="config-analyst-model" value={analyst || ''} disabled={controlled ? false : disabled} onChange={onAnalyst}>
+        <option value="">{ANALYST_NONE_LABEL}</option>
+        {!known && <option value={analyst}>{analyst}</option>}
+        <optgroup label={WEB_ANALYST_GROUP}>{web.map(opt)}</optgroup>
+        {ollama.length > 0 && <optgroup label={OLLAMA_GROUP}>{ollama.map(opt)}</optgroup>}
+      </select>
+    )
+  } else {
+    const unknownAnalyst = Boolean(analyst) && !items.some((m) => m.id === analyst)
+    const { structured, other } = analystGroups(items)
+    const grouped = structured.length > 0 && other.length > 0
+    analystSelect = (
+      <select data-testid="config-analyst-model" value={analyst} disabled={controlled ? false : disabled} onChange={onAnalyst}>
+        {!analyst && <option value="">—</option>}
+        {unknownAnalyst && <option value={analyst}>{analyst}</option>}
+        {grouped ? (
+          <>
+            <optgroup label="structured outputs (recommended)">{structured.map(opt)}</optgroup>
+            <optgroup label="other models">{other.map(opt)}</optgroup>
+          </>
+        ) : (
+          [...structured, ...other].map(opt)
+        )}
+      </select>
+    )
+  }
 
   return (
-    <div className={css.bar} data-testid="slot-config-bar">
+    <div className={css.bar} data-testid="slot-config-bar" data-mode={desktop ? 'desktop' : 'web'}>
       <label className={css.field}>
         <span className={css.label}>Analyst</span>
-        <select data-testid="config-analyst-model" value={analyst} disabled={disabled} onChange={(e) => save({ analyst_model: e.target.value })}>
-          {!analyst && <option value="">—</option>}
-          {unknownAnalyst && <option value={analyst}>{analyst}</option>}
-          {grouped ? (
-            <>
-              <optgroup label="structured outputs (recommended)">{structured.map(opt)}</optgroup>
-              <optgroup label="other models">{other.map(opt)}</optgroup>
-            </>
-          ) : (
-            [...structured, ...other].map(opt)
-          )}
-        </select>
+        {analystSelect}
       </label>
       <label className={css.field} title="Default for the Fusion pane's iterations stepper; each Fusion run can override it.">
         <span className={css.label}>Fusion iterations (default)</span>
@@ -140,16 +194,18 @@ export default function SlotConfigBar() {
           ))}
         </select>
       </label>
-      <label className={css.field} title={GROUNDED_TITLE} data-testid="config-grounded-label">
-        <input
-          type="checkbox"
-          data-testid="config-grounded"
-          checked={Boolean(slotConfig && slotConfig.grounded)}
-          disabled={disabled}
-          onChange={(e) => save({ grounded: e.target.checked })}
-        />
-        <span>{GROUNDED_LABEL}</span>
-      </label>
+      {desktop ? null : (
+        <label className={css.field} title={GROUNDED_TITLE} data-testid="config-grounded-label">
+          <input
+            type="checkbox"
+            data-testid="config-grounded"
+            checked={Boolean(slotConfig && slotConfig.grounded)}
+            disabled={disabled}
+            onChange={(e) => save({ grounded: e.target.checked })}
+          />
+          <span>{GROUNDED_LABEL}</span>
+        </label>
+      )}
       {disabled && (
         <span className={css.hint} data-testid="config-hint">
           select or create a conversation to edit its settings

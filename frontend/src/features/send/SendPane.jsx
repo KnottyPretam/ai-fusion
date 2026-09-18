@@ -4,6 +4,9 @@
 // refresh, the conversation-scoped pending prompt / banner and the composer lock from submit
 // (including the create round-trip of a first send) until the refetch settles — lives in
 // useSendTurn.js (Stage 2: shared with the desktop PromptBar); this pane is its consumer.
+// Stage 3 (renderer-drawer): `composer={false}` renders the three columns (and the banner) without
+// the main composer form — the desktop drawer's Captured tab, where the unified prompt bar is the
+// composer; the default (`true`) is the web pane exactly as before.
 import { useEffect, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { loadModels } from '../../api/http.js'
@@ -16,7 +19,7 @@ import styles from './send.module.css'
 export const GROUNDED_HINT_TITLE =
   'Grounded mode: every Send (three calls) and every solo continue carries the OpenRouter web-search plugin, which adds a per-request search fee plus the prompt tokens of the injected results. Analyze and Fusion calls are never grounded. Toggle it in the config bar.'
 
-export default function SendPane() {
+export default function SendPane({ composer = true }) {
   const dispatch = useDispatch()
   const conversation = useSlice('conversation')
   const slotConfig = useSlice('slotConfig')
@@ -68,34 +71,36 @@ export default function SendPane() {
           {banner}
         </div>
       ) : null}
-      <form
-        className={styles.composer}
-        onSubmit={(e) => {
-          e.preventDefault()
-          submit()
-        }}
-      >
-        <div className={styles.composerBody}>
-          {grounded ? (
-            <div className={`${styles.hint} ${styles.groundedHint}`} data-testid="send-grounded-hint" title={GROUNDED_HINT_TITLE}>
-              web search on
-            </div>
-          ) : null}
-          <textarea
-            data-testid="send-composer"
-            aria-label="Prompt for all three models"
-            placeholder={conversation ? 'Send to all three models… (Enter to send, Shift+Enter for a newline)' : 'Start a conversation: send a prompt to all three models (Enter to send)'}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={locked}
-            rows={3}
-          />
-        </div>
-        <button type="submit" className={styles.sendButton} data-testid="send-button" disabled={locked || !prompt.trim()}>
-          {sendStreaming ? 'Streaming…' : 'Send'}
-        </button>
-      </form>
+      {composer ? (
+        <form
+          className={styles.composer}
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+        >
+          <div className={styles.composerBody}>
+            {grounded ? (
+              <div className={`${styles.hint} ${styles.groundedHint}`} data-testid="send-grounded-hint" title={GROUNDED_HINT_TITLE}>
+                web search on
+              </div>
+            ) : null}
+            <textarea
+              data-testid="send-composer"
+              aria-label="Prompt for all three models"
+              placeholder={conversation ? 'Send to all three models… (Enter to send, Shift+Enter for a newline)' : 'Start a conversation: send a prompt to all three models (Enter to send)'}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={onKeyDown}
+              disabled={locked}
+              rows={3}
+            />
+          </div>
+          <button type="submit" className={styles.sendButton} data-testid="send-button" disabled={locked || !prompt.trim()}>
+            {sendStreaming ? 'Streaming…' : 'Send'}
+          </button>
+        </form>
+      ) : null}
     </div>
   )
 }
