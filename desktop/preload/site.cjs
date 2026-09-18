@@ -80,6 +80,32 @@
 //     output passes the lint by construction.
 //   * `config`: a full config is re-merged onto DEFAULT_SELECTORS (every key present, unknown keys
 //     dropped with the usual warnings); a bare site block is taken as-is.
+//
+// Stage 3 (capture-hardening): `toMarkdown(el)` (contract §3) — the captured text is the reply's
+// rendered MARKDOWN, not its innerText — and `replyText`'s cascade hardened around it (prefer the
+// markdown container the `assistantText` cascade points at, fall back to innerText). Readings taken
+// where the contract is silent (also listed in `test/fixtures/dom/README.md` and the S7 build log):
+//   * whitespace: inline runs are collapsed the way the browser renders them, EXCEPT where the page
+//     preserves whitespace — a `pre`, or a computed `white-space` of pre / pre-wrap / pre-line /
+//     break-spaces (ChatGPT's `.whitespace-pre-wrap` plain-text turns, every composer) — which is
+//     copied verbatim. Without a view (a fake document, `node --test`) nothing is preserved.
+//   * a block's edges are trimmed (a markdown document has no leading or trailing blank space); the
+//     inside of a preserved run is never touched, and a node the walk cannot read (no `childNodes`)
+//     renders to `''`, so `blockText` answers with innerText exactly as Stage 2 did.
+//   * markdown is NOT escaped: a reply that contains `*` or a backtick is captured as it reads on
+//     the page. The captured text is quoted data for an analyst prompt, never re-rendered by Triplex,
+//     and escaping would break the byte-for-byte fenced JSON the analyst replies with.
+//   * code blocks: the body is the first `code` descendant of the `pre` (else the `pre` itself), one
+//     trailing newline dropped; the language is the first of a `language-`/`lang-`/`highlight-` class,
+//     a `data-language` attribute, a bare token left in the `pre` once the code and the chrome are
+//     removed (ChatGPT renders its header inside the `pre`), or a bare-token block immediately
+//     before the block holding the `pre` (a header rendered outside it). A body that itself holds a
+//     ``` line is fenced with four backticks.
+//   * chrome: `button`, `select`, `input`, `textarea`, media and `script`/`style` subtrees are
+//     dropped everywhere, as is any block whose whole text is one of MD_CHROME_TEXT ("Copy code",
+//     "Edit", "Read aloud"…) and anything `hidden`, `aria-hidden="true"`, `display:none` or
+//     `visibility:hidden`. A link renders as its text; the URL is dropped (contract §3) — citations
+//     ride on the Analyze/Fusion prompts, not on the capture.
 
 ;(() => {
   'use strict'
@@ -661,6 +687,460 @@
     return '<!doctype html>\n' + out.join('') + '\n'
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // Rendered markdown (contract §3 `toMarkdown`; Stage 3)
+  // ---------------------------------------------------------------------------------------------
+
+  /** Elements whose subtree is never reply content: chrome, media, scripts and form controls. */
+  const MD_SKIP_TAGS = Object.freeze([
+    'script',
+    'style',
+    'noscript',
+    'template',
+    'svg',
+    'canvas',
+    'video',
+    'audio',
+    'iframe',
+    'img',
+    'picture',
+    'source',
+    'track',
+    'button',
+    'select',
+    'option',
+    'input',
+    'textarea',
+    'dialog',
+  ])
+  /** Block-level tags: everything else is inline (see `mdBlocks`). */
+  const MD_BLOCK_TAGS = Object.freeze([
+    'address',
+    'article',
+    'aside',
+    'blockquote',
+    'dd',
+    'details',
+    'div',
+    'dl',
+    'dt',
+    'fieldset',
+    'figcaption',
+    'figure',
+    'footer',
+    'form',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'header',
+    'hgroup',
+    'hr',
+    'li',
+    'main',
+    'nav',
+    'ol',
+    'p',
+    'pre',
+    'section',
+    'summary',
+    'table',
+    'tbody',
+    'td',
+    'tfoot',
+    'th',
+    'thead',
+    'tr',
+    'ul',
+  ])
+  /**
+   * Code-block chrome: the copy/edit affordances the chat UIs render inside the block (mostly
+   * `<button>`s — already dropped — but a bare `<span>`/`<div>` label is just as common). A block
+   * whose whole text is one of these is dropped, and they are stripped from a code block's header
+   * before the language is read out of it.
+   */
+  const MD_CHROME_TEXT = Object.freeze([
+    'copy',
+    'copy code',
+    'copy to clipboard',
+    'copied',
+    'copied!',
+    'edit',
+    'download',
+    'share',
+    'run',
+    'wrap',
+    'unwrap',
+    'wrap lines',
+    'retry',
+    'regenerate',
+    'expand',
+    'collapse',
+    'good response',
+    'bad response',
+    'read aloud',
+  ])
+  /** `white-space` computed values that keep runs of spaces and newlines (the `pre` tag always does). */
+  const MD_PRESERVE_WS = Object.freeze(['pre', 'pre-wrap', 'pre-line', 'break-spaces'])
+  /** A code-block header is a bare language token, never a sentence. */
+  const MD_LANG_RE = /^[A-Za-z0-9+#._-]{1,24}$/
+
+  function mdNodeType(n) {
+    return n && typeof n.nodeType === 'number' ? n.nodeType : 0
+  }
+
+  function mdChildren(n) {
+    if (!n || typeof n !== 'object') return []
+    const c = n.childNodes
+    return c && typeof c.length === 'number' ? Array.from(c) : []
+  }
+
+  function mdAttr(el, name) {
+    if (!safeTrue(() => typeof el.getAttribute === 'function')) return ''
+    const v = el.getAttribute(name)
+    return v === null || v === undefined ? '' : String(v)
+  }
+
+  function mdClasses(el) {
+    const raw = mdAttr(el, 'class') || (typeof el.className === 'string' ? el.className : '')
+    return raw.split(/\s+/).filter((s) => s !== '')
+  }
+
+  function mdIsChrome(s) {
+    return MD_CHROME_TEXT.includes(String(s).trim().toLowerCase().replace(/\s+/g, ' '))
+  }
+
+  /** The style bag of `el` through its own document's view; cached per render, null without one. */
+  function mdStyle(el, ctx) {
+    if (ctx.styles.has(el)) return ctx.styles.get(el)
+    let cs = null
+    try {
+      cs = computedStyle(el, ctx.win)
+    } catch (_e) {
+      cs = null
+    }
+    ctx.styles.set(el, cs)
+    return cs
+  }
+
+  /** A `pre` always preserves; otherwise the computed `white-space` decides (no view means collapse). */
+  function mdPreserves(el, ctx, inherited) {
+    if (tagNameOf(el) === 'pre') return true
+    const cs = mdStyle(el, ctx)
+    if (!cs) return inherited
+    const ws = String(cs.whiteSpace === undefined || cs.whiteSpace === null ? '' : cs.whiteSpace).trim()
+    if (ws === '') return inherited
+    return MD_PRESERVE_WS.includes(ws)
+  }
+
+  /** Rendered away: `display:none`, `visibility:hidden`, `hidden` or `aria-hidden="true"`. */
+  function mdHidden(el, ctx) {
+    if (safeTrue(() => typeof el.hasAttribute === 'function' && el.hasAttribute('hidden'))) return true
+    if (mdAttr(el, 'aria-hidden').toLowerCase() === 'true') return true
+    const cs = mdStyle(el, ctx)
+    return !!(cs && (cs.display === 'none' || cs.visibility === 'hidden'))
+  }
+
+  function mdSkip(el, ctx) {
+    return MD_SKIP_TAGS.includes(tagNameOf(el)) || mdHidden(el, ctx)
+  }
+
+  function mdIsBlock(el) {
+    return MD_BLOCK_TAGS.includes(tagNameOf(el))
+  }
+
+  /** The raw text of a subtree, newlines from `<br>`, chrome dropped — the body of a fenced block. */
+  function mdRawText(node, ctx) {
+    if (mdNodeType(node) === 3) {
+      const s = typeof node.data === 'string' ? node.data : typeof node.nodeValue === 'string' ? node.nodeValue : ''
+      return normalizeText(s)
+    }
+    if (mdNodeType(node) !== 1) return ''
+    if (mdSkip(node, ctx)) return ''
+    if (tagNameOf(node) === 'br') return '\n'
+    let out = ''
+    for (const c of mdChildren(node)) out += mdRawText(c, ctx)
+    return out
+  }
+
+  /** Inline markdown for one node (emphasis, inline code, a link as its text; the URL is dropped). */
+  function mdInline(node, ctx) {
+    if (mdNodeType(node) === 3) {
+      const s = normalizeText(typeof node.data === 'string' ? node.data : typeof node.nodeValue === 'string' ? node.nodeValue : '')
+      return ctx.preserve ? s : s.replace(/\s+/g, ' ')
+    }
+    if (mdNodeType(node) !== 1) return ''
+    if (mdSkip(node, ctx)) return ''
+    const tag = tagNameOf(node)
+    if (tag === 'br') return '\n'
+    if (tag === 'code' || tag === 'kbd' || tag === 'samp') {
+      const body = mdRawText(node, ctx).replace(/\s+/g, ' ').trim()
+      return body === '' ? '' : '`' + body + '`'
+    }
+    const inner = mdInlineChildren(node, { ...ctx, preserve: mdPreserves(node, ctx, ctx.preserve) })
+    if (inner.trim() === '') return inner
+    if (tag === 'strong' || tag === 'b') return '**' + inner + '**'
+    if (tag === 'em' || tag === 'i') return '_' + inner + '_'
+    if (tag === 'del' || tag === 's' || tag === 'strike') return '~~' + inner + '~~'
+    return inner
+  }
+
+  function mdInlineChildren(el, ctx) {
+    let out = ''
+    for (const c of mdChildren(el)) out += mdInline(c, ctx)
+    return out
+  }
+
+  /** One element's whole inline text (a heading, a table cell, a list item's own line). */
+  function mdInlineOf(el, ctx) {
+    const inner = mdInlineChildren(el, { ...ctx, preserve: mdPreserves(el, ctx, ctx.preserve) })
+    return mdTidy(inner, ctx.preserve)
+  }
+
+  /** Trim the blank edges of a rendered block, never its inside. */
+  function mdTidy(s, preserve) {
+    return preserve ? s.replace(/^\n+|[ \t\n]+$/g, '') : s.replace(/^[ \t\n]+|[ \t\n]+$/g, '')
+  }
+
+  /** `language-json` / `lang-py` / `data-language` on the code or its `pre`. */
+  function mdLanguageOf(el) {
+    for (const c of mdClasses(el)) {
+      const m = /^(?:language|lang|highlight)-(.+)$/.exec(c)
+      if (m && MD_LANG_RE.test(m[1])) return m[1]
+    }
+    for (const name of ['data-language', 'data-lang', 'data-code-language']) {
+      const v = mdAttr(el, name).trim()
+      if (v !== '' && MD_LANG_RE.test(v)) return v
+    }
+    return ''
+  }
+
+  /** A code block's header text when it sits INSIDE the `pre`: everything but the code and the chrome. */
+  function mdHeaderLanguage(pre, code, ctx) {
+    let raw = ''
+    const walk = (node) => {
+      if (node === code) return
+      if (mdNodeType(node) === 3) {
+        raw += mdRawText(node, ctx)
+        return
+      }
+      if (mdNodeType(node) !== 1 || mdSkip(node, ctx)) return
+      for (const c of mdChildren(node)) walk(c)
+    }
+    for (const c of mdChildren(pre)) walk(c)
+    const token = raw
+      .split(/\s+/)
+      .filter((s) => s !== '' && !mdIsChrome(s))
+      .join(' ')
+      .trim()
+    return token !== '' && MD_LANG_RE.test(token) && !mdIsChrome(token) ? token : ''
+  }
+
+  /** `pre` as a fenced block: the first `code` descendant is the body; the language comes from it, its `pre`, an in-block header or the wrapper header. */
+  function mdFence(pre, ctx) {
+    const code = deepQuerySelector(pre, 'code') || pre
+    const body = mdRawText(code, ctx).replace(/\n+$/, '')
+    const lang = mdLanguageOf(code) || mdLanguageOf(pre) || mdHeaderLanguage(pre, code, ctx) || ctx.pendingLang || ''
+    const ticks = /^\s*`{3,}/m.test(body) ? '````' : '```'
+    return ticks + lang + '\n' + body + '\n' + ticks
+  }
+
+  /** `ul`/`ol` as `- ` / `1. ` items; a nested list is indented by the marker's width. */
+  function mdList(el, ctx) {
+    const ordered = tagNameOf(el) === 'ol'
+    const startAttr = parseInt(mdAttr(el, 'start'), 10)
+    let n = Number.isFinite(startAttr) && startAttr > 0 ? startAttr : 1
+    const lines = []
+    for (const li of mdChildren(el)) {
+      if (mdNodeType(li) !== 1 || tagNameOf(li) !== 'li' || mdSkip(li, ctx)) continue
+      const marker = ordered ? `${n++}. ` : '- '
+      // A nested list hangs directly off its item's line (a tight list); any other block is a
+      // paragraph inside the item and keeps its blank line.
+      const entries = mdBlockEntries(li, { ...ctx, preserve: mdPreserves(li, ctx, ctx.preserve), pendingLang: '' })
+      const body = entries.reduce((acc, e, i) => (i === 0 ? e.text : acc + (e.tag === 'ul' || e.tag === 'ol' ? '\n' : '\n\n') + e.text), '')
+      const indented = body
+        .split('\n')
+        .map((line, i) => (i === 0 ? marker + line : line === '' ? '' : ' '.repeat(marker.length) + line))
+        .join('\n')
+      lines.push(body === '' ? marker.trimEnd() : indented)
+    }
+    return lines.join('\n')
+  }
+
+  /** `table` as GFM pipes: the first row holding a `th` (else the first row) is the header. */
+  function mdTable(el, ctx) {
+    const rows = []
+    const collect = (node) => {
+      for (const c of mdChildren(node)) {
+        if (mdNodeType(c) !== 1 || mdSkip(c, ctx)) continue
+        const tag = tagNameOf(c)
+        if (tag === 'tr') rows.push(c)
+        else if (tag === 'thead' || tag === 'tbody' || tag === 'tfoot') collect(c)
+      }
+    }
+    collect(el)
+    if (rows.length === 0) return ''
+    const cellsOf = (tr) =>
+      mdChildren(tr)
+        .filter((c) => mdNodeType(c) === 1 && (tagNameOf(c) === 'td' || tagNameOf(c) === 'th') && !mdSkip(c, ctx))
+        .map((c) => mdInlineOf(c, ctx).replace(/\|/g, '\\|').replace(/\n+/g, ' '))
+    const headerIndex = rows.findIndex((tr) => mdChildren(tr).some((c) => mdNodeType(c) === 1 && tagNameOf(c) === 'th'))
+    const headRow = headerIndex === -1 ? 0 : headerIndex
+    const head = cellsOf(rows[headRow])
+    const width = rows.reduce((w, tr) => Math.max(w, cellsOf(tr).length), head.length)
+    const pad = (cells) => {
+      const out = cells.slice(0, width)
+      while (out.length < width) out.push('')
+      return '| ' + out.join(' | ') + ' |'
+    }
+    const lines = [pad(head), '| ' + Array.from({ length: width }, () => '---').join(' | ') + ' |']
+    rows.forEach((tr, i) => {
+      if (i !== headRow) lines.push(pad(cellsOf(tr)))
+    })
+    return lines.join('\n')
+  }
+
+  /**
+   * The blocks an element renders to, each tagged with the tag that produced it (the tag is what
+   * lets `mdList` keep a nested list tight against its item): a heading, a fence, a list, a table,
+   * a quote, else its children's blocks.
+   */
+  function mdBlock(el, ctx) {
+    const tag = tagNameOf(el)
+    const inner = { ...ctx, preserve: mdPreserves(el, ctx, ctx.preserve) }
+    const one = (text) => (text === '' ? [] : [{ tag, text }])
+    const heading = /^h([1-6])$/.exec(tag)
+    if (heading) {
+      const text = mdInlineOf(el, inner)
+      return text === '' ? [] : [{ tag, text: '#'.repeat(Number(heading[1])) + ' ' + text.replace(/\n+/g, ' ') }]
+    }
+    if (tag === 'hr') return [{ tag, text: '---' }]
+    if (tag === 'pre') return [{ tag, text: mdFence(el, inner) }]
+    if (tag === 'ul' || tag === 'ol') return one(mdList(el, inner))
+    if (tag === 'table') return one(mdTable(el, inner))
+    if (tag === 'blockquote') {
+      const body = mdBlocks(el, { ...inner, pendingLang: '' }).join('\n\n')
+      return one(
+        body === ''
+          ? ''
+          : body
+              .split('\n')
+              .map((line) => (line === '' ? '>' : '> ' + line))
+              .join('\n'),
+      )
+    }
+    return mdBlockEntries(el, inner)
+  }
+
+  /** The bare language label of a code-block header; `''` when the element is content. */
+  function mdHeaderToken(el, ctx) {
+    const token = mdRawText(el, ctx).trim().replace(/\s+/g, ' ')
+    if (token === '' || mdIsChrome(token) || !MD_LANG_RE.test(token)) return ''
+    return token
+  }
+
+  /** `el` is or holds a `pre` (the light DOM only: this runs once per block child, so it stays a single native query). */
+  function mdHasPre(el) {
+    return tagNameOf(el) === 'pre' || queryOne(el, 'pre') !== null
+  }
+
+  /** The first element child after `from` that is not chrome; null when there is none. */
+  function mdNextElement(children, from) {
+    for (let i = from; i < children.length; i += 1) {
+      const n = children[i]
+      if (mdNodeType(n) === 1) return n
+    }
+    return null
+  }
+
+  /**
+   * An element's blocks: runs of inline children become one paragraph, block children render
+   * themselves. A bare language label directly before a block holding a `pre` (a code-block header
+   * rendered outside the `pre`) is carried into the fence instead of becoming a paragraph, and a
+   * block whose whole text is copy/edit chrome is dropped.
+   */
+  function mdBlockEntries(el, ctx) {
+    const out = []
+    let inline = []
+    const flush = () => {
+      if (inline.length === 0) return
+      const text = mdTidy(inline.map((n) => mdInline(n, ctx)).join(''), ctx.preserve)
+      inline = []
+      if (text.trim() !== '') out.push({ tag: 'p', text })
+    }
+    const children = mdChildren(el)
+    for (let i = 0; i < children.length; i += 1) {
+      const child = children[i]
+      const type = mdNodeType(child)
+      if (type === 3) {
+        inline.push(child)
+        continue
+      }
+      if (type !== 1) continue
+      if (mdSkip(child, ctx)) continue
+      if (!mdIsBlock(child)) {
+        inline.push(child)
+        continue
+      }
+      flush()
+      if (!mdHasPre(child)) {
+        // A bare language label directly before the block that holds the `pre` is that fence's
+        // language (the subtree is only walked when a code block really follows).
+        const next = mdNextElement(children, i + 1)
+        if (next && !mdSkip(next, ctx) && mdHasPre(next)) {
+          const token = mdHeaderToken(child, ctx)
+          if (token !== '') {
+            ctx.pendingLang = token
+            continue
+          }
+        }
+      }
+      const entries = mdBlock(child, ctx)
+      // a block that renders to one paragraph of copy/edit chrome is chrome, not content
+      if (entries.length === 1 && entries[0].tag === 'p' && mdIsChrome(entries[0].text)) continue
+      for (const entry of entries) if (entry.text !== '') out.push(entry)
+      ctx.pendingLang = ''
+    }
+    flush()
+    return out
+  }
+
+  /** The block strings of `el` (see `mdBlockEntries`). */
+  function mdBlocks(el, ctx) {
+    return mdBlockEntries(el, ctx).map((e) => e.text)
+  }
+
+  /**
+   * toMarkdown(el) → string (contract §3, Stage 3): the rendered markdown of a reply container —
+   * `pre`/`code` as fenced blocks with the language from a `language-xxx` class or the block's own
+   * header, "Copy code" chrome stripped, headings as `#`, nested lists as `-` / `1.`, tables as GFM
+   * pipes, links as their text (the URL is dropped), `strong`/`em` as `**` / `_`, paragraphs
+   * separated by a blank line and inline whitespace collapsed — except where the page preserves it
+   * (`pre`, or a computed `white-space` of pre / pre-wrap / pre-line / break-spaces), which is
+   * copied verbatim. Never throws and never reaches the network; `''` for a node with no children
+   * (the caller then falls back to the rendered text — see `replyText`).
+   */
+  function toMarkdown(el, { window: win } = {}) {
+    if (!el || typeof el !== 'object') return ''
+    try {
+      const view = win || (el.ownerDocument && el.ownerDocument.defaultView) || null
+      const ctx = { styles: new Map(), win: view, preserve: false, pendingLang: '' }
+      if (mdNodeType(el) === 3) return mdTidy(mdInline(el, ctx), false)
+      ctx.preserve = mdNodeType(el) === 1 ? mdPreserves(el, ctx, false) : false
+      const tag = tagNameOf(el)
+      if (mdNodeType(el) === 1 && mdIsBlock(el) && tag !== 'div' && tag !== 'section' && tag !== 'article' && tag !== 'main') {
+        return mdBlock(el, ctx)
+          .map((e) => e.text)
+          .join('\n\n')
+      }
+      return mdBlocks(el, ctx).join('\n\n')
+    } catch (_e) {
+      return ''
+    }
+  }
+
   function makeController() {
     const AC = globalThis.AbortController
     if (typeof AC === 'function') return new AC()
@@ -1006,20 +1486,33 @@
     }
 
     /**
+     * One block's text: its rendered MARKDOWN (Stage 3 `toMarkdown` — fenced code with its
+     * language, headings, nested lists, GFM tables, links as their text, copy chrome stripped),
+     * falling back to the rendered text (innerText, else textContent) whenever the markdown render
+     * is blank — a container the walk cannot read (no `childNodes`: a shadow host, a fake) still
+     * captures its text.
+     */
+    function blockText(el) {
+      const md = toMarkdown(el, { window: win })
+      return isBlank(md) ? readText(el) : md
+    }
+
+    /**
      * A container's reply text: EVERY match of the first `assistantText` entry that matches, in
      * document order (a match nested in another is skipped), joined by a blank line — a turn
      * rendered as several blocks (a summary before the answer, text around a tool block) is
      * captured whole, not truncated to its first block; without a match the container itself.
-     * Rendered text (innerText, else textContent). Stage 3's `toMarkdown` replaces the join.
+     * The markdown container is preferred (that is what the `assistantText` cascade points at) and
+     * innerText is the fallback — see `blockText`.
      */
     function replyText(container) {
       for (const selector of nonEmptyCascade(sel.assistantText)) {
         const hits = deepQuerySelectorAll(container, selector)
         if (hits.length === 0) continue
         const blocks = hits.filter((el) => !hits.some((other) => other !== el && safeTrue(() => other.contains(el))))
-        return blocks.map(readText).join('\n\n')
+        return blocks.map(blockText).join('\n\n')
       }
-      return readText(container)
+      return blockText(container)
     }
 
     function cascadeText(cascade) {
@@ -1859,6 +2352,10 @@
       isTextField,
       readText,
       scrubDom,
+      toMarkdown,
+      MD_SKIP_TAGS,
+      MD_BLOCK_TAGS,
+      MD_CHROME_TEXT,
       createAdapter,
       AdapterError,
       attachIpc,

@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <title>…</title>
+  </head>
+  <body>
+    <div id="root">
+      <div class="flex h-full w-full flex-col">
+        <main class="relative flex flex-1 flex-col items-center">
+          <div class="flex w-full max-w-3xl flex-col gap-6">
+            <div class="message-bubble items-end">
+              <span class="whitespace-pre-wrap">…</span>
+            </div>
+            <div id="response-uuid" class="relative flex flex-col">
+              <div class="response-content-markdown prose break-words">
+                <p>…</p>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>…</th>
+                      <th>…</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>…</td>
+                      <td>…</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="not-prose">
+                  <div class="flex items-center justify-between rounded-t-xl px-4 py-2">
+                    <span class="font-mono text-xs">…</span>
+                    <button class="rounded-md" aria-label="…" type="button">…</button>
+                  </div>
+                  <pre><code class="language-json">…</code></pre>
+                </div>
+              </div>
+              <div class="flex items-center gap-1">
+                <button class="rounded-md" aria-label="…" type="button">…</button>
+              </div>
+            </div>
+          </div>
+          <div class="flex w-full max-w-3xl flex-col">
+            <form class="relative w-full rounded-3xl border">
+              <div class="tiptap ProseMirror" contenteditable="true" translate="no" role="textbox" aria-label="Ask Grok anything"><p>…</p></div>
+              <textarea class="absolute opacity-0"></textarea>
+              <div class="flex items-center justify-between gap-2">
+                <button class="rounded-full" data-testid="chat-submit" aria-label="Submit" type="submit">…</button>
+              </div>
+            </form>
+          </div>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

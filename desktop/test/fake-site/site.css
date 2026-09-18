@@ -168,3 +168,55 @@ button.stop {
   background: #444;
   cursor: pointer;
 }
+
+/* --- Stage 3: a RENDERED markdown reply (?reply=json|rich) ---------------------------------- */
+/* The container above is pre-wrap for the plain echo; a rendered markdown block sets its own
+   white-space (a class on the element always beats an inherited value), so paragraphs collapse
+   their whitespace as on a real page and only code keeps it verbatim. */
+.md { white-space: normal; }
+.md pre,
+.md code {
+  white-space: pre;
+}
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3 { margin: 12px 0 6px; font-size: 1.1em; }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 8px 0; padding-inline-start: 22px; }
+.md table { border-collapse: collapse; margin: 8px 0; }
+.md th, .md td { border: 1px solid var(--border); padding: 2px 8px; text-align: start; }
+.md code { font-family: ui-monospace, monospace; }
+.md pre, .md .code-block, .md .not-prose {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  overflow-x: auto;
+}
+.md pre .code-header,
+.md .code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85em;
+  white-space: normal;
+}
+.md .code-body, .md .code-block__code { padding: 6px 8px; }
+.md .code-sticky { position: sticky; top: 0; display: flex; justify-content: flex-end; }
+.md .code-block pre, .md .not-prose pre { margin: 0; border: 0; border-radius: 0; }
+.md .code-header button,
+.md .code-sticky button,
+.md .code-actions button {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.md .code-actions { display: flex; justify-content: flex-end; padding: 2px 8px; }

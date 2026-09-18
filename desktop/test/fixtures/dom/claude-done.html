@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <title>…</title>
+  </head>
+  <body>
+    <div class="flex min-h-screen w-full">
+      <div class="flex h-screen w-full flex-col">
+        <div class="flex-1 overflow-y-auto">
+          <div class="mx-auto flex w-full max-w-3xl flex-col gap-6">
+            <div class="group relative" data-testid="user-message">
+              <p class="whitespace-pre-wrap break-words">…</p>
+            </div>
+            <div class="font-claude-response">
+              <div class="grid-cols-1 grid gap-2.5">
+                <p class="whitespace-normal break-words">…</p>
+                <ol>
+                  <li>
+                    <p>…</p>
+                    <ul>
+                      <li>…</li>
+                    </ul>
+                  </li>
+                  <li>…</li>
+                </ol>
+                <div class="relative group/copy">
+                  <div class="text-text-300 absolute pl-3 pt-2.5 text-xs">…</div>
+                  <div class="code-block__code">
+                    <pre><code class="language-python">…</code></pre>
+                  </div>
+                  <div class="absolute end-2 top-2">
+                    <button class="inline-flex items-center" aria-label="…" type="button">…</button>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1">
+                <button class="inline-flex items-center" data-testid="action-bar-copy" aria-label="…" type="button">…</button>
+                <button class="inline-flex items-center" data-testid="action-bar-retry" aria-label="…" type="button">…</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="relative mx-auto flex w-full max-w-3xl flex-col">
+          <fieldset class="flex w-full min-w-0 flex-col">
+            <div class="flex flex-col bg-bg-000 rounded-2xl border" data-testid="chat-input-container">
+              <div class="ProseMirror break-words" contenteditable="true" translate="no" role="textbox" aria-label="Write your prompt to Claude" data-testid="chat-input">
+                <p></p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button class="inline-flex items-center rounded-lg" aria-label="Send message" type="button" disabled="">…</button>
+              </div>
+            </div>
+          </fieldset>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
