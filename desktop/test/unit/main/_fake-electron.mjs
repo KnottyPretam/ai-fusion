@@ -4,7 +4,8 @@
 // layout, zoom, a shortcut, health forwarding, the bridge handshake + one request → result round
 // trip over a fake WebSocket, the Stage 2 IPC channels, the renderer's origin guard + foreign-frame
 // IPC refusal, child-window / redirect / backstop policy, the Bluetooth chooser, the health + zoom
-// + bridge replay, window-bounds persistence) and prints ONE line `FAKE_ELECTRON_REPORT <json>`
+// + bridge replay, window-bounds persistence, the Stage 3 hidden analyst page) and prints ONE line
+// `FAKE_ELECTRON_REPORT <json>`
 // before exiting; `app.exit(code)` prints the report and exits with that code at once (the refusal
 // paths). Every FakeWebContents emits `web-contents-created` on `app` as Electron does,
 // synchronously in its constructor.
@@ -17,6 +18,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { buildSpawnSpec } from '../../../main/backend.js'
 
 if (!process.env.TRIPLEX_BACKEND_URL) process.env.TRIPLEX_BACKEND_URL = 'http://127.0.0.1:1'
 if (!process.env.BRIDGE_TOKEN) process.env.BRIDGE_TOKEN = 'wiring'
@@ -501,6 +503,109 @@ async function probe() {
   } catch (e) {
     probes.snapshotFile = { error: String(e.message) }
   }
+
+
+  // --- Stage 3: the hidden analyst page --------------------------------------------------------
+  // A `web:chatgpt:analyst` request creates the analyst view LAZILY on persist:chatgpt, hidden,
+  // and runs the turn on it — never on the chatgpt pane — observing even though capture is off for
+  // chatgpt. Then: a challenge health auto-reveals it, the `analyst` rect positions it,
+  // panes:setAnalyst switches the partition (old view destroyed, `analyst` frame re-sent, the next
+  // spawn's ANALYST_MODEL updated) and a request with no analyst chosen is rejected.
+  const ANALYST_REQ = {
+    ...REQUEST,
+    req_id: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f',
+    model: 'web:chatgpt:analyst',
+    slot: 'chatgpt',
+    view: 'analyst',
+    role: 'analyst',
+    purpose: 'extraction',
+    fresh: true,
+    text: '<<<R1>>> claim',
+  }
+  const viewsBeforeAnalyst = views.length
+  const turnEventsBeforeAnalyst = win.webContents.sent.filter(([c]) => c === 'panes:turn').length
+  const paneOpsBeforeAnalyst = views[1].webContents.sent.filter(([c]) => c === 'triplex:adapter').length
+  const chatgptHealthBefore = win.webContents.sent.filter(([c, s]) => c === 'panes:health' && s === 'chatgpt').length
+  if (ws) ws.receive(ANALYST_REQ)
+  await sleep(20)
+  probes.analystViewsCreated = views.length - viewsBeforeAnalyst
+  const av = views[views.length - 1]
+  const awc = av.webContents
+  probes.analystView = {
+    partition: av.options.webPreferences.partition,
+    sitePreload: String(av.options.webPreferences.preload).endsWith(path.join('preload', 'site.cjs')),
+    sandbox: av.options.webPreferences.sandbox,
+    contextIsolation: av.options.webPreferences.contextIsolation,
+    backgroundThrottling: av.options.webPreferences.backgroundThrottling,
+    zoom: awc.zoom,
+    visible: av.getVisible(),
+    loads: awc.loads.slice(),
+  }
+  probes.analystAccepted = ws ? ws.frames('accepted').find((f) => f.req_id === ANALYST_REQ.req_id) || null : null
+  probes.analystAdapterConfig = await settle(ipcMain.invoke('adapter:config', mainFrameEvent(awc)))
+  const analystOp = (op) => awc.sent.find(([c, m]) => c === 'triplex:adapter' && m && m.op === op)
+  const aReady = analystOp('ready')
+  probes.analystReadyMsg = aReady ? aReady[1] : null
+  if (aReady) ipcMain.emit('triplex:adapter:result', mainFrameEvent(awc), { reqId: aReady[1].reqId, ok: true, op: 'ready', composerSelector: '#c' })
+  await sleep(10)
+  const aInsert = analystOp('insertAndSubmit')
+  probes.analystInsertMsg = aInsert ? aInsert[1] : null
+  probes.analystFocusedDuringInsert = awc.focused
+  if (aInsert) {
+    ipcMain.emit('triplex:adapter:result', mainFrameEvent(awc), { reqId: aInsert[1].reqId, ok: true, op: 'insertAndSubmit', submitted: true, composerSelector: '#c', sendSelector: 'b', assistantCount: 1, confirmedBy: 'composer_cleared', ms: 3, url: 'http://127.0.0.1:5199/?site=chatgpt' })
+  }
+  await sleep(10)
+  const aObserve = analystOp('observe')
+  probes.analystObserveMsg = aObserve ? aObserve[1] : null
+  if (aObserve) {
+    ipcMain.emit('triplex:adapter:result', mainFrameEvent(awc), { reqId: aObserve[1].reqId, ok: true, op: 'observe', text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 12, url: 'http://127.0.0.1:5199/?site=chatgpt' })
+  }
+  await sleep(10)
+  probes.analystResult = ws ? ws.frames('result').find((f) => f.req_id === ANALYST_REQ.req_id) || null : null
+  probes.analystPaneUntouched = {
+    paneAdapterOps: views[1].webContents.sent.filter(([c]) => c === 'triplex:adapter').length - paneOpsBeforeAnalyst,
+    newTurnEvents: win.webContents.sent.filter(([c]) => c === 'panes:turn').length - turnEventsBeforeAnalyst,
+  }
+
+  // a challenge on the analyst view reveals it (decision 7) without touching the chatgpt pane chip
+  ipcMain.emit('triplex:adapter:health', mainFrameEvent(awc), { ...health, session: 'challenge' })
+  await sleep(5)
+  probes.analystStates = win.webContents.sent.filter(([c]) => c === 'panes:analyst').map(([, s]) => s)
+  probes.analystHealthLeaked = win.webContents.sent.filter(([c, s]) => c === 'panes:health' && s === 'chatgpt').length - chatgptHealthBefore
+
+  // the `analyst` rect drives the revealed view's bounds
+  ipcMain.emit('panes:layout', renderer, { claude: { x: 0, y: 100.4, width: 500, height: 600 }, chatgpt: null, grok: { x: 500, y: 100, width: 500, height: 600 }, analyst: { x: 10, y: 700, width: 400, height: 200 } })
+  probes.analystLayout = { bounds: av.getBounds(), visible: av.getVisible() }
+  await settle(ipcMain.invoke('panes:showAnalyst', renderer, false))
+  probes.analystHiddenAgain = av.getVisible()
+
+  // setAnalyst switches the partition: the old view is destroyed, a new hidden one is created, the
+  // bridge gets a fresh `analyst` frame and the next spawn would carry the new ANALYST_MODEL
+  await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'claude'))
+  await sleep(10)
+  const newAv = views[views.length - 1]
+  probes.setAnalyst = {
+    frames: ws ? ws.frames('analyst') : null,
+    oldDestroyed: awc.isDestroyed(),
+    created: views.length - viewsBeforeAnalyst,
+    newPartition: newAv.options.webPreferences.partition,
+    newVisible: newAv.getVisible(),
+    settingsAnalyst: t && t.settings ? t.settings.get().analyst : null,
+    spawnAnalystModel: buildSpawnSpec({ repoDir: '/repo', userData: app.getPath('userData'), token: 'probe', settings: t.settings, env: {} }).env.ANALYST_MODEL,
+  }
+  probes.setAnalystBad = await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'bing'))
+
+  // no analyst chosen → the request is rejected analyst_not_chosen, nothing is typed anywhere
+  await settle(ipcMain.invoke('panes:setAnalyst', renderer, null))
+  await sleep(10)
+  const NO_ANALYST_REQ = { ...ANALYST_REQ, req_id: '2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f60' }
+  if (ws) ws.receive(NO_ANALYST_REQ)
+  await sleep(10)
+  probes.analystNotChosen = ws ? ws.frames('rejected').find((f) => f.req_id === NO_ANALYST_REQ.req_id) || null : null
+  probes.analystNullState = { destroyed: newAv.webContents.isDestroyed(), spawnAnalystModel: buildSpawnSpec({ repoDir: '/repo', userData: app.getPath('userData'), token: 'probe', settings: t.settings, env: {} }).env.ANALYST_MODEL }
+  // back to the default so settings.json ends the run as it started (nothing is recreated: lazy)
+  await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'chatgpt'))
+  probes.analystViewsAfterRestore = views.length - viewsBeforeAnalyst
 
   // a socket drop → banner state to the renderer; the client schedules a reconnect (a new socket)
   if (ws) ws.close(1006, '')

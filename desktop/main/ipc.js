@@ -18,7 +18,18 @@
 // (clearStorageData on that partition only, then newChatUrl), `panes:snapshot(slot)` (adapter
 // `snapshot` → scrubbed HTML under `<userData>/snapshots/<slot>-<ts>.html` → {path}).
 // `prompt:send` is gone (§2: removed in Stage 2) — no handler, nothing answers on that channel.
-// No electron import: `ipcMain`, the view manager, settings, chats, `fs` and the timers are injected.
+//
+// Stage 3: `panes:setAnalyst(slot|null)` (persists settings.analyst; a partition change destroys
+// and recreates the hidden view, main re-sends the bridge `analyst` frame from its settings
+// subscription and the next backend spawn picks the new ANALYST_MODEL up) and
+// `panes:showAnalyst(boolean)` (persists settings.analystVisible). Both answer the renderer with
+// `panes:analyst {slot, visible, health}`, which is also replayed with health / zoom / bridge. The
+// analyst view is a SECOND view on a site's partition, so it is resolved separately in
+// `adapter:config` and its Health lands on `panes:analyst` only — never on that slot's
+// `panes:health` chip and never in the slot-keyed bridge `health` frame, both of which describe
+// the PANE. `panes:layout` carries its rect under the `analyst` key.
+//
+// No electron import: `ipcMain`, the view managers, settings, chats, `fs` and the timers are injected.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -65,6 +76,12 @@ export function requireDirection(direction) {
 export function requireBoolean(v) {
   if (typeof v !== 'boolean') throw badRequest()
   return v
+}
+
+/** The analyst choice for `panes:setAnalyst`: `null` (no analyst) or a slot id. */
+export function requireAnalystChoice(slot) {
+  if (slot === null || slot === undefined) return null
+  return requireSlot(slot)
 }
 
 /** A conversation id for `panes:openChats`: null, or a non-empty string ≤ 200 chars. */
@@ -125,6 +142,7 @@ export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = 
  *   ipcMain             {handle, on, removeHandler, removeListener}
  *   isRenderer(event)   true only for the renderer window's main frame
  *   views               the view manager (views.js)
+ *   analystViews        the hidden analyst view manager (analyst-views.js; Stage 3, optional)
  *   layoutState         mutable {mode, active} shared with shortcuts (updated from 'panes:active')
  *   orchestrator        {inflight(slot)} (Stage 2: `run` is driven by the bridge client, not IPC)
  *   selectors           {current, reload, lastError}
@@ -144,6 +162,7 @@ export function registerIpc({
   ipcMain,
   isRenderer,
   views,
+  analystViews = null,
   layoutState,
   orchestrator = null,
   selectors,
@@ -209,6 +228,7 @@ export function registerIpc({
       const b = getBridgeState()
       if (b && typeof b.connected === 'boolean') emit('panes:bridge', publicBridgeState(b))
     }
+    if (analystViews && typeof analystViews.state === 'function') emit('panes:analyst', analystViews.state())
   }
 
   const inflight = (slot) => !!(orchestrator && typeof orchestrator.inflight === 'function' && orchestrator.inflight(slot))
@@ -291,7 +311,10 @@ export function registerIpc({
 
   on('panes:layout', (event, layout) => {
     if (!isRenderer(event)) return
-    views.applyLayout(normalizeLayout(layout))
+    const normalized = normalizeLayout(layout)
+    views.applyLayout(normalized)
+    // The renderer reports the analyst rect under the 'analyst' key when it shows the fourth tab.
+    if (analystViews && typeof analystViews.applyLayout === 'function') analystViews.applyLayout(normalized)
   })
 
   on('panes:active', (event, next) => {
@@ -385,16 +408,41 @@ export function registerIpc({
     return saveDomSnapshot({ views, snapshotsDir, fs, now }, slot)
   })
 
+  // --- Stage 3 ---------------------------------------------------------------------------------
+  handle('panes:setAnalyst', async (event, slot) => {
+    requireRenderer(event)
+    const choice = requireAnalystChoice(slot)
+    if (!analystViews || typeof analystViews.setAnalyst !== 'function') throw new Error('analyst_unavailable')
+    analystViews.setAnalyst(choice)
+  })
+
+  handle('panes:showAnalyst', async (event, visible) => {
+    requireRenderer(event)
+    requireBoolean(visible)
+    if (!analystViews || typeof analystViews.setVisible !== 'function') throw new Error('analyst_unavailable')
+    analystViews.setVisible(visible)
+  })
+
   // --- site preload → main ---------------------------------------------------------------------
   handle('adapter:config', (event) => {
-    const site = views.slotOfSender(event)
+    // The hidden analyst view runs the same site preload on the same partition: it must get the
+    // slot's selectors too, or it would stay inert and never answer a `ready`.
+    const site = views.slotOfSender(event) ?? (analystViews && typeof analystViews.slotOfSender === 'function' ? analystViews.slotOfSender(event) : null)
     const config = selectors && typeof selectors.current === 'function' ? selectors.current() : null
     return { site, selectors: config, dev: !!dev }
   })
 
   on('triplex:adapter:health', (event, health) => {
+    if (health === null || typeof health !== 'object' || Array.isArray(health)) return
     const slot = views.slotOfSender(event)
-    if (slot === null || health === null || typeof health !== 'object' || Array.isArray(health)) return
+    if (slot === null) {
+      // The analyst view's own Health: it describes a view the renderer shows as a fourth tab, not
+      // that slot's pane, so it never touches `panes:health` or the slot-keyed bridge `health` frame.
+      const analystSlot = analystViews && typeof analystViews.slotOfSender === 'function' ? analystViews.slotOfSender(event) : null
+      if (analystSlot === null) return
+      analystViews.setHealth(annotateHealth(health, selectors && typeof selectors.lastError === 'function' ? selectors.lastError() : null))
+      return
+    }
     const annotated = annotateHealth(health, selectors && typeof selectors.lastError === 'function' ? selectors.lastError() : null)
     views.setHealth(slot, annotated)
     emit('panes:health', slot, annotated)

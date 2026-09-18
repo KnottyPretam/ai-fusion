@@ -21,7 +21,14 @@
 // SendTurn with not_captured errors; capture on for all three (pane-<slot>-capture) → the next
 // Send persists the three fake replies; the fake page URLs land in chats.json; selecting the
 // older conversation in the sidebar navigates the views back; the bridge banner appears when the
-// socket is closed from inside (__triplexTest.bridge.close()) and clears on reconnect.
+// socket is closed from inside (__triplexTest.bridge.close()) and clears on reconnect. Stage 3 rows
+// (describe 'desktop analyze + fusion (hidden analyst page)'): settings.analyst = chatgpt reaches the
+// backend as hello.analyst with no view created yet; a conversation POSTed with
+// slot_config.analyst_model = 'web:chatgpt:analyst' and captured on all three gets three replies;
+// Analyze renders analyze-report from the HIDDEN analyst view (the fake site's ?reply=json answers
+// the extraction) while the chatgpt pane types nothing; Fusion(1) challenges the three panes, checks
+// convergence on the analyst view and reaches fusion-exit-reason converged; navigating the analyst
+// view to ?state=challenge auto-reveals it as deck-tab-analyst.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -486,6 +493,236 @@ test.describe('desktop send (bridge)', () => {
     await expect.poll(() => app.evaluate(() => globalThis.__triplexTest.bridge.status().connected), { timeout: 15_000 }).toBe(true)
     await expect(page.getByTestId('bridge-banner')).toBeHidden({ timeout: 10_000 })
     await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 10_000 }).toBe(true)
+  })
+})
+
+
+// ---------------------------------------------------------------------------------------------
+// Stage 3: Analyze and Fusion through the hidden analyst page
+// ---------------------------------------------------------------------------------------------
+//
+// The analyst choice is per conversation (`slot_config.analyst_model`), and playwright.config.js
+// (frozen) gives the app-project backend no ANALYST_MODEL, so this block POSTs its conversation to
+// `/api/conversations` with `analyst_model: 'web:chatgpt:analyst'` and selects it in the sidebar —
+// rather than going through the drawer's Settings tab, which would couple these rows to the
+// renderer's analyst chooser. Everything else is the real path: capture on for all three panes, one
+// Send over the bridge, then Analyze (one analyst call on the HIDDEN view, answered by the fake
+// site's `?reply=json` Extraction) and Fusion(1) (three defense prompts typed into the three PANES,
+// one convergence check on the analyst view) → `fusion-exit-reason` converged. Last row: the
+// analyst view is navigated to `?state=challenge`, whose health report auto-reveals it as the
+// fourth tab (`deck-tab-analyst`).
+
+test.describe('desktop analyze + fusion (hidden analyst page)', () => {
+  test.describe.configure({ mode: 'serial', timeout: 300_000 })
+  const logs = []
+  const PROMPT_A = 'what is the gyroscope full-scale range'
+  let userData
+  let app
+  let page
+  let convId = null
+
+  /** The desktop slot_config: web: models for the panes, the hidden ChatGPT page as the analyst. */
+  const desktopSlotConfig = () => ({
+    slots: {
+      claude: { model: 'web:claude', effort: 'off' },
+      chatgpt: { model: 'web:chatgpt', effort: 'off' },
+      grok: { model: 'web:grok', effort: 'off' },
+    },
+    analyst_model: 'web:chatgpt:analyst',
+    max_iterations: 1,
+    materiality_min: 'medium', // planted_factual: only d1 is material, and the fixture resolves d1
+    grounded: false,
+  })
+
+  /** {url, site, submitted} from the hidden analyst view's page (null while it is still loading). */
+  function analystFakeState() {
+    return app.evaluate(async () => {
+      const wc = globalThis.__triplexTest.analystViews.webContents()
+      if (!wc || wc.isDestroyed() || wc.isLoading()) return null
+      try {
+        return await wc.executeJavaScript('(() => ({ url: location.href, site: window.__fake ? window.__fake.site : null, submitted: window.__fake ? window.__fake.submitted.slice() : null }))()')
+      } catch (_e) {
+        return null
+      }
+    })
+  }
+
+  /** The analyst manager's own state: the chosen slot, the reveal flag, the cached health, the view. */
+  function analystState() {
+    return app.evaluate(() => {
+      const a = globalThis.__triplexTest.analystViews
+      const view = a.get()
+      return { slot: a.slot(), visible: a.visible(), session: a.getHealth() ? a.getHealth().session : null, hasView: !!view, viewVisible: view ? view.getVisible() : null }
+    })
+  }
+
+  async function openDrawerTab(tab) {
+    const drawer = page.getByTestId('desk-drawer')
+    if (!(await drawer.isVisible().catch(() => false))) await page.getByTestId('drawer-toggle').click()
+    await expect(drawer).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId(`drawer-tab-${tab}`).click()
+  }
+
+  test.beforeAll(async () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-analyst-'))
+    const override = {}
+    for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
+    fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+    // ?reply=json answers the analyst prompts (keyed on <<<R1>>> / <<<DIVERGENCES>>> / YOUR CLAIM)
+    // with the planted_factual fixtures and everything else with the echo.
+    ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150&reply=json') }))
+  })
+
+  test.afterAll(async () => {
+    if (app) await app.close().catch(() => {})
+  })
+
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+      await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+    }
+  })
+
+  test('settings.analyst defaults to chatgpt, hello.analyst carries it and no analyst view exists yet', async () => {
+    expect(readSettings(userData).analyst).toBe('chatgpt')
+    expect(readSettings(userData).analystVisible).toBe(false)
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.analyst), { timeout: 10_000 }).toBe('chatgpt')
+    expect(await analystState()).toMatchObject({ slot: 'chatgpt', visible: false, hasView: false })
+    await expect(page.getByTestId('deck-tab-analyst')).toBeHidden()
+  })
+
+  test('a conversation whose analyst_model is web:chatgpt:analyst, captured on all three, gets three replies', async () => {
+    const created = await backend('/api/conversations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'analyst run', slot_config: desktopSlotConfig() }),
+    })
+    convId = created.id
+    expect(created.slot_config.analyst_model).toBe('web:chatgpt:analyst')
+
+    await page.reload()
+    await page.waitForSelector('[data-testid="desktop-shell"]', { timeout: 45_000 })
+    const row = page.getByTestId('sidebar').getByTestId('conv-row').filter({ hasText: 'analyst run' }).first()
+    await expect(row).toBeVisible({ timeout: 20_000 })
+    await row.getByTestId('conv-select').click()
+
+    await page.getByTestId('deck-mode-split').click()
+    for (const slot of SLOTS) {
+      await ensureTargetChecked(page, slot)
+      const sw = page.getByTestId(`pane-${slot}-capture`)
+      await expect(sw).toBeVisible({ timeout: 10_000 })
+      if ((await toggleState(sw)) === 'off') await sw.click()
+    }
+    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true })
+
+    await sendFromPromptBar(page, PROMPT_A)
+    await expect
+      .poll(async () => {
+        const conv = await backend(`/api/conversations/${convId}`)
+        const turn = lastSendTurn(conv)
+        if (!turn || turn.prompt !== PROMPT_A) return 'no turn yet'
+        return SLOTS.map((s) => (turn.responses[s] === null ? 'pending' : 'done')).join(',')
+      }, { timeout: 180_000 })
+      .toBe('done,done,done')
+    const conv = await backend(`/api/conversations/${convId}`)
+    for (const slot of SLOTS) expect(lastSendTurn(conv).responses[slot], slot).toBe(`Echo: ${PROMPT_A}`)
+  })
+
+  test('Analyze runs on the hidden analyst view and renders analyze-report; the chatgpt PANE never sees the analyst prompt', async () => {
+    const paneBefore = (await fakeState(app, 'chatgpt')).submitted.length
+    await openDrawerTab('analyze')
+    const run = page.getByTestId('analyze-run')
+    await expect(run).toBeEnabled({ timeout: 20_000 })
+    await run.click()
+
+    await expect(page.getByTestId('analyze-report')).toBeVisible({ timeout: 180_000 })
+    const conv = await backend(`/api/conversations/${convId}`)
+    const analyze = [...conv.turns].reverse().find((t) => t.type === 'analyze')
+    expect(analyze, 'an analyze turn was persisted').toBeTruthy()
+    expect(analyze.status).toBe('ok')
+    expect(analyze.extraction.divergences.map((d) => d.id)).toContain('d1')
+
+    // the analyst prompt was typed into the HIDDEN view, on its own chat, not into the pane
+    await expect.poll(() => analystFakeState().then((s) => (s && s.submitted ? 'ready' : 'pending')), { timeout: 30_000 }).toBe('ready')
+    const analyst = await analystFakeState()
+    expect(analyst, 'the analyst view has a page').toBeTruthy()
+    expect(analyst.site).toBe('chatgpt')
+    expect(analyst.submitted.length).toBeGreaterThanOrEqual(1)
+    expect(analyst.submitted.at(-1)).toContain('<<<R1>>>')
+    expect((await fakeState(app, 'chatgpt')).submitted.length, 'the pane typed nothing extra').toBe(paneBefore)
+    expect(await analystState()).toMatchObject({ slot: 'chatgpt', hasView: true, viewVisible: false })
+    // the analyst page is the hidden fourth view, so it is never a pane chat link
+    expect(Object.keys(readChats(userData)[convId] || {}).sort()).toEqual([...SLOTS].sort())
+  })
+
+  test('Fusion(1) challenges the three panes, checks convergence on the analyst view and exits converged', async () => {
+    const before = {}
+    for (const slot of SLOTS) before[slot] = (await fakeState(app, slot)).submitted.length
+    await expect.poll(() => analystFakeState().then((s) => (s ? 'ready' : 'pending')), { timeout: 30_000 }).toBe('ready')
+    const analystChatBefore = (await analystFakeState()).url
+
+    await openDrawerTab('fusion')
+    const iterations = page.getByTestId('fusion-iterations')
+    await expect(iterations).toBeVisible({ timeout: 15_000 })
+    await iterations.fill('1')
+    await iterations.blur()
+    const run = page.getByTestId('fusion-run')
+    await expect(run).toBeEnabled({ timeout: 20_000 })
+    await run.click()
+
+    const exit = page.getByTestId('fusion-exit-reason')
+    await expect(exit).toBeVisible({ timeout: 240_000 })
+    await expect.poll(() => exit.getAttribute('data-exit-reason'), { timeout: 240_000 }).toBe('converged')
+
+    const conv = await backend(`/api/conversations/${convId}`)
+    const fusion = [...conv.turns].reverse().find((t) => t.type === 'fusion')
+    expect(fusion.exit_reason).toBe('converged')
+    // one challenge per label with a position on d1 → one more submission in each PANE
+    for (const slot of SLOTS) {
+      const s = await fakeState(app, slot)
+      expect(s.submitted.length, `${slot} was challenged in its own chat`).toBeGreaterThan(before[slot])
+      expect(s.submitted.at(-1), slot).toContain('YOUR CLAIM')
+    }
+    // the convergence check is the analyst's, on the hidden view — and `fresh:true` means it is a
+    // NEW chat there, so the fake page's `submitted` starts over rather than growing
+    await expect.poll(() => analystFakeState().then((s) => (s && s.submitted && s.submitted.length ? 'ready' : 'pending')), { timeout: 30_000 }).toBe('ready')
+    const analyst = await analystFakeState()
+    expect(analyst.submitted.at(-1)).toContain('<<<DIVERGENCES>>>')
+    expect(analyst.url, 'a fresh analyst chat, not the extraction one').not.toBe(analystChatBefore)
+  })
+
+  test('a challenge on the analyst page auto-reveals it as the fourth tab (deck-tab-analyst)', async () => {
+    await app.evaluate((_electron, url) => globalThis.__triplexTest.analystViews.loadUrl(url), `${FAKE_BASE}/?site=chatgpt&state=challenge`)
+    await expect.poll(() => analystState().then((s) => s.session), { timeout: 30_000 }).toBe('challenge')
+    await expect.poll(() => analystState().then((s) => s.visible), { timeout: 10_000 }).toBe(true)
+    await expect.poll(() => readSettings(userData).analystVisible, { timeout: 10_000 }).toBe(true)
+
+    const tab = page.getByTestId('deck-tab-analyst')
+    await expect(tab).toBeVisible({ timeout: 20_000 })
+    await tab.click()
+    // shown as a real view: the renderer reports an `analyst` rect and main gives it those bounds
+    await expect
+      .poll(async () => {
+        const [state, rect] = await Promise.all([
+          app.evaluate(() => {
+            const v = globalThis.__triplexTest.analystViews.get()
+            return v ? { bounds: v.getBounds(), visible: v.getVisible() } : null
+          }),
+          page.evaluate(() => {
+            const el = document.querySelector('[data-testid="pane-analyst-viewport"]') || document.querySelector('[data-testid="desk-analyst-viewport"]')
+            if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: r.left, y: r.top, width: r.width, height: r.height }
+          }),
+        ])
+        if (!state) return 'no analyst view'
+        if (!state.visible) return `hidden ${JSON.stringify(state)}`
+        if (!rect) return 'shown (no named viewport placeholder to compare)'
+        const d = Math.max(Math.abs(state.bounds.x - rect.x), Math.abs(state.bounds.y - rect.y), Math.abs(state.bounds.width - rect.width), Math.abs(state.bounds.height - rect.height))
+        return d <= 1 ? 'shown (bounds match the placeholder)' : `off by ${d}px`
+      }, { timeout: 20_000 })
+      .toMatch(/^shown/)
   })
 })
 

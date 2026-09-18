@@ -8,8 +8,12 @@
 // banner state on a drop), no prompt:send handler, openChats (null → every pane kept) / signOut /
 // snapshot, a request holding `ready` until a New-chat navigation commits, the renderer's origin
 // guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the Bluetooth
-// chooser, the health + zoom + bridge replay, crash recreation and the bounds → settings.json
-// flush on close; TRIPLEX_BACKEND_URL on a non-loopback host refused (exit 2) unless
+// chooser, the health + zoom + bridge + analyst replay, crash recreation, the bounds → settings.json
+// flush on close and the Stage 3 hidden analyst page (hello.analyst, a `web:chatgpt:analyst` request
+// creating the view lazily on persist:chatgpt and observing with capture off, auto-reveal on a
+// challenge, the `analyst` rect, panes:setAnalyst switching the partition + the `analyst` frame +
+// the next spawn's ANALYST_MODEL, analyst_not_chosen);
+// TRIPLEX_BACKEND_URL on a non-loopback host refused (exit 2) unless
 // TRIPLEX_ALLOW_REMOTE_BACKEND=1. The fake forces TRIPLEX_BACKEND_URL (attach mode): a wiring run
 // never spawns a backend and never opens a real socket.
 import test from 'node:test'
@@ -49,7 +53,7 @@ function run(env) {
   return { status: r.status, report: line ? JSON.parse(line.slice('FAKE_ELECTRON_REPORT '.length)) : null, stderr: r.stderr, stdout: r.stdout }
 }
 
-test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, crash recreate, bounds flush', () => {
+test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, the Stage 3 analyst page, crash recreate, bounds flush', () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-'))
   writeSelectorsOverride(userData)
   const { status, report, stderr } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson(), TRIPLEX_RENDERER_URL: 'http://localhost:5184' })
@@ -71,7 +75,9 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual([win.options.width, win.options.height], [1600, 900])
 
   // three views, one per slot, in SLOTS order, each on its partition with the site preload, unthrottled
-  assert.equal(report.views.length, 4, 'three initial views + one recreated after the crash probe')
+  // three panes + the lazily created analyst view (persist:chatgpt) + its replacement after
+  // setAnalyst('claude') + the pane recreated by the crash probe
+  assert.equal(report.views.length, 6, 'three panes, two analyst views, one recreated pane')
   const views = report.views.slice(0, 3)
   SLOTS.forEach((slot, i) => {
     const wp = views[i].options.webPreferences
@@ -87,7 +93,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
 
   // every §2 channel is registered once; prompt:send (removed in Stage 2) is not registered at all
   const handles = report.ipcHandles
-  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot']) {
+  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot', 'panes:setAnalyst', 'panes:showAnalyst']) {
     assert.equal(handles.filter((h) => h === c).length, 1, c)
   }
   assert.equal(handles.includes('prompt:send'), false, 'prompt:send is gone')
@@ -99,7 +105,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
   }
-  for (const label of ['Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
+  for (const label of ['Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
     assert.ok(report.menu.items.includes(label), label)
   }
 
@@ -142,7 +148,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // --- the bridge: attach mode → ws://127.0.0.1:1/api/bridge, hello with BRIDGE_TOKEN, nothing before open
   assert.deepEqual(p.socket, { url: 'ws://127.0.0.1:1/api/bridge', sentBeforeOpen: 0 })
   assert.equal(p.bridgeBeforeAck, 'connecting')
-  assert.deepEqual(p.hello, { type: 'hello', protocol: 1, token: 'wiring', version: '0.1.0', sites: SLOTS, capture: { claude: false, chatgpt: false, grok: false }, analyst: null })
+  assert.deepEqual(p.hello, { type: 'hello', protocol: 1, token: 'wiring', version: '0.1.0', sites: SLOTS, capture: { claude: false, chatgpt: false, grok: false }, analyst: { slot: 'chatgpt' } }, 'hello.analyst reflects settings.analyst (default chatgpt)')
   assert.equal(p.bridgeAfterAck.connected, true)
   assert.equal(p.bridgeAfterAck.pingS, 20)
   // every panes:getInfo before the ack replayed {connected:false}; the ack itself sent exactly one connected:true
@@ -218,6 +224,59 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.ok(p.snapshot.value.path.endsWith('.html'))
   assert.equal(p.snapshotFile, '<html><body>…</body></html>')
 
+
+  // --- Stage 3: the hidden analyst page ---------------------------------------------------------
+  // nothing exists until the first analyst request; then ONE view on persist:chatgpt, hidden
+  assert.equal(p.analystViewsCreated, 1, 'a web:chatgpt:analyst request creates the analyst view lazily')
+  assert.deepEqual(p.analystView, {
+    partition: 'persist:chatgpt',
+    sitePreload: true,
+    sandbox: true,
+    contextIsolation: true,
+    backgroundThrottling: false,
+    zoom: 1,
+    visible: false,
+    // the initial load, then fresh:true opening a new chat
+    loads: [`${FAKE_BASE}/?site=chatgpt`, `${FAKE_BASE}/?site=chatgpt`],
+  })
+  assert.deepEqual(p.analystAccepted, { type: 'accepted', req_id: '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f', view: 'analyst', slot: 'chatgpt' })
+  assert.equal(p.analystAdapterConfig.ok, true)
+  assert.equal(p.analystAdapterConfig.value.site, 'chatgpt', 'the analyst view gets the slot’s selectors, not site:null')
+  assert.ok(p.analystReadyMsg, 'fresh:true navigates, then waits for the composer')
+  assert.equal(p.analystReadyMsg.timeoutMs, 15000)
+  assert.equal(p.analystInsertMsg.text, '<<<R1>>> claim', 'the analyst prompt is typed verbatim')
+  assert.equal(p.analystFocusedDuringInsert, 1, 'the hidden view is focused under the mutex (the Stage 0 spike)')
+  assert.ok(p.analystObserveMsg, 'the analyst ALWAYS observes — capture is off for chatgpt here')
+  assert.equal(p.analystObserveMsg.baselineCount, 1)
+  assert.equal(p.analystResult.ok, true)
+  assert.equal(p.analystResult.captured, true)
+  assert.equal(p.analystResult.text, '```json\n{"agreements": []}\n```')
+  assert.deepEqual(p.analystPaneUntouched, { paneAdapterOps: 0, newTurnEvents: 0 }, 'the chatgpt PANE was never asked anything and reported no phase')
+
+  // a challenge on the analyst view reveals it and never lands on the chatgpt pane chip
+  assert.equal(p.analystHealthLeaked, 0, 'the analyst’s health is not that slot’s panes:health')
+  const revealed = p.analystStates.at(-1)
+  assert.equal(revealed.slot, 'chatgpt')
+  assert.equal(revealed.visible, true, 'challenge → panes:analyst visible:true')
+  assert.equal(revealed.health.session, 'challenge')
+  assert.deepEqual(p.analystLayout, { bounds: { x: 10, y: 700, width: 400, height: 200 }, visible: true }, 'the analyst rect positions the revealed view')
+  assert.equal(p.analystHiddenAgain, false, 'showAnalyst(false) hides it at once')
+
+  // setAnalyst switches the partition, re-sends the `analyst` frame and updates the spawn env
+  assert.deepEqual(p.setAnalyst.frames, [{ type: 'analyst', analyst: { slot: 'claude' } }])
+  assert.equal(p.setAnalyst.oldDestroyed, true, 'the chatgpt analyst view is gone')
+  assert.equal(p.setAnalyst.created, 2, 'one replacement view')
+  assert.equal(p.setAnalyst.newPartition, 'persist:claude')
+  assert.equal(p.setAnalyst.newVisible, false)
+  assert.equal(p.setAnalyst.settingsAnalyst, 'claude')
+  assert.equal(p.setAnalyst.spawnAnalystModel, 'web:claude:analyst', 'the next backend start gets the new ANALYST_MODEL')
+  assert.deepEqual(p.setAnalystBad, { ok: false, error: 'bad_request' })
+
+  // no analyst chosen → analyst_not_chosen, the view torn down and ANALYST_MODEL pinned to ''
+  assert.equal(p.analystNotChosen.code, 'analyst_not_chosen')
+  assert.deepEqual(p.analystNullState, { destroyed: true, spawnAnalystModel: '' })
+  assert.equal(p.analystViewsAfterRestore, 2, 'choosing an analyst again stays lazy: no view until it is needed')
+
   // a socket drop → the banner state reaches the renderer; the client is scheduling a reconnect
   assert.equal(p.bridgeAfterDrop, 'closed')
   assert.deepEqual(p.bridgeSentAfterDrop.at(-1), { connected: false })
@@ -261,6 +320,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
     ['panes:zoom', { slot: 'grok', factor: 1.2 }],
     ['panes:bridge', { connected: false }],
+    ['panes:analyst', { slot: 'chatgpt', visible: false, health: null }],
   ]
   assert.deepEqual(p.replay, expectedReplay)
   assert.deepEqual(p.replayOnGetInfo, expectedReplay)
@@ -273,7 +333,8 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.settingsFile.zoom, { claude: 1, chatgpt: 1, grok: 1.2 })
   assert.deepEqual(p.settingsFile.capture, { claude: true, chatgpt: false, grok: false }, 'the capture switch persisted')
   assert.equal(p.settingsFile.analyst, 'chatgpt')
-  for (const key of ['views', 'orchestrator', 'settings', 'bridge', 'chats', 'backend']) assert.ok(p.testGlobal.includes(key), key)
+  assert.equal(p.settingsFile.analystVisible, false)
+  for (const key of ['views', 'analystViews', 'orchestrator', 'settings', 'bridge', 'chats', 'backend']) assert.ok(p.testGlobal.includes(key), key)
 
   // the token never reaches a log line
   assert.equal(stderr.includes('wiring'), false, 'BRIDGE_TOKEN is never logged')

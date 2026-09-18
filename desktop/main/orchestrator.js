@@ -6,10 +6,11 @@
 //
 // Per request (contract §1, decisions 12 / 13):
 //   1. reject from the HEALTH CACHE before any DOM write: unknown slot → unknown_site; no live
-//      view → view_crashed; a turn already in flight on that slot, or health.stop === true (the
+//      view → view_crashed; a turn already in flight on that view, or health.stop === true (the
 //      site is still answering a manual prompt) → view_busy; health.session logged_out |
 //      challenge | blocked → that code; matched.error 'view_crashed' → view_crashed;
-//      view 'analyst' → analyst_not_chosen until Stage 3 injects `analystAdapterFor`.
+//      view 'analyst' with no analyst chosen (or a slot that is not the chosen one) →
+//      analyst_not_chosen.
 //   2. `accepted{req_id, view, slot}`.
 //   3. navigation: link = chats.get(conversation_id, slot); a link that exists and differs from
 //      the view's URL → loadUrl(link) (a failed load → result `navigation`); no link → adopt
@@ -36,6 +37,16 @@
 //   A bridge `cancel` aborts the adapter op in flight (AbortSignal → adapter `cancel` → the op
 //   answers `cancelled`). A socket drop is the caller's business: the turn completes locally and
 //   bridge-client.js discards its frames. `ms` is an integer since the request was taken up.
+//
+// Stage 3, `view: 'analyst'` (analyst-views.js): the request runs on the HIDDEN analyst view of
+// that site instead of its pane — a different `WebContentsView` on the same partition, so an
+// analyst turn and a pane turn on the same slot are independent, while two analyst turns are
+// serialized against each other (the second is `view_busy`). Differences from a pane turn:
+// `fresh:true` opens `newChatUrl` on the analyst view and `fresh:false` continues in place (a
+// recorded chat link belongs to the pane and is never consulted or written for the analyst); the
+// analyst ALWAYS observes — the per-pane capture switches do not apply to a view the user never
+// reads — and no `panes:turn` phase is emitted, because that event is keyed by slot alone (§2)
+// and would label the slot's PANE as typing.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
@@ -137,7 +148,11 @@ function adapterFailure(e) {
 /**
  * createOrchestrator(deps) → {run, cancel, inflight, mutex}
  *   adapterFor(slot)               the view's adapter client (null → view_crashed)
- *   analystAdapterFor?(slot)       Stage 3: the hidden analyst view's client (absent → analyst_not_chosen)
+ *   analystAdapterFor?(slot)       Stage 3: the hidden analyst view's client for `slot` (absent, or
+ *                                  null → `analyst_not_chosen`: no analyst is chosen, or not that one)
+ *   analystView?                   Stage 3, the rest of the analyst view's seam (analyst-views.js):
+ *                                  {currentUrl(), loadUrl(url), newChatUrl(), pendingNavigation(),
+ *                                   focus(), getHealth(), setHealth(h)} — every entry optional
  *   focusView(slot)                `webContents.focus()` on the view (may be async)
  *   restoreRendererFocus()         called once the last queued insert phase has finished
  *   timeoutsFor(slot)              {composerWaitMs, sendWaitMs, submitVerifyMs} from the merged selectors
@@ -158,6 +173,7 @@ function adapterFailure(e) {
 export function createOrchestrator({
   adapterFor,
   analystAdapterFor = null,
+  analystView = null,
   focusView,
   restoreRendererFocus,
   timeoutsFor,
@@ -235,6 +251,53 @@ export function createOrchestrator({
     }
   }
 
+  /** One entry of the optional `analystView` seam (analyst-views.js), bound; null when not wired. */
+  const analystFn = (name) => (analystView && typeof analystView[name] === 'function' ? analystView[name].bind(analystView) : null)
+
+  /**
+   * The collaborators one turn uses, chosen by `view`: a pane turn drives the slot's site view, its
+   * chat links and its capture switch; an analyst turn drives the hidden analyst view, never touches
+   * chats.json, always observes and emits no `panes:turn` phase (§2 keys both by slot alone).
+   */
+  function seamFor(view, slot) {
+    if (view !== 'analyst') {
+      return {
+        client: typeof adapterFor === 'function' ? adapterFor(slot) : null,
+        url: () => url(slot),
+        loadUrl: typeof loadUrl === 'function' ? (u) => loadUrl(slot, u) : null,
+        newChatUrl: typeof newChatUrl === 'function' ? () => newChatUrl(slot) : null,
+        pendingNavigation: typeof pendingNavigation === 'function' ? () => pendingNavigation(slot) : null,
+        focus: typeof focusView === 'function' ? () => focusView(slot) : null,
+        getHealth: typeof getHealth === 'function' ? () => getHealth(slot) : null,
+        setHealth: typeof setHealth === 'function' ? (h) => setHealth(slot, h) : null,
+        observes: () => captureOn(slot),
+        recordsChat: true,
+        phases: true,
+      }
+    }
+    const analystUrl = analystFn('currentUrl')
+    return {
+      client: typeof analystAdapterFor === 'function' ? analystAdapterFor(slot) : null,
+      url: () => {
+        if (!analystUrl) return ''
+        try {
+          return String(analystUrl() || '')
+        } catch (_e) {
+          return ''
+        }
+      },
+      loadUrl: analystFn('loadUrl'),
+      newChatUrl: analystFn('newChatUrl'),
+      pendingNavigation: analystFn('pendingNavigation'),
+      focus: analystFn('focus'),
+      getHealth: analystFn('getHealth'),
+      setHealth: analystFn('setHealth'),
+      observes: () => true, // the analyst page is read back whatever the pane capture switches say
+      recordsChat: false,
+      phases: false,
+    }
+  }
+
   /**
    * Record the chat this turn landed in: the view's URL now when it matches, else the first
    * matching navigation within CHAT_URL_WAIT_MS. Returns `{url(), stop()}`; `url()` is the
@@ -287,16 +350,16 @@ export function createOrchestrator({
    * initial load) to commit, so `ready` is never answered by the document about to be replaced.
    * Bounded by NAVIGATION_WAIT_MS; the turn's abort signal ends the wait at once. Never throws.
    */
-  async function awaitPendingNavigation(slot, signal) {
-    if (typeof pendingNavigation !== 'function') return
+  async function awaitPendingNavigation(seam, label, signal) {
+    if (typeof seam.pendingNavigation !== 'function') return
     let pending = null
     try {
-      pending = pendingNavigation(slot)
+      pending = seam.pendingNavigation()
     } catch (_e) {
       pending = null
     }
     if (!pending || typeof pending.then !== 'function') return
-    info(`${slot}: a navigation is pending; waiting for it to commit before ready`)
+    info(`${label}: a navigation is pending; waiting for it to commit before ready`)
     let timer = null
     let onAbort = null
     try {
@@ -340,60 +403,64 @@ export function createOrchestrator({
 
   /** The turn proper, after `accepted`. Resolves with the result frame (never rejects). */
   async function turn(request, entry) {
-    const { slot, view } = request
+    const { slot } = request
+    const { seam, label } = entry
     const reqId = request.req_id
     const started = entry.started
     const elapsed = () => Math.max(0, Math.round(now() - started))
     const signal = entry.controller.signal
-    const client = view === 'analyst' ? analystAdapterFor(slot) : adapterFor(slot)
+    const client = seam.client
     const { readyMs, submitMs, quietMs, captureTimeoutMs, observeMs } = budgets(slot)
+    const emitPhase = (p, code) => {
+      if (seam.phases) phase(slot, p, code)
+    }
     let chatWatch = null
     const cancelled = () => {
       if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
     }
     try {
-      if (!client) throw new AdapterRequestError('view_crashed', `${slot}: no live view`)
-      // 3. navigation (decision 12)
-      const link = chats && typeof chats.get === 'function' && typeof request.conversation_id === 'string' ? chats.get(request.conversation_id, slot) : null
+      if (!client) throw new AdapterRequestError('view_crashed', `${label}: no live view`)
+      // 3. navigation (decision 12; the analyst view never consults or records a chat link)
+      const link = seam.recordsChat && chats && typeof chats.get === 'function' && typeof request.conversation_id === 'string' ? chats.get(request.conversation_id, slot) : null
       let target = null
-      if (request.fresh === true && typeof newChatUrl === 'function') target = newChatUrl(slot) || null
-      else if (link && link !== url(slot)) target = link
+      if (request.fresh === true && typeof seam.newChatUrl === 'function') target = seam.newChatUrl() || null
+      else if (link && link !== seam.url()) target = link
       if (target) {
-        if (typeof loadUrl !== 'function') throw new AdapterRequestError('navigation', `${slot}: cannot navigate (no loader)`)
-        info(`${slot}: opening ${link && target === link ? 'the recorded chat' : 'a new chat'}`)
+        if (typeof seam.loadUrl !== 'function') throw new AdapterRequestError('navigation', `${label}: cannot navigate (no loader)`)
+        info(`${label}: opening ${link && target === link ? 'the recorded chat' : 'a new chat'}`)
         try {
-          await loadUrl(slot, target)
+          await seam.loadUrl(target)
         } catch (e) {
-          throw new AdapterRequestError('navigation', `could not open the recorded chat: ${(e && e.message) || e}`)
+          throw new AdapterRequestError('navigation', `could not open ${link && target === link ? 'the recorded chat' : 'a new chat'}: ${(e && e.message) || e}`)
         }
         cancelled()
       }
       // 3b. a navigation main started elsewhere must commit first (the old document would answer)
-      await awaitPendingNavigation(slot, signal)
+      await awaitPendingNavigation(seam, label, signal)
       cancelled()
       // 4. ready
       await client.request('ready', { timeoutMs: readyMs }, { timeoutMs: readyMs + TIMEOUT_GRACE_MS, signal })
       cancelled()
-      // 5. insert under the mutex
+      // 5. insert under the mutex (a hidden analyst view takes focus too — the Stage 0 spike)
       const submitted = await underMutex(async () => {
         cancelled()
-        phase(slot, 'typing')
-        if (typeof focusView === 'function') await focusView(slot)
+        emitPhase('typing')
+        if (typeof seam.focus === 'function') await seam.focus()
         return client.request('insertAndSubmit', { text: request.text }, { timeoutMs: submitMs + TIMEOUT_GRACE_MS, signal })
       })
-      phase(slot, 'submitted')
+      emitPhase('submitted')
       // 6. chat-URL wait, in the background (never delays the result)
-      chatWatch = watchChatUrl(slot, request.conversation_id)
-      const resultUrl = () => chatWatch.url() || (typeof submitted.url === 'string' && submitted.url) || url(slot)
-      // 7. observe when capture is on
-      if (!captureOn(slot)) {
+      chatWatch = seam.recordsChat ? watchChatUrl(slot, request.conversation_id) : { url: () => null, stop: () => {} }
+      const resultUrl = () => chatWatch.url() || (typeof submitted.url === 'string' && submitted.url) || seam.url()
+      // 7. observe when capture is on (always, for the analyst view)
+      if (!seam.observes()) {
         return { type: 'result', req_id: reqId, ok: true, captured: false, url: resultUrl(), ms: elapsed() }
       }
       cancelled()
-      phase(slot, 'replying')
+      emitPhase('replying')
       const observePayload = { quietMs, timeoutMs: captureTimeoutMs }
       if (Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0) observePayload.baselineCount = submitted.assistantCount
-      else warn(`${slot}: the submit result carried no usable assistantCount; the adapter samples the baseline itself`)
+      else warn(`${label}: the submit result carried no usable assistantCount; the adapter samples the baseline itself`)
       const observed = await client.request('observe', observePayload, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
@@ -402,7 +469,7 @@ export function createOrchestrator({
       const f = adapterFailure(e)
       const code = RESULT_CODE_SET.has(f.code) ? f.code : 'site_error'
       const message = code === f.code ? f.message : `${f.code}: ${f.message}`
-      warn(`${slot}: ${code} — ${message}`)
+      warn(`${label}: ${code} — ${message}`)
       return { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
     }
   }
@@ -428,36 +495,41 @@ export function createOrchestrator({
 
     // 1. reject from the health cache, before any DOM write
     if (!SLOTS.includes(slot)) return reject('unknown_site', `no view for slot ${String(slot)}`)
-    if (view === 'analyst' && typeof analystAdapterFor !== 'function') return reject('analyst_not_chosen', 'no analyst view is available (Stage 3)')
+    if (view === 'analyst' && typeof analystAdapterFor !== 'function') return reject('analyst_not_chosen', 'no analyst page is available')
+    // The analyst view is one per app, not one per slot: its own key serializes analyst turns
+    // against each other while leaving that site's PANE (a different view) free to run its own.
     const key = view === 'analyst' ? `analyst:${slot}` : slot
-    const client = view === 'analyst' ? analystAdapterFor(slot) : adapterFor(slot)
-    if (!client) return reject('view_crashed', `${slot}: no live view`)
-    let health = typeof getHealth === 'function' ? getHealth(slot) : null
-    if (view !== 'analyst' && health && health.stop === true && !active.has(key)) {
+    const label = view === 'analyst' ? `analyst page (${slot})` : slot
+    const seam = seamFor(view, slot)
+    if (!seam.client) {
+      if (view === 'analyst') return reject('analyst_not_chosen', `no analyst page is chosen for ${slot}; choose one in Settings`)
+      return reject('view_crashed', `${slot}: no live view`)
+    }
+    let health = typeof seam.getHealth === 'function' ? seam.getHealth() : null
+    if (health && health.stop === true && !active.has(key)) {
       // The cache is fed by the adapter's change/poll publishes (1.5 s) — a stop button that showed
       // for a short reply can linger in it. Re-read before rejecting so a finished reply never
       // turns a send into view_busy; a site that is really still answering stays rejected.
       try {
-        const fresh = await client.request('health', {}, { timeoutMs: FRESH_HEALTH_TIMEOUT_MS })
+        const fresh = await seam.client.request('health', {}, { timeoutMs: FRESH_HEALTH_TIMEOUT_MS })
         if (fresh && fresh.ok !== false && fresh.health && typeof fresh.health === 'object') {
           health = fresh.health
-          if (typeof setHealth === 'function') setHealth(slot, fresh.health)
+          if (typeof seam.setHealth === 'function') seam.setHealth(fresh.health)
         }
       } catch (_e) {
         /* keep the cached value */
       }
     }
-    const bad = rejectFromHealth(view === 'analyst' ? null : health, { inflight: active.has(key) })
-    if (bad) return reject(bad.code, `${slot}: ${bad.message}`)
+    const bad = rejectFromHealth(health, { inflight: active.has(key) })
+    if (bad) return reject(bad.code, `${label}: ${bad.message}`)
 
     // 2. accepted
-    const entry = { reqId, view, slot, controller: new AbortController(), started: now() }
+    const entry = { reqId, view, slot, seam, label, controller: new AbortController(), started: now() }
     active.set(key, entry)
     send({ type: 'accepted', req_id: reqId, view, slot })
     try {
       const result = await turn(request, entry)
-      if (result.ok) phase(slot, 'done')
-      else phase(slot, 'error', result.code)
+      if (seam.phases) phase(slot, result.ok ? 'done' : 'error', result.ok ? undefined : result.code)
       return send(result)
     } finally {
       if (active.get(key) === entry) active.delete(key)

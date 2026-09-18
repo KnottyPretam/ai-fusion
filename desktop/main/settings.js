@@ -118,7 +118,8 @@ export function sanitizeSettings(raw) {
  *   save()                         atomic write now
  *   getZoom(slot) / setZoom(slot, factor)        clamped; setZoom saves immediately; returns the factor
  *   getCapture() / setCapture(slot, on)          Stage 2 callers; saves immediately
- *   getAnalyst() / setAnalyst(slot|null) / setAnalystVisible(bool)   Stage 3 callers; save immediately
+ *   getAnalyst() / setAnalyst(slot|null)                             Stage 3 callers; save immediately
+ *   getAnalystVisible() / setAnalystVisible(bool)                    the analyst view's fourth-tab mirror
  *   windowBoundsForLaunch()        {x?, y?, width, height, maximized} clamped to screen.getDisplayMatching(...).workArea
  *   queueWindowBounds(bounds, maximized)   debounced save of the (normal) window bounds
  *   flushWindowBounds()            write a pending bounds update now (window close / before-quit)
@@ -244,6 +245,10 @@ export function createSettings({
     return doc.analyst
   }
 
+  function getAnalystVisible() {
+    return doc.analystVisible === true
+  }
+
   function setAnalystVisible(visible) {
     doc.analystVisible = !!visible
     save()
@@ -321,6 +326,7 @@ export function createSettings({
     setCapture,
     getAnalyst,
     setAnalyst,
+    getAnalystVisible,
     setAnalystVisible,
     windowBoundsForLaunch,
     queueWindowBounds,

@@ -3,18 +3,20 @@
 // the panes, the three loads run in parallel and each is bounded / signOut / snapshot), no
 // prompt:send handler at all (§2: removed in Stage 2), adapter:config by sender, health
 // forwarding, the cached health + zoom + bridge state (with its error text) replayed after
-// panes:getInfo, getInfo.backend.
+// panes:getInfo, getInfo.backend; the Stage 3 channels (panes:setAnalyst / panes:showAnalyst —
+// sender + payload validation) and the analyst view's own seam (adapter:config, health → the
+// analyst state and never the pane's chip, the `analyst` layout rect, panes:analyst replayed).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 
-function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null } = {}) {
+function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
   const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
@@ -70,6 +72,29 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
       return on
     },
   }
+  const analystWc = fakeWebContents({ id: 21 })
+  // A stand-in for analyst-views.js: one hidden view on the chosen slot's partition.
+  const analystViews = {
+    slot: 'chatgpt',
+    visibleFlag: false,
+    health: null,
+    layouts: [],
+    state: () => ({ slot: analystViews.slot, visible: analystViews.visibleFlag, health: analystViews.health }),
+    setAnalyst: (v) => {
+      calls.push(['setAnalyst', v])
+      analystViews.slot = v
+    },
+    setVisible: (v) => {
+      calls.push(['showAnalyst', v])
+      analystViews.visibleFlag = v
+    },
+    setHealth: (h) => {
+      calls.push(['analystHealth', h])
+      analystViews.health = h
+    },
+    applyLayout: (n) => analystViews.layouts.push(n),
+    slotOfSender: (event) => (event && event.sender && event.sender.id === analystWc.id && (!event.senderFrame || !event.senderFrame.parent) ? analystViews.slot : null),
+  }
   const chats = { get: (convId, slot) => (convId === CONV && links[slot]) || null }
   const orchestrator = { inflight: (s) => (inflight[s] ? { reqId: 'r' } : null) }
   const sent = []
@@ -80,6 +105,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     ipcMain,
     isRenderer: (event) => !!event && event.sender === renderer && (!event.senderFrame || !event.senderFrame.parent),
     views,
+    ...(withAnalyst ? { analystViews } : {}),
     layoutState,
     orchestrator,
     selectors,
@@ -98,7 +124,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     ...(timers ? { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout } : {}),
   })
   const fromRenderer = eventFrom(renderer)
-  return { ipcMain, renderer, siteWc, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current }
+  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current }
 }
 
 const rejects = (p, re = /bad_request/) => assert.rejects(p, re)
@@ -146,6 +172,12 @@ test('every renderer channel rejects bad_request for a non-renderer sender (a si
     await rejects(ipcMain.invoke('panes:signOut', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:snapshot', ev, 'claude'))
   }
+  const stage3 = setup({ withAnalyst: true })
+  for (const ev of [eventFrom(stage3.siteWc.claude), { sender: stage3.renderer, senderFrame: { parent: {} } }, { sender: null }, undefined]) {
+    await rejects(stage3.ipcMain.invoke('panes:setAnalyst', ev, 'claude'))
+    await rejects(stage3.ipcMain.invoke('panes:showAnalyst', ev, true))
+  }
+  assert.deepEqual(stage3.calls, [], 'a refused caller never reaches the analyst manager')
 })
 
 test('fire-and-forget channels from a non-renderer sender are dropped silently', () => {
@@ -398,4 +430,105 @@ test('dispose() removes every handler and listener', () => {
   ipc.dispose()
   assert.equal(ipcMain.handlers.size, 0)
   for (const list of ipcMain.listeners.values()) assert.equal(list.length, 0)
+})
+
+// --- Stage 3: the hidden analyst page -----------------------------------------------------------
+
+test('requireAnalystChoice: null / undefined → null, a slot passes, anything else is bad_request', () => {
+  assert.equal(requireAnalystChoice(null), null)
+  assert.equal(requireAnalystChoice(undefined), null)
+  for (const slot of ['claude', 'chatgpt', 'grok']) assert.equal(requireAnalystChoice(slot), slot)
+  for (const bad of ['bing', '', 1, true, ['claude'], {}]) assert.throws(() => requireAnalystChoice(bad), /bad_request/)
+})
+
+test('panes:setAnalyst persists the choice (null included) and refuses an unknown slot; panes:showAnalyst takes a boolean only', async () => {
+  const { ipcMain, fromRenderer, calls, analystViews } = setup({ withAnalyst: true })
+  await ipcMain.invoke('panes:setAnalyst', fromRenderer, 'grok')
+  assert.equal(analystViews.slot, 'grok')
+  await ipcMain.invoke('panes:setAnalyst', fromRenderer, null)
+  assert.equal(analystViews.slot, null)
+  await rejects(ipcMain.invoke('panes:setAnalyst', fromRenderer, 'bing'))
+  await rejects(ipcMain.invoke('panes:setAnalyst', fromRenderer, 1))
+  await rejects(ipcMain.invoke('panes:setAnalyst', fromRenderer, ['grok']))
+
+  await ipcMain.invoke('panes:showAnalyst', fromRenderer, true)
+  assert.equal(analystViews.visibleFlag, true)
+  await ipcMain.invoke('panes:showAnalyst', fromRenderer, false)
+  assert.equal(analystViews.visibleFlag, false)
+  for (const bad of ['true', 1, null, undefined, {}]) await rejects(ipcMain.invoke('panes:showAnalyst', fromRenderer, bad))
+  assert.deepEqual(
+    calls.filter(([c]) => c === 'setAnalyst' || c === 'showAnalyst'),
+    [
+      ['setAnalyst', 'grok'],
+      ['setAnalyst', null],
+      ['showAnalyst', true],
+      ['showAnalyst', false],
+    ],
+    'only the valid calls reached the manager',
+  )
+})
+
+test('the Stage 3 channels answer analyst_unavailable when no analyst manager is wired (a Stage 2 main)', async () => {
+  const { ipcMain, fromRenderer } = setup()
+  await assert.rejects(ipcMain.invoke('panes:setAnalyst', fromRenderer, 'grok'), /analyst_unavailable/)
+  await assert.rejects(ipcMain.invoke('panes:showAnalyst', fromRenderer, true), /analyst_unavailable/)
+})
+
+test('panes:layout hands the analyst rect to the analyst manager alongside the pane rects', () => {
+  const { ipcMain, fromRenderer, calls, analystViews } = setup({ withAnalyst: true })
+  ipcMain.emit('panes:layout', fromRenderer, { claude: { x: 0, y: 0, width: 10, height: 10 }, analyst: { x: 5.4, y: 6, width: 20, height: 30 } })
+  const applied = calls.find(([c]) => c === 'applyLayout')[1]
+  assert.deepEqual(applied.analyst, { x: 5, y: 6, width: 20, height: 30 })
+  assert.equal(analystViews.layouts.length, 1)
+  assert.deepEqual(analystViews.layouts[0], applied, 'both managers see the same normalized layout')
+})
+
+test('adapter:config resolves the hidden analyst view too (otherwise it would stay inert and never answer a ready)', async () => {
+  const { ipcMain, analystWc, siteWc } = setup({ withAnalyst: true })
+  const cfg = await ipcMain.invoke('adapter:config', eventFrom(analystWc))
+  assert.equal(cfg.site, 'chatgpt', 'the analyst view gets the chosen slot’s selectors')
+  assert.deepEqual(Object.keys(cfg.selectors), ['version', 'chatgpt', 'claude', 'grok'])
+  assert.equal((await ipcMain.invoke('adapter:config', eventFrom(siteWc.grok))).site, 'grok', 'panes still resolve first')
+  assert.equal((await ipcMain.invoke('adapter:config', eventFrom(analystWc, { parent: {} }))).site, null, 'a sub-frame stays inert')
+  assert.equal((await ipcMain.invoke('adapter:config', { sender: { id: 999 }, senderFrame: { parent: null } })).site, null)
+})
+
+test('the analyst view’s health lands on the analyst state only: never the slot’s panes:health chip, never the bridge health frame', () => {
+  const { ipcMain, analystWc, siteWc, sent, health, calls, analystViews } = setup({ withAnalyst: true })
+  const h = { composer: false, send: false, reply: null, stop: null, session: 'challenge', matched: { composer: null, send: null, reply: null, stop: null, error: null }, url: 'u', host: 'h', title: 't', ts: 2 }
+  ipcMain.emit('triplex:adapter:health', eventFrom(analystWc), h)
+  assert.deepEqual(analystViews.health, h)
+  assert.deepEqual(
+    sent.filter(([c]) => c === 'panes:health'),
+    [],
+    'the chatgpt PANE chip is untouched',
+  )
+  assert.equal(health.chatgpt, undefined, 'and so is the pane health cache')
+  assert.equal(
+    calls.some(([c]) => c === 'onHealth'),
+    false,
+    'nothing went to the bridge',
+  )
+
+  // a pane report still takes the normal path
+  const paneHealth = { ...h, session: 'ok' }
+  ipcMain.emit('triplex:adapter:health', eventFrom(siteWc.claude), paneHealth)
+  assert.deepEqual(health.claude, paneHealth)
+  assert.equal(sent.filter(([c]) => c === 'panes:health').length, 1)
+
+  // an unknown sender is still dropped
+  ipcMain.emit('triplex:adapter:health', eventFrom({ id: 999 }), paneHealth)
+  assert.equal(sent.filter(([c]) => c === 'panes:health').length, 1)
+})
+
+test('panes:getInfo replays panes:analyst after the bridge state', async () => {
+  const { ipcMain, fromRenderer, sent, views, analystViews } = setup({ withAnalyst: true, bridge: { connected: false } })
+  views.slots = () => []
+  analystViews.health = { session: 'ok' }
+  analystViews.visibleFlag = true
+  await ipcMain.invoke('panes:getInfo', fromRenderer)
+  assert.deepEqual(sent, [
+    ['panes:bridge', { connected: false }],
+    ['panes:analyst', { slot: 'chatgpt', visible: true, health: { session: 'ok' } }],
+  ])
 })

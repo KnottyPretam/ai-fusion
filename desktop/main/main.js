@@ -1,4 +1,5 @@
-// desktop/main/main.js — Electron main process wiring (Stage 1 electron-main → Stage 2 electron-bridge).
+// desktop/main/main.js — Electron main process wiring (Stage 1 electron-main → Stage 2
+// electron-bridge → Stage 3 analyst-view).
 //
 // Run from desktop/: `npx electron .` (package.json "main"). ESM on purpose ("type":"module").
 // This is the ONLY module that imports 'electron'; every other file under main/ takes its
@@ -25,9 +26,14 @@
 //                origin), the three site views (views.js), the orchestrator (one bridge request →
 //                one turn), the bridge client (hello{token} → hello_ack → request/result, capture /
 //                health frames, backoff, `panes:bridge`), shortcuts + the application menu
-//                (menu.js), every IPC channel (ipc.js), the cached health + zoom + bridge state
-//                replayed to the renderer on every did-finish-load; global.__triplexTest under
-//                TRIPLEX_E2E_APP=1.
+//                (menu.js), every IPC channel (ipc.js), the cached health + zoom + bridge state +
+//                analyst state replayed to the renderer on every did-finish-load; global.__triplexTest
+//                under TRIPLEX_E2E_APP=1.
+// Stage 3:       the hidden analyst view (analyst-views.js) on persist:<settings.analyst> —
+//                created lazily, never shown unless the renderer asks — its `panes:analyst` state
+//                pushed to the renderer, the bridge `analyst` frame re-sent from the settings
+//                subscription on every change, and `ANALYST_MODEL` picked up by the NEXT backend
+//                spawn (buildSpawnSpec reads settings.getAnalyst() at spawn time).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -41,6 +47,7 @@ import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attach
 import { createSettings } from './settings.js'
 import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
+import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
 import { registerIpc, saveDomSnapshot } from './ipc.js'
 import { createShortcuts } from './shortcuts.js'
@@ -137,6 +144,7 @@ let chats = null
 let selectors = null
 let stopSelectorsWatch = null
 let views = null
+let analystViews = null
 let orchestrator = null
 let shortcuts = null
 let ipc = null
@@ -229,7 +237,8 @@ function createWindow() {
  * zoom factors and the bridge state. `webContents.send` to a page that is still loading (launch,
  * the reload after a renderer crash) is lost, and `panes:getInfo` carries neither. Wired to the
  * renderer's did-finish-load here; ipc.js also replays right after `panes:getInfo`, when the
- * renderer's listeners are known to exist.
+ * renderer's listeners are known to exist. Stage 3 adds the analyst state, which drives the
+ * fourth tab.
  */
 function replayToRenderer() {
   if (!views || !windowAlive()) return
@@ -239,6 +248,7 @@ function replayToRenderer() {
     sendToRenderer('panes:zoom', { slot, factor: views.zoomFactor(slot) })
   }
   sendToRenderer('panes:bridge', bridgeState)
+  if (analystViews) sendToRenderer('panes:analyst', analystViews.state())
 }
 
 /** Decide where the backend is: attach to TRIPLEX_BACKEND_URL (decided in preflight), else prepare a spawn on TRIPLEX_BACKEND_PORT. */
@@ -295,8 +305,34 @@ function start() {
   })
   win.webContents.on('did-finish-load', replayToRenderer)
 
+  // The hidden analyst page: nothing is created until an analyst request, `showAnalyst(true)` or an
+  // `analyst` rect asks for it (contract §5 `settings.analyst`, default 'chatgpt').
+  analystViews = createAnalystViews({
+    WebContentsView,
+    sessionFromPartition: (partition) => session.fromPartition(partition),
+    contentView: win.contentView,
+    sites,
+    preload: SITE_PRELOAD,
+    settings,
+    ipcMain,
+    openExternal,
+    onState: (state) => sendToRenderer('panes:analyst', state),
+    dev: DEV,
+    ssoHosts: E2E ? [] : SSO_HOSTS,
+  })
+
   orchestrator = createOrchestrator({
     adapterFor: (slot) => views.adapterFor(slot),
+    analystAdapterFor: (slot) => analystViews.adapterFor(slot),
+    analystView: {
+      currentUrl: () => analystViews.currentUrl(),
+      loadUrl: (url) => analystViews.loadUrl(url),
+      newChatUrl: () => analystViews.newChatUrl(),
+      pendingNavigation: () => analystViews.pendingNavigation(),
+      focus: () => analystViews.focus(),
+      getHealth: () => analystViews.getHealth(),
+      setHealth: (h) => analystViews.setHealth(h),
+    },
     focusView: (slot) => views.focus(slot),
     restoreRendererFocus: focusRenderer,
     timeoutsFor: (slot) => timeoutsFor(selectors.current(), slot),
@@ -317,6 +353,7 @@ function start() {
   const reloadSelectors = () => {
     selectors.reload()
     views.pushConfig(selectors.current())
+    analystViews.pushConfig(selectors.current())
   }
 
   shortcuts = createShortcuts({
@@ -333,6 +370,7 @@ function start() {
   })
   shortcuts.attach(win.webContents)
   views.onCreated((_slot, wc) => shortcuts.attach(wc)) // before createAll: initial and recreated views alike
+  analystViews.onCreated((_slot, wc) => shortcuts.attach(wc)) // it holds the keyboard focus during an insert
   views.createAll()
 
   const snapshotsDir = path.join(userData, 'snapshots')
@@ -346,6 +384,7 @@ function start() {
       actions: {
         reloadSelectors,
         saveSnapshot: (slot) => saveDomSnapshot({ views, snapshotsDir }, slot),
+        showAnalyst: () => analystViews.setVisible(true),
         signOut: (slot) => views.signOut(slot),
       },
       log: console,
@@ -355,14 +394,14 @@ function start() {
     console.warn(`[triplex] application menu not installed: ${(e && e.message) || e}`)
   }
 
-  // Bridge client: hello carries the capture switches; Stage 2 announces no analyst (the hidden
-  // analyst view arrives with Stage 3, which passes settings.getAnalyst() here instead).
+  // Bridge client: hello carries the capture switches and the analyst choice (§1); every later
+  // change re-sends the matching `capture` / `analyst` frame from the settings subscription below.
   bridge = createBridgeClient({
     url: bridgeUrlFor(backendInfo.url, { allowRemote: env.TRIPLEX_ALLOW_REMOTE_BACKEND === '1' }),
     token: resolved.token,
     version: PKG.version,
     getCapture: () => settings.getCapture(),
-    getAnalyst: () => null,
+    getAnalyst: () => settings.getAnalyst(),
     getHealth: (slot) => views.getHealth(slot),
     setHealth: (slot, h) => views.setHealth(slot, h),
     onRequest: (frame, emit) => orchestrator.run(frame, emit),
@@ -375,12 +414,16 @@ function start() {
   })
   settings.subscribe(({ key }) => {
     if (key === 'capture') bridge.sendCapture(settings.getCapture())
+    // A new analyst takes effect for the backend in two steps: the frame tells the running backend
+    // which page answers now, and the next spawn's ANALYST_MODEL (buildSpawnSpec) makes it durable.
+    if (key === 'analyst') bridge.sendAnalyst(settings.getAnalyst())
   })
 
   ipc = registerIpc({
     ipcMain,
     isRenderer,
     views,
+    analystViews,
     layoutState,
     orchestrator,
     selectors,
@@ -400,7 +443,7 @@ function start() {
   stopSelectorsWatch = selectors.watch({
     onChange: ({ changed, error }) => {
       if (!changed) return
-      const n = views.pushConfig(selectors.current())
+      const n = views.pushConfig(selectors.current()) + analystViews.pushConfig(selectors.current())
       console.log(`[selectors] override ${error ? 'invalid (last good kept)' : 'reloaded'}; config pushed to ${n} view(s)`)
     },
   })
@@ -426,7 +469,7 @@ function start() {
   }
 
   if (E2E) {
-    globalThis.__triplexTest = { views, orchestrator, settings, selectors, layoutState, ipc, bridge, chats, backend: backend || { info: () => backendInfo, attached: true } }
+    globalThis.__triplexTest = { views, analystViews, orchestrator, settings, selectors, layoutState, ipc, bridge, chats, backend: backend || { info: () => backendInfo, attached: true } }
   }
 }
 
