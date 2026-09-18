@@ -124,6 +124,8 @@
 .drawerBody { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .drawerPanel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: auto; }
 .drawerPanel[hidden] { display: none; }
+/* Analyze with no analyst that can answer: this hint stands in for the pane (Decision 4). */
+.blockedHint { margin: 0; padding: 8px 10px; font-size: 12px; color: var(--warn); }
 .captured { overflow: hidden; }
 .captured > * { flex: 1 1 auto; min-height: 0; }
 .settings { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; font-size: 13px; }

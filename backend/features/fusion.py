@@ -41,6 +41,16 @@ asked for `resolved|standing` only; a `resolved_unjustified` it returns anyway c
 `resolved` and the flag rule alone decides the kind.
 `FusionTurn.usage` covers fusion calls only (its wall clock is the fusion part).
 
+Both `complete_json(retries=1)` calls above rely on the client's web no-retry rule
+(`client.web_retry_suppressed`, S7 review: "Fusion's convergence retry re-types the whole payload
+into a NEW hidden analyst chat"): on a `web:` transport an attempt that produced no output at all
+is NOT corrected, because the correction follow-up would carry no assistant echo -- which the
+bridge reads as a fresh analyst conversation and would re-type the entire convergence payload into
+a brand-new chat in the user's own account (a pane defense would re-submit into the site's own
+thread for nothing). So an empty site reply is one `unavailable` exchange, or one convergence check
+that fails and leaves its divergences standing, and exactly ONE request frame either way. Output
+that merely fails parsing or validation still gets the correction attempt in the same chat.
+
 Anonymisation (docs/semantics.md "Anonymization / leaks" + the "Delimiter breakout" addendum):
 every model- or analyst-authored text Triplex puts into a prompt is scrubbed AND delimited -- the
 divergence `topic` of a challenge, and the topic + current claims of the convergence payload --

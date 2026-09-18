@@ -62,6 +62,39 @@ for (const site of SLOTS) {
   })
 }
 
+/**
+ * chatgpt.com mounts a PLACEHOLDER chat url `/c/WEB:<uuid>` while the first reply streams and only then
+ * replaces it with the real `/c/<uuid>` (MEASURED live, 2026-09-17; the placeholder 404s back to the home
+ * page when revisited). The pattern therefore ends the id at the segment — `(?:[?#]|$)` — so the
+ * placeholder matches nothing and main records only the real link.
+ */
+test('chatgpt.chatUrlPattern ends the id at the segment: it rejects the /c/WEB:<uuid> placeholder and accepts /c/<uuid> bare, with a query and with a fragment', () => {
+  const re = () => new RegExp(DEFAULT_SELECTORS.chatgpt.chatUrlPattern)
+  const uuid = '68c1a2b3-4d5e-6f70-8a9b-0c1d2e3f4a5b'
+  assert.ok(!re().test(`https://chatgpt.com/c/WEB:${uuid}`), 'the WEB: placeholder must not match')
+  assert.ok(!re().test(`https://chatgpt.com/c/WEB:${uuid}?model=auto`))
+  assert.ok(!re().test('https://chatgpt.com/c/WEB:'))
+  assert.ok(re().test(`https://chatgpt.com/c/${uuid}`))
+  assert.ok(re().test(`https://chatgpt.com/c/${uuid}?model=auto`))
+  assert.ok(re().test(`https://chatgpt.com/c/${uuid}#top`))
+  assert.ok(!re().test('https://chatgpt.com/c/'))
+  assert.ok(!re().test('https://chatgpt.com/'))
+  // the id itself is still allowed to carry dashes only: a colon (or any other segment junk) ends the match
+  assert.ok(!re().test(`https://chatgpt.com/c/${uuid}:extra`))
+})
+
+test('the placeholder shape is rejected on every site: claude through its hex-only id, grok and chatgpt through the segment-end rule', () => {
+  const uuid = '8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d'
+  // claude: `[0-9a-f-]+` cannot start at "W", so a placeholder of that shape could never be recorded
+  assert.ok(!new RegExp(DEFAULT_SELECTORS.claude.chatUrlPattern).test(`https://claude.ai/chat/WEB:${uuid}`))
+  assert.ok(new RegExp(DEFAULT_SELECTORS.claude.chatUrlPattern).test(`https://claude.ai/chat/${uuid}`))
+  // grok carries the same segment-end rule as chatgpt. Nothing like the chatgpt placeholder has been
+  // measured on grok.com; the rule is applied for symmetry, because a recorded link that 404s is
+  // silent (the pane just opens the wrong chat) and the rule costs nothing on a real id.
+  assert.ok(!new RegExp(DEFAULT_SELECTORS.grok.chatUrlPattern).test(`https://grok.com/c/WEB:${uuid}`))
+  assert.ok(new RegExp(DEFAULT_SELECTORS.grok.chatUrlPattern).test(`https://grok.com/c/${uuid}`))
+})
+
 test('the chatgpt/claude/grok cascades start with the entries the fake site is built around', () => {
   assert.equal(DEFAULT_SELECTORS.chatgpt.composer[0], '#prompt-textarea')
   assert.equal(DEFAULT_SELECTORS.chatgpt.send[0], "button[data-testid='send-button']")
@@ -87,7 +120,7 @@ test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com
   assert.ok(!grok.composer.includes('textarea'))
   assert.ok(grok.composer.every((s) => /[[.#]/.test(s)), 'every grok composer entry is qualified, never a bare tag')
   // every other key is untouched
-  assert.equal(grok.chatUrlPattern, '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+')
+  assert.equal(grok.chatUrlPattern, '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+(?:[?#]|$)')
   assert.deepEqual(grok.loggedOut, ["a[href*='/sign-in']", "a[href*='accounts.x.ai']"])
   assert.deepEqual(grok.loggedOutUrl, ['accounts.x.ai', '/sign-in'])
   assert.deepEqual(grok.challenge, ["iframe[src*='challenges.cloudflare.com']"])
@@ -106,6 +139,8 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   const { chatgpt, claude } = DEFAULT_SELECTORS
   assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']"])
   assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']"])
+  // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
+  // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
   assert.deepEqual(chatgpt.assistantText, ['.markdown', '.whitespace-pre-wrap'])
   assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']"])
   assert.deepEqual(claude.stop, ["button[aria-label='Stop response']", "button[aria-label*='Stop']"])

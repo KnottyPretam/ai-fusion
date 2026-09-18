@@ -6,6 +6,11 @@
 // GET /health → 200 "ok"; files from this directory; SPA fallback: any path without a file
 // extension serves index.html (so /c/<id>, /auth/login, /challenges.cloudflare.com/turnstile all
 // render the page); no caching headers; exits cleanly on SIGTERM/SIGINT when run directly.
+//
+// The one path the fallback does NOT serve is `/c/WEB:<id>`: chatgpt.com's PLACEHOLDER chat url
+// (measured 2026-09-17, replayed by the fake site's ?webUrlMs) is not a chat — revisiting it lands
+// back on the home page — so the server answers 404 and a recorded placeholder link cannot pretend
+// to work.
 
 import fs from 'node:fs'
 import http from 'node:http'
@@ -48,6 +53,10 @@ function handle(req, res) {
   }
   if (pathname === '/health') {
     send(res, 200, 'ok')
+    return
+  }
+  if (pathname.startsWith('/c/WEB:')) {
+    send(res, 404, 'not found') // the placeholder chat url is not a chat (see the header)
     return
   }
   const ext = path.extname(pathname)

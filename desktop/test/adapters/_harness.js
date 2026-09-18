@@ -84,16 +84,19 @@ export function installFakeIpc({ site, selectors, dev }) {
  * Open a fake-site page with the fake IPC + site.cjs installed. `site` is the page's look-alike;
  * `ipcSite` what adapter:config answers (null = inert). The fake site's own query keys are passed
  * through: state, thread, sendDelayMs, composer (grok only), and Stage 2 replyMs / reply / nostop /
- * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json` or, from Stage 3, `rich` — both
- * RENDERED as markdown with real code-block chrome). `path` picks the page path (the SPA fallback
- * serves index.html for /c/<id>).
+ * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json`, `rich` or, from S7, `fidelity` —
+ * all RENDERED as markdown with real code-block chrome), plus the S7-review lifecycle keys
+ * remountMs / placeholderMs / webUrlMs (the measured chatgpt placeholder-then-remount turn and its
+ * placeholder `/c/WEB:<uuid>` url). `path` picks the page path (the SPA fallback serves index.html
+ * for /c/<id>).
  */
 export async function open(page, opts = {}) {
   const { site, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site, path: pagePath = '/', ...query } = opts
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  for (const key of ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns']) {
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs']
+  for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
   await page.goto(`${pagePath}?${q.toString()}`)
@@ -101,7 +104,12 @@ export async function open(page, opts = {}) {
 
 export const request = (page, msg) => page.evaluate((m) => window.__triplexFakeIpc.request(m), msg)
 export const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
-/** The fake site's Stage 2 reply state. */
+/**
+ * The fake site's Stage 2 reply state, plus the S7-review lifecycle readings: the placeholder turn's
+ * text and the three moments of ?remountMs (`placeholderAt`, `placeholderGoneAt`, `remountedAt`), every
+ * stop-button transition (`stopEvents`: [{on:true},{on:false}] = up continuously across the gap) and
+ * every history push/replace (`urls`).
+ */
 export const replyState = (page) =>
   page.evaluate(() => ({
     replying: window.__fake.replying,
@@ -112,6 +120,12 @@ export const replyState = (page) =>
     doneSignalAt: window.__fake.doneSignalAt,
     lastRenderAt: window.__fake.lastRenderAt,
     rendersAfterSignal: window.__fake.rendersAfterSignal,
+    placeholderText: window.__fake.placeholderText,
+    placeholderAt: window.__fake.placeholderAt,
+    placeholderGoneAt: window.__fake.placeholderGoneAt,
+    remountedAt: window.__fake.remountedAt,
+    stopEvents: window.__fake.stopEvents,
+    urls: window.__fake.urls,
     replyText: window.__fake.replyText(),
   }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))

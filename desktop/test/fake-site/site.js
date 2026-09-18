@@ -17,6 +17,12 @@
  *   ?reply=rich      (Stage 3) CANNED_RICH instead of the echo: a heading, bold / italic / inline code, a
  *                    link, a nested list, a GFM table and a fenced code block — every shape `toMarkdown`
  *                    has to rebuild
+ *   ?reply=fidelity  (S7) CANNED_FIDELITY: the capture-fidelity reply — a paragraph carrying inline code
+ *                    that CONTAINS a backtick and a KaTeX-shaped formula (the accessible MathML copy with
+ *                    its `application/x-tex` annotation, hidden by clip as KaTeX hides it, next to the
+ *                    aria-hidden glyph run), a nested list, a GFM table and a multi-line fenced JSON block
+ *                    whose lines are `div.cm-line` BLOCK elements (a shiki / CodeMirror-style highlighter).
+ *                    Analyze and Fusion parse that fenced body, so it has to come back byte for byte.
  *
  * Stage 3 — markdown replies: ?reply=json and ?reply=rich are RENDERED (renderMarkdown) as the chat UIs
  * render markdown — real block elements and real code-block chrome (a header carrying the language and a
@@ -36,6 +42,34 @@
  *                    'Searching the web…', marked done at once — chatgpt gets its copy button — while the
  *                    stop button stays up) and, TWO_TURNS_LAG_MS later, the answer container streaming as
  *                    usual; a capture must follow the LAST container and never end on the tool turn
+ *
+ * S7 review — the chatgpt placeholder/remount lifecycle, MEASURED live on chatgpt.com with a real
+ * logged-in session on 2026-09-17 (the same readings are in the site.cjs header and in
+ * test/fixtures/dom/README.md):
+ *   * within ~1 s of the submit a SHORT placeholder assistant turn is mounted (~12 characters, and on
+ *     chatgpt with NO `.markdown` child) while button[data-testid="stop-button"] (aria-label
+ *     "Stop answering") is visible;
+ *   * at ~2 s that placeholder is UNMOUNTED: `[data-message-author-role="assistant"]` returns ZERO for
+ *     roughly 10 s while the stop button stays visible;
+ *   * at ~13 s the real reply container is mounted with a `.markdown` child carrying the answer;
+ *   * at ~14 s the stop button disappears and a second copy-turn-action-button appears.
+ * The two options below replay that lifecycle on a test timescale:
+ *   ?remountMs=N     mount a short placeholder turn (?placeholderMs later it is REMOVED from the DOM
+ *                    entirely — zero assistant containers), then mount the REAL reply N ms after that
+ *                    removal and stream it as usual. The stop button is raised before the placeholder and
+ *                    is dropped only at the end signal, so it stays visible across the whole gap (as
+ *                    measured). Composes with ?replyMs / ?reply=… / ?nostop=1 / ?nodone=1 / ?doneLagMs /
+ *                    ?twoTurns=1 (the two-turn dance happens after the gap) — with ?blockAfterMs the
+ *                    banner timer still starts at the REAL reply, not at the submit. Note ?nostop=1:
+ *                    with no stop button a placeholder that sits still for quietMs would itself look
+ *                    quiet, so keep quietMs > placeholderMs there (as the specs do).
+ *   ?placeholderMs=N how long the placeholder stays mounted before it is removed (default
+ *                    PLACEHOLDER_MS); only meaningful with ?remountMs
+ *   ?webUrlMs=N      the PLACEHOLDER chat URL: the submit pushes /c/WEB:<uuid> (which no tightened
+ *                    chatUrlPattern matches, and which serve.js answers with 404 — on chatgpt.com a
+ *                    revisit lands back on the home page) and N ms later REPLACES it with the real
+ *                    /c/<uuid>, same uuid. Every push/replace is recorded in window.__fake.urls, so a
+ *                    spec can assert which of them a chatUrlPattern would have recorded.
  *
  * Reply DOM — matches the selectors v2 `assistant` / `assistantText` / `stop` / `done` cascades
  * (site.cjs DEFAULT_SELECTORS, contract §4) with their FIRST entries:
@@ -76,14 +110,20 @@
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
  * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
- *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs, doneLagMs, twoTurns}, replying,
+ *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs, doneLagMs, twoTurns,
+ *                  remountMs, placeholderMs, webUrlMs}, replying,
  *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
+ *                  placeholderText, placeholderAt, placeholderGoneAt, remountedAt, stopEvents, urls,
  *                  replyText(), replySource()} (the site's own debug surface; `replySource()` is the reply's
  * markdown source, null before any reply; `helperText()` is the hidden helper
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
  * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
  * ms of the end signal and the last text render, null before; `rendersAfterSignal` the renders that
- * landed after the end signal).
+ * landed after the end signal; `placeholderText` the placeholder turn's text (null when ?remountMs is
+ * off), `placeholderAt` / `placeholderGoneAt` / `remountedAt` epoch ms of its mount, its removal and the
+ * real container's mount; `stopEvents` every stop-button transition as {on, ts} — [{on:true},{on:false}]
+ * means the button was up continuously across the gap; `urls` every pushState/replaceState as
+ * {how:'push'|'replace', href, ts}).
  */
 ;(() => {
   'use strict'
@@ -104,6 +144,15 @@
   /** ?twoTurns=1: the answer container follows the tool container after this many ms. */
   const TWO_TURNS_LAG_MS = 300
   const TOOL_TEXT = 'Searching the web…'
+  /**
+   * ?remountMs: the placeholder turn chatgpt.com mounts before it unmounts everything (measured
+   * 2026-09-17: ~12 characters, no `.markdown` child, up for about a second). PLACEHOLDER_MS is how
+   * long it stays before it is removed; ?placeholderMs overrides it.
+   */
+  const PLACEHOLDER_TEXT = 'Placeholder…'
+  const PLACEHOLDER_MS = 250
+  /** ?webUrlMs: how the placeholder chat URL is prefixed on chatgpt.com (`/c/WEB:<uuid>`). */
+  const WEB_URL_PREFIX = 'WEB:'
 
   // Canned JSON for ?reply=json — the assembled `content` of the planted_factual fixtures, verbatim
   // (analyst.extraction.1, <slot>.defense.1, analyst.convergence.1). observe.spec.js re-derives these
@@ -140,6 +189,36 @@
     '```',
   ].join('\n')
 
+  /**
+   * Canned markdown for ?reply=fidelity (S7): one reply that carries every shape the capture used to
+   * mangle — inline code holding a backtick, a KaTeX formula, a nested list, a GFM table and a
+   * multi-line JSON body rendered one BLOCK element per line. observe.spec.js asserts the capture
+   * comes back as this source, verbatim, and that the fenced body still JSON.parses.
+   */
+  const CANNED_FIDELITY = [
+    '## Capture fidelity',
+    '',
+    'The range register is `` `GYRO_RANGE` `` in prose, and the axis tolerance is $\\pm 0.5^\\circ$ at 25 C.',
+    '',
+    '- ranges',
+    '  - 2000 deg/s',
+    '  - 125 deg/s',
+    '- registers',
+    '',
+    '| Register | Value |',
+    '| --- | --- |',
+    '| GYRO_RANGE | 0x0F |',
+    '| CHIP_ID | 0x1F |',
+    '',
+    '```json',
+    '{',
+    '  "register": "0x0F",',
+    '  "ranges": [2000, 125],',
+    '  "note": "a ` backtick and a \\"quote\\" inside a string"',
+    '}',
+    '```',
+  ].join('\n')
+
   const params = new URLSearchParams(location.search)
   const site = Object.prototype.hasOwnProperty.call(SITES, params.get('site')) ? params.get('site') : 'chatgpt'
   const cfg = SITES[site]
@@ -153,13 +232,20 @@
   const replyOpts = {
     enabled: params.has('replyMs') || params.has('reply'),
     ms: Math.max(0, Number(params.get('replyMs')) || 0),
-    kind: params.get('reply') === 'json' ? 'json' : params.get('reply') === 'rich' ? 'rich' : 'echo',
+    kind: ['json', 'rich', 'fidelity'].includes(params.get('reply')) ? params.get('reply') : 'echo',
     nostop: params.get('nostop') === '1',
     nodone: params.get('nodone') === '1',
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
     doneLagMs: params.has('doneLagMs') ? Math.max(0, Number(params.get('doneLagMs')) || 0) : null,
     twoTurns: params.get('twoTurns') === '1',
+    // the measured chatgpt lifecycle (see the header): a placeholder turn, then a gap with NO
+    // assistant container at all, then the real reply
+    remountMs: params.has('remountMs') ? Math.max(0, Number(params.get('remountMs')) || 0) : null,
+    placeholderMs: params.has('placeholderMs') ? Math.max(0, Number(params.get('placeholderMs')) || 0) : PLACEHOLDER_MS,
   }
+  /** ?webUrlMs: the placeholder chat URL is replaced by the real one this many ms after the push. */
+  const webUrlMs = params.has('webUrlMs') ? Math.max(0, Number(params.get('webUrlMs')) || 0) : null
+  replyOpts.webUrlMs = webUrlMs
 
   const app = document.getElementById('app')
   app.setAttribute('data-site', site)
@@ -192,6 +278,15 @@
     doneSignalAt: null,
     lastRenderAt: null,
     rendersAfterSignal: 0,
+    // ?remountMs: the placeholder turn's text and the three moments of the measured lifecycle
+    placeholderText: replyOpts.remountMs === null ? null : PLACEHOLDER_TEXT,
+    placeholderAt: null,
+    placeholderGoneAt: null,
+    remountedAt: null,
+    /** Every stop-button transition, {on, ts}: [{on:true},{on:false}] = up continuously across the gap. */
+    stopEvents: [],
+    /** Every history push/replace, {how, href, ts} — which of them a chatUrlPattern would record. */
+    urls: [],
     replyText: () => (reply ? reply.textEl.textContent : null),
     replySource: () => (reply ? reply.full : null),
   }
@@ -268,6 +363,16 @@
 
   // --- helpers ------------------------------------------------------------------------------
   const randomId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+  const hex = (n) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+  /** A v4-shaped id (the sites mint uuids; ?webUrlMs needs one to prefix with WEB:). */
+  const randomUuid = () => [hex(8), hex(4), '4' + hex(3), ((Math.floor(Math.random() * 4) + 8).toString(16) + hex(3)), hex(12)].join('-')
+
+  /** pushState / replaceState, recorded in window.__fake.urls (a spec asserts which URL a pattern would record). */
+  function goUrl(how, url) {
+    if (how === 'replace') history.replaceState({}, '', url)
+    else history.pushState({}, '', url)
+    fake.urls.push({ how, href: location.href, ts: Date.now() })
+  }
 
   function setSendEnabled(on) {
     if (sendTimer !== null) {
@@ -300,7 +405,17 @@
     setTimeout(() => {
       // Real sites mint the chat id on the FIRST message and keep it for later turns; do the same so a
       // recorded chat link stays equal to the pane's URL across sends.
-      if (!/^\/c\/[A-Za-z0-9]+/.test(location.pathname)) history.pushState({}, '', '/c/' + randomId() + location.search)
+      if (/^\/c\/[A-Za-z0-9]+/.test(location.pathname)) return
+      if (webUrlMs === null) {
+        goUrl('push', '/c/' + randomId() + location.search)
+        return
+      }
+      // ?webUrlMs (measured on chatgpt.com, 2026-09-17): the first reply streams under a PLACEHOLDER
+      // url `/c/WEB:<uuid>` — which a chatUrlPattern that ends the id at the segment never matches —
+      // and only later is it replaced by the real `/c/<uuid>`. The uuid is kept; only the prefix goes.
+      const uuid = randomUuid()
+      goUrl('push', '/c/' + WEB_URL_PREFIX + uuid + location.search)
+      setTimeout(() => goUrl('replace', '/c/' + uuid + location.search), webUrlMs)
     }, 500)
     if (replyOpts.enabled) startReply(text)
   }
@@ -320,6 +435,7 @@
   }
 
   function replyFor(text) {
+    if (replyOpts.kind === 'fidelity') return CANNED_FIDELITY
     if (replyOpts.kind === 'rich') return CANNED_RICH
     if (replyOpts.kind === 'json') {
       const canned = cannedFor(text)
@@ -335,8 +451,52 @@
   // `toMarkdown` has to rebuild the markdown from the DOM. An unterminated fence in a streaming
   // PREFIX renders as an open code block, exactly like a live markdown renderer.
 
-  /** `renderInline` is recursive, so each call gets its OWN matcher (a shared /g regex would loop). */
-  const inlineMatcher = () => /`([^`]+)`|\*\*([^*]+)\*\*|_([^_]+)_|\[([^\]]+)\]\(([^)]+)\)/g
+  /**
+   * `renderInline` is recursive, so each call gets its OWN matcher (a shared /g regex would loop).
+   * The double-backtick branch comes FIRST so `` `x` `` is inline code whose body holds a backtick;
+   * `$tex$` renders as a KaTeX-shaped formula (see `buildMath`).
+   */
+  const inlineMatcher = () =>
+    /``\s?(?<tickcode>.+?)\s?``|`(?<code>[^`]+)`|\*\*(?<strong>[^*]+)\*\*|_(?<em>[^_]+)_|\[(?<link>[^\]]+)\]\((?<href>[^)]+)\)|\$(?<tex>[^$\n]+)\$/g
+
+  const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
+  /** The glyphs a TeX source renders to — enough of a mapping for the canned formulas. */
+  const TEX_GLYPHS = { '\\pm': '±', '\\circ': '°', '\\times': '×', '\\le': '≤', '\\ge': '≥', '\\alpha': 'α' }
+  const texGlyphs = (tex) =>
+    tex
+      .replace(/\\[a-zA-Z]+/g, (c) => TEX_GLYPHS[c] || '')
+      .replace(/[{}^_]/g, '')
+      .replace(/\s+/g, '')
+
+  /**
+   * A formula exactly as KaTeX renders one: an accessible MathML copy carrying the TeX source in an
+   * `annotation[encoding="application/x-tex"]` (hidden by CLIP in site.css, never display:none) next
+   * to the aria-hidden glyph run the reader sees. A capture must take the TeX ONCE.
+   */
+  function buildMath(tex) {
+    const mathEl = (tag) => document.createElementNS(MATHML_NS, tag)
+    const span = el('span', 'katex')
+    const mathml = el('span', 'katex-mathml')
+    const math = mathEl('math')
+    const semantics = mathEl('semantics')
+    const mrow = mathEl('mrow')
+    const mi = mathEl('mi')
+    mi.textContent = texGlyphs(tex)
+    mrow.appendChild(mi)
+    const annotation = mathEl('annotation')
+    annotation.setAttribute('encoding', 'application/x-tex')
+    annotation.textContent = tex
+    semantics.append(mrow, annotation)
+    math.appendChild(semantics)
+    mathml.appendChild(math)
+    const html = el('span', 'katex-html')
+    html.setAttribute('aria-hidden', 'true')
+    const glyphs = el('span', 'mord')
+    glyphs.textContent = texGlyphs(tex)
+    html.appendChild(glyphs)
+    span.append(mathml, html)
+    return span
+  }
   const el = (tag, className) => {
     const node = document.createElement(tag)
     if (className) node.className = className
@@ -351,30 +511,33 @@
     })
   }
 
-  /** Inline markdown: `code`, **bold**, _italic_, [text](url) — nothing nested inside code. */
+  /** Inline markdown: `code` / `` `code` ``, **bold**, _italic_, [text](url), $tex$ — nothing nested inside code. */
   function renderInline(parent, text) {
     const re = inlineMatcher()
     let last = 0
     let m
     while ((m = re.exec(text)) !== null) {
       appendText(parent, text.slice(last, m.index))
-      if (m[1] !== undefined) {
+      const g = m.groups
+      if (g.tickcode !== undefined || g.code !== undefined) {
         const code = document.createElement('code')
-        code.textContent = m[1]
+        code.textContent = g.tickcode !== undefined ? g.tickcode : g.code
         parent.appendChild(code)
-      } else if (m[2] !== undefined) {
+      } else if (g.strong !== undefined) {
         const strong = document.createElement('strong')
-        renderInline(strong, m[2])
+        renderInline(strong, g.strong)
         parent.appendChild(strong)
-      } else if (m[3] !== undefined) {
+      } else if (g.em !== undefined) {
         const em = document.createElement('em')
-        renderInline(em, m[3])
+        renderInline(em, g.em)
         parent.appendChild(em)
-      } else {
+      } else if (g.link !== undefined) {
         const a = document.createElement('a')
-        a.setAttribute('href', m[5])
-        renderInline(a, m[4])
+        a.setAttribute('href', g.href)
+        renderInline(a, g.link)
         parent.appendChild(a)
+      } else {
+        parent.appendChild(buildMath(g.tex))
       }
       last = m.index + m[0].length
     }
@@ -389,9 +552,26 @@
    *   grok     a header row (label + copy button) before the <pre>, and NO language class on the
    *            code — the label is the only clue, so both language sources stay covered
    */
+  /**
+   * The body of a code block: one text node (chatgpt / claude / grok as measured), or — under
+   * ?reply=fidelity — one BLOCK `div.cm-line` per line, the shiki / CodeMirror shape whose lines a
+   * capture that only breaks on `<br>` used to run together.
+   */
+  function fillCode(code, body) {
+    if (replyOpts.kind !== 'fidelity') {
+      code.textContent = body
+      return
+    }
+    for (const line of body.split('\n')) {
+      const div = el('div', 'cm-line')
+      if (line !== '') div.appendChild(document.createTextNode(line))
+      code.appendChild(div)
+    }
+  }
+
   function buildCodeBlock(lang, body) {
     const code = document.createElement('code')
-    code.textContent = body
+    fillCode(code, body)
     if (site === 'chatgpt') {
       const pre = el('pre', 'code-pre')
       const wrap = el('div', 'code-wrap')
@@ -588,6 +768,27 @@
   }
 
   /**
+   * The SHORT placeholder assistant turn of the measured chatgpt lifecycle (?remountMs): the container
+   * the site mounts within ~1 s of the submit and unmounts again a beat later. On chatgpt it carries NO
+   * `.markdown` child (measured 2026-09-17), so a capture reads its text through the container itself —
+   * which is exactly why it must never be mistaken for the answer; claude / grok get the same shape
+   * without their inner markdown element (not measured there, kept symmetrical).
+   */
+  function buildPlaceholder() {
+    if (site === 'chatgpt') {
+      const article = document.createElement('article')
+      article.setAttribute('data-message-author-role', 'assistant')
+      article.textContent = PLACEHOLDER_TEXT
+      return article
+    }
+    const box = document.createElement('div')
+    box.className = site === 'claude' ? 'font-claude-response reply' : 'reply'
+    if (site === 'grok') box.id = 'response-' + randomId()
+    box.textContent = PLACEHOLDER_TEXT
+    return box
+  }
+
+  /**
    * Full re-render of the reply (what a markdown renderer does): every child replaced. The echo is
    * plain text in a `pre-wrap` container (so its spaces, tabs and newlines read back byte for
    * byte); ?reply=json / ?reply=rich render their markdown as real DOM (see `renderMarkdown`).
@@ -615,7 +816,36 @@
     fake.containers += 1
   }
 
+  /**
+   * ?remountMs — the measured chatgpt lifecycle (see the header): a short placeholder turn under the
+   * stop button, then the placeholder REMOVED (zero assistant containers) for `remountMs`, then the
+   * real reply. The stop button is raised before the placeholder and only dropped by the end signal,
+   * so it is visible across the whole gap; `?twoTurns` and every other reply option then apply to the
+   * real reply exactly as without this option.
+   */
   function startReply(text) {
+    if (replyOpts.remountMs === null) {
+      beginReply(text)
+      return
+    }
+    const placeholder = buildPlaceholder()
+    thread.appendChild(placeholder)
+    fake.containers += 1
+    fake.placeholderAt = Date.now()
+    fake.replying = true
+    fake.done = false
+    if (!replyOpts.nostop) actions.streaming(true)
+    setTimeout(() => {
+      placeholder.remove() // unmounted entirely: countAssistant() is back to the baseline
+      fake.placeholderGoneAt = Date.now()
+      setTimeout(() => {
+        fake.remountedAt = Date.now()
+        beginReply(text)
+      }, replyOpts.remountMs)
+    }, replyOpts.placeholderMs)
+  }
+
+  function beginReply(text) {
     if (replyOpts.twoTurns) {
       // ?twoTurns=1: a finished "tool" turn first — its text static, its done marker mounted at once
       // (chatgpt) — under the stop button, then the answer container after TWO_TURNS_LAG_MS.
@@ -705,6 +935,11 @@
     return b
   }
 
+  /** Record a stop-button transition (window.__fake.stopEvents): the gap must not drop it. */
+  function noteStop(on) {
+    fake.stopEvents.push({ on, ts: Date.now() })
+  }
+
   /** chatgpt / claude / grok&composer=textarea: one send button, disabled until the model holds text; the stop button takes its place while streaming. */
   function toggleActions(button) {
     const stopButton = makeStopButton()
@@ -726,6 +961,7 @@
         render()
       },
       streaming(on) {
+        if (on !== streaming) noteStop(on)
         streaming = on
         render()
       },
@@ -761,6 +997,7 @@
         render()
       },
       streaming(on) {
+        if (on !== streaming) noteStop(on)
         streaming = on
         render()
       },

@@ -28,9 +28,9 @@ text), so the table is the history of what was seen on which day.
 | 13. Any Cloudflare/Turnstile challenge → pane revealed, turn fails fast with `challenge`, solving by hand restores health; record site/when. | S5 | | | | | | |
 | 14. Focus returns to the prompt bar after Send. | S5 | | | | | | |
 | 15. Backend spawned by Electron: `GET /api/bridge/status` connected within 5 s; kill the backend → banner; restart → reconnects. | S6 | 2026-09-16 | all | pass | — | — | `scripts/desktop.sh`: renderer built for /app/, Electron spawned the backend (venv) on 8021, renderer loaded after one retry, `GET /api/bridge/status` connected within 6 s; kill/restart of the backend covered by app spec 12 (banner on socket drop, clears on reconnect) — manual kill still to do |
-| 16. Send with capture off → `GET /api/conversations/{id}` shows `errors.<slot>` = "capture is off…", empty threads; sidebar lists it. | S6 | | | | | | |
-| 17. Capture on for one site → `responses.<slot>` equals the pane's reply; thread has the `[user, assistant]` pair; the others `not_captured`. | S6 | | | | | | |
-| 18. Capture on for all three → three responses; Captured tab matches the panes; the meter shows latency/calls only. | S6 | | | | | | |
+| 16. Send with capture off → `GET /api/conversations/{id}` shows `errors.<slot>` = "capture is off…", empty threads; sidebar lists it. | S6 | 2026-09-17 | all | pass | — | not_captured | user run: a Send with all three switches off stored three "capture is off" errors, empty threads; Analyze correctly refused (its wording was wrong and was fixed) |
+| 17. Capture on for one site → `responses.<slot>` equals the pane's reply; thread has the `[user, assistant]` pair; the others `not_captured`. | S6 | 2026-09-17 | claude, grok | pass | claude `.font-claude-response`, grok `div[id^='response-']` | — | user run with capture on: claude 3489 chars and grok 7068 chars captured into their threads |
+| 18. Capture on for all three → three responses; Captured tab matches the panes; the meter shows latency/calls only. | S6 | 2026-09-17 | chatgpt | fail→fixed | `[data-message-author-role='assistant']` + `.markdown` | timeout | chatgpt captured 12 chars then timed out: the site mounts a placeholder turn, UNMOUNTS the container for ~10 s, then remounts the real reply; observe held the detached node. Fixed (isConnected drop, seenContainer, budget bound) + fake-site regression. Awaiting a user re-run |
 | 19. `chats.json` holds the three chat URLs; select an older conversation → panes navigate to its chats; a Send continues them; New conversation → fresh chats. | S6 | | | | | | |
 | 20. Unchecked target → that site untouched, `turn_start.slots` lists the subset, Analyze reports it missing. | S6 | | | | | | |
 | 21. Break a selector in `selectors.json` → chip red within 2 s without restart; restore. | S6 | | | | | | |
@@ -40,7 +40,7 @@ text), so the table is the history of what was seen on which day.
 | 25. Analyst = `ollama:hermes3` → Analyze produces a report or degrades cleanly with raw attempts shown. | S7 | | | | | | |
 | 26. Analyst unset → Analyze disabled with the hint; a pre-pivot conversation (OpenRouter models) → Send yields `transport_disabled`, nothing reaches OpenRouter. | S7 | | | | | | |
 | 27. Rate-limit / "Unusual activity" observed? → recorded; no automatic retry happened. | S7 | | | | | | |
-| 28. Read stop/done selectors for claude.ai and grok.com from devtools; record them. | S7 | | | | | | |
+| 28. Read stop/done selectors for claude.ai and grok.com from devtools; record them. | S7 | 2026-09-17 | chatgpt | pass | stop `button[data-testid='stop-button']` (aria-label "Stop answering"), done `copy-turn-action-button`, assistant `[data-message-author-role='assistant']`, text `.markdown` (`.whitespace-pre-wrap` no longer matches, kept as a free fallback; `.prose` also matches) | — | measured live with a one-prompt probe; claude and grok stop/done selectors still to read |
 
 ## How to record
 

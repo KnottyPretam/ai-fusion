@@ -4,8 +4,10 @@
 // one) → `rejected analyst_not_chosen`; `fresh:true` opens newChatUrl on the analyst view and waits
 // for the composer, `fresh:false` continues in place; analyst turns are serialized against each
 // other (`view_busy`) while the same site's PANE turn runs independently; the analyst ALWAYS
-// observes whatever the capture switches say; it never reads or records a chat link and never
-// emits a `panes:turn` phase; its own health governs its rejections. Every emitted frame is
+// observes whatever the capture switches say; it never reads or records a PANE chat link and never
+// emits a `panes:turn` phase; its own health governs its rejections; a `fresh:false` continuation
+// is bound to the chat its own CONVERSATION used (main's in-memory analyst chat map), and the
+// stale-stop health re-read holds the view reserved while it is in flight. Every emitted frame is
 // checked by protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,7 +62,7 @@ function okHealth(extra = {}) {
  * setup(opts): `analystSlot` (null = no analyst chosen), `analystHealth`, `capture`, `links`.
  * The analyst seam is a fake analyst-views.js: one client, its own URL, navigation and health.
  */
-function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, links = {}, paneHealth = {}, analystNewChatUrl = null } = {}) {
+function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, links = {}, paneHealth = {}, analystNewChatUrl = null, analystChatMemory = {} } = {}) {
   const trace = []
   const panes = { claude: scriptedClient('pane:claude', trace), chatgpt: scriptedClient('pane:chatgpt', trace), grok: scriptedClient('pane:grok', trace) }
   const analystClient = scriptedClient('analyst', trace)
@@ -76,6 +78,8 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
     pending: null,
     created: 0,
   }
+  /** main's memory of which analyst chat each conversation used (analyst-views.js). */
+  const analystChats = new Map(Object.entries(analystChatMemory))
   let clock = 1000.4
   const orch = createOrchestrator({
     adapterFor: (slot) => panes[slot] || null,
@@ -101,6 +105,12 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
       setHealth: (h) => {
         analyst.health = h
       },
+      chatFor: (convId) => analystChats.get(convId) || null,
+      chatOwner: (url) => {
+        for (const [convId, u] of analystChats) if (u === url) return convId
+        return null
+      },
+      noteChat: (convId, url) => analystChats.set(convId, url),
     },
     focusView: (slot) => trace.push(`${slot}:focus`),
     restoreRendererFocus: () => trace.push('renderer:focus'),
@@ -128,7 +138,7 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
   })
   const emitted = []
   const emit = (frame) => emitted.push(frame)
-  return { orch, panes, analystClient, analyst, trace, timers, phases, chatsSet, emitted, emit }
+  return { orch, panes, analystClient, analyst, analystChats, trace, timers, phases, chatsSet, emitted, emit }
 }
 
 const analystRequest = (slot = 'chatgpt', extra = {}) => ({
@@ -394,4 +404,156 @@ test('an analyst failure is a result frame with a §1 result code and never a pa
   assert.equal(result.code, 'composer_not_found')
   assert.deepEqual(phases, [])
   assertValid(emitted)
+})
+
+test('the stale-stop health re-read holds the view reserved: a second request inside that window is view_busy, not a second turn on the same client', async () => {
+  const { orch, analystClient, analyst, emitted, emit } = setup({ analystHealth: okHealth({ stop: true }) })
+  const first = orch.run(analystRequest('chatgpt', { req_id: 'A1' }), emit)
+  await settleAll()
+  assert.deepEqual(analystClient.ops(), ['health'], 'the fresh read is in flight, nothing is reserved yet in the old code')
+
+  // A2 arrives while A1 is still awaiting the fresh health read (up to FRESH_HEALTH_TIMEOUT_MS)
+  const second = await orch.run(analystRequest('chatgpt', { req_id: 'A2' }), emit)
+  assert.equal(second.type, 'rejected', 'the second request never gets accepted')
+  assert.equal(second.code, 'view_busy')
+  assert.equal(second.req_id, 'A2')
+  assert.deepEqual(analystClient.ops(), ['health'], 'and never reaches the view — no second health read, no second ready')
+  assert.deepEqual(
+    emitted.filter((f) => f.type === 'accepted'),
+    [],
+    'neither turn is accepted while the read is in flight (A1 is still deciding)',
+  )
+
+  // A1 owns the view and runs to completion; cancel still reaches it (its entry was not overwritten)
+  analystClient.settle('health', { ok: true, op: 'health', health: okHealth({ stop: false }) })
+  await settleAll()
+  assert.equal(analyst.health.stop, false)
+  assert.deepEqual(
+    emitted.filter((f) => f.type === 'accepted').map((f) => f.req_id),
+    ['A1'],
+    'exactly one turn was accepted for the one analyst view',
+  )
+  assert.equal(analystClient.ops()[1], 'ready')
+  assert.equal(orch.cancel('A1'), true, 'the reservation belongs to A1')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  const result = await first
+  assert.equal(result.ok, false)
+  assert.equal(result.code, 'cancelled')
+  assertValid(emitted)
+
+  // the map was given back, so the next request is accepted again
+  const third = orch.run(analystRequest('chatgpt', { req_id: 'A3' }), emit)
+  await settleAll()
+  assert.ok(
+    emitted.some((f) => f.type === 'accepted' && f.req_id === 'A3'),
+    'the view is free once the first turn finished',
+  )
+  orch.cancel('A3')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await third
+})
+
+test('a rejected stale-stop read gives the reservation back: the view is not left busy for ever', async () => {
+  const { orch, analystClient, emitted, emit } = setup({ analystHealth: okHealth({ stop: true }) })
+  const first = orch.run(analystRequest('chatgpt', { req_id: 'B1' }), emit)
+  await settleAll()
+  analystClient.settle('health', { ok: true, op: 'health', health: okHealth({ stop: true }) }) // really still answering
+  const rejected = await first
+  assert.equal(rejected.type, 'rejected')
+  assert.equal(rejected.code, 'view_busy')
+  assert.equal(orch.inflight('analyst:chatgpt'), null, 'nothing is left in the active map')
+
+  const second = orch.run(analystRequest('chatgpt', { req_id: 'B2', fresh: false }), emit)
+  await settleAll()
+  analystClient.settle('health', { ok: true, op: 'health', health: okHealth({ stop: false }) })
+  await settleAll()
+  assert.ok(
+    emitted.some((f) => f.type === 'accepted' && f.req_id === 'B2'),
+    'the next request is judged on its own fresh read',
+  )
+  orch.cancel('B2')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await second
+})
+
+test('a fresh:false analyst continuation is bound to its conversation: back to its OWN chat, never typed into another conversation’s', async () => {
+  const OTHER = 'b7d2c1e0-4a3b-4c5d-9e8f-102030405060'
+  const { orch, analystClient, analyst, analystChats, emit, emitted } = setup()
+
+  /** One whole analyst turn; `landedIn` is the chat URL the page reports back (and navigates to). */
+  const runTurn = async (convId, extra, landedIn) => {
+    const done = orch.run(analystRequest('chatgpt', { conversation_id: convId, ...extra }), emit)
+    await settleAll()
+    analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+    await settleAll()
+    analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, ms: 1 })
+    await settleAll()
+    analyst.url = landedIn // the site navigated into the chat while it answered
+    analystClient.settle('observe', { ok: true, op: 'observe', text: '{}', doneBy: 'quiet', ms: 1, url: landedIn })
+    return done
+  }
+
+  // 1. conversation A opens a fresh analyst chat and finishes there: main remembers it
+  assert.equal((await runTurn(CONV, { req_id: 'A1', fresh: true }, 'https://x.test/c/a1')).ok, true)
+  assert.equal(analystChats.get(CONV), 'https://x.test/c/a1', 'the analyst chat is recorded for A')
+  // 2. conversation B takes the one hidden view in the gap between A's two attempts
+  assert.equal((await runTurn(OTHER, { req_id: 'B1', fresh: true }, 'https://x.test/c/b1')).ok, true)
+  assert.equal(analystChats.get(OTHER), 'https://x.test/c/b1')
+  assert.equal(analyst.url, 'https://x.test/c/b1', 'the view now shows B’s chat')
+
+  // 3. A's correction attempt (bridge fresh:false) goes BACK to A's chat, not into B's
+  const loadsBefore = analyst.loads.length
+  const correction = orch.run(analystRequest('chatgpt', { req_id: 'A2', fresh: false, conversation_id: CONV }), emit)
+  await settleAll()
+  assert.deepEqual(analyst.loads.slice(loadsBefore), ['https://x.test/c/a1'], 'A’s own chat is opened first')
+  assert.deepEqual(analystClient.ops().at(-1), 'ready', 'and only then is the page asked anything')
+  orch.cancel('A2')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await correction
+
+  // 4. a conversation with no recorded chat, while the view sits in someone else's: a NEW chat
+  analyst.url = 'https://x.test/c/b1'
+  const third = orch.run(analystRequest('chatgpt', { req_id: 'C1', fresh: false, conversation_id: '5f6e7d8c-9a0b-4c1d-8e2f-304050607080' }), emit)
+  await settleAll()
+  assert.equal(analyst.loads.at(-1), 'https://x.test/new-chatgpt', 'a fresh chat rather than B’s')
+  orch.cancel('C1')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await third
+  assertValid(emitted)
+})
+
+test('a fresh:false analyst continuation stays put when the view is already in its own chat (or in nobody’s)', async () => {
+  const { orch, analystClient, analyst, emit } = setup({ analystChatMemory: { [CONV]: 'https://x.test/c/a1' } })
+  analyst.url = 'https://x.test/c/a1'
+  const own = orch.run(analystRequest('chatgpt', { req_id: 'A2', fresh: false }), emit)
+  await settleAll()
+  assert.deepEqual(analyst.loads, [], 'no navigation: the view is already in this conversation’s chat')
+  assert.deepEqual(analystClient.ops(), ['ready'])
+  orch.cancel('A2')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await own
+
+  // an unowned chat (nothing recorded for anyone) is still adopted, exactly as before Stage 3's fix
+  const fresh = setup()
+  const run = fresh.orch.run(analystRequest('chatgpt', { req_id: 'A3', fresh: false }), fresh.emit)
+  await settleAll()
+  assert.deepEqual(fresh.analyst.loads, [])
+  assert.deepEqual(fresh.analystClient.ops(), ['ready'])
+  fresh.orch.cancel('A3')
+  fresh.analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await run
+})
+
+test('the analyst chat is recorded only for a URL that matches the site’s chatUrlPattern (the site root never becomes a chat)', async () => {
+  const { orch, analystClient, analyst, analystChats, emit } = setup()
+  const done = orch.run(analystRequest('chatgpt', { fresh: true }), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, ms: 1 })
+  await settleAll()
+  analyst.url = 'https://x.test/'
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '{}', doneBy: 'quiet', ms: 1, url: 'https://x.test/' })
+  assert.equal((await done).ok, true)
+  assert.equal(analystChats.size, 0, 'nothing recorded for a URL that is not a chat')
 })

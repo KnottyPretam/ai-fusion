@@ -16,12 +16,17 @@
 //                          the chosen analyst (the orchestrator answers `analyst_not_chosen`)
 //   setAnalyst(slot|null)  persists settings.analyst; a partition change destroys the old view and
 //                          recreates it (hidden) when one existed, else stays lazy
-//   setVisible(bool)       persists settings.analystVisible; false hides the view at once
+//   setVisible(bool)       persists settings.analystVisible; false hides the view at once, and true is
+//                          refused while no analyst is chosen (nothing would be behind the tab)
 //   applyLayout(norm)      the `analyst` rect of a normalized layout drives bounds + visibility
 //   setHealth(h)/getHealth()   the health cache behind `panes:analyst`; `challenge` / `logged_out`
 //                          AUTO-REVEALS the view (decision 7: the affected view is shown so the
 //                          user can sign in or solve the challenge by hand)
 //   currentUrl()/loadUrl(url)/newChatUrl()/pendingNavigation()/focus()/slotOfSender(event)
+//   chatFor(convId)/chatOwner(url)/noteChat(convId, url)   which analyst chat each conversation is
+//                          in: the view is one per app while the backend's busy guard is per
+//                          conversation, so the orchestrator binds a `fresh:false` continuation to
+//                          the chat its own conversation used instead of typing into a foreign one
 //   pushConfig(selectors)  the §4 selector hot reload reaches the analyst view as well
 //
 // Readings taken where the contract is silent (documented in the final report):
@@ -29,8 +34,9 @@
 //     the backend's ANALYST_MODEL is only refreshed on the next spawn, so a mid-session change
 //     leaves stale `web:<old>:analyst` requests in flight and "the analyst you asked for is not the
 //     one that is chosen" is exactly that state.
-//   • the analyst view never records a chat link and never emits `panes:turn`: both are keyed by
-//     slot alone (§2) and would mislabel that slot's PANE.
+//   • the analyst view never records a chat link in chats.json and never emits `panes:turn`: both
+//     are keyed by slot alone (§2) and would mislabel that slot's PANE. Its chats are remembered
+//     in memory per conversation instead (`noteChat`), which never leaves main.
 //   • the analyst view's Health is never sent over the bridge `health` frame (also slot-keyed) —
 //     it reaches the renderer as `panes:analyst.health` only.
 //
@@ -48,6 +54,8 @@ import { buildViewOptions, loadWithRetry, crashedHealth, NAVIGATION_WAIT_MS, REC
 export const ANALYST_LAYOUT_KEY = 'analyst'
 /** Session states that reveal the analyst view without being asked (decision 7). */
 export const REVEAL_SESSIONS = Object.freeze(['logged_out', 'challenge'])
+/** How many conversations' analyst chats main remembers (newest kept; the map never grows forever). */
+export const ANALYST_CHAT_MEMORY = 50
 
 /**
  * createAnalystViews(deps) → manager (see the header for the surface).
@@ -84,6 +92,8 @@ export function createAnalystViews({
   let health = null
   let lastLayout = normalizeLayout(null)
   let crashes = []
+  /** conversation id → the analyst chat URL that conversation last used (insertion-ordered, capped). */
+  const chats = new Map()
   const partitionsDone = new Set()
   const created = new Set()
 
@@ -216,6 +226,10 @@ export function createAnalystViews({
         warn(`onCreated listener failed: ${(err && err.message) || err}`)
       }
     }
+    // The cleared health above re-opened main's own gate (rejectFromHealth(null) lets a turn
+    // through); publish it too, or the renderer's fourth tab keeps the crashed chip of the view
+    // this one replaced until the adapter's next change / 10 s heartbeat.
+    publish()
     return e
   }
 
@@ -309,7 +323,10 @@ export function createAnalystViews({
   }
 
   function setVisible(visible) {
-    const next = visible === true
+    // Never revealed while no analyst is chosen: the tab would take half the deck with no view
+    // behind it (nothing can be created — `ensure()` returns null — and no rect brings one back).
+    const next = visible === true && chosen() !== null
+    if (next !== (visible === true)) info('no analyst is chosen; there is no page to reveal')
     if (typeof settings.setAnalystVisible === 'function') settings.setAnalystVisible(next)
     if (next) ensure()
     const e = live()
@@ -323,6 +340,7 @@ export function createAnalystViews({
     if (slot !== null && !SLOTS.includes(slot)) throw new Error(`analyst: unknown slot ${String(slot)}`)
     const before = chosen()
     if (typeof settings.setAnalyst === 'function') settings.setAnalyst(slot)
+    let published = false
     if (before !== slot) {
       const had = !!live()
       if (entry) {
@@ -331,10 +349,17 @@ export function createAnalystViews({
       }
       health = null
       crashes = []
+      chats.clear() // the recorded chat URLs belong to the site that is going away
       if (had && slot !== null) create() // recreate hidden on the new partition; otherwise stay lazy
+      // No analyst → nothing behind the fourth tab: hide it, or the deck keeps half its width on an
+      // empty pane (the renderer keys the tab on `visible` alone, and no rect can bring a view back).
+      if (slot === null && wanted()) {
+        setVisible(false) // publishes
+        published = true
+      }
       info(`analyst page set to ${slot === null ? 'none' : slot}`)
     }
-    publish()
+    if (!published) publish()
     return chosen()
   }
 
@@ -432,6 +457,29 @@ export function createAnalystViews({
     pendingNavigation() {
       const e = live()
       return e && e.pending ? e.pending.promise : null
+    },
+    /** The analyst chat `conversationId` last used, or null. */
+    chatFor(conversationId) {
+      if (typeof conversationId !== 'string' || conversationId === '') return null
+      return chats.get(conversationId) || null
+    },
+    /** Which conversation owns `url`, or null when no conversation has been in that chat. */
+    chatOwner(url) {
+      if (typeof url !== 'string' || url === '') return null
+      for (const [convId, u] of chats) if (u === url) return convId
+      return null
+    },
+    /**
+     * Record the analyst chat a finished turn of `conversationId` landed in (the orchestrator only
+     * offers URLs matching the site's chatUrlPattern). Newest last, capped at ANALYST_CHAT_MEMORY:
+     * a long session must not grow a map forever.
+     */
+    noteChat(conversationId, url) {
+      if (typeof conversationId !== 'string' || conversationId === '' || typeof url !== 'string' || url === '') return null
+      chats.delete(conversationId)
+      chats.set(conversationId, url)
+      while (chats.size > ANALYST_CHAT_MEMORY) chats.delete(chats.keys().next().value)
+      return url
     },
     focus() {
       const e = live()

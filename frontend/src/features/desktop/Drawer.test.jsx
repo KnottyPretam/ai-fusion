@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import DesktopShell from './index.jsx' // registers the `panes` slice (+ slots / analyze / fusion / meter through the drawer)
-import Drawer, { CHOOSE_ANALYST_HINT, DRAWER_TABS, analystHint, captureHint } from './Drawer.jsx'
+import Drawer, { ANALYZE_BLOCKED_HINT, CHOOSE_ANALYST_HINT, DRAWER_TABS, analystHint, analystPageText, captureHint } from './Drawer.jsx'
 import CostMeter from '../meter/index.jsx'
 import { emptyRow, initialMeter } from '../meter/slice.js'
 import { ANALYST_KEY, DEFAULT_ANALYST } from './analyst.js'
@@ -103,6 +103,16 @@ describe('Drawer: pure helpers', () => {
     expect(analystHint('openai/gpt-5.6-luna')).toBe(CHOOSE_ANALYST_HINT)
     expect(DRAWER_TABS.map((t) => t.key)).toEqual(['analyze', 'fusion', 'captured', 'settings'])
   })
+
+  test('analystPageText reports the login main says its hidden page is on, and names the drift when the conversation asks for another', () => {
+    expect(analystPageText('chatgpt', 'web:chatgpt:analyst')).toBe('Hidden analyst page: signed in as ChatGPT.')
+    expect(analystPageText(null, 'ollama:hermes3')).toBe('Hidden analyst page: not open.')
+    expect(analystPageText(null, '')).toBe('Hidden analyst page: not open.')
+    expect(analystPageText('grok', 'web:chatgpt:analyst')).toBe('Hidden analyst page: signed in as Grok. This conversation asks for ChatGPT, so the hidden page is being switched over.')
+    // a local / absent analyst asks for no web session at all: nothing to switch over
+    expect(analystPageText('grok', 'ollama:hermes3')).toBe('Hidden analyst page: signed in as Grok.')
+    expect(analystPageText('nope', 'web:grok:analyst')).toBe('Hidden analyst page: not open. This conversation asks for Grok, so the hidden page is being switched over.')
+  })
 })
 
 describe('Drawer: tabs and panes', () => {
@@ -168,7 +178,7 @@ describe('Drawer: tabs and panes', () => {
     expect(screen.getByTestId('drawer-panel-captured')).toHaveAttribute('hidden')
   })
 
-  test('without a conversation the drawer still opens: Analyze / Fusion render nothing, Captured shows the empty columns, Settings is usable', () => {
+  test('without a conversation the drawer still opens: Analyze / Fusion explain why they are empty, Captured shows the empty columns, Settings is usable', () => {
     const fake = fakeTriplex()
     mount(fake)
     fireEvent.click(tab('settings'))
@@ -241,6 +251,10 @@ describe('Drawer: Settings and the analyst choice', () => {
     expect(screen.getByTestId('config-max-iterations')).toHaveValue('2')
     expect(screen.getByTestId('config-materiality-min')).toHaveValue('medium')
 
+    // main is told which login the hidden page must use before anything else: the conversation's
+    // analyst_model is what Analyze asks the bridge for (panes.analyst.slot is still null here)
+    expect(fake.setAnalyst.mock.calls).toEqual([['chatgpt']])
+
     fireEvent.change(select, { target: { value: 'web:claude:analyst' } })
     expect(localStorage.getItem(ANALYST_KEY)).toBe('web:claude:analyst')
     expect(fake.setAnalyst).toHaveBeenLastCalledWith('claude')
@@ -258,7 +272,7 @@ describe('Drawer: Settings and the analyst choice', () => {
     fireEvent.change(select, { target: { value: '' } })
     expect(localStorage.getItem(ANALYST_KEY)).toBe('')
     expect(fake.setAnalyst).toHaveBeenLastCalledWith(null)
-    expect(fake.setAnalyst).toHaveBeenCalledTimes(3)
+    expect(fake.setAnalyst.mock.calls).toEqual([['chatgpt'], ['claude'], [null], [null]], 'one push per choice: the mount reconcile plus the three changes')
     await waitFor(() => expect(calls).toHaveLength(3))
     expect(calls[2].body).toMatchObject({ analyst_model: '' })
     expect(hint()).toHaveTextContent(CHOOSE_ANALYST_HINT)
@@ -322,6 +336,115 @@ describe('Drawer: Settings and the analyst choice', () => {
   })
 })
 
+describe('Drawer: the analyst the hidden page is actually on', () => {
+  test('Settings prints main’s own analyst login, and the conversation’s choice is pushed to main so the two cannot drift apart silently', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    // main signed the hidden page in as grok (Settings was changed earlier); this conversation —
+    // created through the sidebar, which posts {} — carries the backend's spawn-time chatgpt
+    mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: CFG, panes: { ...initialPanes(), analyst: { slot: 'grok', visible: false, health: null } } })
+    fireEvent.click(tab('settings'))
+    const state = screen.getByTestId('drawer-analyst-state')
+    expect(state).toHaveTextContent('Hidden analyst page: signed in as Grok. This conversation asks for ChatGPT, so the hidden page is being switched over.')
+    // and it is: the drawer repaired it instead of leaving Analyze to fail analyst_not_chosen
+    expect(fake.setAnalyst.mock.calls).toEqual([['chatgpt']])
+
+    // once main confirms, the line is plain and nothing is pushed again
+    act(() => store.dispatch({ type: 'panes/analyst', slot: 'chatgpt' }))
+    expect(screen.getByTestId('drawer-analyst-state')).toHaveTextContent('Hidden analyst page: signed in as ChatGPT.')
+    expect(screen.getByTestId('drawer-analyst-state')).not.toHaveTextContent('switched over')
+    expect(fake.setAnalyst).toHaveBeenCalledTimes(1)
+  })
+
+  test('an Ollama or unset analyst asks for no web session: main is left alone and the line says the page is not open', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    const { unmount } = mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: { ...CFG, analyst_model: 'ollama:hermes3' } })
+    fireEvent.click(tab('settings'))
+    expect(screen.getByTestId('drawer-analyst-state')).toHaveTextContent('Hidden analyst page: not open.')
+    expect(fake.setAnalyst).not.toHaveBeenCalled()
+    unmount()
+
+    // a pre-pivot OpenRouter conversation must not tear main's hidden page down either
+    const fake2 = fakeTriplex()
+    mount(fake2, { conversation: convWith([]), slotConfig: { ...CFG, analyst_model: 'openai/gpt-5.6-luna' }, panes: { ...initialPanes(), analyst: { slot: 'chatgpt', visible: false, health: null } } })
+    fireEvent.click(tab('settings'))
+    expect(screen.getByTestId('drawer-analyst-state')).toHaveTextContent('Hidden analyst page: signed in as ChatGPT.')
+    expect(fake2.setAnalyst).not.toHaveBeenCalled()
+  })
+
+  test('with no conversation open the localStorage mirror is what gets pushed (main never sees that key)', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    localStorage.setItem(ANALYST_KEY, 'web:grok:analyst')
+    mount(fake)
+    expect(fake.setAnalyst.mock.calls).toEqual([['grok']])
+    fireEvent.click(tab('settings'))
+    expect(screen.getByTestId('drawer-analyst-state')).toHaveTextContent('Hidden analyst page: not open. This conversation asks for Grok, so the hidden page is being switched over.')
+  })
+
+  test('the Settings hint says what the code does with the three replies (they are quoted verbatim, not scrubbed)', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: CFG })
+    fireEvent.click(tab('settings'))
+    const settings = screen.getByTestId('drawer-panel-settings')
+    expect(settings).toHaveTextContent('Triplex labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it.')
+    expect(settings).not.toHaveTextContent('The analyst reads only R1/R2/R3-labelled text')
+  })
+})
+
+describe('Drawer: Analyze with no analyst that can answer', () => {
+  test('the Analyze tab shows the hint in place of the pane, so no run can burn the send turn into a degraded state (Decision 4)', () => {
+    const fake = fakeTriplex()
+    stubFetch([])
+    const { unmount } = mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: { ...CFG, analyst_model: '' } })
+    fireEvent.click(screen.getByTestId('drawer-toggle'))
+    const panel = screen.getByTestId('drawer-panel-analyze')
+    expect(panel).toHaveAttribute('data-blocked', 'true')
+    expect(screen.getByTestId('drawer-analyze-blocked')).toHaveTextContent(ANALYZE_BLOCKED_HINT)
+    // there is nothing to click: no pane, no run, no re-run — the degraded turn cannot be created
+    expect(screen.queryByTestId('analyze')).toBeNull()
+    expect(screen.queryByTestId('analyze-run')).toBeNull()
+    expect(screen.queryByTestId('analyze-rerun')).toBeNull()
+    expect(hint()).toHaveTextContent(CHOOSE_ANALYST_HINT)
+    unmount()
+
+    // a pre-pivot OpenRouter analyst is not a desktop transport either
+    const fake2 = fakeTriplex()
+    const { unmount: unmount2 } = mount(fake2, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: { ...CFG, analyst_model: 'openai/gpt-5.6-luna' } })
+    fireEvent.click(screen.getByTestId('drawer-toggle'))
+    expect(screen.getByTestId('drawer-panel-analyze')).toHaveAttribute('data-blocked', 'true')
+    expect(screen.queryByTestId('analyze-run')).toBeNull()
+    unmount2()
+
+    // both desktop transports run: the pane is back with its button
+    for (const analyst_model of ['web:chatgpt:analyst', 'ollama:hermes3']) {
+      const f = fakeTriplex()
+      const { unmount: u } = mount(f, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: { ...CFG, analyst_model } })
+      fireEvent.click(screen.getByTestId('drawer-toggle'))
+      expect(screen.getByTestId('drawer-panel-analyze'), analyst_model).toHaveAttribute('data-blocked', 'false')
+      expect(screen.getByTestId('analyze-run'), analyst_model).toBeEnabled()
+      expect(screen.queryByTestId('drawer-analyze-blocked')).toBeNull()
+      u()
+    }
+  })
+
+  test('choosing an analyst in Settings unblocks the Analyze tab in place', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([{ method: 'PUT', url: '/api/conversations/c1/slot_config', respond: ({ body }) => jsonResponse(body) }])
+    mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: { ...CFG, analyst_model: '' } })
+    fireEvent.click(tab('settings'))
+    expect(screen.getByTestId('drawer-panel-analyze')).toHaveAttribute('data-blocked', 'true')
+    fireEvent.change(screen.getByTestId('config-analyst-model'), { target: { value: 'web:claude:analyst' } })
+    expect(fake.setAnalyst).toHaveBeenLastCalledWith('claude')
+    expect(screen.getByTestId('drawer-panel-analyze')).toHaveAttribute('data-blocked', 'false')
+    expect(screen.getByTestId('analyze-run')).toBeInTheDocument()
+    expect(hint()).toBeNull()
+    await waitFor(() => expect(seqOf(calls)).toEqual(['PUT /api/conversations/c1/slot_config']))
+  })
+})
+
 describe('Drawer: auto-open on an Analyze run', () => {
   test('the analyze stream starting opens the drawer on the Analyze tab; a fusion stream (which auto-runs Analyze) does not', () => {
     const fake = fakeTriplex()
@@ -361,33 +484,39 @@ describe('CostMeter: desktop mode', () => {
     costCapExceeded: true,
   })
 
-  test('the desktop prop shows latency / calls only: no tokens, cost, multiplier, truncation count or cost-cap warning', () => {
+  test('the desktop prop drops cost, the Fusion multiplier and the cost-cap warning but KEEPS the tokens (an Ollama analyst reports them)', () => {
     renderWithStore(<CostMeter desktop />, { preloaded: { meter: meterState() } })
     const meter = screen.getByTestId('meter')
     expect(meter).toHaveAttribute('data-mode', 'desktop')
-    expect(screen.getByTestId('meter-group-last')).toHaveAttribute('colspan', '2')
-    expect(screen.getByTestId('meter-group-conv')).toHaveAttribute('colspan', '2')
+    expect(screen.getByTestId('meter-group-last')).toHaveAttribute('colspan', '3')
+    expect(screen.getByTestId('meter-group-conv')).toHaveAttribute('colspan', '3')
+    expect(screen.getByTestId('meter-send-tokens')).toHaveTextContent('30 / 60')
+    expect(screen.getByTestId('meter-send-conv-tokens')).toHaveTextContent('60 / 120')
     expect(screen.getByTestId('meter-send-latency')).toHaveTextContent('800 ms')
     expect(screen.getByTestId('meter-send-calls')).toHaveTextContent('3')
     expect(screen.getByTestId('meter-send-conv-latency')).toHaveTextContent('1.6 s')
     expect(screen.getByTestId('meter-send-conv-calls')).toHaveTextContent('6')
     expect(screen.getByTestId('meter-analyze-latency')).toHaveTextContent('2.0 s')
+    expect(screen.getByTestId('meter-total-conv-tokens')).toHaveTextContent('60 / 120')
     expect(screen.getByTestId('meter-total-conv-calls')).toHaveTextContent('7')
     expect(screen.getByTestId('meter-total-conv-latency')).toHaveTextContent('3.6 s')
-    for (const id of ['meter-send-tokens', 'meter-send-cost', 'meter-send-conv-tokens', 'meter-send-conv-cost', 'meter-total-conv-cost', 'meter-fusion-multiplier', 'meter-truncated', 'meter-cost-cap']) {
+    for (const id of ['meter-send-cost', 'meter-send-conv-cost', 'meter-total-conv-cost', 'meter-fusion-multiplier', 'meter-cost-cap']) {
       expect(screen.queryByTestId(id)).toBeNull()
     }
-    expect(meter).not.toHaveTextContent('tokens in / out')
     expect(meter).not.toHaveTextContent('$')
     const heads = [...meter.querySelectorAll('thead tr')[1].querySelectorAll('th')].map((th) => th.textContent)
-    expect(heads).toEqual(['feature', 'latency', 'calls', 'latency', 'calls'])
+    expect(heads).toEqual(['feature', 'tokens in / out', 'latency', 'calls', 'tokens in / out', 'latency', 'calls'])
+    // and the footer says what is actually true of the two desktop transports
+    expect(screen.getByTestId('meter-truncated')).toHaveTextContent('truncated replies: 1')
+    expect(meter).toHaveTextContent('a web session reports no tokens and is billed by the site, not by Triplex; a local Ollama analyst reports its tokens at no cost')
   })
 
   test('the default follows window.triplex: desktop columns under the Electron preload, the web columns otherwise', () => {
     vi.stubGlobal('triplex', {})
     const { unmount } = renderWithStore(<CostMeter />, { preloaded: { meter: meterState() } })
     expect(screen.getByTestId('meter')).toHaveAttribute('data-mode', 'desktop')
-    expect(screen.queryByTestId('meter-send-tokens')).toBeNull()
+    expect(screen.queryByTestId('meter-send-cost')).toBeNull()
+    expect(screen.getByTestId('meter-send-tokens')).toHaveTextContent('30 / 60')
     unmount()
     vi.unstubAllGlobals()
     renderWithStore(<CostMeter />, { preloaded: { meter: meterState() } })

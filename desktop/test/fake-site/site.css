@@ -220,3 +220,17 @@ button.stop {
   cursor: pointer;
 }
 .md .code-actions { display: flex; justify-content: flex-end; padding: 2px 8px; }
+
+/* KaTeX hides its accessible MathML copy — the one carrying the TeX source — by CLIP, never by
+   display:none or aria-hidden (the visual glyph run next to it is the aria-hidden one). The capture
+   must read the TeX out of it exactly once; site.cjs `mdMath` does. */
+.katex-mathml {
+  position: absolute;
+  clip: rect(1px, 1px, 1px, 1px);
+  padding: 0;
+  border: 0;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+}
+.md code .cm-line { display: block; }

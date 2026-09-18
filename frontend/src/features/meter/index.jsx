@@ -4,9 +4,12 @@
 // multiplier — the last Fusion's cost divided by the cost of the Send it fused — sits on the
 // Fusion row so it is impossible to miss and never shrinks as the conversation grows.
 // Stage 3 (renderer-drawer): desktop mode — `desktop` prop, defaulting to "window.triplex exists"
-// (the Electron preload's contextBridge surface) — shows latency / calls only: the web sessions
-// and local Ollama report no tokens and no cost, so those columns, the multiplier badge and the
-// cost-cap warning are left out (`data-mode="desktop"`). The web app is byte-identical.
+// (the Electron preload's contextBridge surface) — drops the COST column, Fusion's multiplier badge
+// and the cost-cap warning (`data-mode="desktop"`): a web session is billed by the site, not by
+// Triplex, and a local Ollama call is free. Tokens stay: `ollama.sanitize_payload` asks for usage,
+// so an Ollama analyst reports real prompt / completion counts (a web session reports 0 / 0), and
+// hiding them would hide the only context-pressure figure the desktop app has. The web app is
+// byte-identical.
 import { Fragment } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
@@ -41,31 +44,23 @@ export function fmtMs(ms) {
   return v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`
 }
 
-// The four cells of one group (two in desktop mode: latency, calls). Test ids: meter-<row>-<col>
+// The four cells of one group (three in desktop mode: no cost). Test ids: meter-<row>-<col>
 // for the last-invocation group and meter-<row>-conv-<col> for the conversation group.
 function Cells({ name, group, row, badge, desktop = false }) {
   const id = group === 'last' ? `meter-${name}` : `meter-${name}-conv`
   const first = group === 'conv' ? css.groupStart : undefined
-  if (desktop) {
-    return (
-      <>
-        <td className={first} data-testid={`${id}-latency`}>
-          {fmtMs(row.latency_ms)}
-        </td>
-        <td data-testid={`${id}-calls`}>{fmtInt(row.calls)}</td>
-      </>
-    )
-  }
   return (
     <>
       <td className={first} data-testid={`${id}-tokens`}>
         {fmtInt(row.prompt_tokens)} / {fmtInt(row.completion_tokens)}
         {row.reasoning_tokens > 0 && <span className={css.muted}> (+{fmtInt(row.reasoning_tokens)} reasoning)</span>}
       </td>
-      <td data-testid={`${id}-cost`}>
-        {fmtUsd(row.cost_usd)}
-        {badge}
-      </td>
+      {desktop ? null : (
+        <td data-testid={`${id}-cost`}>
+          {fmtUsd(row.cost_usd)}
+          {badge}
+        </td>
+      )}
       <td data-testid={`${id}-latency`}>{fmtMs(row.latency_ms)}</td>
       <td data-testid={`${id}-calls`}>{fmtInt(row.calls)}</td>
     </>
@@ -100,7 +95,7 @@ export default function CostMeter({ desktop = isDesktop() }) {
   const lastFusion = last.fusion || fallback.last.fusion
   const mult = lastFusion.calls > 0 && fusedSendCost > 0 ? lastFusion.cost_usd / fusedSendCost : null
   const total = meter.total || fallback.total
-  const cols = desktop ? 2 : 4
+  const cols = desktop ? 3 : 4
   return (
     <div className={css.meter} data-testid="meter" data-mode={desktop ? 'desktop' : 'web'}>
       {!desktop && meter.costCapExceeded && (
@@ -122,17 +117,11 @@ export default function CostMeter({ desktop = isDesktop() }) {
             <th scope="col">feature</th>
             {GROUPS.map((g) => (
               <Fragment key={g.key}>
-                {desktop ? null : (
-                  <>
-                    <th scope="col" className={g.key === 'conv' ? css.groupStart : undefined}>
-                      tokens in / out
-                    </th>
-                    <th scope="col">cost</th>
-                  </>
-                )}
-                <th scope="col" className={desktop && g.key === 'conv' ? css.groupStart : undefined}>
-                  latency
+                <th scope="col" className={g.key === 'conv' ? css.groupStart : undefined}>
+                  tokens in / out
                 </th>
+                {desktop ? null : <th scope="col">cost</th>}
+                <th scope="col">latency</th>
                 <th scope="col">calls</th>
               </Fragment>
             ))}
@@ -150,14 +139,12 @@ export default function CostMeter({ desktop = isDesktop() }) {
         </tbody>
       </table>
       <div className={css.foot}>
-        {desktop ? null : (
-          <span data-testid="meter-truncated" className={total.truncated > 0 ? css.trunc : undefined}>
-            truncated replies: {fmtInt(total.truncated)}
-          </span>
-        )}
+        <span data-testid="meter-truncated" className={total.truncated > 0 ? css.trunc : undefined}>
+          truncated replies: {fmtInt(total.truncated)}
+        </span>
         <span>
           {desktop
-            ? 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · the web sessions and local Ollama report no tokens or cost'
+            ? 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · a web session reports no tokens and is billed by the site, not by Triplex; a local Ollama analyst reports its tokens at no cost'
             : 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock'}
         </span>
       </div>

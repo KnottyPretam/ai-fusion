@@ -141,6 +141,98 @@ def test_base_url_env(monkeypatch, value, expected):
     assert ollama.DEFAULT_BASE_URL == "http://127.0.0.1:11434/v1"
 
 
+# --------------------------------------------------------------------------- loopback warning
+@pytest.fixture
+def fresh_warnings(monkeypatch, caplog):
+    """A clean per-process warning memo (`warn_if_remote` warns once per host) + WARNING capture."""
+    monkeypatch.setattr(ollama, "_warned_hosts", set())
+    caplog.set_level(logging.WARNING, logger="triplex.llm.ollama")
+    return caplog
+
+
+def _remote_warnings(caplog) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "triplex.llm.ollama" and r.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        ollama.DEFAULT_BASE_URL,
+        "http://localhost:11434/v1",
+        "http://LOCALHOST:11434/v1",
+        "http://localhost./v1",
+        "http://[::1]:11434/v1",
+        "https://127.0.0.1/v1",
+    ],
+)
+def test_is_loopback_accepts_every_loopback_spelling(url):
+    assert ollama.is_loopback(url) is True
+    assert ollama.host_of(url) is not None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://10.0.0.5:11434/v1",
+        "http://ollama.test:11435/v1",
+        "http://127.0.0.1.evil.example/v1",
+        "http://[::2]:11434/v1",
+        "ollama.test:11435/v1",  # no scheme: no parsable host, so not loopback either
+        "",
+    ],
+)
+def test_is_loopback_rejects_everything_else(url):
+    assert ollama.is_loopback(url) is False
+
+
+def test_warn_if_remote_is_silent_for_a_loopback_base_url(fresh_warnings):
+    assert ollama.warn_if_remote(ollama.DEFAULT_BASE_URL) is None
+    assert ollama.warn_if_remote(" http://localhost:11434/v1 ") is None
+    assert _remote_warnings(fresh_warnings) == []
+
+
+def test_warn_if_remote_warns_once_per_process_naming_the_host(fresh_warnings):
+    assert ollama.warn_if_remote("http://10.0.0.5:11434/v1") == "10.0.0.5"
+    assert ollama.warn_if_remote("http://10.0.0.5:11434/v1") is None  # once per process
+    assert ollama.warn_if_remote("http://10.0.0.5:9999/v1") is None  # same host, other port
+    lines = _remote_warnings(fresh_warnings)
+    assert len(lines) == 1
+    assert "OLLAMA_BASE_URL" in lines[0] and "10.0.0.5" in lines[0]
+    assert "non-loopback" in lines[0] and "network" in lines[0]
+    assert ollama.warn_if_remote("http://ollama.test:11435/v1") == "ollama.test"  # a new host
+    assert len(_remote_warnings(fresh_warnings)) == 2
+
+
+def test_warn_if_remote_names_an_unparsable_value_verbatim(fresh_warnings):
+    assert ollama.warn_if_remote("ollama.test:11435/v1") == "ollama.test:11435/v1"
+    assert "ollama.test:11435/v1" in _remote_warnings(fresh_warnings)[0]
+
+
+async def test_a_remote_base_url_is_served_after_one_warning(
+    respx_router, monkeypatch, fresh_warnings
+):
+    """No refusal (the user may run Ollama on another box) -- but the log says where it went."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://10.0.0.5:11434/v1")
+    route = _route(respx_router, *_ok_payloads(), url="http://10.0.0.5:11434/v1/chat/completions")
+    for _ in range(2):
+        deltas = await collect(_call())
+        assert kinds(deltas) == ["text", "done"]
+    assert route.call_count == 2
+    lines = _remote_warnings(fresh_warnings)
+    assert len(lines) == 1 and "10.0.0.5" in lines[0]
+
+
+async def test_the_default_base_url_streams_without_a_warning(respx_router, fresh_warnings):
+    route = _route(respx_router, *_ok_payloads())
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"] and route.call_count == 1
+    assert _remote_warnings(fresh_warnings) == []
+
+
 # --------------------------------------------------------------------------- the request
 async def test_payload_headers_and_url(respx_router):
     assert settings().mock_openrouter is True and not settings().openrouter_api_key

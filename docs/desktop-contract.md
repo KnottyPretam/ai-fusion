@@ -158,7 +158,7 @@ and (Stage 2) on `fs.watch`.
 ```json
 { "version": 1,
   "chatgpt": {
-    "chatUrlPattern": "^https://chatgpt\\.com/c/[A-Za-z0-9-]+",
+    "chatUrlPattern": "^https://chatgpt\\.com/c/[A-Za-z0-9-]+(?:[?#]|$)",
     "composer": ["#prompt-textarea", "div[contenteditable='true'].ProseMirror", "div[role='textbox'][aria-label='Chat with ChatGPT']", "div[contenteditable='true'][role='textbox']"],
     "send": ["button[data-testid='send-button']", "#composer-submit-button", "button[aria-label='Send prompt']", "button[aria-label='Send message']", "button.composer-submit-button-color"],
     "loggedOut": ["a[href*='/auth/login']", "button[data-testid='login-button']"], "loggedOutUrl": ["/auth/login", "auth.openai.com", "auth0.openai.com"],
@@ -171,7 +171,7 @@ and (Stage 2) on `fs.watch`.
     "loggedOut": ["a[href*='/login']", "button[data-testid='login-with-google']"], "loggedOutUrl": ["/login"],
     "challenge": ["iframe[src*='challenges.cloudflare.com']"], "challengeTitle": ["Just a moment"],
     "errorText": ["unusual activity", "rate limit"], "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 },
-  "grok": { "chatUrlPattern": "^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+",
+  "grok": { "chatUrlPattern": "^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+(?:[?#]|$)",
     "composer": ["div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']", "div[role='textbox'][aria-label='Ask Grok anything']", "div.ProseMirror[contenteditable='true']", "textarea[aria-label='Ask Grok anything']", "textarea[placeholder*='Grok']", "div[contenteditable='true'][data-lexical-editor='true']"],
     "send": ["button[data-testid='chat-submit']", "button[aria-label='Submit']", "button[type='submit']"],
     "loggedOut": ["a[href*='/sign-in']", "a[href*='accounts.x.ai']"], "loggedOutUrl": ["accounts.x.ai", "/sign-in"],

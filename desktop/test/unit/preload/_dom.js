@@ -5,8 +5,10 @@
 // to be run through the REAL desktop/preload/site.cjs, and the desktop package may not grow a
 // dependency (no jsdom). The surface below is exactly what site.cjs touches — `querySelector(All)`,
 // `matches`, `closest`, `contains`, `compareDocumentPosition`, `childNodes`, `attributes`,
-// `textContent`, `getAttribute`/`hasAttribute`, `nodeType`/`localName`/`tagName`, `document.title`
-// — and nothing else. There is no layout and no view, so `isVisible` treats every element as
+// `textContent`, `getAttribute`/`hasAttribute`, `nodeType`/`localName`/`tagName`, `document.title`,
+// `isConnected` — and nothing else, plus `removeChild`/`remove` so a test can UNMOUNT a node (the
+// chatgpt placeholder turn measured on 2026-09-17: `observe` has to drop a container whose
+// `isConnected` went false). There is no layout and no view, so `isVisible` treats every element as
 // visible and `toMarkdown` preserves no whitespace (see the site.cjs Stage 3 header): a fixture is
 // a shape, never a rendering.
 //
@@ -77,6 +79,18 @@ class Element {
   get disabled() {
     return this.hasAttribute('disabled')
   }
+  /**
+   * Connected = the walk up from this node ends at the document (or at its `documentElement`, which is
+   * the root `parseHtml` builds and never gives a parent). A node that has been removed — or any node
+   * under it — is not connected, which is what `observe` keys on when a site unmounts its reply.
+   */
+  get isConnected() {
+    let n = this
+    while (n.parentNode) n = n.parentNode
+    if (n.nodeType === 9) return true
+    const doc = this.ownerDocument
+    return !!(doc && n === doc.documentElement)
+  }
   get textContent() {
     return this.childNodes.map((n) => n.textContent).join('')
   }
@@ -98,6 +112,19 @@ class Element {
     node.ownerDocument = this.ownerDocument
     this.childNodes.push(node)
     return node
+  }
+  removeChild(node) {
+    const i = this.childNodes.indexOf(node)
+    if (i !== -1) {
+      this.childNodes.splice(i, 1)
+      node.parentNode = null
+    }
+    return node
+  }
+  /** Unmount this element (`el.remove()` as in the browser); its own subtree stays intact, just detached. */
+  remove() {
+    if (this.parentNode && typeof this.parentNode.removeChild === 'function') this.parentNode.removeChild(this)
+    return this
   }
   matches(selector) {
     return matchesSelector(this, selector)

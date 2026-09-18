@@ -193,7 +193,11 @@ describe('AnalyzePane: button gating', () => {
     const conv = conversation([sendTurn({ id: 's1' }), sendTurn({ id: 's2', responses: { claude: 'a', chatgpt: null, grok: 'c' }, errors: { chatgpt: 'boom' } })])
     renderPane(stateWith([], { conv }))
     expect(screen.getByTestId('analyze-run')).toBeDisabled()
-    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('waiting for all three responses')
+    // The slot FAILED (errors.chatgpt), so "waiting for all three responses" would send the user
+    // back to the models; the hint names the slot, the reason, and the only way out (a new Send).
+    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('no reply was captured for chatgpt')
+    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('boom')
+    expect(screen.getByTestId('analyze-hint')).toHaveTextContent('Send again')
   })
 
   test('complete latest send turn and idle streams -> enabled', () => {

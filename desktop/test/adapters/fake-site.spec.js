@@ -129,6 +129,79 @@ test.describe('Stage 2 reply options the capture specs lean on', () => {
   })
 })
 
+/**
+ * The S7-review lifecycle options, replaying what was MEASURED on chatgpt.com with a real logged-in
+ * session on 2026-09-17: a short placeholder assistant turn (~12 characters, no `.markdown` child),
+ * then the placeholder UNMOUNTED so `[data-message-author-role=assistant]` returns ZERO for ~10 s
+ * while the stop button stays visible, then the real reply container with its `.markdown` child; and a
+ * PLACEHOLDER chat url `/c/WEB:<uuid>` that is only later replaced by the real `/c/<uuid>`.
+ */
+test.describe('the measured chatgpt placeholder/remount lifecycle (?remountMs, ?webUrlMs)', () => {
+  const sel = DEFAULT_SELECTORS.chatgpt
+  const lifecycle = (page) =>
+    page.evaluate(() => ({
+      done: window.__fake.done,
+      containers: window.__fake.containers,
+      placeholderText: window.__fake.placeholderText,
+      placeholderAt: window.__fake.placeholderAt,
+      placeholderGoneAt: window.__fake.placeholderGoneAt,
+      remountedAt: window.__fake.remountedAt,
+      stopEvents: window.__fake.stopEvents,
+      urls: window.__fake.urls,
+      replyText: window.__fake.replyText(),
+    }))
+  const submit = async (page, text) => {
+    await page.locator(sel.composer[0]).click()
+    await page.keyboard.type(text)
+    await page.keyboard.press('Enter')
+  }
+
+  test('?remountMs: a short placeholder turn with no .markdown child, then ZERO assistant containers, then the real reply — with the stop button up across the whole gap', async ({ page }) => {
+    await page.goto('/?site=chatgpt&replyMs=400&placeholderMs=600&remountMs=700')
+    await submit(page, 'remount')
+    // 1. the placeholder: one assistant container, short, and NO `.markdown` child (the measured shape)
+    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
+    await expect(page.locator(sel.stop[0])).toHaveCount(1)
+    const placeholder = await lifecycle(page)
+    expect(placeholder.placeholderText.length).toBeLessThanOrEqual(16)
+    await expect(page.locator(sel.assistant[0])).toHaveText(placeholder.placeholderText)
+    await expect(page.locator(sel.assistant[0]).locator(sel.assistantText[0])).toHaveCount(0)
+    expect(placeholder.containers).toBe(1)
+    // 2. the gap: the container is unmounted entirely while the stop button stays visible
+    await expect(page.locator(sel.assistant[0])).toHaveCount(0)
+    await expect(page.locator(sel.stop[0])).toHaveCount(1)
+    // 3. the real reply: a container with its `.markdown` child, then the end signal
+    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
+    await expect(page.locator(sel.assistant[0]).locator(sel.assistantText[0])).toHaveCount(1)
+    await expect.poll(async () => (await lifecycle(page)).done).toBe(true)
+    await expect(page.locator(sel.stop[0])).toHaveCount(0)
+    await expect(page.locator(sel.done[0])).toHaveCount(1)
+    const end = await lifecycle(page)
+    expect(end.replyText).toBe('Echo: remount')
+    expect(end.containers).toBe(2) // the placeholder and the real reply
+    expect(end.placeholderGoneAt - end.placeholderAt).toBeGreaterThanOrEqual(500)
+    expect(end.remountedAt - end.placeholderGoneAt).toBeGreaterThanOrEqual(600)
+    // one raise, one drop: the stop button was never taken down during the gap
+    expect(end.stopEvents.map((e) => e.on)).toEqual([true, false])
+  })
+
+  test('?webUrlMs: the submit pushes the placeholder /c/WEB:<uuid> and replaces it with the real /c/<uuid>; the placeholder path is not a chat (404)', async ({ page }) => {
+    await page.goto('/?site=chatgpt&replyMs=200&webUrlMs=700')
+    await submit(page, 'url')
+    await expect.poll(async () => (await lifecycle(page)).urls.length).toBe(2)
+    const { urls } = await lifecycle(page)
+    expect(urls.map((u) => u.how)).toEqual(['push', 'replace'])
+    const placeholderPath = new URL(urls[0].href).pathname
+    const realPath = new URL(urls[1].href).pathname
+    expect(placeholderPath).toMatch(/^\/c\/WEB:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(realPath).toBe(placeholderPath.replace('/c/WEB:', '/c/')) // same uuid, the prefix gone
+    expect(urls[1].ts - urls[0].ts).toBeGreaterThanOrEqual(600)
+    expect(page.url()).toBe(urls[1].href) // the real url is the one the page is left on
+    expect((await page.request.get(placeholderPath)).status()).toBe(404) // revisiting the placeholder is not a chat
+    expect((await page.request.get(realPath)).status()).toBe(200)
+  })
+})
+
 test('chatgpt: an innerHTML write is reconciled away and never enables send', async ({ page }) => {
   await page.goto('/?site=chatgpt')
   const composer = page.locator('#prompt-textarea')

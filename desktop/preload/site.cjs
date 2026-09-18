@@ -95,17 +95,48 @@
 //   * markdown is NOT escaped: a reply that contains `*` or a backtick is captured as it reads on
 //     the page. The captured text is quoted data for an analyst prompt, never re-rendered by Triplex,
 //     and escaping would break the byte-for-byte fenced JSON the analyst replies with.
-//   * code blocks: the body is the first `code` descendant of the `pre` (else the `pre` itself), one
-//     trailing newline dropped; the language is the first of a `language-`/`lang-`/`highlight-` class,
-//     a `data-language` attribute, a bare token left in the `pre` once the code and the chrome are
-//     removed (ChatGPT renders its header inside the `pre`), or a bare-token block immediately
-//     before the block holding the `pre` (a header rendered outside it). A body that itself holds a
-//     ``` line is fenced with four backticks.
+//   * code blocks: the body is the `code` descendants of the `pre` (else the `pre` itself) joined by
+//     newlines, one trailing newline dropped, and a BLOCK child inside it is a line of its own (a
+//     highlighter that wraps each line in a `div` keeps its lines, an empty one its blank line); the
+//     language is the first of a `language-`/`lang-`/`highlight-` class, a `data-language` attribute,
+//     a bare token left in the `pre` once the code and the chrome are removed (ChatGPT renders its
+//     header inside the `pre`), or a bare-token block immediately before the block holding the `pre`
+//     (a header rendered outside it) — that last one ONLY when the fence names no other language, or
+//     the same one, and never a heading / list / table / quote, so a one-token paragraph (`### 2000`,
+//     a `**app.py**` label) stays content. The fence is always one backtick longer than the longest
+//     fence line inside the body, and an inline code span is delimited and padded the same way
+//     (CommonMark), so a reply that shows backticks reads back with them.
+//   * a MathML formula (KaTeX's accessible copy, hidden by clip and not by `display:none`) is
+//     captured ONCE: its `application/x-tex` annotation as `$…$` (`$$…$$` when `display="block"`),
+//     else its glyph run. An image is its alt text as `![alt]()` (no URL, contract §3); no alt, nothing.
 //   * chrome: `button`, `select`, `input`, `textarea`, media and `script`/`style` subtrees are
 //     dropped everywhere, as is any block whose whole text is one of MD_CHROME_TEXT ("Copy code",
 //     "Edit", "Read aloud"…) and anything `hidden`, `aria-hidden="true"`, `display:none` or
 //     `visibility:hidden`. A link renders as its text; the URL is dropped (contract §3) — citations
 //     ride on the Analyze/Fusion prompts, not on the capture.
+//
+// S7 review — two capture bugs MEASURED live on chatgpt.com with a real logged-in session on
+// 2026-09-17 (recorded here, and in `test/fixtures/dom/README.md`, so the next reader does not have to
+// re-measure; replayed offline by the fake site's `?remountMs` / `?placeholderMs` / `?webUrlMs` and
+// pinned by `test/adapters/observe.spec.js` + `test/unit/preload/observe.test.js`):
+//   1. The reply container is mounted, UNMOUNTED and mounted again. After a submit a SHORT placeholder
+//      assistant turn appears within ~1 s (about 12 characters, and NO `.markdown` child) while
+//      `button[data-testid="stop-button"]` (aria-label "Stop answering") is visible; at ~2 s that
+//      placeholder is unmounted, so `document.querySelectorAll('[data-message-author-role="assistant"]')`
+//      returns ZERO for roughly 10 s while the stop button stays up; at ~13 s the real container is
+//      mounted with a `.markdown` child carrying the answer; at ~14 s the stop button disappears and a
+//      second `button[data-testid="copy-turn-action-button"]` appears (one already exists for the
+//      user's own turn while the reply streams). Consequences for `observe`: a container that is no
+//      longer connected is DROPPED (holding the detached node freezes the text at the placeholder and
+//      makes the `done` marker unmatchable, so the capture could only ever end by timeout on the
+//      placeholder's text), the first-token deadline applies only until a container has been seen ONCE,
+//      and the gap is bounded by the overall budget like any other unfinished reply.
+//      `.whitespace-pre-wrap` did NOT match anywhere on the current page — `.markdown` and `.prose`
+//      do — so `assistantText` keeps it only as a harmless last fallback.
+//   2. The chat URL of that first reply is a PLACEHOLDER `https://chatgpt.com/c/WEB:<uuid>`, replaced
+//      later by the real `https://chatgpt.com/c/<uuid>`; revisiting the placeholder 404s back to the
+//      home page. `chatgpt.chatUrlPattern` therefore ends the id at the segment (`(?:[?#]|$)`), so the
+//      placeholder matches nothing and main records only the real link.
 
 ;(() => {
   'use strict'
@@ -219,7 +250,11 @@
   const DEFAULT_SELECTORS = {
     version: 1,
     chatgpt: {
-      chatUrlPattern: '^https://chatgpt\\.com/c/[A-Za-z0-9-]+',
+    // chatUrlPattern ends the id at the segment: chatgpt.com mounts a PLACEHOLDER url
+    // `/c/WEB:<uuid>` while the first reply streams and only then replaces it with the real
+    // `/c/<uuid>` (measured 2026-09-17). The placeholder matched the open-ended pattern and was
+    // recorded as the conversation's chat link, which 404s back to the home page on a revisit.
+      chatUrlPattern: '^https://chatgpt\\.com/c/[A-Za-z0-9-]+(?:[?#]|$)',
       composer: [
         '#prompt-textarea',
         "div[contenteditable='true'].ProseMirror",
@@ -276,7 +311,7 @@
       captureTimeoutMs: 300000,
     },
     grok: {
-      chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+',
+      chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+(?:[?#]|$)',
       // Verified live on grok.com (signed in, 2026-09-16; contract §4): the composer is a
       // TipTap/ProseMirror div inside a <form>. A hidden 14 px helper <textarea> also exists on the
       // page, so a bare `textarea` entry must NEVER be a fallback — it matched the helper, the
@@ -698,6 +733,7 @@
     'noscript',
     'template',
     'svg',
+    'math',
     'canvas',
     'video',
     'audio',
@@ -786,6 +822,8 @@
   const MD_PRESERVE_WS = Object.freeze(['pre', 'pre-wrap', 'pre-line', 'break-spaces'])
   /** A code-block header is a bare language token, never a sentence. */
   const MD_LANG_RE = /^[A-Za-z0-9+#._-]{1,24}$/
+  /** Tags that are reply CONTENT even when their whole text is one bare token: never a fence's header. */
+  const MD_NEVER_HEADER_TAGS = Object.freeze(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'dl', 'table', 'blockquote', 'pre'])
 
   function mdNodeType(n) {
     return n && typeof n.nodeType === 'number' ? n.nodeType : 0
@@ -851,18 +889,120 @@
     return MD_BLOCK_TAGS.includes(tagNameOf(el))
   }
 
-  /** The raw text of a subtree, newlines from `<br>`, chrome dropped — the body of a fenced block. */
+  /**
+   * The raw text of a subtree — the body of a fenced block: newlines from `<br>` and from every
+   * BLOCK child (a highlighter that wraps each code line in a `div` / `.cm-line` keeps its lines,
+   * an empty one its blank line), chrome dropped, a formula or an image rendered by itself.
+   */
   function mdRawText(node, ctx) {
     if (mdNodeType(node) === 3) {
       const s = typeof node.data === 'string' ? node.data : typeof node.nodeValue === 'string' ? node.nodeValue : ''
       return normalizeText(s)
     }
     if (mdNodeType(node) !== 1) return ''
+    if (mdSelfRendered(node)) return mdSelfRender(node, ctx)
     if (mdSkip(node, ctx)) return ''
     if (tagNameOf(node) === 'br') return '\n'
     let out = ''
-    for (const c of mdChildren(node)) out += mdRawText(c, ctx)
+    let open = false // the previous child was a block: it ended its own line
+    for (const c of mdChildren(node)) {
+      if (mdNodeType(c) === 1 && !mdSelfRendered(c) && mdSkip(c, ctx)) continue
+      const block = mdNodeType(c) === 1 && mdIsBlock(c)
+      const text = mdRawText(c, ctx)
+      if (!block && text === '') continue
+      if ((block || open) && out !== '') out += '\n'
+      out += text
+      open = block
+    }
     return out
+  }
+
+  /** An element the walk renders ITSELF instead of descending into (all of them are in MD_SKIP_TAGS). */
+  function mdSelfRendered(el) {
+    const tag = tagNameOf(el)
+    return tag === 'math' || tag === 'img' || tag === 'picture'
+  }
+
+  /** A formula / an image, ONCE, wherever the walk meets it; a hidden one renders to `''`. */
+  function mdSelfRender(node, ctx) {
+    if (mdHidden(node, ctx)) return ''
+    return tagNameOf(node) === 'math' ? mdMath(node, ctx) : mdImage(node)
+  }
+
+  /**
+   * The TeX source of a MathML formula (`annotation[encoding="application/x-tex"]`), `''` without one.
+   * Its text is read DIRECTLY: the annotation is the source copy by design and the UA hides it
+   * (MathML Core renders only `semantics`' first child), so the usual hidden-subtree rule must not
+   * apply to it.
+   */
+  function mdTexOf(math) {
+    let out = ''
+    const walk = (n) => {
+      if (out !== '' || mdNodeType(n) !== 1) return
+      if (tagNameOf(n) === 'annotation') {
+        const enc = mdAttr(n, 'encoding').toLowerCase()
+        if (enc === '' || enc.includes('tex')) {
+          let raw = ''
+          try {
+            raw = typeof n.textContent === 'string' ? n.textContent : ''
+          } catch (_e) {
+            raw = ''
+          }
+          out = normalizeText(raw).replace(/\s+/g, ' ').trim()
+        }
+        return
+      }
+      for (const c of mdChildren(n)) walk(c)
+    }
+    walk(math)
+    return out
+  }
+
+  /** A formula's own glyph run (the MathML characters), the `annotation` subtrees left out. */
+  function mdMathGlyphs(math, ctx) {
+    let out = ''
+    const walk = (n) => {
+      const type = mdNodeType(n)
+      if (type === 3) {
+        out += mdRawText(n, ctx)
+        return
+      }
+      if (type !== 1 || tagNameOf(n) === 'annotation') return
+      if (tagNameOf(n) !== 'math' && mdSkip(n, ctx)) return
+      for (const c of mdChildren(n)) walk(c)
+    }
+    for (const c of mdChildren(math)) walk(c)
+    return out.replace(/\s+/g, ' ').trim()
+  }
+
+  /**
+   * A formula ONCE: its TeX source when the MathML carries one (KaTeX's accessible copy is hidden by
+   * clip, not by `display:none`, so the walk sees both the glyph run and the annotation) — `$…$`,
+   * `$$…$$` for `display="block"` — else the glyph run.
+   */
+  function mdMath(math, ctx) {
+    const tex = mdTexOf(math)
+    if (tex === '') return mdMathGlyphs(math, ctx)
+    return mdAttr(math, 'display').toLowerCase() === 'block' ? '$$' + tex + '$$' : '$' + tex + '$'
+  }
+
+  /** An image is its alt text (`![alt]()`); the URL is dropped like a link's, and no alt is nothing. */
+  function mdImage(node) {
+    const img = tagNameOf(node) === 'img' ? node : queryOne(node, 'img')
+    const alt = img ? mdAttr(img, 'alt').replace(/\s+/g, ' ').trim() : ''
+    return alt === '' ? '' : '![' + alt + ']()'
+  }
+
+  /**
+   * A code span, delimited the way CommonMark requires: a run of backticks longer than any run
+   * inside the body, plus a space of padding when the body starts or ends with one — so a body that
+   * itself shows backticks (a reply about markdown) reads back with them intact.
+   */
+  function mdCodeSpan(body) {
+    if (body === '') return ''
+    const longest = (body.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0)
+    const pad = body.startsWith('`') || body.endsWith('`') ? ' ' : ''
+    return '`'.repeat(longest + 1) + pad + body + pad + '`'.repeat(longest + 1)
   }
 
   /** Inline markdown for one node (emphasis, inline code, a link as its text; the URL is dropped). */
@@ -872,13 +1012,11 @@
       return ctx.preserve ? s : s.replace(/\s+/g, ' ')
     }
     if (mdNodeType(node) !== 1) return ''
+    if (mdSelfRendered(node)) return mdSelfRender(node, ctx)
     if (mdSkip(node, ctx)) return ''
     const tag = tagNameOf(node)
     if (tag === 'br') return '\n'
-    if (tag === 'code' || tag === 'kbd' || tag === 'samp') {
-      const body = mdRawText(node, ctx).replace(/\s+/g, ' ').trim()
-      return body === '' ? '' : '`' + body + '`'
-    }
+    if (tag === 'code' || tag === 'kbd' || tag === 'samp') return mdCodeSpan(mdRawText(node, ctx).replace(/\s+/g, ' ').trim())
     const inner = mdInlineChildren(node, { ...ctx, preserve: mdPreserves(node, ctx, ctx.preserve) })
     if (inner.trim() === '') return inner
     if (tag === 'strong' || tag === 'b') return '**' + inner + '**'
@@ -926,7 +1064,8 @@
         raw += mdRawText(node, ctx)
         return
       }
-      if (mdNodeType(node) !== 1 || mdSkip(node, ctx)) return
+      // every `code` is body (a `pre` may render one per line), never a language label
+      if (mdNodeType(node) !== 1 || tagNameOf(node) === 'code' || mdSkip(node, ctx)) return
       for (const c of mdChildren(node)) walk(c)
     }
     for (const c of mdChildren(pre)) walk(c)
@@ -938,12 +1077,39 @@
     return token !== '' && MD_LANG_RE.test(token) && !mdIsChrome(token) ? token : ''
   }
 
-  /** `pre` as a fenced block: the first `code` descendant is the body; the language comes from it, its `pre`, an in-block header or the wrapper header. */
+  /**
+   * The `code` bodies of a `pre`, in document order — a nested `code` stays folded into its parent
+   * (it is already part of that body), and the open shadow roots are searched when the `pre` itself
+   * holds none.
+   */
+  function mdCodesIn(pre) {
+    const codes = queryAll(pre, 'code')
+    if (codes.length > 1) {
+      const outer = codes.filter((c) => !codes.some((o) => o !== c && safeTrue(() => typeof o.contains === 'function' && o.contains(c) === true)))
+      if (outer.length > 0) return outer
+    }
+    if (codes.length > 0) return codes
+    const deep = deepQuerySelector(pre, 'code')
+    return deep ? [deep] : []
+  }
+
+  /** The fence's own info string — the code's class, its `pre`'s, or a header INSIDE the `pre`; `''` when it has none. */
+  function fenceLanguage(pre, ctx, codes) {
+    if (!pre) return ''
+    const list = codes || mdCodesIn(pre)
+    const code = list[0] || pre
+    return mdLanguageOf(code) || mdLanguageOf(pre) || mdHeaderLanguage(pre, code, ctx)
+  }
+
+  /** `pre` as a fenced block: every `code` descendant is body; the language comes from it, its `pre`, an in-block header or the wrapper header. */
   function mdFence(pre, ctx) {
-    const code = deepQuerySelector(pre, 'code') || pre
-    const body = mdRawText(code, ctx).replace(/\n+$/, '')
-    const lang = mdLanguageOf(code) || mdLanguageOf(pre) || mdHeaderLanguage(pre, code, ctx) || ctx.pendingLang || ''
-    const ticks = /^\s*`{3,}/m.test(body) ? '````' : '```'
+    const codes = mdCodesIn(pre)
+    const code = codes[0] || pre
+    const body = (codes.length > 1 ? codes.map((c) => mdRawText(c, ctx)).join('\n') : mdRawText(code, ctx)).replace(/\n+$/, '')
+    const lang = fenceLanguage(pre, ctx, codes) || ctx.pendingLang || ''
+    // the delimiter is always one backtick longer than the longest fence line inside the body
+    const inside = (body.match(/^[ \t]*`{3,}/gm) || []).reduce((n, run) => Math.max(n, run.trim().length), 0)
+    const ticks = '`'.repeat(Math.max(3, inside + 1))
     return ticks + lang + '\n' + body + '\n' + ticks
   }
 
@@ -1041,9 +1207,14 @@
     return token
   }
 
-  /** `el` is or holds a `pre` (the light DOM only: this runs once per block child, so it stays a single native query). */
+  /** The `pre` `el` is or holds (the light DOM only: this runs once per block child, so it stays a single native query). */
+  function mdPreIn(el) {
+    return tagNameOf(el) === 'pre' ? el : queryOne(el, 'pre')
+  }
+
+  /** `el` is or holds a `pre`. */
   function mdHasPre(el) {
-    return tagNameOf(el) === 'pre' || queryOne(el, 'pre') !== null
+    return mdPreIn(el) !== null
   }
 
   /** The first element child after `from` that is not chrome; null when there is none. */
@@ -1079,7 +1250,7 @@
         continue
       }
       if (type !== 1) continue
-      if (mdSkip(child, ctx)) continue
+      if (mdSkip(child, ctx) && !mdSelfRendered(child)) continue
       if (!mdIsBlock(child)) {
         inline.push(child)
         continue
@@ -1087,11 +1258,15 @@
       flush()
       if (!mdHasPre(child)) {
         // A bare language label directly before the block that holds the `pre` is that fence's
-        // language (the subtree is only walked when a code block really follows).
+        // language (the subtree is only walked when a code block really follows) — but ONLY when the
+        // fence has no language of its own, or the very same one: a one-token block a fence already
+        // names differently (`### 2000`, a `**app.py**` label) is CONTENT and is emitted as a block,
+        // and a heading / list / table / quote is content whatever the fence says.
         const next = mdNextElement(children, i + 1)
-        if (next && !mdSkip(next, ctx) && mdHasPre(next)) {
+        if (next && !mdSkip(next, ctx) && mdHasPre(next) && !MD_NEVER_HEADER_TAGS.includes(tagNameOf(child))) {
           const token = mdHeaderToken(child, ctx)
-          if (token !== '') {
+          const lang = token === '' ? '' : fenceLanguage(mdPreIn(next), ctx)
+          if (token !== '' && (lang === '' || lang.toLowerCase() === token.toLowerCase())) {
             ctx.pendingLang = token
             continue
           }
@@ -1130,6 +1305,7 @@
       if (mdNodeType(el) === 3) return mdTidy(mdInline(el, ctx), false)
       ctx.preserve = mdNodeType(el) === 1 ? mdPreserves(el, ctx, false) : false
       const tag = tagNameOf(el)
+      if (mdNodeType(el) === 1 && mdSelfRendered(el)) return mdTidy(mdInline(el, ctx), false)
       if (mdNodeType(el) === 1 && mdIsBlock(el) && tag !== 'div' && tag !== 'section' && tag !== 'article' && tag !== 'main') {
         return mdBlock(el, ctx)
           .map((e) => e.text)
@@ -1818,7 +1994,9 @@
      * (streaming re-renders are non-monotonic; Decision 16).
      *
      *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
-     *                 else `reply_not_found`
+     *                 else `reply_not_found` — the deadline applies only until a container has been
+     *                 seen ONCE: a container that is unmounted again (chatgpt's placeholder turn,
+     *                 measured 2026-09-17) is dropped and the gap counts as "still replying"
      *   done          `done_selector`  a visible, clickable `done` match on or after the last container
      *                                  while NO stop button is visible (the site's "still replying"
      *                                  signal wins over a finished tool turn's action bar)
@@ -1830,7 +2008,9 @@
      *                 resolves once the text has not moved between two samples — the final markdown
      *                 render may land a frame after the marker; past the budget the latest text is
      *                 returned with that doneBy rather than `timeout`
-     *   budget        `timeoutMs` (default `captureTimeoutMs`) elapsed → `timeout` with the partial text
+     *   budget        `timeoutMs` (default `captureTimeoutMs`) elapsed → `timeout` with the partial text,
+     *                 a gap with no container at all included (a site that unmounts its reply and never
+     *                 remounts it times out; it never waits past the budget)
      *   session       a banner → `site_error` whose message is ONLY the configured phrase that matched;
      *                 a wall / challenge → `logged_out` / `challenge`; `cancelled` on abort — each with
      *                 the partial text when it is non-blank; re-checked on the poll samples only
@@ -1858,6 +2038,7 @@
       let lastText = null
       let lastChangeAt = t0
       let seenStop = false
+      let seenContainer = false // a container existed at least once: a later gap is a re-render, not a missing reply
       let endSeen = null // 'done_selector' | 'stop_gone' once the site signalled the end
       let endSeenAt = 0
       const partial = () => (isBlank(text) ? undefined : text)
@@ -1885,13 +2066,30 @@
           if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
           if (full) sessionGate()
           const containers = assistantContainers()
-          if (containers.length > baseline) container = containers[containers.length - 1]
+          if (containers.length > baseline) {
+            container = containers[containers.length - 1]
+            seenContainer = true
+          }
+          else if (container && container.isConnected === false) container = null
+          // Measured on chatgpt.com (2026-09-17): the site mounts a short placeholder turn, then
+          // UNMOUNTS the whole container for ~10 s before remounting the real reply. Holding the
+          // detached node freezes the text at the placeholder and makes `findDone` unmatchable
+          // (it is no longer in the document), so the capture could only ever end by timeout.
+          // Dropping it means the gap is simply "still streaming": once a container has been seen
+          // the first-token deadline no longer applies, only the overall budget.
           if (!container) {
-            if (now - t0 >= firstToken) {
+            if (!seenContainer && now - t0 >= firstToken) {
               throw new AdapterError(
                 'reply_not_found',
                 `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))})`,
               )
+            }
+            // The gap IS bounded by the overall budget: a site that unmounts its reply and never
+            // brings it back answers `timeout` with whatever text was last on the page, exactly as a
+            // reply that never finishes does — it must never sit here until main's own deadline.
+            if (now - t0 >= budget) {
+              if (!full) sessionGate() // a terminal answer never bypasses the session check
+              throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
             }
             return null
           }

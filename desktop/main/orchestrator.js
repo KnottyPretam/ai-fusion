@@ -10,7 +10,9 @@
 //      site is still answering a manual prompt) → view_busy; health.session logged_out |
 //      challenge | blocked → that code; matched.error 'view_crashed' → view_crashed;
 //      view 'analyst' with no analyst chosen (or a slot that is not the chosen one) →
-//      analyst_not_chosen.
+//      analyst_not_chosen. A lingering `stop` in the cache is re-read from the page first, and the
+//      view is RESERVED across that read, so two requests arriving inside that window cannot both
+//      be accepted onto one view (the loser is `view_busy`).
 //   2. `accepted{req_id, view, slot}`.
 //   3. navigation: link = chats.get(conversation_id, slot); a link that exists and differs from
 //      the view's URL → loadUrl(link) (a failed load → result `navigation`); no link → adopt
@@ -47,6 +49,14 @@
 // analyst ALWAYS observes — the per-pane capture switches do not apply to a view the user never
 // reads — and no `panes:turn` phase is emitted, because that event is keyed by slot alone (§2)
 // and would label the slot's PANE as typing.
+// "In place" is bound to the CONVERSATION, though: the hidden analyst view is one per app while the
+// backend's busy guard is per conversation, so between conversation A's first analyst attempt and
+// its correction another conversation can take the view and open its own chat. A `fresh:false`
+// analyst request therefore returns to the analyst chat its own conversation last used
+// (`analystView.chatFor`), or opens a NEW one when it has none and the view sits in a chat that
+// belongs to a different conversation (`analystView.chatOwner`) — a correction is never typed into
+// another conversation's chat. Each finished analyst turn records its chat (`analystView.noteChat`,
+// only URLs matching the site's chatUrlPattern), which is main's memory, not chats.json.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
@@ -152,7 +162,8 @@ function adapterFailure(e) {
  *                                  null → `analyst_not_chosen`: no analyst is chosen, or not that one)
  *   analystView?                   Stage 3, the rest of the analyst view's seam (analyst-views.js):
  *                                  {currentUrl(), loadUrl(url), newChatUrl(), pendingNavigation(),
- *                                   focus(), getHealth(), setHealth(h)} — every entry optional
+ *                                   focus(), getHealth(), setHealth(h), chatFor(convId),
+ *                                   chatOwner(url), noteChat(convId, url)} — every entry optional
  *   focusView(slot)                `webContents.focus()` on the view (may be async)
  *   restoreRendererFocus()         called once the last queued insert phase has finished
  *   timeoutsFor(slot)              {composerWaitMs, sendWaitMs, submitVerifyMs} from the merged selectors
@@ -294,6 +305,10 @@ export function createOrchestrator({
       setHealth: analystFn('setHealth'),
       observes: () => true, // the analyst page is read back whatever the pane capture switches say
       recordsChat: false,
+      // main's per-conversation memory of the hidden view's chats (never chats.json, which is the pane's)
+      chatFor: analystFn('chatFor'),
+      chatOwner: analystFn('chatOwner'),
+      noteChat: analystFn('noteChat'),
       phases: false,
     }
   }
@@ -343,6 +358,50 @@ export function createOrchestrator({
       if (timer && typeof timer.unref === 'function') timer.unref()
     }
     return { url: () => recorded, stop }
+  }
+
+  /**
+   * Where a `fresh:false` analyst request must continue. The hidden analyst view is ONE per app
+   * while the backend's busy guard is per conversation, so "in place" can be ANOTHER conversation's
+   * chat (A's correction attempt after B took the view between A's two attempts). Returns the URL
+   * to open first, or null to stay where the view is:
+   *   • this conversation's own recorded analyst chat, when the view has moved away from it;
+   *   • a brand-new chat, when this conversation has no recorded chat and the view sits in one that
+   *     belongs to a different conversation (never type a correction into a foreign chat);
+   *   • null when the view is already in this conversation's chat, or in nobody's.
+   */
+  function analystContinuation(seam, convId) {
+    if (typeof seam.chatFor !== 'function') return null
+    const here = seam.url()
+    let mine = null
+    let owner = null
+    try {
+      mine = convId === '' ? null : seam.chatFor(convId) || null
+      owner = typeof seam.chatOwner === 'function' ? seam.chatOwner(here) || null : null
+    } catch (e) {
+      warn(`analyst chat lookup failed: ${(e && e.message) || e}`)
+      return null
+    }
+    if (typeof mine === 'string' && mine !== '') return mine === here ? null : mine
+    if (owner === null || owner === convId) return null
+    info('analyst page: the chat it is in belongs to another conversation; opening a new one')
+    return typeof seam.newChatUrl === 'function' ? seam.newChatUrl() || null : null
+  }
+
+  /**
+   * Remember which analyst chat this conversation is in, so its next `fresh:false` continuation
+   * comes back here. Only URLs matching the site's chatUrlPattern are recorded (the same rule as
+   * the pane's chats.json), so the site root is never mistaken for a chat.
+   */
+  function noteAnalystChat(seam, slot, convId, u) {
+    if (typeof seam.noteChat !== 'function' || convId === '' || typeof u !== 'string' || u === '') return
+    const pattern = compileChatUrlPattern(typeof chatUrlPatternFor === 'function' ? chatUrlPatternFor(slot) : '')
+    if (!pattern || !pattern.test(u)) return
+    try {
+      seam.noteChat(convId, u)
+    } catch (e) {
+      warn(`analyst chat could not be recorded: ${(e && e.message) || e}`)
+    }
   }
 
   /**
@@ -420,11 +479,14 @@ export function createOrchestrator({
     }
     try {
       if (!client) throw new AdapterRequestError('view_crashed', `${label}: no live view`)
-      // 3. navigation (decision 12; the analyst view never consults or records a chat link)
-      const link = seam.recordsChat && chats && typeof chats.get === 'function' && typeof request.conversation_id === 'string' ? chats.get(request.conversation_id, slot) : null
+      // 3. navigation (decision 12; the analyst view never consults or records a PANE chat link)
+      const convId = typeof request.conversation_id === 'string' ? request.conversation_id : ''
+      const link = seam.recordsChat && chats && typeof chats.get === 'function' && convId !== '' ? chats.get(convId, slot) : null
       let target = null
       if (request.fresh === true && typeof seam.newChatUrl === 'function') target = seam.newChatUrl() || null
       else if (link && link !== seam.url()) target = link
+      // an analyst continuation belongs to its conversation, never to whoever used the view last
+      else if (!seam.recordsChat) target = analystContinuation(seam, convId)
       if (target) {
         if (typeof seam.loadUrl !== 'function') throw new AdapterRequestError('navigation', `${label}: cannot navigate (no loader)`)
         info(`${label}: opening ${link && target === link ? 'the recorded chat' : 'a new chat'}`)
@@ -450,11 +512,13 @@ export function createOrchestrator({
       })
       emitPhase('submitted')
       // 6. chat-URL wait, in the background (never delays the result)
-      chatWatch = seam.recordsChat ? watchChatUrl(slot, request.conversation_id) : { url: () => null, stop: () => {} }
+      chatWatch = seam.recordsChat ? watchChatUrl(slot, convId) : { url: () => null, stop: () => {} }
       const resultUrl = () => chatWatch.url() || (typeof submitted.url === 'string' && submitted.url) || seam.url()
       // 7. observe when capture is on (always, for the analyst view)
       if (!seam.observes()) {
-        return { type: 'result', req_id: reqId, ok: true, captured: false, url: resultUrl(), ms: elapsed() }
+        const only = resultUrl()
+        noteAnalystChat(seam, slot, convId, only)
+        return { type: 'result', req_id: reqId, ok: true, captured: false, url: only, ms: elapsed() }
       }
       cancelled()
       emitPhase('replying')
@@ -464,7 +528,9 @@ export function createOrchestrator({
       const observed = await client.request('observe', observePayload, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
-      return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: (typeof observed.url === 'string' && observed.url) || resultUrl(), ms: elapsed(), done_by: doneBy }
+      const finalUrl = (typeof observed.url === 'string' && observed.url) || resultUrl()
+      noteAnalystChat(seam, slot, convId, finalUrl)
+      return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: finalUrl, ms: elapsed(), done_by: doneBy }
     } catch (e) {
       const f = adapterFailure(e)
       const code = RESULT_CODE_SET.has(f.code) ? f.code : 'site_error'
@@ -505,11 +571,16 @@ export function createOrchestrator({
       if (view === 'analyst') return reject('analyst_not_chosen', `no analyst page is chosen for ${slot}; choose one in Settings`)
       return reject('view_crashed', `${slot}: no live view`)
     }
+    const entry = { reqId, view, slot, seam, label, controller: new AbortController(), started: now() }
     let health = typeof seam.getHealth === 'function' ? seam.getHealth() : null
-    if (health && health.stop === true && !active.has(key)) {
+    const busy = active.has(key)
+    if (health && health.stop === true && !busy) {
       // The cache is fed by the adapter's change/poll publishes (1.5 s) — a stop button that showed
       // for a short reply can linger in it. Re-read before rejecting so a finished reply never
       // turns a send into view_busy; a site that is really still answering stays rejected.
+      // The view is RESERVED across that await (`busy` was read before it): two requests that
+      // arrive inside the 3 s window would otherwise both find the map empty and both be accepted.
+      active.set(key, entry)
       try {
         const fresh = await seam.client.request('health', {}, { timeoutMs: FRESH_HEALTH_TIMEOUT_MS })
         if (fresh && fresh.ok !== false && fresh.health && typeof fresh.health === 'object') {
@@ -520,11 +591,13 @@ export function createOrchestrator({
         /* keep the cached value */
       }
     }
-    const bad = rejectFromHealth(health, { inflight: active.has(key) })
-    if (bad) return reject(bad.code, `${label}: ${bad.message}`)
+    const bad = rejectFromHealth(health, { inflight: busy })
+    if (bad) {
+      if (active.get(key) === entry) active.delete(key) // give the reservation back
+      return reject(bad.code, `${label}: ${bad.message}`)
+    }
 
     // 2. accepted
-    const entry = { reqId, view, slot, seam, label, controller: new AbortController(), started: now() }
     active.set(key, entry)
     send({ type: 'accepted', req_id: reqId, view, slot })
     try {

@@ -39,7 +39,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu } from 'electron'
+import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme } from 'electron'
 import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
@@ -264,7 +264,24 @@ function resolveBackend(userData) {
   return { token, backend: createBackend({ spec, logDir: path.join(userData, 'logs'), log: console }) }
 }
 
+/**
+ * The three site pages are never styled by Triplex (no CSS injection into pages we do not own):
+ * they are told what the system prefers, and chatgpt.com / claude.ai / grok.com apply their OWN
+ * dark themes through `prefers-color-scheme`. A site pinned to light in its own settings stays
+ * light, which is correct — that is the user's choice on that site.
+ */
+function applyTheme(theme) {
+  const next = theme === 'light' || theme === 'dark' || theme === 'system' ? theme : 'dark'
+  try {
+    nativeTheme.themeSource = next
+  } catch (err) {
+    console.error(`[theme] could not set themeSource: ${(err && err.message) || err}`)
+  }
+  return next
+}
+
 function start() {
+  applyTheme(process.env.TRIPLEX_THEME)
   const userData = app.getPath('userData')
   try {
     fs.mkdirSync(userData, { recursive: true })
@@ -332,6 +349,11 @@ function start() {
       focus: () => analystViews.focus(),
       getHealth: () => analystViews.getHealth(),
       setHealth: (h) => analystViews.setHealth(h),
+      // a `fresh:false` analyst continuation belongs to its conversation, not to whoever used the
+      // one hidden view last (the backend's busy guard is per conversation)
+      chatFor: (convId) => analystViews.chatFor(convId),
+      chatOwner: (url) => analystViews.chatOwner(url),
+      noteChat: (convId, url) => analystViews.noteChat(convId, url),
     },
     focusView: (slot) => views.focus(slot),
     restoreRendererFocus: focusRenderer,

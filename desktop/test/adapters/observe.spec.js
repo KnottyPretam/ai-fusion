@@ -5,6 +5,10 @@
 // second assistant container mid-observe (?twoTurns), `snapshot` (passes the fixture lint), the
 // `config` re-merge and `ready` after a loadURL to /c/<id>. The real desktop/preload/site.cjs is
 // injected through the fake IPC exactly as in adapter.spec.js (see _harness.js).
+//
+// S7 review adds the chatgpt placeholder-then-remount lifecycle and its placeholder chat url, both
+// MEASURED live on chatgpt.com on 2026-09-17 and replayed by the fake site's ?remountMs /
+// ?placeholderMs / ?webUrlMs — see the describe block near the end of this file.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -291,6 +295,77 @@ test.describe('?reply=rich — a rendered markdown reply comes back as GFM (Stag
   })
 })
 
+/**
+ * ?reply=fidelity — ONE end-to-end guard for the S7 capture-fidelity fixes: a reply carrying a
+ * paragraph, inline code that CONTAINS a backtick, a KaTeX formula (the accessible MathML copy with
+ * its TeX annotation, hidden by clip, next to the aria-hidden glyph run), a nested list, a GFM table
+ * and a fenced JSON block whose language sits in a header next to a Copy button and whose lines are
+ * `div.cm-line` BLOCK elements. Every part has to come back — and the fenced body has to stay
+ * JSON.parse-able, because that is what Analyze and Fusion read out of a captured reply.
+ */
+test.describe('?reply=fidelity — every capture-fidelity shape survives one observe (S7)', () => {
+  /** The fake site's CANNED_FIDELITY: nothing in it is a link, so the capture must equal it verbatim. */
+  const FIDELITY = [
+    '## Capture fidelity',
+    '',
+    'The range register is `` `GYRO_RANGE` `` in prose, and the axis tolerance is $\\pm 0.5^\\circ$ at 25 C.',
+    '',
+    '- ranges',
+    '  - 2000 deg/s',
+    '  - 125 deg/s',
+    '- registers',
+    '',
+    '| Register | Value |',
+    '| --- | --- |',
+    '| GYRO_RANGE | 0x0F |',
+    '| CHIP_ID | 0x1F |',
+    '',
+    '```json',
+    '{',
+    '  "register": "0x0F",',
+    '  "ranges": [2000, 125],',
+    '  "note": "a ` backtick and a \\"quote\\" inside a string"',
+    '}',
+    '```',
+  ].join('\n')
+  const JSON_BODY = { register: '0x0F', ranges: [2000, 125], note: 'a ` backtick and a "quote" inside a string' }
+
+  for (const site of SLOTS) {
+    test(`${site}: the paragraph, the backtick-bearing inline code, the formula, the nested list, the table and the multi-line JSON fence all come back, and the fence still JSON.parses`, async ({ page }) => {
+      await open(page, { site, reply: 'fidelity', replyMs: 400 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: 'everything at once, please' })
+      expect(sent.ok).toBe(true)
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, FIDELITY, DONE_BY[site])
+      expect(res.text).toBe(await page.evaluate(() => window.__fake.replySource())) // verbatim, link-free
+
+      // the DOM really carried the hard shapes (not markdown text dropped into the container)
+      const container = DEFAULT_SELECTORS[site].assistant[0]
+      await expect(page.locator(`${container} h2`)).toHaveText('Capture fidelity')
+      await expect(page.locator(`${container} p code`)).toHaveText('`GYRO_RANGE`') // a backtick INSIDE the code span
+      await expect(page.locator(`${container} .katex-mathml annotation`)).toHaveAttribute('encoding', 'application/x-tex')
+      await expect(page.locator(`${container} .katex-html[aria-hidden="true"]`)).toHaveCount(1)
+      await expect(page.locator(`${container} ul ul > li`)).toHaveCount(2)
+      await expect(page.locator(`${container} table tbody tr`)).toHaveCount(2)
+      await expect(page.locator(`${container} pre code div.cm-line`)).toHaveCount(5) // one BLOCK element per code line
+      await expect(page.locator(`${container} pre`).first()).toBeVisible()
+      // the code block's language header and its Copy button are on the page (chatgpt: inside the pre)
+      const header = await page.locator(`${container} .code-header`).first().innerText() // grok's header also holds its Copy button
+      expect(header.trim().split('\n')[0]).toBe('json')
+      await expect(page.locator(`${container} button[aria-label^="Copy"]`).first()).toHaveCount(1)
+      // the glyph run the reader sees is in the DOM and NOT in the capture: the TeX is there once
+      expect(await page.locator(`${container} .katex-html`).innerText()).toContain('±')
+      expect(res.text).not.toContain('±')
+      expect(res.text.match(/\\pm/g)).toHaveLength(1)
+
+      // what Analyze / Fusion do with a captured reply: parse the fenced body
+      const fence = res.text.slice(res.text.indexOf('```json\n') + '```json\n'.length, res.text.lastIndexOf('\n```'))
+      expect(fence.split('\n')).toHaveLength(5) // the lines survived the block elements
+      expect(JSON.parse(fence)).toEqual(JSON_BODY)
+    })
+  }
+})
+
 test.describe('the end signal before the last render (?doneLagMs) and a second container mid-observe (?twoTurns)', () => {
   for (const site of SLOTS) {
     test(`${site}: ?doneLagMs=300 — the done marker / stop removal lands 300 ms before the last render; observe still returns the final text (${DONE_BY[site]})`, async ({ page }) => {
@@ -321,6 +396,149 @@ test.describe('the end signal before the last render (?doneLagMs) and a second c
       expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
     })
   }
+})
+
+/**
+ * The chatgpt placeholder-then-remount lifecycle, MEASURED live on chatgpt.com with a real logged-in
+ * session on 2026-09-17 and replayed by the fake site's ?remountMs / ?placeholderMs / ?webUrlMs:
+ *   ~1 s   a SHORT placeholder assistant turn (~12 characters, no `.markdown` child) under a visible
+ *          button[data-testid="stop-button"] (aria-label "Stop answering")
+ *   ~2 s   the placeholder is UNMOUNTED — `[data-message-author-role="assistant"]` returns ZERO for
+ *          roughly 10 s — while the stop button stays visible
+ *   ~13 s  the real reply container is mounted, `.markdown` child and all
+ *   ~14 s  the stop button goes and a second copy-turn-action-button appears
+ * plus a PLACEHOLDER chat url `/c/WEB:<uuid>` that is only later replaced by the real `/c/<uuid>`.
+ *
+ * What the capture must do, and what these tests pin: drop a container that is no longer connected
+ * (holding the detached placeholder freezes the text and makes `done` unmatchable, so the capture could
+ * only ever end by timeout on the placeholder's text), apply the first-token deadline only until a
+ * container has been seen ONCE (a later gap is a re-render, bounded by the overall budget) and report a
+ * url the tightened `chatUrlPattern` accepts — the placeholder url matches nothing, so main never
+ * records a link that 404s.
+ */
+test.describe('the chatgpt placeholder-then-remount lifecycle (measured live 2026-09-17)', () => {
+  const ASSISTANT = DEFAULT_SELECTORS.chatgpt.assistant[0]
+  const MARKDOWN = DEFAULT_SELECTORS.chatgpt.assistantText[0]
+
+  test('observe waits through the gap and returns the REAL reply, never the placeholder; the stop button is never dropped in between', async ({ page }) => {
+    await open(page, { site: 'chatgpt', replyMs: 500, placeholderMs: 300, remountMs: 900 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'after the remount' })
+    expect(sent).toMatchObject({ ok: true, submitted: true })
+    const t0 = Date.now()
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, 'Echo: after the remount', 'done_selector')
+    const r = await replyState(page)
+    expect(r.placeholderText).toBe('Placeholder…')
+    expect(res.text).not.toContain(r.placeholderText) // the short placeholder turn is not the answer
+    expect(r.containers).toBe(2) // the placeholder, then the real reply
+    expect(r.remountedAt).toBeGreaterThan(t0) // the real container mounted only AFTER observe began
+    expect(r.remountedAt - r.placeholderGoneAt).toBeGreaterThanOrEqual(800) // it waited out the whole gap
+    expect(res.ms).toBeGreaterThanOrEqual(900)
+    expect(r.stopEvents.map((e) => e.on)).toEqual([true, false]) // up before the placeholder, down at the end
+    await expect(page.locator(ASSISTANT)).toHaveCount(1)
+    await expect(page.locator(CHATGPT_DONE)).toHaveCount(1)
+  })
+
+  test('a gap LONGER than firstTokenMs still succeeds: the deadline only applies until a container has been seen once', async ({ page }) => {
+    await open(page, { site: 'chatgpt', replyMs: 300, placeholderMs: 800, remountMs: 1200, selectors: withOverride('chatgpt', { firstTokenMs: 500 }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'a gap longer than the deadline' })
+    expect(sent.assistantCount).toBe(0)
+    await expect(page.locator(ASSISTANT)).toHaveCount(1) // the placeholder is up: observe starts with a container in view
+    await expect(page.locator(ASSISTANT).locator(MARKDOWN)).toHaveCount(0) // …and it carries no `.markdown` child
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, 'Echo: a gap longer than the deadline', 'done_selector')
+    const r = await replyState(page)
+    expect(r.remountedAt - r.placeholderGoneAt).toBeGreaterThanOrEqual(500) // the gap really outlasted firstTokenMs
+    expect(r.containers).toBe(2)
+    expect(res.text).not.toContain(r.placeholderText)
+  })
+
+  test('a page that NEVER mounts a container still fails reply_not_found within firstTokenMs (lifting the deadline after a container was seen did not disable it)', async ({ page }) => {
+    await open(page, { site: 'chatgpt', selectors: withOverride('chatgpt', { firstTokenMs: 600 }) }) // no reply options: nothing ever mounts
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'nobody answers' })
+    const t0 = Date.now()
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expect(res).toMatchObject({ ok: false, op: 'observe', code: 'reply_not_found' })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(600)
+    expect(res.message).toMatch(/600 ms/)
+    expect('partial' in res).toBe(false)
+    expect((await replyState(page)).containers).toBe(0)
+  })
+
+  test('a placeholder that never comes back is bounded by the BUDGET: timeout (never reply_not_found, never a wait for the remount), its partial the placeholder text', async ({ page }) => {
+    // the remount is 20 s away and the budget is 1.2 s: the capture must answer at the budget
+    await open(page, { site: 'chatgpt', replyMs: 200, placeholderMs: 700, remountMs: 20000, selectors: withOverride('chatgpt', { firstTokenMs: 500 }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'gone for good' })
+    await expect(page.locator(ASSISTANT)).toHaveCount(1) // the placeholder, seen before it is unmounted
+    const t0 = Date.now()
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, timeoutMs: 1200 })
+    expect(res).toMatchObject({ ok: false, op: 'observe', code: 'timeout' })
+    expect(res.message).toMatch(/1200 ms/)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1200)
+    expect(Date.now() - t0).toBeLessThan(6000) // and NOT 20 s: a gap with no container is still bounded
+    const r = await replyState(page)
+    expect(res.partial).toBe(r.placeholderText) // the last text that was on the page — a partial, with an error
+    expect(r.remountedAt).toBeNull()
+    await expect(page.locator(ASSISTANT)).toHaveCount(0)
+  })
+
+  test('the lifecycle composes with ?reply=json + ?doneLagMs: the fenced JSON comes back verbatim after the gap', async ({ page }) => {
+    await open(page, { site: 'chatgpt', reply: 'json', replyMs: 900, placeholderMs: 300, remountMs: 700, doneLagMs: 300 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'YOUR CLAIM: the gyroscope tops out at 1000 deg/s' })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expect(res).toMatchObject({ ok: true, op: 'observe', doneBy: 'done_selector' })
+    const defense = fenced(fixtureText('chatgpt.defense.1.jsonl'))
+    expect(res.text).toBe(defense)
+    const r = await replyState(page)
+    expect(r.rendersAfterSignal).toBeGreaterThan(1) // the end signal landed before the last render, as under ?doneLagMs alone
+    expect(r.containers).toBe(2)
+    expect(JSON.parse(res.text.replace(/^```json\n/, '').replace(/\n```$/, '')).stance).toBe('revise')
+  })
+
+  test('the lifecycle composes with ?nostop=1 + ?nodone=1: quiet detection settles on the REAL text, and the gap never reads as quiet', async ({ page }) => {
+    await open(page, {
+      site: 'chatgpt',
+      replyMs: 300,
+      placeholderMs: 200,
+      remountMs: 900,
+      nostop: 1,
+      nodone: 1,
+      selectors: withOverride('chatgpt', { quietMs: 500 }), // > placeholderMs: a placeholder sitting still is not "quiet"
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'quiet after the gap' })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, 'Echo: quiet after the gap', 'quiet')
+    const r = await replyState(page)
+    expect(r.stopEvents).toEqual([]) // ?nostop=1: there was never a stop button to see
+    expect(res.text).not.toContain(r.placeholderText)
+    await expect(page.locator(CHATGPT_DONE)).toHaveCount(0)
+  })
+
+  test('the recorded chat url: the placeholder /c/WEB:<uuid> matches no tightened chatUrlPattern, and the url the adapter reports after the capture is the REAL /c/<uuid>', async ({ page }) => {
+    // the shape of DEFAULT_SELECTORS.chatgpt.chatUrlPattern (the id ends at the segment), pointed at the fake site
+    const PATTERN = '^http://127\\.0\\.0\\.1:\\d+/c/[A-Za-z0-9-]+(?:[?#]|$)'
+    await open(page, { site: 'chatgpt', replyMs: 1500, webUrlMs: 400, selectors: withOverride('chatgpt', { chatUrlPattern: PATTERN }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'mint a chat id' })
+    expect(sent.ok).toBe(true)
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expect(res).toMatchObject({ ok: true, op: 'observe', doneBy: 'done_selector' })
+    const { urls } = await replyState(page)
+    expect(urls.map((u) => u.how)).toEqual(['push', 'replace'])
+    const re = new RegExp(PATTERN)
+    expect(new URL(urls[0].href).pathname).toContain('/c/WEB:')
+    expect(re.test(urls[0].href)).toBe(false) // main records only matching urls: the placeholder is never one
+    expect(re.test(urls[1].href)).toBe(true)
+    expect(res.url).toBe(urls[1].href) // what the adapter reports after the capture is the real chat url
+    expect(res.url).not.toContain('WEB:')
+    expect(page.url()).toBe(urls[1].href)
+    // the same rule on the real pattern, verbatim from the defaults
+    const real = new RegExp(DEFAULT_SELECTORS.chatgpt.chatUrlPattern)
+    const uuid = new URL(urls[1].href).pathname.replace('/c/', '')
+    expect(real.test(`https://chatgpt.com/c/WEB:${uuid}`)).toBe(false)
+    expect(real.test(`https://chatgpt.com/c/${uuid}`)).toBe(true)
+    // and the placeholder url is not a chat at all: revisiting it 404s (chatgpt.com sends you home)
+    expect((await page.request.get(new URL(urls[0].href).pathname)).status()).toBe(404)
+  })
 })
 
 test('a second submit (and a snapshot) while observe is in flight answers busy; the observe still completes', async ({ page }) => {

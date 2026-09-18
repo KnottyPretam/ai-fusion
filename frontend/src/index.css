@@ -1,5 +1,15 @@
 /* FROZEN after Stage 0: palette tokens + the shared .markdown-content rules (carried over from
-   llm-council: every ReactMarkdown must be wrapped in <div className="markdown-content">). */
+   llm-council: every ReactMarkdown must be wrapped in <div className="markdown-content">).
+
+   THEME. `:root` is the light palette; every rule in the app uses the tokens, never a raw colour
+   (the few #fff left are label text on a coloured button, which is correct in both themes). Dark
+   values are defined ONCE and applied in two ways:
+     - `:root[data-theme="dark"]`        an explicit choice (the desktop deck's theme button, or
+                                         localStorage `triplex.theme` in the browser)
+     - `@media (prefers-color-scheme: dark)` guarded by `:root:not([data-theme="light"])`, so the
+                                         system preference applies until the user picks a side.
+   The three site views are NOT themed by us: Electron sets `nativeTheme.themeSource`, so the real
+   ChatGPT / Claude / Grok pages follow their own dark mode. Triplex never injects CSS into them. */
 :root {
   --bg: #ffffff;
   --bg-muted: #f7f8fa;
@@ -22,6 +32,56 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+/* --- dark palette -------------------------------------------------------------------------- */
+/* Roles match the light set one for one. `--grok` is near-black in light mode, so it gets a light
+   counterpart here (the brand mark is black-on-white / white-on-black); the other two brand hues
+   carry over unchanged because they read on either ground. */
+:root[data-theme='dark'] {
+  --bg: #0d1117;
+  --bg-muted: #161b22;
+  --fg: #e6edf3;
+  --fg-muted: #9198a1;
+  --border: #30363d;
+  --primary: #58a6ff;
+  --primary-soft: #11253d;
+  --ok: #3fb950;
+  --ok-soft: #10261a;
+  --warn: #d29922;
+  --warn-soft: #2b2415;
+  --err: #f85149;
+  --err-soft: #34181a;
+  --fusion: #a371f7;
+  --fusion-soft: #241a3a;
+  --claude: #e08a68;
+  --chatgpt: #19c99b;
+  --grok: #f0f0f0;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #0d1117;
+    --bg-muted: #161b22;
+    --fg: #e6edf3;
+    --fg-muted: #9198a1;
+    --border: #30363d;
+    --primary: #58a6ff;
+    --primary-soft: #11253d;
+    --ok: #3fb950;
+    --ok-soft: #10261a;
+    --warn: #d29922;
+    --warn-soft: #2b2415;
+    --err: #f85149;
+    --err-soft: #34181a;
+    --fusion: #a371f7;
+    --fusion-soft: #241a3a;
+    --claude: #e08a68;
+    --chatgpt: #19c99b;
+    --grok: #f0f0f0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='light'] { color-scheme: light; }
+
 html, body, #root { height: 100%; margin: 0; }
 body { font-family: var(--sans); font-size: 14px; line-height: 1.45; color: var(--fg); background: var(--bg); }
 button { font: inherit; cursor: pointer; }

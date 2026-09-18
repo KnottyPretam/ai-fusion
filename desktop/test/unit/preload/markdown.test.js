@@ -143,3 +143,100 @@ test('replyText: the assistantText cascade is preferred and rendered as markdown
   assert.equal(claude.replyText({ tagName: 'DIV', innerText: 'rendered text' }), 'rendered text')
   assert.equal(claude.replyText({ tagName: 'DIV', textContent: 'raw text' }), 'raw text')
 })
+
+// --- S7 review fixes: capture fidelity ---------------------------------------------------------
+
+test('toMarkdown: a bare-token block before a code block is only that fence\'s header when the fence names no other language — otherwise it is CONTENT', () => {
+  // the regression: a one-token heading before a `code.language-py` was swallowed as the header and
+  // then discarded outright (the class wins), so a real block vanished from the capture
+  assert.equal(md(`<div class="markdown"><h3>2000</h3><pre><code class="language-py">x=1</code></pre></div>`), '### 2000\n\n```py\nx=1\n```')
+  // a heading / list / table / quote is content even when the fence has no language of its own
+  assert.equal(md(`<div class="markdown"><h3>2000</h3><pre><code>x=1</code></pre></div>`), '### 2000\n\n```\nx=1\n```')
+  assert.equal(md(`<div class="markdown"><ul><li>2000</li></ul><pre><code>x=1</code></pre></div>`), '- 2000\n\n```\nx=1\n```')
+  // a `**app.py**` filename label and a one-word answer before a snippet survive too
+  assert.equal(md(`<div class="markdown"><p><strong>app.py</strong></p><pre><code class="language-py">x=1</code></pre></div>`), '**app.py**\n\n```py\nx=1\n```')
+  assert.equal(md(`<div class="markdown"><p>Yes</p><pre><code class="language-py">x=1</code></pre></div>`), 'Yes\n\n```py\nx=1\n```')
+  // the real claude shape: the label and the class disagree → the label is content, the class the language
+  assert.equal(
+    md(`<div class="font-claude-response"><div class="relative group/copy"><div class="text-text-300 absolute text-xs">app.py</div><div class="code-block__code"><pre><code class="language-python">print(1)</code></pre></div></div></div>`),
+    'app.py\n\n```python\nprint(1)\n```',
+  )
+  // …and when they agree, the header is still folded into the fence exactly once
+  assert.equal(
+    md(`<div class="font-claude-response"><div class="relative group/copy"><div class="text-text-300 absolute text-xs">python</div><div class="code-block__code"><pre><code class="language-python">print(1)</code></pre></div></div></div>`),
+    '```python\nprint(1)\n```',
+  )
+  // grok's shape is unchanged: no class anywhere, so the header IS the only language clue
+  assert.equal(
+    md(`<div class="response-content-markdown"><div class="not-prose"><div class="flex"><span class="font-mono text-xs">bash</span><button aria-label="Copy">Copy</button></div><pre><code>echo hi</code></pre></div></div>`),
+    '```bash\necho hi\n```',
+  )
+})
+
+test('toMarkdown: a code block whose lines are block elements keeps its lines (a highlighter that wraps each line in a <div>)', () => {
+  const lines = md(`<div class="markdown"><pre><code class="language-json"><div>{</div><div>  "a": 1</div><div>}</div></code></pre></div>`)
+  assert.equal(lines, '```json\n{\n  "a": 1\n}\n```')
+  assert.equal(JSON.parse(lines.slice('```json\n'.length, -'\n```'.length)).a, 1) // the capture still parses
+  // an empty line element is a blank line, and a <span> line (hljs) is still inline
+  assert.equal(md(`<div class="markdown"><pre><code><div>a</div><div></div><div>b</div></code></pre></div>`), '```\na\n\nb\n```')
+  assert.equal(md(`<div class="markdown"><pre><code><span>a</span><span>b</span></code></pre></div>`), '```\nab\n```')
+  // the chrome inside a line container is still dropped and never breaks the line
+  assert.equal(md(`<div class="markdown"><pre><code><div class="cm-line">let a = 1<button>Copy</button></div><div class="cm-line">let b = 2</div></code></pre></div>`), '```\nlet a = 1\nlet b = 2\n```')
+})
+
+test('toMarkdown: a <pre> holding more than one <code> keeps every body and promotes none of them to the fence language', () => {
+  assert.equal(md(`<div class="markdown"><pre><code>line one</code><code>py</code></pre></div>`), '```\nline one\npy\n```')
+  // the language still comes from the first body's class, and every body is kept in order
+  assert.equal(
+    md(`<div class="markdown"><pre><code class="language-py">x = 1</code><code>y = 2</code></pre></div>`),
+    '```py\nx = 1\ny = 2\n```',
+  )
+  // one code + an in-`pre` header is unchanged (the chatgpt shape)
+  assert.equal(md(`<div class="markdown"><pre><div><div>python</div><code>print(1)</code></div></pre></div>`), '```python\nprint(1)\n```')
+  // a NESTED code is already part of its parent's body: it is not appended a second time
+  assert.equal(md(`<div class="markdown"><pre><code class="language-js">let a = <code>1</code></code></pre></div>`), '```js\nlet a = 1\n```')
+})
+
+test('toMarkdown: the fence is always longer than the longest fence line inside the body (three, four, five backticks)', () => {
+  assert.equal(md(`<div class="markdown"><pre><code class="language-md">plain</code></pre></div>`), '```md\nplain\n```')
+  assert.equal(md(`<div class="markdown"><pre><code class="language-md">\`\`\`json\n{}\n\`\`\`</code></pre></div>`), '````md\n```json\n{}\n```\n````')
+  // a body that itself holds a FOUR-tick fence needs five, or the captured block closes early
+  assert.equal(md(`<div class="markdown"><pre><code class="language-md">\`\`\`\`json\n{}\n\`\`\`\`</code></pre></div>`), '`````md\n````json\n{}\n````\n`````')
+  // an indented fence line counts too
+  assert.equal(md(`<div class="markdown"><pre><code>  \`\`\`\`\n  x\n  \`\`\`\`</code></pre></div>`), '`````\n  ````\n  x\n  ````\n`````')
+})
+
+test('toMarkdown: inline code containing a backtick keeps its backticks (CommonMark delimiter run + padding)', () => {
+  assert.equal(md(`<div class="markdown"><p>type <code>\`x\`</code> now</p></div>`), 'type `` `x` `` now')
+  assert.equal(md(`<div class="markdown"><p>a <code>npm ci</code> b</p></div>`), 'a `npm ci` b')
+  // a run inside the body is always shorter than the delimiter; the padding is only where a backtick
+  // sits against an edge (CommonMark strips at most one space from each side)
+  assert.equal(md(`<div class="markdown"><p><code>a \`\` b</code></p></div>`), '```a `` b```')
+  assert.equal(md(`<div class="markdown"><p><code>a \` b</code></p></div>`), '``a ` b``')
+  assert.equal(md(`<div class="markdown"><p><kbd>\`</kbd></p></div>`), '`` ` ``')
+})
+
+test('toMarkdown: a KaTeX / MathML formula is captured ONCE — its TeX annotation, not the glyph run as well', () => {
+  const katex = (tex, glyphs, attrs = '') =>
+    `<div class="markdown"><p><span class="katex"><span class="katex-mathml"><math${attrs}><semantics><mrow><msup><mi>x</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">${tex}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true">${glyphs}</span></span></p></div>`
+  assert.equal(md(katex('x^2', '<span>x</span><span>2</span>')), '$x^2$')
+  assert.equal(md(katex('E = mc^2', '<span>E</span>', ' display="block"')), '$$E = mc^2$$')
+  // a formula with no TeX annotation falls back to its glyph run, still once
+  assert.equal(md(`<div class="markdown"><p><math><mrow><mi>x</mi><mn>2</mn></mrow></math></p></div>`), 'x2')
+  // the formula sits in its sentence, and 'math' is a subtree the walk renders itself
+  assert.equal(md(`<div class="markdown"><p>so <math><semantics><mi>y</mi><annotation encoding="application/x-tex">y_1</annotation></semantics></math> holds.</p></div>`), 'so $y_1$ holds.')
+  assert.ok(MD_SKIP_TAGS.includes('math'))
+  assert.equal(toMarkdown(parseFragment(`<math><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>`)), '$x$')
+})
+
+test('toMarkdown: an image contributes its alt text and never its URL', () => {
+  assert.equal(md(`<div class="markdown"><p>Chart: <img src="x.png" alt="revenue by quarter"></p></div>`), 'Chart: ![revenue by quarter]()')
+  const withSrc = md(`<div class="markdown"><p><img src="https://cdn.example.com/plot.png" alt="the plot"></p></div>`)
+  assert.equal(withSrc, '![the plot]()')
+  assert.ok(!withSrc.includes('example.com'))
+  // no alt is nothing at all (the Stage 2 behaviour), and a block-level image is its own block
+  assert.equal(md(`<div class="markdown"><p>Chart: <img src="x.png"></p></div>`), 'Chart:')
+  assert.equal(md(`<div class="markdown"><img src="x.png" alt="a figure"><p>after</p></div>`), '![a figure]()\n\nafter')
+  assert.equal(md(`<div class="markdown"><p><picture><source srcset="a.webp"><img src="a.png" alt="picture alt"></picture></p></div>`), '![picture alt]()')
+  assert.equal(md(`<div class="markdown"><p><img src="x.png" alt="hidden" aria-hidden="true"></p></div>`), '')
+})

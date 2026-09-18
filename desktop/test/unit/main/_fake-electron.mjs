@@ -1,5 +1,5 @@
 // A fake `electron` module for main-wiring.test.js: enough of app / BrowserWindow /
-// WebContentsView / session / shell / ipcMain / screen / Menu for main/main.js to run its
+// WebContentsView / session / shell / ipcMain / screen / Menu / nativeTheme for main/main.js to run its
 // preflight and `start()` under plain Node. After `ready` it probes the wiring (IPC handlers,
 // layout, zoom, a shortcut, health forwarding, the bridge handshake + one request → result round
 // trip over a fake WebSocket, the Stage 2 IPC channels, the renderer's origin guard + foreign-frame
@@ -316,6 +316,18 @@ export const Menu = {
   },
   setApplicationMenu(menu) {
     report.menu = menu
+  },
+}
+
+/** The renderer's palette lives in CSS; the SITE pages follow `themeSource` (main never injects CSS). */
+export const nativeTheme = {
+  _themeSource: 'system',
+  get themeSource() {
+    return this._themeSource
+  },
+  set themeSource(next) {
+    this._themeSource = next
+    report.themeSource = next
   },
 }
 

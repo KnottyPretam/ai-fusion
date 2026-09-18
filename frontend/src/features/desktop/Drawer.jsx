@@ -14,6 +14,12 @@
 //                                      analyst_model when one is open — a pre-pivot OpenRouter
 //                                      conversation shows it — else the desktop choice)
 //   drawer-analyst-visible             Settings: the "show the analyst page" switch (showAnalyst)
+//   drawer-analyst-state               Settings: which login main's hidden analyst page is actually
+//                                      on (`panes.analyst.slot`, main's own truth) plus, when this
+//                                      conversation asks for a different one, that it is being
+//                                      switched over
+//   drawer-analyze-blocked             the Analyze tab with no analyst that can answer: the hint
+//                                      takes the pane's place, so there is no run to click at all
 //
 // Tabs: Analyze = the unchanged features/analyze pane, Fusion = the unchanged features/fusion pane
 // (their slices are registered by the index.jsx modules imported here), Captured = the web
@@ -21,13 +27,23 @@
 // unified prompt bar is the composer), Settings = SlotConfigBar in desktop mode (analyst groups
 // "web sessions (hidden analyst page)" / "local Ollama", grounded hidden) plus the analyst-page
 // switch. All four stay mounted (hidden) so the Fusion stepper and scroll positions survive a tab
-// switch; the CostMeter (desktop mode: latency / calls) is the drawer's footer.
+// switch; the CostMeter (desktop mode: tokens / latency / calls, no cost) is the drawer's footer.
 //
 // Analyst choice (./analyst.js): the select's value is the open conversation's analyst_model, or
 // the desktop choice when none is open; a change persists the mirror (`triplex.desktop.analyst`),
 // tells main which site the hidden page signs in as (`triplex.setAnalyst(slot|null)`, optional-
 // chained) and, through SlotConfigBar, PUTs the open conversation's slot_config. The desktop
 // choice is what the next created conversation gets (desktopSlotConfig).
+//
+// Three stores hold that choice — the conversation's `slot_config.analyst_model` (what Analyze
+// asks the bridge for), the renderer's localStorage mirror and main's `settings.analyst` (the
+// login the hidden page is signed in as) — and a request whose slot is not main's is answered
+// `analyst_not_chosen`. So the drawer keeps them together instead of letting them drift: it prints
+// what main reports (`drawer-analyst-state`) and pushes the effective `web:<slot>:analyst` to main
+// whenever main is on another slot (once per choice: a conversation created through the sidebar
+// carries the backend's spawn-time analyst, and the localStorage mirror is not shared with main).
+// With no analyst that can answer at all, the Analyze tab shows that hint in place of the pane
+// (Decision 4: "Analyze disabled with a hint"), so no run burns a send turn into a degraded state.
 //
 // Auto-open: when the analyze stream starts (`streams.analyze` idle → streaming: the Analyze
 // button, not Fusion's auto-run, which streams under 'fusion') the drawer opens on the Analyze
@@ -42,7 +58,7 @@ import CostMeter from '../meter/index.jsx'
 import SendPane from '../send/SendPane.jsx'
 import { analystSlotOf, isDesktopAnalyst, loadAnalyst, persistAnalyst } from './analyst.js'
 import { desktopApi } from './PaneDeck.jsx'
-import { initialPanes, notCapturedSlots } from './slice.js'
+import { SLOT_LABELS, initialPanes, isSlotId, notCapturedSlots } from './slice.js'
 import css from './desktop.module.css'
 
 export const DRAWER_TABS = [
@@ -53,6 +69,10 @@ export const DRAWER_TABS = [
 ]
 export const TAB_KEYS = DRAWER_TABS.map((t) => t.key)
 export const CHOOSE_ANALYST_HINT = 'choose an analyst'
+/** Shown instead of the Analyze pane while no analyst can answer (Decision 4: Analyze disabled). */
+export const ANALYZE_BLOCKED_HINT = 'Analyze needs an analyst: choose a web session or local Ollama in Settings.'
+/** Every pane returns null without a selected conversation, which left the drawer a blank slab. */
+export const NO_CONVERSATION_HINT = 'No conversation selected. Send a prompt, or pick one in the sidebar, and its Analyze, Fusion and captured replies appear here.'
 
 /** 'capture is off for claude, grok' for the latest send turn of the conversation, or null. */
 export function captureHint(conversation) {
@@ -63,6 +83,18 @@ export function captureHint(conversation) {
 /** 'choose an analyst' unless the model is a desktop analyst (web:<slot>:analyst | ollama:*). */
 export function analystHint(model) {
   return isDesktopAnalyst(model) ? null : CHOOSE_ANALYST_HINT
+}
+
+/**
+ * What main reports its hidden analyst page is on (`panes.analyst.slot`), and — when `model` asks
+ * for a different web session — that the page is being switched over to it. Main's state is the
+ * one that decides whether a bridge analyst request is answered at all.
+ */
+export function analystPageText(pageSlot, model) {
+  const on = isSlotId(pageSlot) ? `signed in as ${SLOT_LABELS[pageSlot]}` : 'not open'
+  const wanted = analystSlotOf(model)
+  const drift = wanted && wanted !== pageSlot ? ` This conversation asks for ${SLOT_LABELS[wanted]}, so the hidden page is being switched over.` : ''
+  return `Hidden analyst page: ${on}.${drift}`
 }
 
 /** Swallow the rejection of an IPC promise (bad_request, a closed window); the UI stays up. */
@@ -98,15 +130,30 @@ export default function Drawer({ api = desktopApi() }) {
   }
   const toggle = () => dispatch({ type: 'panes/drawer' })
 
+  const pushedSlot = useRef(null)
   const onAnalystChange = (model) => {
     const next = typeof model === 'string' ? model : ''
     setChoice(next)
     persistAnalyst(undefined, next)
+    pushedSlot.current = analystSlotOf(next)
     settle(api?.setAnalyst?.(analystSlotOf(next)))
   }
 
   const effectiveAnalyst = slotConfig && typeof slotConfig === 'object' ? slotConfig.analyst_model : choice
+  const analystReady = isDesktopAnalyst(effectiveAnalyst)
   const hints = [captureHint(conversation), analystHint(effectiveAnalyst)].filter(Boolean)
+  const wantedSlot = analystSlotOf(effectiveAnalyst)
+  const pageSlot = isSlotId(analystState.slot) ? analystState.slot : null
+
+  // Main's hidden page must be the login this conversation's analyst_model names, or the bridge
+  // answers analyst_not_chosen: push the choice once (mount included — main never sees the
+  // localStorage mirror, and a conversation created in the sidebar carries the spawn-time analyst).
+  // Once per choice, so a main that lands somewhere else is reported rather than fought over.
+  useEffect(() => {
+    if (wantedSlot === null || wantedSlot === pageSlot || pushedSlot.current === wantedSlot) return
+    pushedSlot.current = wantedSlot
+    settle(api?.setAnalyst?.(wantedSlot))
+  }, [api, wantedSlot, pageSlot])
 
   return (
     <div className={css.drawer} data-testid="desk-drawer" data-open={open ? 'true' : 'false'} data-tab={tab}>
@@ -129,11 +176,32 @@ export default function Drawer({ api = desktopApi() }) {
       </div>
       {open ? (
         <div className={css.drawerBody} data-testid="drawer-body">
-          <div className={css.drawerPanel} data-testid="drawer-panel-analyze" hidden={tab !== 'analyze'}>
-            <AnalyzePane />
+          <div className={css.drawerPanel} data-testid="drawer-panel-analyze" data-blocked={analystReady ? 'false' : 'true'} hidden={tab !== 'analyze'}>
+            {!conversation ? (
+              <p className={css.blockedHint} data-testid="drawer-no-conversation" role="status">
+                {NO_CONVERSATION_HINT}
+              </p>
+            ) : analystReady ? (
+              <AnalyzePane />
+            ) : (
+              // The pane is not rendered at all: a disabled button would still be clickable from a
+              // test (and a `fieldset` only disables what the browser considers a form control),
+              // while Decision 4 wants the run to be impossible, not merely discouraged. An earlier
+              // report comes straight back with the analyst — the analyze slice hydrates from the
+              // persisted turn.
+              <p className={css.blockedHint} data-testid="drawer-analyze-blocked" role="status">
+                {ANALYZE_BLOCKED_HINT}
+              </p>
+            )}
           </div>
           <div className={css.drawerPanel} data-testid="drawer-panel-fusion" hidden={tab !== 'fusion'}>
-            <FusionPane />
+            {conversation ? (
+              <FusionPane />
+            ) : (
+              <p className={css.blockedHint} data-testid="drawer-no-conversation-fusion" role="status">
+                {NO_CONVERSATION_HINT}
+              </p>
+            )}
           </div>
           <div className={`${css.drawerPanel} ${css.captured}`} data-testid="drawer-panel-captured" hidden={tab !== 'captured'}>
             <SendPane composer={false} />
@@ -145,9 +213,12 @@ export default function Drawer({ api = desktopApi() }) {
                 <input type="checkbox" data-testid="drawer-analyst-visible" checked={!!analystState.visible} onChange={(e) => settle(api?.showAnalyst?.(e.target.checked))} />
                 <span>Show the analyst page as a pane</span>
               </label>
+              <p className={css.hint} data-testid="drawer-analyst-state" role="status">
+                {analystPageText(pageSlot, effectiveAnalyst)}
+              </p>
               <p className={css.hint}>
-                The analyst reads only R1/R2/R3-labelled text. A web session runs it in a hidden page signed in as that site (a fresh chat per Analyze); local Ollama needs a running server. New conversations
-                start with the choice above; the open conversation is updated in place.
+                Triplex labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it. A web session runs the analyst in a
+                hidden page signed in as that site (a fresh chat per Analyze); local Ollama needs a running server. New conversations start with the choice above; the open conversation is updated in place.
               </p>
             </div>
           </div>

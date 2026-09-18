@@ -3,10 +3,11 @@
 // permissions / device-chooser rules of a site view; adapterFor gating (null analyst, or a slot
 // that is not the chosen one); setAnalyst switching the partition (old view destroyed, new hidden
 // view); auto-reveal on a challenge / logged_out health; the `analyst` layout rect driving bounds
-// and visibility; slotOfSender; navigation + focus for the orchestrator; the selector hot reload.
+// and visibility; slotOfSender; navigation + focus for the orchestrator; the per-conversation
+// analyst chat memory (chatFor / chatOwner / noteChat); the selector hot reload.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createAnalystViews, REVEAL_SESSIONS } from '../../../main/analyst-views.js'
+import { ANALYST_CHAT_MEMORY, createAnalystViews, REVEAL_SESSIONS } from '../../../main/analyst-views.js'
 import { normalizeLayout } from '../../../main/layout.js'
 import { isPoliced } from '../../../main/policy.js'
 import { hasDeviceChooserPolicy } from '../../../main/permissions.js'
@@ -280,7 +281,7 @@ test('loadUrl / focus / currentUrl are inert without a view, and loadUrl reports
   await assert.rejects(() => manager.loadUrl('http://127.0.0.1:5199/'), (e) => e.code === 'view_crashed')
 })
 
-test('a crashed analyst view publishes a view_crashed health and is recreated once, hidden', () => {
+test('a crashed analyst view publishes a view_crashed health and is recreated once, hidden — and the recreate publishes the cleared health', () => {
   const { manager, instances, timers, states } = setup()
   manager.adapterFor('chatgpt')
   const wc = instances[0].webContents
@@ -292,6 +293,89 @@ test('a crashed analyst view publishes a view_crashed health and is recreated on
   assert.equal(instances.length, 2, 'recreated after the delay')
   assert.equal(instances[1].getVisible(), false)
   assert.equal(instances[1].options.webPreferences.partition, 'persist:chatgpt')
+  // main's own gate is open again (rejectFromHealth(null) lets a turn through): the renderer must
+  // hear that too, or the fourth tab keeps a red view_crashed chip on a live view for seconds
+  assert.equal(manager.getHealth(), null)
+  assert.equal(states.at(-1).health, null, 'the recreated view’s cleared state reached the renderer')
+  assert.deepEqual(states.at(-1), { slot: 'chatgpt', visible: false, health: null })
+})
+
+test('setAnalyst(null) hides the fourth tab: nothing is left behind it (the deck would keep an empty half)', () => {
+  const { manager, instances, settings, states } = setup({ analystVisible: true })
+  manager.adapterFor('chatgpt')
+  manager.applyLayout(normalizeLayout({ analyst: { x: 0, y: 0, width: 100, height: 100 } }))
+  assert.equal(instances[0].getVisible(), true, 'revealed as the fourth pane')
+
+  manager.setAnalyst(null) // the drawer: "ollama:hermes3" or "— none —"
+  assert.equal(manager.get(), null, 'no view behind the tab any more')
+  assert.equal(settings.analystVisible, false, 'so the tab is hidden, and that is persisted')
+  assert.deepEqual(states.at(-1), { slot: null, visible: false, health: null })
+  assert.equal(instances[0].webContents.isDestroyed(), true, 'the view behind the tab is gone')
+
+  // choosing a web analyst again leaves the tab closed until the user asks for it
+  manager.setAnalyst('grok')
+  assert.equal(settings.analystVisible, false)
+  assert.deepEqual(states.at(-1), { slot: 'grok', visible: false, health: null })
+})
+
+test('revealing the analyst pane is refused while no analyst is chosen (nothing would be behind the tab)', () => {
+  const { manager, instances, settings, states } = setup({ analyst: null })
+  assert.equal(manager.setVisible(true), false)
+  assert.equal(settings.analystVisible, false, 'not persisted: there is no page to show')
+  assert.equal(instances.length, 0)
+  assert.deepEqual(states.at(-1), { slot: null, visible: false, health: null })
+
+  // with an analyst it is persisted as before
+  manager.setAnalyst('grok')
+  assert.equal(manager.setVisible(true), true)
+  assert.equal(settings.analystVisible, true)
+})
+
+test('setAnalyst(null) with the tab already closed publishes exactly one state', () => {
+  const { manager, states } = setup()
+  manager.adapterFor('chatgpt')
+  const before = states.length
+  manager.setAnalyst(null)
+  assert.equal(states.length, before + 1, 'no double publish when there is nothing to hide')
+  assert.deepEqual(states.at(-1), { slot: null, visible: false, health: null })
+})
+
+test('the per-conversation analyst chat memory: noteChat / chatFor / chatOwner, capped, and cleared when the slot changes', () => {
+  const { manager } = setup()
+  const A = 'a1111111-2222-4333-8444-555555555555'
+  const B = 'b1111111-2222-4333-8444-555555555555'
+  assert.equal(manager.chatFor(A), null)
+  assert.equal(manager.chatOwner('https://chatgpt.test/c/1'), null)
+
+  manager.noteChat(A, 'https://chatgpt.test/c/a')
+  manager.noteChat(B, 'https://chatgpt.test/c/b')
+  assert.equal(manager.chatFor(A), 'https://chatgpt.test/c/a')
+  assert.equal(manager.chatOwner('https://chatgpt.test/c/b'), B, 'the orchestrator asks whose chat the view is in')
+  assert.equal(manager.chatOwner('https://chatgpt.test/c/zz'), null)
+
+  // the newest URL of a conversation wins, and junk is ignored
+  manager.noteChat(A, 'https://chatgpt.test/c/a2')
+  assert.equal(manager.chatFor(A), 'https://chatgpt.test/c/a2')
+  assert.equal(manager.chatOwner('https://chatgpt.test/c/a'), null, 'the replaced URL belongs to nobody')
+  for (const bad of [null, undefined, '', 42]) {
+    assert.equal(manager.noteChat(bad, 'https://chatgpt.test/c/x'), null)
+    assert.equal(manager.noteChat(A, bad), null)
+    assert.equal(manager.chatFor(bad), null)
+    assert.equal(manager.chatOwner(bad), null)
+  }
+  assert.equal(manager.chatFor(A), 'https://chatgpt.test/c/a2', 'unchanged by the junk')
+
+  // bounded: a long session never grows the map for ever, and the newest entries are the kept ones
+  for (let i = 0; i < ANALYST_CHAT_MEMORY + 5; i++) manager.noteChat(`conv-${i}`, `https://chatgpt.test/c/${i}`)
+  assert.equal(manager.chatFor(A), null, 'the oldest entries fell out')
+  assert.equal(manager.chatFor(`conv-${ANALYST_CHAT_MEMORY + 4}`), `https://chatgpt.test/c/${ANALYST_CHAT_MEMORY + 4}`)
+  assert.equal(manager.chatFor('conv-0'), null)
+
+  // the URLs belong to the site that is going away
+  manager.noteChat(A, 'https://chatgpt.test/c/a3')
+  manager.setAnalyst('grok')
+  assert.equal(manager.chatFor(A), null, 'a new partition starts with no remembered chats')
+  assert.equal(manager.chatOwner('https://chatgpt.test/c/a3'), null)
 })
 
 test('pushConfig reaches the analyst view too (the §4 selector hot reload), and is a no-op while lazy', () => {

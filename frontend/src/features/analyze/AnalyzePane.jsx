@@ -62,9 +62,28 @@ export default function AnalyzePane() {
   const turn = analyze.turn
   const extraction = turn && turn.extraction
 
+  // An incomplete send turn has two very different causes. On the web every missing response means
+  // the model failed or is still streaming; in the desktop app the usual cause is that capture is
+  // off for that site, so the reply is on screen but was never read back — say which it is.
+  // An incomplete send turn has three very different causes, and telling the user "waiting for all
+  // three responses" when the replies are finished (or failed) sends them back to the models
+  // instead of to the fix. Name the slots and the cause, and say what to do: a turn that is missing
+  // a reply can never be analyzed, so the answer is always a NEW Send, not another Analyze.
+  const errs = (send && send.errors) || {}
+  const failed = Object.keys(errs)
+  const notCaptured = failed.filter((s) => String(errs[s] || '').startsWith('capture is off'))
+  const errored = failed.filter((s) => !notCaptured.includes(s))
+  const list = (xs) => xs.join(', ')
+  const were = (xs) => (xs.length === 1 ? 'was' : 'were')
+
   let hint = null
   if (!send) hint = 'send a prompt first'
-  else if (!complete) hint = 'waiting for all three responses'
+  else if (notCaptured.length && !errored.length) {
+    hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so Triplex never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
+  } else if (errored.length) {
+    const why = String(errs[errored[0]] || '').trim()
+    hint = `no reply was captured for ${list(errored)}${notCaptured.length ? ` (and capture was off for ${list(notCaptured)})` : ''}: ${why}. This turn cannot be analyzed — Send again.`
+  } else if (!complete) hint = 'waiting for all three responses'
   else if (streaming) hint = 'a stream is running'
 
   return (

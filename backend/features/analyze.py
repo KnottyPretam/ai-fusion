@@ -35,7 +35,11 @@ output keeps the correction attempt exactly as before (the correction message co
 same analyst chat, `fresh:false`). Reading where the contract is silent: a captured reply with no
 text at all (`parse_error: empty response`, `raw == ""` -- the bridge maps whitespace-only text to
 no text delta) is "no output" too and is not retried on a web session. Mock and OpenRouter
-analysts are untouched (goldens byte-identical).
+analysts are untouched (goldens byte-identical). The transport half of the rule is
+`client.web_retry_suppressed`, which the client applies to its own internal retry as well (S7
+review, "Fusion's convergence retry re-types the whole payload into a NEW hidden analyst chat"):
+one rule, two enforcement points -- Analyze drives its second attempt itself (`retries=0`), Fusion
+lets `complete_json` drive it (`retries=1`).
 """
 
 from __future__ import annotations
@@ -146,8 +150,13 @@ def retry_follow_up(raw: str, error: str | None) -> list[dict[str, str]]:
 def web_retry_suppressed(model: str, raw: str, error: str | None) -> bool:
     """The web no-retry rule (module docstring): True when the analyst is a web session and the
     attempt produced no output at all (`raw == ""` with an error), so the second attempt must not
-    run. Any output keeps the correction attempt; non-web transports always retry as before."""
-    return client.transport_kind(model) == "web" and not raw and error is not None
+    run. Any output keeps the correction attempt; non-web transports always retry as before.
+
+    The transport half of the rule is `client.web_retry_suppressed` -- the same predicate the
+    client applies to the internal retry of a `complete_json(retries>=1)` call (Fusion's defense
+    and convergence calls) -- so the rule lives in ONE place; this function adds the condition
+    that only Analyze can see: its first attempt failed (`error`) with nothing typed back."""
+    return error is not None and not raw and client.web_retry_suppressed(model, raw)
 
 
 async def _produce(

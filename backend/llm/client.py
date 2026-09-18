@@ -39,7 +39,21 @@ the OpenRouter branch, so a local model is served under `TRIPLEX_DESKTOP=1`, is 
 from fixtures, and consults neither the cost cap nor the key check. A usage chunk without `cost`
 prices at 0 (the bare name is unknown to the catalog), no usage chunk -> `EstimatedUsage`, a
 refused connection -> `transport_error`. `_live_stream`'s defaults reproduce the OpenRouter
-behaviour byte for byte.
+behaviour byte for byte. A non-loopback `OLLAMA_BASE_URL` is still served (the user may run Ollama
+on another box deliberately) but logs one WARNING per process naming that host: the whole analyst
+payload -- the question and all three replies -- leaves this machine.
+
+Web no-retry rule (`web_retry_suppressed`, docs/desktop-contract.md section 6 + the S7 review's
+"Fusion's convergence retry re-types the whole payload into a NEW hidden analyst chat"):
+`complete_json` does not run its internal correction attempt when the model is a `web:` session
+and the attempt produced no usable output (`raw_text.strip() == ""`); the parse error is returned
+as it is. There is nothing to correct, and the follow-up would be a user-only payload:
+`bridge.text_for` reads that as a fresh analyst conversation, so the ENTIRE prompt would be typed
+a second time into a brand-new chat in the user's own account (and a pane view would re-submit
+into the site's own thread for nothing). Output that fails parsing or validation still gets the
+correction attempt in the SAME chat (`fresh: false`), and non-web transports are untouched
+(goldens byte-identical). `features/analyze.py` applies the same rule to the second attempt it
+drives itself (it calls `complete_json` with `retries=0`).
 """
 
 from __future__ import annotations
@@ -141,6 +155,16 @@ def transport_kind(model: str) -> Literal["web", "ollama", "openrouter"]:
 def desktop_mode() -> bool:
     """`TRIPLEX_DESKTOP=1` (private env read; config.py is frozen)."""
     return os.environ.get("TRIPLEX_DESKTOP", "0").strip() == "1"
+
+
+def web_retry_suppressed(model: str, raw_text: str) -> bool:
+    """The web no-retry rule (module docstring): True when the model is a web session and the
+    attempt produced NO usable output, so a correction attempt must not run. `raw_text` is
+    stripped because that is exactly the text the follow-up would echo back as the assistant
+    turn: without it the retry is a user-only payload, which `bridge.text_for` reads as a new
+    analyst conversation (`fresh: true`) and re-types in full. `features/analyze.py` applies the
+    same rule to the second attempt it drives itself."""
+    return transport_kind(model) == "web" and not raw_text.strip()
 
 
 def structured_response_format(purpose: str, schema_model: type[BaseModel]) -> dict[str, Any]:
@@ -548,6 +572,10 @@ async def stream_completion(
             )
         elif kind == "ollama":  # Stage 3 -- a local model: no key, no cap, no mock, no OpenRouter
             is_mock = False  # a local server's (zero-cost) usage is real usage, not a replay
+            ollama_base = ollama.base_url()
+            # Served either way (a deliberate remote Ollama is allowed), but a non-loopback host
+            # gets ONE WARNING per process: the analyst payload leaves this machine.
+            ollama.warn_if_remote(ollama_base)
             gen = _live_stream(
                 role=role,
                 purpose=purpose,
@@ -555,7 +583,7 @@ async def stream_completion(
                 messages=messages,
                 payload=ollama.sanitize_payload(payload, model),
                 trace=trace,
-                base_url=ollama.base_url(),
+                base_url=ollama_base,
                 headers=ollama.headers(),
                 cost_lookup=False,
             )
@@ -894,6 +922,19 @@ async def complete_json(
                 # gets locations and error types, never a fragment of the reply.
                 error = str(e)
                 log_error = f"{e.error_count()} validation error(s): {validation_summary(e)}"
+        if attempt + 1 < attempts and web_retry_suppressed(model, raw_text):
+            # Web no-retry rule: the site produced nothing to correct, so the only follow-up
+            # possible is the bare correction message -- which an analyst view reads as a new
+            # chat and where a pane view would re-type into the site's own thread for nothing.
+            log.info(
+                "complete_json no retry (web session produced no output) "
+                "role=%s purpose=%s model=%s: %.200s",
+                role,
+                purpose,
+                model,
+                log_error,
+            )
+            break
         if attempt + 1 < attempts:
             log.info(
                 "complete_json retry %d/%d role=%s purpose=%s model=%s: %.200s",
@@ -929,4 +970,5 @@ __all__ = [
     "structured_response_format",
     "transport_kind",
     "validation_summary",
+    "web_retry_suppressed",
 ]
