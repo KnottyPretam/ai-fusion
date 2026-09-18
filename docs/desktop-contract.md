@@ -129,6 +129,10 @@ The prompt is always a message field, never interpolated into code; the adapter 
 ```js
 SLOTS, DEFAULT_SELECTORS, mergeSelectors(defaults, override) → {merged, warnings: string[]}, siteFor(hostname, sites) → slot|null,
 scrubDom(document) → string, toMarkdown(el) → string /* Stage 3 */,
+// toMarkdown's FENCED output (language + raw body, copy chrome stripped) is the contract that
+// carries an analyst's JSON: a `web:` model is asked for a fenced block precisely because a
+// rendered PARAGRAPH loses backslash escapes (CommonMark resolves them before any ASCII
+// punctuation), so an unfenced \" comes back as a bare " and the JSON no longer parses.
 createAdapter({document, window, site, selectors, now = Date.now}) → {
   health() → Health, sessionState() → 'ok'|'logged_out'|'challenge'|'blocked'|'unknown',
   findComposer() → {el, selector}|null, waitForComposer(timeoutMs) → Promise<{el, selector}>,

@@ -168,7 +168,11 @@ async def test_send_analyze_fusion_over_the_bridge_matches_the_mock_run(
     (extraction,) = extractions
     assert extraction["model"] == "web:chatgpt:analyst" and extraction["role"] == "analyst"
     assert extraction["fresh"] is True
-    system, user = analyze_prompts.build_messages(PROMPT, {LABEL_OF[s]: CHAT[s] for s in SLOT_IDS})
+    # A web analyst is asked for a FENCED json block, not for a bare object (the reply is read
+    # back out of rendered markdown -- tests/bridge/test_fenced_json.py).
+    system, user = analyze_prompts.build_messages(
+        PROMPT, {LABEL_OF[s]: CHAT[s] for s in SLOT_IDS}, fenced=True
+    )
     assert extraction["text"] == system["content"] + "\n\n" + user["content"]
 
     assert {r["slot"] for r in defenses} == set(SLOT_IDS)
@@ -183,7 +187,7 @@ async def test_send_analyze_fusion_over_the_bridge_matches_the_mock_run(
 
     (convergence,) = convergences
     assert convergence["fresh"] is True and convergence["model"] == "web:chatgpt:analyst"
-    assert convergence["text"].startswith(fusion_prompts.CONVERGENCE_SYSTEM)
+    assert convergence["text"].startswith(fusion_prompts.CONVERGENCE_SYSTEM_FENCED)
     assert "<<<DIVERGENCES>>>" in convergence["text"] and "R2" in convergence["text"]
 
     # ---- leak sweep over every typed text -----------------------------------------------

@@ -74,7 +74,9 @@ async def test_empty_convergence_reply_is_asked_once_per_round(
     convergences = desk.of(*CONVERGENCE)
     assert len(convergences) == 2  # exactly one per round
     assert [r["fresh"] for r in convergences] == [True, True]  # an analyst call is always fresh
-    assert all(r["text"].startswith(fusion_prompts.CONVERGENCE_SYSTEM) for r in convergences)
+    assert all(
+        r["text"].startswith(fusion_prompts.CONVERGENCE_SYSTEM_FENCED) for r in convergences
+    )
     assert len({r["req_id"] for r in convergences}) == 2
 
     assert turn["exit_reason"] == "max_iterations"

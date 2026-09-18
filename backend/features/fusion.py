@@ -339,6 +339,7 @@ class _FusionRun:
         # Exactly what the peer block shows (render_peer_block scrubs every claim).
         peer_claims_shown = [anon.scrub(claims[(d, peer)]) for peer in holders if peer != label]
         own_just = justs[(d, label)]
+        spec = self.conv.slot_config.slots[slot]
         prompt = prompts.challenge_prompt(
             topic=anon.scrub(div.topic),  # analyst-authored: scrubbed here, delimited there
             current_claim=claims[(d, label)],
@@ -348,11 +349,13 @@ class _FusionRun:
             peer_block=anon.render_peer_block(peers, exclude=label),
             round=round_no,
             max_iterations=self.max_iterations,
+            # A web session's reply is read back out of rendered markdown, where only a fenced
+            # block survives byte for byte (prompts/fusion.py module docstring).
+            fenced=client.transport_kind(spec.model) == "web",
         )
         anon.find_leaks(prompt)  # advisory: logs a warning, never blocks
         thread = self.threads[slot]
         messages = [to_openai(m) for m in thread] + [{"role": "user", "content": prompt}]
-        spec = self.conv.slot_config.slots[slot]
         parsed, raw_text, usage, error = await client.complete_json(
             role=slot,
             purpose=DEFENSE_PURPOSE,
@@ -442,13 +445,16 @@ class _FusionRun:
             }
             for d in to_check
         ]
-        messages = prompts.convergence_messages(items)
+        analyst_model = self.conv.slot_config.analyst_model
+        messages = prompts.convergence_messages(
+            items, fenced=client.transport_kind(analyst_model) == "web"
+        )
         for m in messages:
             anon.find_leaks(m["content"])  # advisory only
         parsed, _raw, usage, error = await client.complete_json(
             role=ANALYST_ROLE,
             purpose=CONVERGENCE_PURPOSE,
-            model=self.conv.slot_config.analyst_model,
+            model=analyst_model,
             messages=messages,
             schema_model=ConvergenceCheck,
             effort=ANALYST_EFFORT,

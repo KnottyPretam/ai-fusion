@@ -6,6 +6,7 @@ out of scope)."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -156,6 +157,64 @@ def test_challenge_prompt_asks_for_the_defense_reply_fields():
     assert "only if a specific point above actually persuades you" in p
     assert "caving without cause is failure" in p
     assert "Return ONLY valid JSON" in p
+
+
+# ------------------------------------------- transport-aware JSON instruction (S7 review)
+def test_the_api_json_instructions_are_unchanged_byte_for_byte():
+    """The acceptance bar of the fenced-JSON fix: an API transport's challenge and convergence text
+    is the Appendix A text it always was. The digests pin it, so an accidental edit fails here
+    instead of silently rewriting the tests/e2e goldens."""
+    assert prompts.DEFENSE_JSON_LEAD == (
+        "Return ONLY valid JSON (no prose, no code fences) with exactly these keys:\n"
+    )
+    for text, digest in (
+        (
+            prompts.DEFENSE_JSON_INSTRUCTION,
+            "63bf680f8216c36c321992463a328f37d91d09f4284074adae7c5e800463f6ef",
+        ),
+        (
+            prompts.CONVERGENCE_SYSTEM,
+            "0b4711e0be1b688399701ec90df2252ddca0c9593da6beecb5ea0c8a0f401e48",
+        ),
+        (
+            prompts.ANTI_SYCOPHANCY_CLAUSE,
+            "a6264f9e1e3b59cd88dc871086ba80e2dc30f8ce9ed4adb1ea0749d2e446625b",
+        ),
+    ):
+        assert hashlib.sha256(text.encode()).hexdigest() == digest, text
+    assert _prompt() == _prompt(fenced=False)  # the default is the API text
+    assert prompts.convergence_messages([])[0]["content"] == prompts.CONVERGENCE_SYSTEM
+
+
+def test_the_web_challenge_swaps_only_the_json_instruction_lead():
+    """A `web:` session's reply is read back out of RENDERED markdown, where a paragraph resolves
+    CommonMark backslash escapes and a fenced block does not (tests/bridge/test_fenced_json.py), so
+    it is asked for a ```json fence. Every other clause is the same bytes: the quoted-data notice,
+    the delimited blocks, the anti-sycophancy clause, the round counter and the key list."""
+    api, web = _prompt(), _prompt(fenced=True)
+    assert web == api.replace(prompts.DEFENSE_JSON_LEAD, prompts.DEFENSE_JSON_LEAD_FENCED)
+    assert prompts.DEFENSE_JSON_LEAD not in web and "```json" in web
+    assert prompts.ANTI_SYCOPHANCY_CLAUSE in web and "This is round 2 of at most 3." in web
+    assert web.startswith(QUOTED_DATA_NOTICE)
+    for key in ("stance", "justification", "revised_claim", "confidence", "persuaded_by"):
+        assert f'"{key}"' in web
+    assert_no_identity_leak(web)
+
+
+def test_the_web_convergence_system_swaps_only_the_json_instruction_lead():
+    items = [{"divergence_id": "d1", "topic": "SPI clock", "claims": {"R1": "10 MHz"}}]
+    api, web = prompts.convergence_messages(items), prompts.convergence_messages(
+        items, fenced=True
+    )
+    assert prompts.CONVERGENCE_SYSTEM_FENCED == prompts.CONVERGENCE_SYSTEM.replace(
+        prompts.CONVERGENCE_JSON_LEAD, prompts.CONVERGENCE_JSON_LEAD_FENCED
+    )
+    assert web[0]["content"] == prompts.CONVERGENCE_SYSTEM_FENCED
+    assert "```json" in web[0]["content"]
+    assert "no prose, no code fences" not in web[0]["content"]
+    assert QUOTED_DATA_NOTICE in web[0]["content"] and '"statuses"' in web[0]["content"]
+    assert web[1] == api[1]  # the payload never depends on the transport
+    assert_no_identity_leak(web[0]["content"])
 
 
 def test_challenge_prompt_round_counter_and_no_leak_on_clean_input():

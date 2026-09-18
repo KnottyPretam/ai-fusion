@@ -54,6 +54,17 @@ into the site's own thread for nothing). Output that fails parsing or validation
 correction attempt in the SAME chat (`fresh: false`), and non-web transports are untouched
 (goldens byte-identical). `features/analyze.py` applies the same rule to the second attempt it
 drives itself (it calls `complete_json` with `retries=0`).
+
+Fenced JSON over the web transport (S7 review, MEASURED live on 2026-09-17 -- a real Analyze
+degraded with `parse_error: no JSON object found in the response` on both attempts). A web reply is
+read back out of the chat page's RENDERED markdown (`desktop/preload/site.cjs` `toMarkdown`), and
+CommonMark resolves a backslash escape before any ASCII punctuation: the analyst's correct
+`"exactly \\"PING-1\\"."` arrived as `"exactly "PING-1"."`. A fenced code block resolves nothing,
+so `backend/prompts/*` ask a `web:` model for a ```json fence, and `extract_json` prefers a
+fenced block's CONTENT over any prose around it (`_candidates`). `extract_json(..., repair=True)`
+-- passed only for a `web:` model -- adds one last resort after every candidate has failed:
+`repair_json_string_quotes` re-escapes the inner quotes of a string and the result is kept only if
+it then parses. Both halves leave every API transport byte-identical (the goldens pin that).
 """
 
 from __future__ import annotations
@@ -795,25 +806,93 @@ def _balanced_objects(text: str) -> tuple[list[str], bool]:
     return objects, False
 
 
-def extract_json(text: str) -> tuple[Any | None, str | None]:
-    """Lenient JSON extraction: strip code fences, take the outermost {...}. Returns
-    (value, None) or (None, error message). Never raises."""
+_STRING_CLOSERS = ",}]:"
+
+
+def repair_json_string_quotes(text: str) -> str | None:
+    """Re-escape the `"` characters that sit INSIDE a JSON string; `None` when nothing needed
+    repairing, so the caller hands the text on untouched.
+
+    Why this is safe. In RFC 8259 a string that appears inside an object or an array is ALWAYS
+    followed by structural punctuation -- `,` `}` `]` or `:`, modulo whitespace. A `"` followed by
+    anything else therefore cannot be that string's closing quote: it is a quote whose escape is
+    missing. Valid JSON never matches the rule, so this function returns `None` for it (pinned by
+    a hypothesis test over generated objects) and the repair can only ever be reached by text that
+    already failed every parse. It only ever INSERTS a backslash before a `"`, never deletes or
+    reorders anything, and `extract_json` keeps the result only when it then parses -- otherwise
+    the original parse error is reported unchanged.
+
+    Why it exists (S7 review, MEASURED live on 2026-09-17): the web transport reads a reply back
+    out of a chat page's RENDERED markdown, and CommonMark resolves a backslash escape before any
+    ASCII punctuation, so the analyst's correct `"exactly \\"PING-1\\"."` reached Triplex as
+    `"exactly "PING-1"."` and Analyze degraded with `parse_error`. The primary fix is the fenced
+    JSON instruction (a fenced block resolves no escapes); this is the net under a model that
+    answers in prose anyway, which is why `extract_json(..., repair=True)` is passed ONLY for a
+    `web:` model -- an API transport that returns broken JSON keeps its retry-then-degrade path,
+    byte for byte."""
+    if '"' not in text:
+        return None
+    out: list[str] = []
+    changed = False
+    in_str = False
+    esc = False
+    n = len(text)
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j >= n or text[j] in _STRING_CLOSERS:
+                    in_str = False  # a real closing quote (end of input counts: nothing follows)
+                else:
+                    out.append("\\")  # an inner quote the writer left unescaped
+                    changed = True
+            out.append(ch)
+            continue
+        if ch == '"':
+            in_str = True
+        out.append(ch)
+    return "".join(out) if changed else None
+
+
+def _candidates(raw: str) -> list[str]:
+    """Every parse candidate of `raw`, in PREFERENCE order.
+
+    A fenced block comes FIRST, ahead of the whole text and of any prose around it: over the web
+    transport the reply is read back out of a rendered page, where the fence is the only construct
+    that survives verbatim, so its content is the payload and everything outside it is chrome. A
+    fence whose content does not parse falls straight through to the lenient scan below."""
+    out: list[str] = [m.group(1) for m in _FENCE_RE.finditer(raw)]
+    out.append(raw)
+    # An unterminated fence (truncated output): everything after the opening fence.
+    om = _OPEN_FENCE_RE.search(raw)
+    if om:
+        out.append(raw[om.end() :])
+    first, last = raw.find("{"), raw.rfind("}")
+    if first != -1 and last > first:
+        out.append(raw[first : last + 1])
+    return out
+
+
+def extract_json(text: str, *, repair: bool = False) -> tuple[Any | None, str | None]:
+    """Lenient JSON extraction: a fenced block first, then the whole text, then the outermost
+    {...}. Returns (value, None) or (None, error message). Never raises.
+
+    `repair=True` adds ONE last resort after every candidate has failed: re-escaping the unescaped
+    inner quotes of a string (`repair_json_string_quotes`). It is passed only for a `web:` model,
+    so every API transport behaves byte for byte as before."""
     if not isinstance(text, str):
         return None, "no text"
     raw = text.strip()
     if not raw:
         return None, "empty response"
 
-    candidates: list[str] = [raw]
-    for m in _FENCE_RE.finditer(raw):
-        candidates.append(m.group(1))
-    # An unterminated fence (truncated output): everything after the opening fence.
-    om = _OPEN_FENCE_RE.search(raw)
-    if om:
-        candidates.append(raw[om.end() :])
-    first, last = raw.find("{"), raw.rfind("}")
-    if first != -1 and last > first:
-        candidates.append(raw[first : last + 1])
+    candidates: list[str] = _candidates(raw)
 
     for c in candidates:
         v = _try_load(c)
@@ -827,6 +906,23 @@ def extract_json(text: str) -> tuple[Any | None, str | None]:
             v = _try_load(obj)
             if isinstance(v, dict):
                 return v, None
+    if repair:
+        # Last resort, web transport only: nothing above parsed, so re-escape the inner quotes of
+        # each candidate and try again. A repair that still does not parse is discarded and the
+        # original error stands (`repair_json_string_quotes`).
+        for c in candidates:
+            fixed = repair_json_string_quotes(c)
+            if fixed is None:
+                continue
+            for cand in [fixed, *_balanced_objects(fixed)[0]]:
+                v = _try_load(cand)
+                if isinstance(v, dict):
+                    log.warning(
+                        "extract_json repaired %d unescaped quote(s) inside a JSON string "
+                        "(web transport: a rendered page resolves backslash escapes)",
+                        len(fixed) - len(c),
+                    )
+                    return v, None
     for c in candidates:
         v = _try_load(c)
         if v is not None:
@@ -908,7 +1004,9 @@ async def complete_json(
             return None, "", usage, msg
 
         raw_text = "".join(parts)
-        value, perr = extract_json(raw_text)
+        # The quote repair is a web-transport net only (`repair_json_string_quotes`): an API
+        # transport's broken JSON keeps its retry-then-degrade path, byte for byte.
+        value, perr = extract_json(raw_text, repair=transport_kind(model) == "web")
         if value is None:
             error = f"{PARSE_ERROR}: {perr}"
             log_error = error  # extract_json's messages never quote the text
@@ -966,6 +1064,7 @@ __all__ = [
     "complete_json",
     "desktop_mode",
     "extract_json",
+    "repair_json_string_quotes",
     "stream_completion",
     "structured_response_format",
     "transport_kind",

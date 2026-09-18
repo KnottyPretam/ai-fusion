@@ -10,7 +10,12 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from backend.llm import catalog, mock
-from backend.llm.client import RETRY_USER_MESSAGE, complete_json, extract_json
+from backend.llm.client import (
+    RETRY_USER_MESSAGE,
+    complete_json,
+    extract_json,
+    repair_json_string_quotes,
+)
 from backend.schemas import ConvergenceCheck, DefenseReply, Extraction, ModelMeta
 from tests.llm.conftest import CHAT_URL, chunk, error_chunk, sse_body, usage_obj
 
@@ -119,6 +124,107 @@ def test_truncated_nested_output_is_a_parse_error_not_an_inner_object():
     # object is untouched, and a stray closing brace after it does not matter
     assert extract_json('{ not json } {"a": {"b": 1}}') == ({"a": {"b": 1}}, None)
     assert extract_json('{"a": {"b": 1}} }') == ({"a": {"b": 1}}, None)
+
+
+# ------------------------------------------------- fenced blocks and the web quote repair (S7)
+# The defect MEASURED live on 2026-09-17: a web analyst's reply is read back out of the chat page's
+# RENDERED markdown, where CommonMark resolves a backslash escape before any ASCII punctuation, so
+# a correct `\"PING-1\"` inside a JSON string arrived as a bare `"PING-1"` and Analyze degraded.
+MEASURED = (
+    '{"agreements":[{"topic":"Requested output","statement":"The reply is exactly "PING-1".",'
+    '"models":["R1","R2","R3"]}],"divergences":[]}'
+)
+
+
+def test_a_fenced_block_wins_over_prose_around_it():
+    """The fence is what survives a rendered round trip, so its CONTENT is the payload and anything
+    outside it is chrome -- even when the prose happens to hold a parseable object of its own."""
+    text = 'Draft was {"draft": true}.\n\n```json\n{"real": 1}\n```\n\nHope that helps!'
+    assert extract_json(text) == ({"real": 1}, None)
+    # ... and a fence whose trailing junk breaks the whole-candidate parse is still preferred
+    assert extract_json('{"prose": 1}\n```json\n{"real": 2}\n// done\n```') == ({"real": 2}, None)
+
+
+def test_a_fence_holding_invalid_json_falls_through_to_the_lenient_scan():
+    assert extract_json('```json\n{"a": 1,}\n```\n{"b": 2}') == ({"b": 2}, None)
+    value, err = extract_json("```json\nnot json at all\n```")
+    assert value is None and err
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        MEASURED,
+        "```json\n" + MEASURED + "\n```",
+        "Here you go:\n\n" + MEASURED + "\n\nLet me know!",
+    ],
+)
+def test_repair_recovers_the_measured_unescaped_quotes(text):
+    """Only with `repair=True` (the web transport): the analyst's own statement comes back."""
+    assert extract_json(text) == (None, "no JSON object found in the response")
+    value, err = extract_json(text, repair=True)
+    assert err is None
+    assert value["agreements"][0]["statement"] == 'The reply is exactly "PING-1".'
+    assert value["divergences"] == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"a": "x" "b": "y"}',  # a missing comma: repairing the quotes cannot rescue it
+        '{"a": [{"b": "c"',  # truncated: the truncation hint must survive
+        "no json here",
+        "```json\n```",
+        '{"a": 1',
+    ],
+)
+def test_repair_never_rescues_text_that_is_broken_some_other_way(text):
+    """The repair is accepted only when the result parses, so every one of these keeps the error it
+    had before -- the retry-then-degrade path is unchanged."""
+    assert extract_json(text, repair=True) == extract_json(text)
+
+
+def test_repair_does_not_fire_on_valid_json_examples():
+    """The rule can only match text that is already invalid: inside an object or an array a JSON
+    string is ALWAYS followed by `,` `}` `]` or `:` (modulo whitespace)."""
+    for text in (
+        '{"a": 1}',
+        '{"s": "a, b: c} ] x"}',  # every closer character INSIDE a string value
+        '{"s": "he said \\"hi\\""}',  # already escaped
+        '{"s": "trailing backslash \\\\"}',
+        '{"a": {"b": ["x", "y"]}, "c": null}',
+        json.dumps({"k": 'a "quoted" phrase, then: more'}, indent=2),
+        '"just a string"',
+        "   ",
+    ):
+        assert repair_json_string_quotes(text) is None, text
+
+
+@given(obj=json_objects, indent=st.sampled_from([None, 2]))
+@FUZZ
+def test_repair_never_touches_valid_json(obj, indent):
+    """The non-destructiveness proof: for ANY object json.dumps can emit, the repair declines."""
+    dumped = json.dumps(obj, indent=indent)
+    for text in (dumped, json.dumps(obj, indent=indent, ensure_ascii=False)):
+        assert repair_json_string_quotes(text) is None
+        assert extract_json(text, repair=True) == extract_json(text) == (obj, None)
+
+
+@given(text=st.one_of(st.text(max_size=120), st.just(MEASURED), json_objects.map(json.dumps)))
+@FUZZ
+def test_repair_only_ever_inserts_backslashes(text):
+    """Whatever it does to ARBITRARY text, the output is the input with `\\` characters inserted:
+    nothing is ever deleted, reordered or rewritten, so a repair can only fail to parse."""
+    fixed = repair_json_string_quotes(text)
+    if fixed is None:
+        return
+    i = 0
+    for ch in fixed:
+        if i < len(text) and ch == text[i]:
+            i += 1  # a character of the original, in order
+        else:
+            assert ch == "\\", (text, fixed)  # the only thing this function may add
+    assert i == len(text), (text, fixed)
 
 
 # --------------------------------------------------------------------------- complete_json

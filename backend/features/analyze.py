@@ -172,7 +172,13 @@ async def _produce(
     try:
         queue.put_nowait({"type": "analyze_start", "turn_id": turn_id, "of_turn": send_turn.id})
         model = conv.slot_config.analyst_model
-        messages = prompts.build_messages(send_turn.prompt, responses_by_label(conv, send_turn))
+        # Transport-aware JSON instruction (prompts/analyze.py module docstring): a web analyst is
+        # a chat page whose reply is read back out of rendered markdown, so it is asked for a
+        # ```json fence; every API transport keeps Appendix A's "no prose, no code fences".
+        fenced = client.transport_kind(model) == "web"
+        messages = prompts.build_messages(
+            send_turn.prompt, responses_by_label(conv, send_turn), fenced=fenced
+        )
         usage = FeatureUsage()
         raw_attempts: list[str] = []
 

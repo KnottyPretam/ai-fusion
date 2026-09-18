@@ -184,6 +184,27 @@ test('toMarkdown: a code block whose lines are block elements keeps its lines (a
   assert.equal(md(`<div class="markdown"><pre><code><div class="cm-line">let a = 1<button>Copy</button></div><div class="cm-line">let b = 2</div></code></pre></div>`), '```\nlet a = 1\nlet b = 2\n```')
 })
 
+test('toMarkdown: a fenced JSON body keeps its BACKSLASH escapes, so the captured block still JSON.parses (the fenced-JSON contract)', () => {
+  // The reason the analyst / defense prompts ask a web session for a ```json fence (backend
+  // prompts/analyze.py, prompts/fusion.py): a rendered PARAGRAPH resolves CommonMark backslash
+  // escapes, so `\"x\"` inside a JSON string would reach Triplex as a bare `"x"` and stop parsing
+  // (MEASURED live on 2026-09-17). Inside a code block nothing is resolved and the bytes are the
+  // page's own, so the capture must hand back every backslash untouched.
+  const body = '{"statement": "The reply is exactly \\"PING-1\\".", "models": ["R1", "R2", "R3"]}'
+  const chatgpt = md(
+    `<div class="markdown"><pre><div class="flex items-center text-xs">json</div><button class="flex gap-1">Copy code</button><code class="language-json">${body}</code></pre></div>`,
+  )
+  assert.equal(chatgpt, '```json\n' + body + '\n```')
+  const captured = JSON.parse(chatgpt.slice('```json\n'.length, -'\n```'.length))
+  assert.equal(captured.statement, 'The reply is exactly "PING-1".')
+  assert.deepEqual(captured.models, ['R1', 'R2', 'R3'])
+  // the same body split one BLOCK element per line (a highlighter) keeps the escapes too
+  const lines = md(
+    `<div class="markdown"><pre><code class="language-json"><div class="cm-line">{</div><div class="cm-line">  "s": "a \\"q\\" and a \\\\ backslash"</div><div class="cm-line">}</div></code></pre></div>`,
+  )
+  assert.equal(JSON.parse(lines.slice('```json\n'.length, -'\n```'.length)).s, 'a "q" and a \\ backslash')
+})
+
 test('toMarkdown: a <pre> holding more than one <code> keeps every body and promotes none of them to the fence language', () => {
   assert.equal(md(`<div class="markdown"><pre><code>line one</code><code>py</code></pre></div>`), '```\nline one\npy\n```')
   // the language still comes from the first body's class, and every body is kept in order

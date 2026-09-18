@@ -126,6 +126,29 @@ describe('SlotColumn: persisted thread', () => {
     expect(messages[1].querySelector('.markdown-content strong')).toHaveTextContent('2000')
   })
 
+  test('a fusion reply that arrived inside a ```json fence (the desktop web transport) is still pretty-printed, and an unparseable one is shown as captured', () => {
+    // A web session is asked for a fenced block because a rendered chat page only preserves a
+    // fence verbatim (backend prompts/fusion.py); the fence is chrome, the JSON inside is the reply.
+    const fenced = '```json\n{"stance":"revise","justification":"the register map","revised_claim":"2000 deg/s","confidence":0.9,"persuaded_by":"R1"}\n```'
+    const prose = 'I will defend my claim, no JSON here.'
+    const c = conv({
+      threads: {
+        claude: [
+          msg('assistant', fenced, { kind: 'fusion_reply', turn_id: 'f1', meta: { divergence_id: 'd1', round: 1 } }),
+          msg('assistant', prose, { kind: 'fusion_reply', turn_id: 'f1', meta: { divergence_id: 'd2', round: 1 } }),
+        ],
+        chatgpt: [],
+        grok: [],
+      },
+    })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const messages = screen.getAllByTestId('slot-claude-message')
+    expect(messages[0]).toHaveTextContent('"stance": "revise"')
+    expect(messages[0]).toHaveTextContent('"persuaded_by": "R1"')
+    expect(messages[0].textContent).not.toContain('```')
+    expect(messages[1].querySelector('pre').textContent).toBe(prose)
+  })
+
   test('persisted per-slot reasoning / citations / truncation / effort come from the latest turn after refetch', () => {
     const turn = {
       id: 't1',

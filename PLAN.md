@@ -357,6 +357,10 @@ with tests written from the acceptance criteria before implementation.
 
 ## Appendix A — Prompt templates (starting points; tune freely)
 
+> The JSON instruction quoted below is the **API** variant. A `web:` model (a site driven through
+> the desktop bridge) swaps that one clause for a fenced-block ask, because its reply is read back out
+> of rendered markdown, which strips backslash escapes; see `docs/semantics.md` "Structured output".
+
 **Analyze — extraction**
 
 ```

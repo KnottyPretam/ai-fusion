@@ -117,8 +117,15 @@ exists, `coerced=True`); unknown model (meta None) → send as configured, coerc
 same SSE-chunk JSONL as everything else), concatenates text deltas, sends
 `response_format={type:"json_schema", json_schema:{name:purpose, strict:true, schema:
 strict_json_schema(cls)}}` + `provider:{require_parameters:true}` iff `get_meta(model).
-structured_outputs`; otherwise no `response_format`, lenient parse only (strip fences, outermost
-braces). Always: lenient parse → pydantic validate → retry per the `complete_json(retries=N)` rule in
+structured_outputs`; otherwise no `response_format`, lenient parse only, which PREFERS a fenced block's content over any
+prose around it, then falls back to the outermost balanced braces. The JSON instruction is
+TRANSPORT-DEPENDENT: an API model gets Appendix A's "no prose, no code fences"; a `web:` model is
+asked for a ```json fence instead, because its reply is read back out of RENDERED markdown, where
+CommonMark resolves a backslash escape before any ASCII punctuation — a correct `\"` inside a JSON
+string is rendered, and therefore captured, as a bare `"`, which is invalid JSON (measured live on
+2026-09-17; inside a fence markdown resolves nothing). For a `web:` model only, a final conservative
+repair re-escapes quotes inside a string after every candidate has failed, and is kept only if the
+result then parses. Always: lenient parse → pydantic validate → retry per the `complete_json(retries=N)` rule in
 api-contract.md (Analyze drives its own single retry with `retries=0`; Fusion uses `retries=1`).
 
 **Reasoning/citations in stream.** `slot_reasoning` text = concatenation of `reasoning.text`

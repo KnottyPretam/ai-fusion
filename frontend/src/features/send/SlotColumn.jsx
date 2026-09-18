@@ -50,12 +50,20 @@ function fusionLabel(msg) {
   return `Fusion round ${meta.round ?? '?'} · ${meta.divergence_id ?? '?'}`
 }
 
+// A fusion reply is JSON, shown re-indented. Over the desktop's web transport the model is asked
+// for a ```json FENCE (a rendered chat page is the only thing that survives verbatim — backend
+// prompts/fusion.py), so the fence is unwrapped before parsing; anything that still does not parse
+// is shown exactly as it was captured.
 function prettyJson(text) {
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
+  const fenced = /^\s*```[A-Za-z0-9_+-]*[ \t]*\r?\n([\s\S]*?)```\s*$/.exec(text)
+  for (const candidate of fenced ? [fenced[1], text] : [text]) {
+    try {
+      return JSON.stringify(JSON.parse(candidate), null, 2)
+    } catch {
+      /* not JSON: try the next candidate, else show the capture as it is */
+    }
   }
+  return text
 }
 
 function Markdown({ text }) {
