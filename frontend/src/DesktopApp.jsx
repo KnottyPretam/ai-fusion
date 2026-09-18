@@ -11,23 +11,17 @@
 import { StoreProvider } from './state/store.jsx'
 import Sidebar from './features/conversations/index.jsx'
 import DesktopShell from './features/desktop/index.jsx'
+import { applyThemeAttr, loadTheme } from './features/desktop/theme.js'
 import './DesktopApp.css'
 
-const THEME_KEY = 'triplex.theme'
-
-function applyTheme() {
-  if (typeof document === 'undefined') return
-  let stored = null
-  try {
-    stored = window.localStorage.getItem(THEME_KEY)
-  } catch (_e) {
-    /* private window / blocked storage: fall back to the default */
-  }
-  const theme = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'dark'
-  if (theme === 'system') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = theme
-}
-applyTheme()
+// First paint only. main.jsx imports this module unconditionally (the `window.triplex` test there
+// picks the component, it does not gate the import), so this side effect MUST check for the desktop
+// itself: in a browser there is no theme control to get back from, and stamping `data-theme` would
+// override `prefers-color-scheme` for a web user who never asked for it.
+// `settings.json.theme` in main stays authoritative — `useTheme` adopts `getInfo()`/`onTheme` and
+// corrects whatever this painted. The helpers are imported, not re-implemented, so the rule lives
+// in one place (features/desktop/theme.js).
+if (typeof window !== 'undefined' && window.triplex) applyThemeAttr(loadTheme())
 
 export default function DesktopApp() {
   return (

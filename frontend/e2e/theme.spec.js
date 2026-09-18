@@ -47,15 +47,16 @@ async function unreadable(page) {
 }
 
 test('the dark palette is legible across Send, Analyze, Fusion and the meter', async ({ page }) => {
-  await page.addInitScript(() => {
-    document.documentElement.dataset.theme = 'dark'
-  })
+  // Drive the palette the way a real viewer gets it, through the system preference — an
+  // `addInitScript` that stamps `data-theme` can silently no-op (documentElement may not exist yet),
+  // and this spec once passed on the bug it was meant to catch because something else stamped it.
+  await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await expect(page.getByTestId('send-composer')).toBeVisible()
-  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark')
-  // the palette really switched: the page ground is dark, not the light default
+  // the palette really switched: the page ground is dark, and nothing stamped an explicit choice
+  expect(await page.evaluate(() => document.documentElement.dataset.theme ?? null)).toBeNull()
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
-  expect(bg).not.toBe('rgb(255, 255, 255)')
+  expect(bg, 'prefers-color-scheme: dark must paint the dark ground').toBe('rgb(13, 17, 23)')
 
   await page.getByTestId('send-composer').fill(PROMPT)
   await page.getByTestId('send-button').click()
@@ -69,5 +70,31 @@ test('the dark palette is legible across Send, Analyze, Fusion and the meter', a
 
   await snap(page, 'dark-flow')
   const bad = await unreadable(page)
-  expect(bad, `unreadable text in dark: ${JSON.stringify(bad, null, 1)}`).toEqual([])
+  expect(bad, `unreadable text in dark (prefers-color-scheme): ${JSON.stringify(bad, null, 1)}`).toEqual([])
+
+  // the explicit-choice path paints the same palette (data-theme wins over the media query)
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark'
+  })
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(13, 17, 23)')
+  const badExplicit = await unreadable(page)
+  expect(badExplicit, `unreadable text in dark (data-theme): ${JSON.stringify(badExplicit, null, 1)}`).toEqual([])
+})
+
+test('the web app is never force-themed: no data-theme without an explicit choice', async ({ page }) => {
+  // main.jsx imports DesktopApp.jsx unconditionally, so its first-paint side effect runs here too.
+  // It must no-op without `window.triplex`: a browser user has no theme control, so stamping
+  // `data-theme` would override their `prefers-color-scheme` with a choice they never made.
+  await page.goto('/')
+  await expect(page.getByTestId('send-composer')).toBeVisible()
+  const state = await page.evaluate(() => ({
+    attr: document.documentElement.dataset.theme ?? null,
+    stored: window.localStorage.getItem('triplex.theme'),
+    body: getComputedStyle(document.body).backgroundColor,
+  }))
+  expect(state.attr, 'the browser must be left to prefers-color-scheme').toBeNull()
+  expect(state.stored).toBeNull()
+  // Playwright's default colour scheme is light, so the light palette must be what paints.
+  expect(state.body).toBe('rgb(255, 255, 255)')
 })
