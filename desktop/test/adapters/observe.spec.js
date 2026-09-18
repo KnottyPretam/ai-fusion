@@ -159,6 +159,33 @@ test.describe('?reply=json', () => {
   const CONVERGENCE = fenced(fixtureText('analyst.convergence.1.jsonl'))
   const DEFENSE = Object.fromEntries(SLOTS.map((s) => [s, fenced(fixtureText(`${s}.defense.1.jsonl`))]))
 
+  // Stage 3: the fake site renders the fence as REAL code-block chrome (a header carrying the
+  // language, a Copy button, the body in <pre><code>) — inside the <pre> on chatgpt, before it on
+  // claude and grok, and with no language class at all on grok. `toMarkdown` rebuilds the fence
+  // from that DOM, so the captured text is the fenced JSON, byte for byte, with no chrome in it.
+  for (const site of SLOTS) {
+    test(`${site}: the reply is rendered as a code block with a header and a Copy button; observe returns the fenced JSON verbatim, with none of the chrome`, async ({ page }) => {
+      await open(page, { site, reply: 'json', replyMs: 200 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: 'Decide which divergences are resolved.\n<<<DIVERGENCES>>>\n[{"id": "d1"}]\n<<<END DIVERGENCES>>>' })
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, CONVERGENCE, DONE_BY[site])
+      // the page really rendered chrome, not text: a <pre>, a <code>, the language label and a copy button
+      const container = DEFAULT_SELECTORS[site].assistant[0]
+      await expect(page.locator(`${container} pre`)).toHaveCount(1)
+      await expect(page.locator(`${container} code`)).toHaveCount(1)
+      await expect(page.locator(`${container} .code-header`)).toContainText('json') // grok's header also holds its copy button
+      expect(await page.locator(`${container} .md button`).count()).toBeGreaterThan(0)
+      if (site === 'grok') await expect(page.locator(`${container} code[class]`)).toHaveCount(0) // the header is the only language clue
+      else await expect(page.locator(`${container} code.language-json`)).toHaveCount(1)
+      // the capture is the fence and nothing else — the chrome text IS in the container's innerText
+      const shown = await replyState(page)
+      expect(shown.replyText).toContain('Copy')
+      expect(res.text).not.toContain('Copy')
+      expect(res.text).toBe(CONVERGENCE)
+      expect(JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)).statuses).toEqual([{ divergence_id: 'd1', status: 'resolved' }])
+    })
+  }
+
   test('chatgpt: <<<R1>>> → the Extraction, YOUR CLAIM → the DefenseReply (even with <<<R1>>> in the peer block), <<<DIVERGENCES>>> → the ConvergenceCheck, verbatim and fenced; no key → the echo', async ({ page }) => {
     await open(page, { site: 'chatgpt', reply: 'json', replyMs: 300 })
     const cases = [
@@ -192,6 +219,76 @@ test.describe('?reply=json', () => {
       expect(JSON.parse(DEFENSE[site].slice('```json\n'.length, -'\n```'.length)).stance).toBe('defend')
     })
   }
+})
+
+test.describe('?reply=rich — a rendered markdown reply comes back as GFM (Stage 3 toMarkdown)', () => {
+  /**
+   * The fake site's CANNED_RICH, as the capture must read it back: the same markdown, with the link
+   * flattened to its text (contract §3: a link renders as its text, the URL is dropped). Everything
+   * else — the heading, the emphasis, the inline code, the two-level list, the GFM table and the
+   * fenced block — round-trips through the DOM unchanged.
+   */
+  const RICH = [
+    '## Gyroscope range',
+    '',
+    'The **BMI088** gyroscope selects its range through the `GYRO_RANGE` register, see the datasheet.',
+    '',
+    '- 2000 deg/s _default_',
+    '  - 1000 deg/s',
+    '  - 500 deg/s',
+    '- 125 deg/s',
+    '',
+    '| Register | Value |',
+    '| --- | --- |',
+    '| GYRO_RANGE | 0x0F |',
+    '| CHIP_ID | 0x1F |',
+    '',
+    '```json',
+    '{"register": "0x0F", "max_dps": 2000}',
+    '```',
+  ].join('\n')
+
+  for (const site of SLOTS) {
+    test(`${site}: a reply with a heading, a nested list, a table, inline code, emphasis, a link and a code block comes back as GFM`, async ({ page }) => {
+      await open(page, { site, reply: 'rich', replyMs: 400 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: 'what is the gyroscope range?' })
+      expect(sent.ok).toBe(true)
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, RICH, DONE_BY[site])
+      // it really is a rendered document, not text: the blocks exist in the DOM
+      const container = DEFAULT_SELECTORS[site].assistant[0]
+      await expect(page.locator(`${container} h2`)).toHaveText('Gyroscope range')
+      await expect(page.locator(`${container} ul > li`)).toHaveCount(4) // two top-level items + the two nested ones
+      await expect(page.locator(`${container} ul ul > li`)).toHaveCount(2)
+      await expect(page.locator(`${container} table th`)).toHaveCount(2)
+      await expect(page.locator(`${container} table tbody tr`)).toHaveCount(2)
+      await expect(page.locator(`${container} p code`)).toHaveText('GYRO_RANGE')
+      await expect(page.locator(`${container} p strong`)).toHaveText('BMI088')
+      await expect(page.locator(`${container} p em`)).toHaveCount(0) // the italic is in the list item
+      await expect(page.locator(`${container} li em`)).toHaveText('default')
+      // the link's URL was in the DOM and is NOT in the capture; its text is
+      await expect(page.locator(`${container} a`)).toHaveAttribute('href', /example\.com/)
+      expect(res.text).not.toContain('example.com')
+      expect(res.text).toContain('see the datasheet.')
+      // the source the site rendered carried the link syntax; the capture carries markdown
+      const source = await page.evaluate(() => window.__fake.replySource())
+      expect(source).toContain('](https://example.com/bmi088/datasheet.pdf)')
+      expect(res.text).toBe(source.replace('[the datasheet](https://example.com/bmi088/datasheet.pdf)', 'the datasheet'))
+    })
+  }
+
+  test('the rewinding stream never leaks a half-rendered document: one answer, the final GFM', async ({ page }) => {
+    await open(page, { site: 'claude', reply: 'rich', replyMs: 1200 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'rich and slow' })
+    const res = await request(page, { reqId: 'rich-1', op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, RICH, 'stop_gone')
+    const r = await replyState(page)
+    expect(r.rewinds).toBeGreaterThan(0) // the markdown was re-rendered from a shorter prefix at least once
+    expect(r.renders).toBeGreaterThan(5)
+    const answers = (await ipcState(page)).results.filter((x) => x.reqId === 'rich-1')
+    expect(answers).toHaveLength(1)
+    expect(answers[0].text).toBe(RICH)
+  })
 })
 
 test.describe('the end signal before the last render (?doneLagMs) and a second container mid-observe (?twoTurns)', () => {

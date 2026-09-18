@@ -14,6 +14,16 @@
  *                    "<<<R1>>>" → the Extraction, checked in THAT order (a challenge prompt for R2/R3 also
  *                    carries <<<R1>>> in its anonymised peer block); no key → the echo. The texts are the
  *                    assembled `content` of backend/llm/fixtures/scenarios/planted_factual/*.jsonl, verbatim.
+ *   ?reply=rich      (Stage 3) CANNED_RICH instead of the echo: a heading, bold / italic / inline code, a
+ *                    link, a nested list, a GFM table and a fenced code block — every shape `toMarkdown`
+ *                    has to rebuild
+ *
+ * Stage 3 — markdown replies: ?reply=json and ?reply=rich are RENDERED (renderMarkdown) as the chat UIs
+ * render markdown — real block elements and real code-block chrome (a header carrying the language and a
+ * "Copy code" button; inside the <pre> on chatgpt, before it on claude and grok; no language class on
+ * grok's <code>, so the header is the only clue there) — instead of being dropped into the container as
+ * text. A streaming PREFIX is re-rendered the same way, so an unterminated fence shows as an open code
+ * block. The echo (?replyMs alone) stays plain text in a pre-wrap container, byte for byte.
  *   ?nostop=1        no stop button while streaming (the adapter's quiet detection)
  *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt)
  *   ?blockAfterMs=N  N ms after a submit the "Unusual activity" alert appears and the reply freezes
@@ -68,7 +78,8 @@
  * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
  *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs, doneLagMs, twoTurns}, replying,
  *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
- *                  replyText()} (the site's own debug surface; `helperText()` is the hidden helper
+ *                  replyText(), replySource()} (the site's own debug surface; `replySource()` is the reply's
+ * markdown source, null before any reply; `helperText()` is the hidden helper
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
  * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
  * ms of the end signal and the last text render, null before; `rendersAfterSignal` the renders that
@@ -105,6 +116,30 @@
   }
   const CANNED_CONVERGENCE = `{"statuses": [{"divergence_id": "d1", "status": "resolved"}]}`
 
+  // Canned markdown for ?reply=rich (Stage 3): one reply that carries every shape `toMarkdown`
+  // has to rebuild — a heading, bold / italic / inline code, a link (whose URL the capture drops),
+  // a nested list, a GFM table and a fenced code block. observe.spec.js holds the markdown the
+  // capture must come back as: this source with the link flattened to its text.
+  const CANNED_RICH = [
+    '## Gyroscope range',
+    '',
+    'The **BMI088** gyroscope selects its range through the `GYRO_RANGE` register, see [the datasheet](https://example.com/bmi088/datasheet.pdf).',
+    '',
+    '- 2000 deg/s _default_',
+    '  - 1000 deg/s',
+    '  - 500 deg/s',
+    '- 125 deg/s',
+    '',
+    '| Register | Value |',
+    '| --- | --- |',
+    '| GYRO_RANGE | 0x0F |',
+    '| CHIP_ID | 0x1F |',
+    '',
+    '```json',
+    '{"register": "0x0F", "max_dps": 2000}',
+    '```',
+  ].join('\n')
+
   const params = new URLSearchParams(location.search)
   const site = Object.prototype.hasOwnProperty.call(SITES, params.get('site')) ? params.get('site') : 'chatgpt'
   const cfg = SITES[site]
@@ -118,7 +153,7 @@
   const replyOpts = {
     enabled: params.has('replyMs') || params.has('reply'),
     ms: Math.max(0, Number(params.get('replyMs')) || 0),
-    kind: params.get('reply') === 'json' ? 'json' : 'echo',
+    kind: params.get('reply') === 'json' ? 'json' : params.get('reply') === 'rich' ? 'rich' : 'echo',
     nostop: params.get('nostop') === '1',
     nodone: params.get('nodone') === '1',
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
@@ -158,6 +193,7 @@
     lastRenderAt: null,
     rendersAfterSignal: 0,
     replyText: () => (reply ? reply.textEl.textContent : null),
+    replySource: () => (reply ? reply.full : null),
   }
   window.__fake = fake
 
@@ -284,11 +320,232 @@
   }
 
   function replyFor(text) {
+    if (replyOpts.kind === 'rich') return CANNED_RICH
     if (replyOpts.kind === 'json') {
       const canned = cannedFor(text)
       if (canned !== null) return '```json\n' + canned + '\n```'
     }
     return 'Echo: ' + text
+  }
+
+  // --- markdown → DOM (Stage 3) --------------------------------------------------------------
+  //
+  // ?reply=json and ?reply=rich render their markdown as the chat UIs do — real block elements and
+  // real code-block chrome — instead of dropping the raw text into the container, so
+  // `toMarkdown` has to rebuild the markdown from the DOM. An unterminated fence in a streaming
+  // PREFIX renders as an open code block, exactly like a live markdown renderer.
+
+  /** `renderInline` is recursive, so each call gets its OWN matcher (a shared /g regex would loop). */
+  const inlineMatcher = () => /`([^`]+)`|\*\*([^*]+)\*\*|_([^_]+)_|\[([^\]]+)\]\(([^)]+)\)/g
+  const el = (tag, className) => {
+    const node = document.createElement(tag)
+    if (className) node.className = className
+    return node
+  }
+
+  function appendText(parent, s) {
+    if (s === '') return
+    s.split('\n').forEach((part, i) => {
+      if (i > 0) parent.appendChild(document.createElement('br'))
+      if (part !== '') parent.appendChild(document.createTextNode(part))
+    })
+  }
+
+  /** Inline markdown: `code`, **bold**, _italic_, [text](url) — nothing nested inside code. */
+  function renderInline(parent, text) {
+    const re = inlineMatcher()
+    let last = 0
+    let m
+    while ((m = re.exec(text)) !== null) {
+      appendText(parent, text.slice(last, m.index))
+      if (m[1] !== undefined) {
+        const code = document.createElement('code')
+        code.textContent = m[1]
+        parent.appendChild(code)
+      } else if (m[2] !== undefined) {
+        const strong = document.createElement('strong')
+        renderInline(strong, m[2])
+        parent.appendChild(strong)
+      } else if (m[3] !== undefined) {
+        const em = document.createElement('em')
+        renderInline(em, m[3])
+        parent.appendChild(em)
+      } else {
+        const a = document.createElement('a')
+        a.setAttribute('href', m[5])
+        renderInline(a, m[4])
+        parent.appendChild(a)
+      }
+      last = m.index + m[0].length
+    }
+    appendText(parent, text.slice(last))
+  }
+
+  /**
+   * The per-site code-block chrome (the shapes the adapters have to see through):
+   *   chatgpt  the header label and the "Copy code" button live INSIDE the <pre>, the body is
+   *            <code class="language-xxx">
+   *   claude   a header div BEFORE the <pre>, <code class="language-xxx">, a copy button after it
+   *   grok     a header row (label + copy button) before the <pre>, and NO language class on the
+   *            code — the label is the only clue, so both language sources stay covered
+   */
+  function buildCodeBlock(lang, body) {
+    const code = document.createElement('code')
+    code.textContent = body
+    if (site === 'chatgpt') {
+      const pre = el('pre', 'code-pre')
+      const wrap = el('div', 'code-wrap')
+      const header = el('div', 'code-header')
+      header.textContent = lang
+      const sticky = el('div', 'code-sticky')
+      const copy = document.createElement('button')
+      copy.type = 'button'
+      copy.setAttribute('data-testid', 'copy-code-button')
+      copy.setAttribute('aria-label', 'Copy code')
+      copy.textContent = 'Copy code'
+      sticky.appendChild(copy)
+      const bodyBox = el('div', 'code-body')
+      if (lang !== '') code.className = 'whitespace-pre! language-' + lang
+      bodyBox.appendChild(code)
+      wrap.append(header, sticky, bodyBox)
+      pre.appendChild(wrap)
+      return pre
+    }
+    if (site === 'claude') {
+      const block = el('div', 'code-block')
+      const header = el('div', 'code-header')
+      header.textContent = lang
+      const inner = el('div', 'code-block__code')
+      const pre = document.createElement('pre')
+      if (lang !== '') code.className = 'language-' + lang
+      pre.appendChild(code)
+      inner.appendChild(pre)
+      const actions = el('div', 'code-actions')
+      const copy = document.createElement('button')
+      copy.type = 'button'
+      copy.setAttribute('aria-label', 'Copy')
+      copy.textContent = 'Copy'
+      actions.appendChild(copy)
+      block.append(header, inner, actions)
+      return block
+    }
+    const block = el('div', 'not-prose')
+    const header = el('div', 'code-header')
+    const label = el('span', 'code-lang')
+    label.textContent = lang
+    const copy = document.createElement('button')
+    copy.type = 'button'
+    copy.setAttribute('aria-label', 'Copy')
+    copy.textContent = 'Copy'
+    header.append(label, copy)
+    const pre = document.createElement('pre')
+    pre.appendChild(code)
+    block.append(header, pre)
+    return block
+  }
+
+  function buildList(lines) {
+    const list = document.createElement(/^\s*\d+\./.test(lines[0]) ? 'ol' : 'ul')
+    let i = 0
+    while (i < lines.length) {
+      const m = /^(\s*)(?:[-*]|\d+\.)\s+(.*)$/.exec(lines[i])
+      const indent = m[1].length
+      const item = document.createElement('li')
+      renderInline(item, m[2])
+      i += 1
+      const nested = []
+      while (i < lines.length) {
+        const deeper = /^(\s*)(?:[-*]|\d+\.)\s+/.exec(lines[i])
+        if (!deeper || deeper[1].length <= indent) break
+        nested.push(lines[i])
+        i += 1
+      }
+      if (nested.length > 0) item.appendChild(buildList(nested))
+      list.appendChild(item)
+    }
+    return list
+  }
+
+  function buildTable(rows) {
+    const cellsOf = (line) =>
+      line
+        .trim()
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map((s) => s.trim())
+    const table = document.createElement('table')
+    const body = document.createElement('tbody')
+    rows.forEach((line, index) => {
+      const values = cellsOf(line)
+      if (index === 1 && values.every((v) => /^:?-{3,}:?$/.test(v))) return // the GFM separator row
+      const tr = document.createElement('tr')
+      for (const value of values) {
+        const cell = document.createElement(index === 0 ? 'th' : 'td')
+        renderInline(cell, value)
+        tr.appendChild(cell)
+      }
+      if (index === 0) {
+        const head = document.createElement('thead')
+        head.appendChild(tr)
+        table.appendChild(head)
+      } else {
+        body.appendChild(tr)
+      }
+    })
+    table.appendChild(body)
+    return table
+  }
+
+  const isBlockStart = (line) => /^```|^#{1,6}\s|^\s*[-*]\s|^\s*\d+\.\s|^\s*\|/.test(line)
+
+  /** Render `src` as markdown into `target` (every child replaced, as a markdown renderer does). */
+  function renderMarkdown(target, src) {
+    const wrap = el('div', 'md')
+    const lines = src.split('\n')
+    let i = 0
+    while (i < lines.length) {
+      const line = lines[i]
+      if (line.trim() === '') {
+        i += 1
+        continue
+      }
+      const fence = /^```(\S*)\s*$/.exec(line)
+      if (fence) {
+        const body = []
+        i += 1
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) body.push(lines[i++])
+        if (i < lines.length) i += 1 // the closing fence
+        wrap.appendChild(buildCodeBlock(fence[1], body.join('\n')))
+        continue
+      }
+      const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+      if (heading) {
+        const h = document.createElement('h' + heading[1].length)
+        renderInline(h, heading[2])
+        wrap.appendChild(h)
+        i += 1
+        continue
+      }
+      if (/^\s*(?:[-*]|\d+\.)\s+/.test(line)) {
+        const block = []
+        while (i < lines.length && /^\s*(?:[-*]|\d+\.)\s+/.test(lines[i])) block.push(lines[i++])
+        wrap.appendChild(buildList(block))
+        continue
+      }
+      if (/^\s*\|/.test(line)) {
+        const rows = []
+        while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++])
+        wrap.appendChild(buildTable(rows))
+        continue
+      }
+      const paragraph = []
+      while (i < lines.length && lines[i].trim() !== '' && !isBlockStart(lines[i])) paragraph.push(lines[i++])
+      const p = document.createElement('p')
+      renderInline(p, paragraph.join('\n'))
+      wrap.appendChild(p)
+    }
+    target.replaceChildren(wrap)
   }
 
   /** The per-site assistant container: `{container, textEl, markDone()}` (see the header for the shapes). */
@@ -330,9 +587,14 @@
     return { container: box, textEl: md, markDone() {} }
   }
 
-  /** Full re-render of the reply text (what a markdown renderer does): every child replaced. */
+  /**
+   * Full re-render of the reply (what a markdown renderer does): every child replaced. The echo is
+   * plain text in a `pre-wrap` container (so its spaces, tabs and newlines read back byte for
+   * byte); ?reply=json / ?reply=rich render their markdown as real DOM (see `renderMarkdown`).
+   */
   function renderReply(s) {
-    reply.textEl.replaceChildren(document.createTextNode(s))
+    if (replyOpts.kind === 'echo') reply.textEl.replaceChildren(document.createTextNode(s))
+    else renderMarkdown(reply.textEl, s)
     fake.renders += 1
     fake.lastRenderAt = Date.now()
     if (reply.ended) fake.rendersAfterSignal += 1

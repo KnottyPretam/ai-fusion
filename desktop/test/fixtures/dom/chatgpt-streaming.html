@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <title>…</title>
+  </head>
+  <body>
+    <div id="__next">
+      <main class="relative h-full w-full flex-1">
+        <div id="thread" class="thread-container">
+          <div class="flex flex-col text-sm">
+            <article class="text-token-text-primary w-full" data-testid="conversation-turn-2" data-message-author-role="user">
+              <div class="whitespace-pre-wrap">…</div>
+            </article>
+            <article class="text-token-text-primary w-full" data-testid="conversation-turn-3" data-message-author-role="assistant">
+              <div class="markdown prose dark:prose-invert w-full break-words">
+                <p>…</p>
+              </div>
+            </article>
+          </div>
+          <div class="sr-only" role="status">…</div>
+          <div class="composer-parent flex h-full flex-col">
+            <form class="w-full">
+              <div class="bg-token-bg-primary flex w-full flex-col">
+                <div id="prompt-textarea" class="ProseMirror" contenteditable="true" translate="no" role="textbox" aria-label="Chat with ChatGPT">
+                  <p></p>
+                </div>
+                <div class="absolute end-3 bottom-0 flex items-center gap-2">
+                  <button class="composer-submit-btn" data-testid="stop-button" aria-label="Stop streaming" type="button">…</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

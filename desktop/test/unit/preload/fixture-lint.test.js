@@ -1,8 +1,14 @@
 // The DOM-fixture lint: fails when any desktop/test/fixtures/dom/*.html carries `@`, `/c/`,
 // `/chat/`, a uuid, `googleusercontent` or `x.com/` (identity that a scrubbed snapshot must not
-// keep). The directory may be empty or absent today — the scan still runs and passes vacuously —
-// and `scrubDom`'s attribute-value scrubbing is proven to defeat every pattern by removing the
-// identity token itself (the address, the handle, the chat id), not merely the delimiter.
+// keep), and `scrubDom`'s attribute-value scrubbing is proven to defeat every pattern by removing
+// the identity token itself (the address, the handle, the chat id), not merely the delimiter.
+//
+// Stage 3 (capture-hardening) added the twelve committed fixtures, so the scan is no longer
+// vacuous: the shape of each one is checked here too — only `SNAPSHOT_KEEP_ATTRS` attributes, every
+// non-blank text node exactly `…`, none of the tags `scrubDom` drops, and the file is a fixed point
+// of the scrubber (re-scrubbing the parsed file changes nothing but the indentation). What each
+// fixture is expected to MATCH lives in fixtures.test.js; why it looks the way it does, and which
+// entries are unverified, in the fixtures' README.md.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -10,9 +16,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { FIXTURES_DIR, LINT_PATTERNS, lintText, listFixtures, lintFixtures } from './_fixture-lint.js'
+import { parseHtml } from './_dom.js'
 
 const require = createRequire(import.meta.url)
-const { scrubDom } = require('../../../preload/site.cjs')
+const { scrubDom, SNAPSHOT_KEEP_ATTRS, SNAPSHOT_DROP_TAGS } = require('../../../preload/site.cjs')
 
 test('lintText flags every pattern with its line, and passes clean markup', () => {
   assert.deepEqual(lintText('<div class="x">…</div>\n<a class="ok">…</a>'), [])
@@ -34,12 +41,49 @@ test('lintText flags every pattern with its line, and passes clean markup', () =
   assert.deepEqual(lintText('1234-5678-abcd'), [])
 })
 
-test('every desktop/test/fixtures/dom/*.html passes the lint (vacuous while the directory is empty or absent, but the scan runs)', () => {
+test('every desktop/test/fixtures/dom/*.html passes the lint, and there really are fixtures to scan', () => {
   const { files, findings } = lintFixtures(FIXTURES_DIR)
   assert.ok(Array.isArray(files))
   assert.ok(FIXTURES_DIR.endsWith(path.join('desktop', 'test', 'fixtures', 'dom')), FIXTURES_DIR)
   assert.deepEqual(findings, [], `fixture lint findings: ${JSON.stringify(findings, null, 2)}`)
   for (const f of files) assert.ok(f.endsWith('.html'))
+  assert.equal(files.length, 12, 'three sites × composer / streaming / done / logged-out')
+})
+
+test('every committed fixture is in the scrubbed shape: allow-listed attributes only, every text node `…`, no dropped tags', () => {
+  for (const file of listFixtures(FIXTURES_DIR)) {
+    const name = path.basename(file)
+    const doc = parseHtml(fs.readFileSync(file, 'utf8'))
+    const attrs = new Set()
+    const texts = new Set()
+    const tags = new Set()
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        if (node.data.trim() !== '') texts.add(node.data.trim())
+      } else if (node.nodeType === 1) {
+        tags.add(node.localName)
+        for (const a of node.attributes) attrs.add(a.name)
+      }
+      for (const c of node.childNodes || []) walk(c)
+    }
+    walk(doc.documentElement)
+    for (const a of attrs) assert.ok(SNAPSHOT_KEEP_ATTRS.includes(a), `${name}: attribute "${a}" is not in SNAPSHOT_KEEP_ATTRS`)
+    assert.deepEqual([...texts], ['…'], `${name}: every non-blank text node must be the scrub placeholder`)
+    for (const tag of tags) assert.ok(!SNAPSHOT_DROP_TAGS.includes(tag), `${name}: <${tag}> is dropped by scrubDom and cannot be in a fixture`)
+    assert.ok(attrs.has('class'), `${name}: a fixture with no class attribute pins nothing`)
+  }
+})
+
+test('every committed fixture is a fixed point of scrubDom (only its indentation differs from the scrubber output)', () => {
+  for (const file of listFixtures(FIXTURES_DIR)) {
+    const raw = fs.readFileSync(file, 'utf8')
+    const once = scrubDom(parseHtml(raw))
+    assert.equal(scrubDom(parseHtml(once)), once, path.basename(file))
+    assert.ok(once.startsWith('<!doctype html>\n<html'), path.basename(file))
+    assert.deepEqual(lintText(once), [])
+    // the same content, with the fixture's readable indentation removed
+    assert.equal(once.replace(/\s+/g, ''), raw.replace(/\s+/g, ''), path.basename(file))
+  }
 })
 
 test('the scan really reads files: a temp fixture directory with one dirty and one clean file yields exactly the dirty findings', () => {
