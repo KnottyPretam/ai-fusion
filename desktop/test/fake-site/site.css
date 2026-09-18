@@ -160,6 +160,26 @@ button.send[disabled] { opacity: 0.35; cursor: not-allowed; }
   word-break: break-word;
 }
 article[data-message-author-role='assistant'] .actions { margin-top: 6px; }
+
+/* --- S8: claude's thinking / tool-use widget (?thinking=1) ----------------------------------- */
+/* The summary line is in the DOM TWICE — the row on screen and the collapsed panel's own copy. The
+   panel is clipped to nothing (height 0 + overflow hidden), the way a collapsed animated panel is,
+   and deliberately NOT display:none / visibility:hidden / hidden / aria-hidden: those four are the
+   only things the markdown walk drops, so a panel hidden that way would reproduce nothing. The body
+   below the widget is `.prose` — the element claude's `assistantText` cascade now points at. */
+.thinking {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.thinking-head {
+  display: flex;
+  gap: 6px;
+}
+.thinking-panel {
+  height: 0;
+  overflow: hidden;
+}
 button.stop {
   padding: 6px 12px;
   border-radius: 8px;

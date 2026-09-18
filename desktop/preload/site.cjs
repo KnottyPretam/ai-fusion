@@ -145,6 +145,32 @@
 //      later by the real `https://chatgpt.com/c/<uuid>`; revisiting the placeholder 404s back to the
 //      home page. `chatgpt.chatUrlPattern` therefore ends the id at the segment (`(?:[?#]|$)`), so the
 //      placeholder matches nothing and main records only the real link.
+//
+// S8 capture fidelity — a claude.ai defect MEASURED on 2026-09-18 from a real Send (the persisted
+// SendTurn of conversation 413b0a4a): the answer was correct but its FIRST line, claude's thinking
+// summary, was captured TWICE —
+//     "Choosing the strongest language for safety-critical flight control.\n\n
+//      Choosing the strongest language for safety-critical flight control.\n\n**Ada/SPARK**\n\n…"
+// — and two web-search turns from the same session showed the same widget doing it with its tool
+// label ("Searched the webBosch BMI088 gyroscope range ±2000 dps datasheet\n\nSearched the web\n\n…",
+// "Searched the web\n\nSearched the web\n\n…"). chatgpt and grok captured cleanly in those same runs.
+// The code path: `observe` reads ONE container per sample (`text = normalizeText(replyText(container))`)
+// and claude's `assistantText` cascade was EMPTY, so `replyText` fell through to `blockText(container)`
+// = `toMarkdown('.font-claude-response')` — the whole TURN, thinking/tool widget included. A single
+// `toMarkdown` pass renders every node exactly once (`mdBlockEntries` walks `childNodes` once and
+// neither `mdInline` nor `mdRawText` re-descends), so the line is in the DOM twice: claude renders the
+// summary in the row you see AND in the collapsed panel, and a panel collapsed by height/clip is not
+// `display:none`, `visibility:hidden`, `hidden` or `aria-hidden` — the only four things `mdHidden`
+// drops. (It is NOT the `assistant` cascade matching a parent and a child: `assistantContainers()`
+// de-duplicates by identity and `observe` follows exactly ONE node — the LAST fresh one in document
+// order — so a nested pair would TRUNCATE a capture, never double it; the 2026-09-17 probe also found
+// exactly one match, `.font-claude-message` matching nothing.)
+// The fix is `claude.assistantText: ['.prose']` (see DEFAULT_SELECTORS): the body is read from the
+// markdown container the probe measured, so the widget is excluded by STRUCTURE — never by matching
+// the text of a "thinking" line — and the cascade fallback keeps the whole container whenever `.prose`
+// is absent, so the rule can add a duplicate header back but can never drop the answer. Replayed
+// offline by the fake site's `?thinking=1` (claude) and pinned by `test/adapters/observe.spec.js`,
+// `test/unit/preload/markdown.test.js` and `test/unit/preload/selectors.test.js`.
 
 ;(() => {
   'use strict'
@@ -180,6 +206,8 @@
   /** After an insertion, let the editor's own reconciliation frame run before reading back. */
   const INSERT_SETTLE_MS = 60
   const MAX_SHADOW_DEPTH = 8
+  /** Upper bound on the parent/host walk of `containsDeep` (a real thread is nowhere near this deep). */
+  const MAX_ANCESTOR_HOPS = 512
   /** Stage 2 observe cadence: a DOM mutation triggers a check at most every 100 ms; a poll runs every 300 ms regardless. */
   const OBSERVE_THROTTLE_MS = 100
   const OBSERVE_POLL_MS = 300
@@ -312,7 +340,21 @@
       // v2 (Stage 2)
       stop: ["button[aria-label='Stop response']", "button[aria-label*='Stop']"],
       assistant: ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'],
-      assistantText: [],
+      // The reply BODY, not the whole turn (S8, contract §4 change request). Measured live on
+      // 2026-09-17 (read-only probe, docs/desktop-verification.md item 28): inside
+      // `.font-claude-response` a `.prose` element holds 2717 of the container's 2754 innerText
+      // characters — the rendered answer; the 37 outside it are the turn's own chrome. With this
+      // cascade EMPTY the capture was the whole container, and a real Send on 2026-09-18 showed what
+      // that costs: claude renders a thinking / tool-use summary line TWICE (the row on screen plus
+      // the collapsed panel's own copy — neither `display:none`, `visibility:hidden`, `hidden` nor
+      // `aria-hidden`, which is all `mdHidden` drops), so the captured reply began
+      // "<summary>\n\n<summary>\n\n<answer>" ("Searched the web" twice on a web-search turn).
+      // Reading the body from `.prose` removes that chrome by STRUCTURE, never by matching its text,
+      // and it cannot lose the answer: `replyText` joins EVERY `.prose` match and falls back to the
+      // whole container when none matches (exactly the old behaviour). One entry on purpose — a
+      // second, looser guess (`.grid-cols-1`) would be consulted only when `.prose` is gone and
+      // could then match a SMALL grid inside the answer, which would silently truncate the capture.
+      assistantText: ['.prose'],
       done: [],
       quietMs: 2500,
       firstTokenMs: 90000,
@@ -555,6 +597,31 @@
     const out = queryAll(root, selector)
     for (const sr of resolveRoots(root, roots)) out.push(...queryAll(sr, selector))
     return out
+  }
+
+  /**
+   * `ancestor` contains `el` in the FLATTENED tree: `contains` plus the shadow hops `contains` does
+   * not make. `deepQuerySelectorAll` searches open shadow roots, so two matches of the same cascade
+   * entry can be a host and a node inside its shadow root — and a plain `contains` says no, which
+   * would make `replyText` concatenate a node with its own ancestor (the same text twice).
+   */
+  function containsDeep(ancestor, el) {
+    if (!ancestor || !el || ancestor === el) return false
+    if (safeTrue(() => typeof ancestor.contains === 'function' && ancestor.contains(el) === true)) return true
+    let node = el
+    for (let hops = 0; hops < MAX_ANCESTOR_HOPS; hops += 1) {
+      let next = null
+      try {
+        next = node.parentNode || node.host || null // a shadow root has no parentNode; it has a host
+      } catch (_e) {
+        return false
+      }
+      if (!next || next === node) return false
+      if (next === ancestor) return true
+      if (safeTrue(() => typeof ancestor.contains === 'function' && ancestor.contains(next) === true)) return true
+      node = next
+    }
+    return false
   }
 
   /** The element's computed style through `win`, else its own document's view; null without one. */
@@ -1683,17 +1750,21 @@
 
     /**
      * A container's reply text: EVERY match of the first `assistantText` entry that matches, in
-     * document order (a match nested in another is skipped), joined by a blank line — a turn
-     * rendered as several blocks (a summary before the answer, text around a tool block) is
+     * document order (a match nested in another is skipped — `containsDeep`, so a shadow-root
+     * descendant of another match never has its text captured twice), joined by a blank line — a
+     * turn rendered as several blocks (a summary before the answer, text around a tool block) is
      * captured whole, not truncated to its first block; without a match the container itself.
      * The markdown container is preferred (that is what the `assistantText` cascade points at) and
-     * innerText is the fallback — see `blockText`.
+     * innerText is the fallback — see `blockText`. That fallback is why a site whose cascade matches
+     * nothing still captures its reply: it can never be the reason an answer goes missing, only the
+     * reason the turn's chrome rides along (the S8 note in this file's header: claude's doubled
+     * thinking summary, which is why `claude.assistantText` stopped being empty).
      */
     function replyText(container) {
       for (const selector of nonEmptyCascade(sel.assistantText)) {
         const hits = deepQuerySelectorAll(container, selector)
         if (hits.length === 0) continue
-        const blocks = hits.filter((el) => !hits.some((other) => other !== el && safeTrue(() => other.contains(el))))
+        const blocks = hits.filter((el) => !hits.some((other) => other !== el && containsDeep(other, el)))
         return blocks.map(blockText).join('\n\n')
       }
       return blockText(container)

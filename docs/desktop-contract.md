@@ -191,9 +191,9 @@ Version 2 (Stage 2, additive per site; `DEFAULT_SELECTORS.version` stays 1 — a
 `assistant:["[data-message-author-role='assistant']"]`, `assistantText:[".markdown",".whitespace-pre-wrap"]`,
 `done:["button[data-testid='copy-turn-action-button']"]`; claude
 `stop:["button[aria-label='Stop response']","button[aria-label*='Stop']"]`,
-`assistant:[".font-claude-response:not(#markdown-artifact)",".font-claude-message"]`, `assistantText:[]`, `done:[]`;
+`assistant:[".font-claude-response:not(#markdown-artifact)",".font-claude-message"]`, `assistantText:[".prose"]`, `done:[]`;
 grok `stop:["button[aria-label='Stop']","button[aria-label*='Stop']"]`, `assistant:["div[id^='response-']"]`,
-`assistantText:[".response-content-markdown"]`, `done:[]`. Empty `stop`+`done` ⇒ quiet detection.
+`assistantText:[".response-content-markdown"]`, `done:[]`. Empty `stop`+`done` ⇒ quiet detection. Claude's `assistantText` is `[".prose"]` from S8: measured 2026-09-17, a `.prose` element inside `.font-claude-response` holds 2717 of the container's 2754 innerText characters, and with the cascade empty a real Send on 2026-09-18 captured claude's thinking-summary line TWICE in front of the answer (the whole turn, widget included — claude renders that summary both in the visible row and in a panel collapsed by height, which is none of the four hidden-nesses the walk drops). The entry can never truncate a capture to nothing: `replyText` joins every match and falls back to the container when none matches.
 Entries the research marked unverified are confirmed in Stage 4. Verified live on 2026-09-16 (grok.com, signed in): the composer is a TipTap/ProseMirror `div.tiptap.ProseMirror[contenteditable][role=textbox][aria-label="Ask Grok anything"]` inside a `form` (a hidden 14 px helper `textarea` also exists — a bare `textarea` entry must never be a fallback), and `button[type=submit][aria-label=Submit][data-testid=chat-submit]` is rendered only once the editor holds text (the voice-mode button occupies that slot while it is empty), so the send cascade is polled after insertion, never before.
 
 ### 5. Sites, policy, permissions, flags, env, files, package

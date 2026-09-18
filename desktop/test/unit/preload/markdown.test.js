@@ -135,7 +135,7 @@ test('replyText: the assistantText cascade is preferred and rendered as markdown
   assert.equal(a.replyText(container), 'the answer\n\n```json\n{"ok": true}\n```')
   // the ".markdown" match wins over the container, so the action bar's "Copy" is not in the capture
   assert.ok(!a.replyText(container).includes('Copy'))
-  // claude keeps assistantText empty: the container itself is rendered
+  // claude reads its body from `.prose` (S8); with no `.prose` the container itself is rendered
   const claudeDoc = parseHtml(`<html><body><div class="font-claude-response"><p>hello</p><ul><li>a</li></ul></div></body></html>`)
   const claude = createAdapter({ document: claudeDoc, site: 'claude', selectors: DEFAULT_SELECTORS })
   assert.equal(claude.replyText(claudeDoc.querySelector('.font-claude-response')), 'hello\n\n- a')
@@ -260,4 +260,69 @@ test('toMarkdown: an image contributes its alt text and never its URL', () => {
   assert.equal(md(`<div class="markdown"><img src="x.png" alt="a figure"><p>after</p></div>`), '![a figure]()\n\nafter')
   assert.equal(md(`<div class="markdown"><p><picture><source srcset="a.webp"><img src="a.png" alt="picture alt"></picture></p></div>`), '![picture alt]()')
   assert.equal(md(`<div class="markdown"><p><img src="x.png" alt="hidden" aria-hidden="true"></p></div>`), '')
+})
+
+// --- S8: claude's doubled thinking summary (measured 2026-09-18) --------------------------------
+
+/**
+ * The claude.ai turn shape behind the S8 capture defect: a thinking / tool-use widget above the
+ * answer whose summary line is in the DOM TWICE — the row on screen and the collapsed panel's own
+ * copy, the panel clipped (no `display:none`, `visibility:hidden`, `hidden` or `aria-hidden`, the
+ * only four things the walk drops) — and the answer inside the `.prose` markdown body the live probe
+ * measured (2717 of the container's 2754 innerText characters, 2026-09-17).
+ */
+const CLAUDE_SUMMARY = 'Choosing the strongest language for safety-critical flight control.'
+const claudeTurn = (bodyClass) =>
+  parseHtml(
+    `<html><body><div class="font-claude-response">` +
+      `<div class="thinking" data-state="closed">` +
+      `<div class="thinking-head"><div class="thinking-summary">${CLAUDE_SUMMARY}</div></div>` +
+      `<div class="thinking-panel"><div class="thinking-summary">${CLAUDE_SUMMARY}</div></div>` +
+      `</div>` +
+      `<div class="${bodyClass}"><p><strong>Ada/SPARK</strong></p><p>SPARK can formally prove the absence of runtime errors.</p></div>` +
+      `<div class="flex items-center"><button data-testid="action-bar-copy" aria-label="Copy">Copy</button></div>` +
+      `</div></body></html>`,
+  )
+const ANSWER_MD = '**Ada/SPARK**\n\nSPARK can formally prove the absence of runtime errors.'
+
+test("replyText (claude, S8): the thinking summary rides in front of the answer TWICE when the body is read from the whole turn — `.prose` reads the body instead and drops the widget by structure", () => {
+  const doc = claudeTurn('grid-cols-1 grid gap-2.5 prose')
+  const container = doc.querySelector('.font-claude-response')
+  // the defect, reproduced: with the old default (an empty cascade) the capture is the whole turn
+  const old = createAdapter({ document: doc, site: 'claude', selectors: { ...DEFAULT_SELECTORS.claude, assistantText: [] } })
+  assert.equal(old.replyText(container), [CLAUDE_SUMMARY, CLAUDE_SUMMARY, ANSWER_MD].join('\n\n'))
+  // the fix: the body is read from the markdown container, so the widget is not in the capture at all
+  const fixed = createAdapter({ document: doc, site: 'claude', selectors: DEFAULT_SELECTORS })
+  assert.equal(fixed.replyText(container), ANSWER_MD)
+  assert.ok(!fixed.replyText(container).includes(CLAUDE_SUMMARY))
+  // one line in the DOM is one line in the capture: the doubling is the page's, not the walk's
+  assert.equal(doc.querySelectorAll('.thinking-summary').length, 2)
+  const single = parseHtml(`<html><body><div class="font-claude-response"><div class="thinking"><div class="thinking-summary">${CLAUDE_SUMMARY}</div></div><div class="prose"><p>answer</p></div></div></body></html>`)
+  const walked = toMarkdown(single.querySelector('.font-claude-response'))
+  assert.equal(walked, CLAUDE_SUMMARY + '\n\nanswer')
+  assert.equal(walked.split(CLAUDE_SUMMARY).length - 1, 1)
+})
+
+test('replyText (claude, S8): a turn with no `.prose` still captures the WHOLE answer — the cascade fallback can add chrome, never lose the reply', () => {
+  const doc = claudeTurn('grid-cols-1 grid gap-2.5') // a build whose body class is not `.prose` any more
+  const container = doc.querySelector('.font-claude-response')
+  const a = createAdapter({ document: doc, site: 'claude', selectors: DEFAULT_SELECTORS })
+  const text = a.replyText(container)
+  assert.equal(text, [CLAUDE_SUMMARY, CLAUDE_SUMMARY, ANSWER_MD].join('\n\n')) // exactly the old behaviour
+  assert.ok(text.endsWith(ANSWER_MD)) // the answer, whole, every time
+  // and the answer alone once a `.prose` element exists anywhere in the turn
+  const withProse = claudeTurn('prose')
+  assert.equal(createAdapter({ document: withProse, site: 'claude', selectors: DEFAULT_SELECTORS }).replyText(withProse.querySelector('.font-claude-response')), ANSWER_MD)
+})
+
+test('replyText (claude, S8): several `.prose` blocks in one turn are all captured, and a `.prose` nested in another is not captured twice', () => {
+  const doc = parseHtml(
+    `<html><body><div class="font-claude-response"><div class="thinking"><div class="thinking-summary">${CLAUDE_SUMMARY}</div></div>` +
+      `<div class="prose"><p>first block</p></div><div class="prose"><p>second block</p><div class="prose"><p>nested</p></div></div></div></body></html>`,
+  )
+  const a = createAdapter({ document: doc, site: 'claude', selectors: DEFAULT_SELECTORS })
+  const text = a.replyText(doc.querySelector('.font-claude-response'))
+  assert.equal(text, 'first block\n\nsecond block\n\nnested')
+  assert.equal(text.split('nested').length - 1, 1) // the nested block's text, once
+  assert.ok(!text.includes(CLAUDE_SUMMARY))
 })

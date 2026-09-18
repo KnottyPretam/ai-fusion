@@ -60,7 +60,7 @@ tiny DOM in `test/unit/preload/_dom.js`, runs the REAL `createAdapter()` over it
 | chatgpt code block: header text + a copy button INSIDE the `pre`, `code.language-xxx` | unverified |
 | chatgpt logged out: `button[data-testid=login-button]` | unverified |
 | claude composer (`div.ProseMirror[contenteditable]`), send (`button[aria-label="Send message"]`), stop (`button[aria-label="Stop response"]`), assistant (`.font-claude-response`), user turn (`[data-testid=user-message]`) | unverified |
-| claude reply text: `assistantText` is deliberately **empty** — the whole `.font-claude-response` container is captured. An inner markdown selector would truncate the capture if it were wrong, and nothing has been measured; the fixtures keep an inner `div.grid-cols-1` so a Stage 4 entry can be added against them | unverified, on purpose |
+| claude reply text: `assistantText` is `[".prose"]` (S8). That a `.prose` element inside `.font-claude-response` holds the answer is **measured** (2026-09-17 probe: 2717 of the container's 2754 innerText characters); that it is the *same div* as the markdown grid is the fixtures' own hand-built guess — they carry `div.grid-cols-1.grid.gap-2.5.prose`. The entry cannot truncate a capture into nothing: `replyText` joins EVERY `.prose` match and falls back to the whole container when none matches | body measured, its exact element hand-built |
 | claude code block: a header div before the `pre`, `code.language-xxx`, copy button after it | unverified |
 | claude logged out: `button[data-testid=login-with-google]` | unverified |
 | grok assistant (`div[id^=response-]`), text (`.response-content-markdown`), stop (`button[aria-label=Stop]`), user bubble (`.message-bubble`) | unverified |
@@ -129,3 +129,44 @@ NOT verified, deliberately: what either page looks like WHILE streaming — that
 into the user's own account. `claude`'s `action-bar-copy` is therefore a CANDIDATE `done` marker, not
 an adopted one: if that action bar is also present during streaming it would end a capture early, and
 the current cascade already works. Adopt it only after watching one live reply.
+
+## The claude reply shape, measured 2026-09-18 (why `assistantText` stopped being empty)
+
+A real Send captured claude.ai's answer correctly but with its FIRST line — claude's thinking summary
+— in front of it **twice** (the persisted SendTurn of conversation `413b0a4a`, 467 characters):
+
+```
+Choosing the strongest language for safety-critical flight control.
+
+Choosing the strongest language for safety-critical flight control.
+
+**Ada/SPARK**
+
+SPARK can formally prove the absence of runtime errors …
+```
+
+Two web-search turns of the same session doubled the widget's tool label the same way
+(`Searched the webBosch BMI088 gyroscope range ±2000 dps datasheet` / `Searched the web` / the answer,
+and `Searched the web` / `Searched the web` / the answer). chatgpt (381 chars) and grok (394 chars)
+captured cleanly in the same run, so it is claude-specific.
+
+What it is: `observe` reads ONE container per sample, and a single `toMarkdown` pass renders every
+node exactly once — so the line is in the DOM twice (the row on screen plus the collapsed panel's own
+copy; a panel collapsed by height or clip is not `display:none`, `visibility:hidden`, `hidden` or
+`aria-hidden`, the only four things the walk drops). With `claude.assistantText` EMPTY, `replyText`
+fell through to the whole `.font-claude-response` container, so the widget rode along. It is NOT two
+`assistant` entries matching a parent and a child: `assistantContainers()` de-duplicates by identity
+and `observe` follows exactly one node (the last fresh one in document order), so a nested pair would
+truncate a capture, never double it — and the 2026-09-17 probe found exactly one match anyway
+(`.font-claude-message` matched nothing).
+
+The fix reads the body from `.prose` — the element the same probe measured holding 2717 of the
+container's 2754 characters — so the widget is out of the capture by STRUCTURE, never by matching the
+text of a "thinking" line, and the cascade fallback keeps the whole container whenever `.prose` is
+absent: the rule can hand back a duplicated header again, it can never drop the answer. The shape is
+replayed offline by the fake site's `?thinking=1` (claude) and pinned by
+`test/adapters/observe.spec.js`, `test/unit/preload/markdown.test.js` and `fixtures.test.js`.
+
+NOT verified, still: what claude's widget looks like WHILE it streams, and whether the second copy is
+the collapsed panel, an `aria-live` announcement or a transition leftover — that needs devtools on a
+live reply. The fix does not depend on which of them it is.

@@ -145,7 +145,11 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']"])
   assert.deepEqual(claude.stop, ["button[aria-label='Stop response']", "button[aria-label*='Stop']"])
   assert.deepEqual(claude.assistant, ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'])
-  assert.deepEqual(claude.assistantText, [])
+  // S8 (contract §4 change request): claude's reply BODY, not the whole turn. Measured 2026-09-17 —
+  // a `.prose` element inside `.font-claude-response` holds 2717 of its 2754 innerText characters —
+  // and forced by the 2026-09-18 capture, where the empty cascade made `replyText` fall back to the
+  // container and claude's thinking widget contributed its summary line TWICE before the answer.
+  assert.deepEqual(claude.assistantText, ['.prose'])
   assert.deepEqual(claude.done, [])
   for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, 300000])
   // every v2 selector compiles (a bad selector would be skipped silently at runtime)

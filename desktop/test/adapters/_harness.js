@@ -87,15 +87,16 @@ export function installFakeIpc({ site, selectors, dev }) {
  * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json`, `rich` or, from S7, `fidelity` —
  * all RENDERED as markdown with real code-block chrome), plus the S7-review lifecycle keys
  * remountMs / placeholderMs / webUrlMs (the measured chatgpt placeholder-then-remount turn and its
- * placeholder `/c/WEB:<uuid>` url). `path` picks the page path (the SPA fallback serves index.html
- * for /c/<id>).
+ * placeholder `/c/WEB:<uuid>` url) and the S8 key `thinking` (claude's thinking-widget turn shape,
+ * whose summary line is in the DOM twice). `path` picks the page path (the SPA fallback serves
+ * index.html for /c/<id>).
  */
 export async function open(page, opts = {}) {
   const { site, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site, path: pagePath = '/', ...query } = opts
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs']
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }

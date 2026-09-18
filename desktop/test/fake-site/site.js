@@ -42,6 +42,14 @@
  *                    'Searching the web…', marked done at once — chatgpt gets its copy button — while the
  *                    stop button stays up) and, TWO_TURNS_LAG_MS later, the answer container streaming as
  *                    usual; a capture must follow the LAST container and never end on the tool turn
+ *   ?thinking=1      (S8, claude only) the claude.ai turn shape MEASURED on 2026-09-18: a thinking /
+ *                    tool-use widget ABOVE the answer, whose summary line sits in the DOM TWICE — the
+ *                    row on screen and the collapsed panel's own copy, the panel clipped to height 0
+ *                    (NOT display:none / visibility:hidden / hidden / aria-hidden, so nothing the
+ *                    markdown walk drops) — and the answer inside the `.prose` markdown body the live
+ *                    probe measured. With claude's `assistantText` empty (the old default) a capture of
+ *                    this shape begins "<summary>\n\n<summary>\n\n<detail>" before the answer: the
+ *                    defect. With `assistantText: ['.prose']` it is the answer alone.
  *
  * S7 review — the chatgpt placeholder/remount lifecycle, MEASURED live on chatgpt.com with a real
  * logged-in session on 2026-09-17 (the same readings are in the site.cjs header and in
@@ -151,6 +159,12 @@
    */
   const PLACEHOLDER_TEXT = 'Placeholder…'
   const PLACEHOLDER_MS = 250
+  /**
+   * ?thinking=1 (claude): the thinking widget's summary line — the one the live capture came back
+   * with twice — and the detail line of its collapsed panel. Both sit OUTSIDE the `.prose` body.
+   */
+  const THINKING_SUMMARY = 'Choosing the strongest language for safety-critical flight control.'
+  const THINKING_DETAIL = 'Weighing certification evidence against memory safety.'
   /** ?webUrlMs: how the placeholder chat URL is prefixed on chatgpt.com (`/c/WEB:<uuid>`). */
   const WEB_URL_PREFIX = 'WEB:'
 
@@ -238,6 +252,8 @@
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
     doneLagMs: params.has('doneLagMs') ? Math.max(0, Number(params.get('doneLagMs')) || 0) : null,
     twoTurns: params.get('twoTurns') === '1',
+    // ?thinking=1 — claude only (the widget is claude.ai's; chatgpt and grok keep their shapes)
+    thinking: params.get('thinking') === '1' && site === 'claude',
     // the measured chatgpt lifecycle (see the header): a placeholder turn, then a gap with NO
     // assistant container at all, then the real reply
     remountMs: params.has('remountMs') ? Math.max(0, Number(params.get('remountMs')) || 0) : null,
@@ -289,6 +305,8 @@
     urls: [],
     replyText: () => (reply ? reply.textEl.textContent : null),
     replySource: () => (reply ? reply.full : null),
+    /** ?thinking=1: the two lines the widget puts outside the `.prose` body (null when it is off). */
+    thinking: replyOpts.thinking ? { summary: THINKING_SUMMARY, detail: THINKING_DETAIL } : null,
   }
   window.__fake = fake
 
@@ -728,6 +746,32 @@
     target.replaceChildren(wrap)
   }
 
+  /**
+   * ?thinking=1 (claude, S8): the thinking / tool-use widget that sits above the answer inside
+   * `.font-claude-response`. Its summary line is in the DOM TWICE — the visible row and the
+   * collapsed panel's copy — which is how one line reached a real capture as two blocks. The panel
+   * is clipped (`height: 0; overflow: hidden`, see site.css), never `display:none`: a panel the
+   * markdown walk already drops would not reproduce anything.
+   */
+  function buildThinking() {
+    const widget = el('div', 'thinking')
+    widget.setAttribute('data-state', 'closed')
+    const head = el('div', 'thinking-head')
+    const headline = el('div', 'thinking-summary')
+    headline.textContent = THINKING_SUMMARY
+    head.appendChild(headline)
+    const panel = el('div', 'thinking-panel')
+    const panelLine = el('div', 'thinking-summary')
+    panelLine.textContent = THINKING_SUMMARY
+    const detail = el('div', 'thinking-detail')
+    detail.textContent = THINKING_DETAIL
+    panel.appendChild(panelLine)
+    panel.appendChild(detail)
+    widget.appendChild(head)
+    widget.appendChild(panel)
+    return widget
+  }
+
   /** The per-site assistant container: `{container, textEl, markDone()}` (see the header for the shapes). */
   function buildAssistant() {
     if (site === 'chatgpt') {
@@ -756,7 +800,12 @@
     if (site === 'claude') {
       const box = document.createElement('div')
       box.className = 'font-claude-response reply'
-      return { container: box, textEl: box, markDone() {} }
+      if (!replyOpts.thinking) return { container: box, textEl: box, markDone() {} }
+      // ?thinking=1: the widget above the answer, then the markdown body the capture must read
+      box.appendChild(buildThinking())
+      const body = el('div', 'grid-cols-1 grid gap-2.5 prose')
+      box.appendChild(body)
+      return { container: box, textEl: body, markDone() {} }
     }
     const box = document.createElement('div')
     box.id = 'response-' + randomId()

@@ -1125,6 +1125,29 @@ test('observe / replyText: EVERY match of the first assistantText entry that mat
   assert.equal(a.replyText(container('only the container')), 'only the container')
 })
 
+test('replyText: a match inside ANOTHER match\'s open shadow root is a nested match too — its text is captured once, not concatenated with its own ancestor', () => {
+  // `deepQuerySelectorAll` searches open shadow roots, but `contains` does not cross them: a host
+  // and a node in its shadow root both matched and the same text was joined to itself. The nested
+  // filter walks parentNode/host instead (`containsDeep`), so only the outer match is captured.
+  const shadowBody = { innerText: 'the answer', parentNode: null }
+  const shadowRoot = {
+    querySelector: (s) => (s === '.markdown' ? shadowBody : null),
+    querySelectorAll: (s) => (s === '*' ? [] : s === '.markdown' ? [shadowBody] : []),
+  }
+  const host = { tagName: 'DIV', innerText: 'the answer', shadowRoot, contains: (x) => x === host, querySelectorAll: () => [], querySelector: () => null }
+  shadowBody.parentNode = { host } // the shadow root's host — the hop `contains` cannot make
+  const reply = {
+    tagName: 'DIV',
+    innerText: 'the answer',
+    querySelector: (s) => (s === '.markdown' ? host : null),
+    querySelectorAll: (s) => (s === '*' ? [host] : s === '.markdown' ? [host] : []),
+    contains: (x) => x === host,
+  }
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
+  assert.equal(a.replyText(reply), 'the answer')
+})
+
 /** A fake element with a real-looking box whose computed style is `style` (through its own document's view). */
 const styled = (style) => ({
   getClientRects: () => [{}],

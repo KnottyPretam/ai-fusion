@@ -703,3 +703,88 @@ test('ready waits for the composer after a loadURL to /c/<id> (the page mounts l
   expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
   expect((await request(page, { op: 'health' })).health.url).toContain('/c/ffffeeeeddddcccc')
 })
+
+/**
+ * ?thinking=1 — claude's thinking / tool-use widget, the S8 capture-fidelity defect MEASURED on
+ * 2026-09-18 from a real Send: the answer was right, but claude's thinking summary line rode in front
+ * of it TWICE ("Choosing the strongest language for safety-critical flight control." twice, then
+ * "**Ada/SPARK**…"); two web-search turns of the same session doubled their "Searched the web" label
+ * the same way, while chatgpt and grok captured cleanly. The line is in the DOM twice — the row on
+ * screen and the collapsed panel's copy, the panel clipped rather than display:none — and claude's
+ * `assistantText` cascade was empty, so the capture was the WHOLE turn. The fix is
+ * `claude.assistantText: ['.prose']`: the body is read from the markdown container, the widget is
+ * excluded by structure, and the cascade fallback keeps the whole container when `.prose` is missing.
+ */
+test.describe("?thinking=1 — claude's doubled thinking summary", () => {
+  const PROMPT = 'which language for flight control?'
+  const ANSWER = 'Echo: ' + PROMPT
+
+  test('the summary is in the DOM twice and in the capture NEVER: the answer is read from the `.prose` body', async ({ page }) => {
+    await open(page, { site: 'claude', thinking: 1, replyMs: 400 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    expect(sent.ok).toBe(true)
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, ANSWER, 'stop_gone')
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    expect(res.text).not.toContain(thinking.summary)
+    expect(res.text).not.toContain(thinking.detail)
+    // the page really does hold the summary twice — this is the shape, not a captured artefact
+    await expect(page.locator('.font-claude-response .thinking-summary')).toHaveCount(2)
+    expect(await page.locator('.font-claude-response').textContent()).toContain(thinking.summary + thinking.summary)
+    // and the second copy is invisible on screen while being none of the four things the markdown
+    // walk drops (display:none, visibility:hidden, [hidden], aria-hidden) — why it was captured
+    const panel = await page.evaluate(() => {
+      const el = document.querySelector('.thinking-panel')
+      const cs = getComputedStyle(el)
+      return {
+        display: cs.display,
+        visibility: cs.visibility,
+        height: cs.height,
+        hidden: el.hasAttribute('hidden'),
+        ariaHidden: el.getAttribute('aria-hidden'),
+        boxHeight: el.getBoundingClientRect().height,
+      }
+    })
+    expect(panel).toEqual({ display: 'block', visibility: 'visible', height: '0px', hidden: false, ariaHidden: null, boxHeight: 0 })
+    // the cascade entry that did it, and the body it points at
+    expect(DEFAULT_SELECTORS.claude.assistantText).toEqual(['.prose'])
+    await expect(page.locator('.font-claude-response .prose')).toHaveCount(1)
+  })
+
+  test('the OLD default (assistantText: []) reproduces the defect on the same page — the summary twice — and never loses the answer', async ({ page }) => {
+    await open(page, { site: 'claude', thinking: 1, replyMs: 400, selectors: withOverride('claude', { assistantText: [] }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    // exactly what the live capture looked like: the summary, the summary again, the widget detail, the answer
+    expectObserved(res, [thinking.summary, thinking.summary, thinking.detail, ANSWER].join('\n\n'), 'stop_gone')
+    // the fallback is chrome-noisy, never lossy: the whole answer is still there
+    expect(res.text.endsWith(ANSWER)).toBe(true)
+  })
+
+  test('a rendered markdown answer under the widget still round-trips as GFM through `.prose`', async ({ page }) => {
+    await open(page, { site: 'claude', thinking: 1, reply: 'rich', replyMs: 400 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: 'what is the gyroscope range?' })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    const source = await page.evaluate(() => window.__fake.replySource())
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    expectObserved(res, source.replace('[the datasheet](https://example.com/bmi088/datasheet.pdf)', 'the datasheet'), 'stop_gone')
+    expect(res.text.startsWith('## Gyroscope range')).toBe(true)
+    expect(res.text).not.toContain(thinking.summary)
+    await expect(page.locator('.font-claude-response .prose h2')).toHaveText('Gyroscope range')
+    await expect(page.locator('.font-claude-response .prose table th')).toHaveCount(2)
+  })
+
+  for (const site of ['chatgpt', 'grok']) {
+    test(`?thinking=1 is claude-only: ${site} keeps its shape`, async ({ page }) => {
+      await open(page, { site, thinking: 1, replyMs: 0 })
+      const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, quietMs: 300 })
+      // an INSTANT reply is over before observe starts: no stop button was ever seen, so grok ends on
+      // quiet while chatgpt still has its copy-turn marker (the same split as the ?replyMs=0 test above)
+      expectObserved(res, ANSWER, site === 'chatgpt' ? 'done_selector' : 'quiet')
+      expect(await page.evaluate(() => window.__fake.thinking)).toBe(null)
+      await expect(page.locator('.thinking')).toHaveCount(0)
+    })
+  }
+})

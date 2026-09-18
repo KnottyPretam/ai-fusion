@@ -17,7 +17,7 @@ import { FIXTURES_DIR } from './_fixture-lint.js'
 import { parseHtml } from './_dom.js'
 
 const require = createRequire(import.meta.url)
-const { createAdapter, DEFAULT_SELECTORS, SLOTS } = require('../../../preload/site.cjs')
+const { createAdapter, toMarkdown, DEFAULT_SELECTORS, SLOTS } = require('../../../preload/site.cjs')
 
 const S = DEFAULT_SELECTORS
 /**
@@ -160,6 +160,24 @@ test('the done fixtures: the reply renders as markdown (a fence with the languag
     '…\n\n| … | … |\n| --- | --- |\n| … | … |\n\n…\n\n```json\n…\n```',
   )
   assert.deepEqual(S.grok.done, [])
+})
+
+test('the assistantText cascade points at the reply BODY in every site\'s streaming and done fixture (S8: claude reads `.prose`, not the whole turn)', () => {
+  for (const slot of SLOTS) {
+    const entryText = S[slot].assistantText[0]
+    assert.ok(entryText, `${slot}: the assistantText cascade must have an entry`)
+    for (const state of ['streaming', 'done']) {
+      const { adapter, doc } = adapterFor(`${slot}-${state}`)
+      const [container] = adapter.assistantContainers()
+      const bodies = container.querySelectorAll(entryText)
+      assert.equal(bodies.length, 1, `${slot}-${state}: ${entryText} must match the body exactly once`)
+      // the capture is that body's markdown, never the turn's — the rule that keeps claude's thinking
+      // widget (and any other turn chrome) out of a capture
+      assert.equal(adapter.replyText(container), toMarkdown(bodies[0]))
+      assert.ok(container !== bodies[0] && container.contains(bodies[0]), `${slot}-${state}: the body is inside the container`)
+      assert.equal(doc.querySelectorAll(entryText).length, 1)
+    }
+  }
 })
 
 test('the logged-out fixtures write nothing: ready() rejects with the session state before touching the DOM', async () => {
