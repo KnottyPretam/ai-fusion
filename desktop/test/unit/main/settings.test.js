@@ -1,17 +1,19 @@
-// settings.js — defaults (capture all false, analyst chatgpt, zoom 1), clamp, atomic round-trip,
-// debounced window bounds. Uses a real temp directory so the tmp + rename write is exercised.
+// settings.js — defaults (capture all false, analyst chatgpt, zoom 1, theme dark), clamp, atomic
+// round-trip, the theme key (the ONE source of truth for the desktop app's palette and
+// nativeTheme.themeSource) and debounced window bounds. Uses a real temp directory so the tmp +
+// rename write is exercised.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createSettings, defaultSettings, sanitizeSettings, clampBounds, clampZoom, stepZoom, SETTINGS_FILE, MIN_WINDOW } from '../../../main/settings.js'
+import { createSettings, defaultSettings, sanitizeSettings, clampBounds, clampZoom, stepZoom, asTheme, SETTINGS_FILE, MIN_WINDOW, THEMES, DEFAULT_THEME } from '../../../main/settings.js'
 import { fakeTimers, fakeLog } from './_fakes.js'
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-settings-'))
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'))
 
-test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, window 1600×900 uncentred', () => {
+test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, theme dark, window 1600×900 uncentred', () => {
   assert.deepEqual(defaultSettings(), {
     version: 1,
     window: { x: null, y: null, width: 1600, height: 900, maximized: false },
@@ -19,6 +21,7 @@ test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, windo
     capture: { claude: false, chatgpt: false, grok: false },
     analyst: 'chatgpt',
     analystVisible: false,
+    theme: 'dark',
   })
   assert.notEqual(defaultSettings().zoom, defaultSettings().zoom, 'a fresh object every time')
 })
@@ -57,6 +60,46 @@ test('round-trip: setZoom / setCapture / setAnalyst write atomically and load ba
   assert.equal(s.setAnalystVisible(0), false, 'the setter coerces (ipc.js is what rejects a non-boolean payload)')
   assert.equal(s.getAnalystVisible(), false)
   assert.equal(readJson(s.file).analystVisible, false)
+})
+
+test('theme: light | dark | system round-trips, notifies subscribers and rejects anything else', () => {
+  const dir = tmpDir()
+  const s = createSettings({ dir, log: fakeLog() })
+  s.load()
+  assert.equal(s.getTheme(), DEFAULT_THEME, 'the desktop shell defaults to dark')
+  const seen = []
+  s.subscribe(({ key, value }) => seen.push([key, value]))
+  for (const theme of THEMES) {
+    assert.equal(s.setTheme(theme), theme)
+    assert.equal(s.getTheme(), theme)
+    assert.equal(readJson(s.file).theme, theme, 'written immediately, like setCapture / setAnalyst')
+  }
+  assert.deepEqual(seen, [
+    ['theme', 'light'],
+    ['theme', 'dark'],
+    ['theme', 'system'],
+  ])
+  for (const bad of ['Dark', 'auto', '', null, undefined, 1, {}]) assert.throws(() => s.setTheme(bad), /unknown theme/)
+  assert.equal(s.getTheme(), 'system', 'a refused write leaves the document alone')
+  const again = createSettings({ dir, log: fakeLog() })
+  again.load()
+  assert.equal(again.getTheme(), 'system', 'the choice survives a restart')
+  assert.deepEqual(fs.readdirSync(dir), [SETTINGS_FILE], 'no tmp file left behind')
+})
+
+test('theme: an unknown or missing value in the file falls back to dark; asTheme is the shared guard', () => {
+  const dir = tmpDir()
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, theme: 'chartreuse' }))
+  const s = createSettings({ dir, log: fakeLog() })
+  assert.equal(s.load().theme, DEFAULT_THEME)
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1 }))
+  assert.equal(s.load().theme, DEFAULT_THEME)
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, theme: 'light' }))
+  assert.equal(s.load().theme, 'light')
+  assert.equal(sanitizeSettings({ theme: 'system' }).theme, 'system')
+  for (const t of THEMES) assert.equal(asTheme(t), t)
+  assert.equal(asTheme('nope'), null)
+  assert.equal(asTheme(undefined, DEFAULT_THEME), DEFAULT_THEME)
 })
 
 test('corrupt or foreign JSON falls back to defaults / well-typed keys only, with a warning', () => {
@@ -151,5 +194,6 @@ test('sanitizeSettings / unknown slot guards', () => {
   const s = createSettings({ dir: tmpDir(), log: fakeLog() })
   assert.throws(() => s.setZoom('bing', 1), /unknown slot/)
   assert.throws(() => s.setAnalyst('bing'), /unknown analyst/)
+  assert.throws(() => s.setTheme('bing'), /unknown theme/)
   assert.throws(() => createSettings({}), /dir is required/)
 })

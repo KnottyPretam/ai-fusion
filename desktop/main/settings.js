@@ -4,10 +4,16 @@
 //    "window":{"x","y","width","height","maximized"},
 //    "zoom":{"claude":1,"chatgpt":1,"grok":1},
 //    "capture":{"claude":false,"chatgpt":false,"grok":false},
-//    "analyst":"chatgpt","analystVisible":false}
+//    "analyst":"chatgpt","analystVisible":false,
+//    "theme":"dark"}
 //
-// Main owns these keys (window bounds / zoom / capture / analyst; the renderer mirrors layout,
-// active tab and targets in localStorage). Writes are tmp-in-same-dir + rename. Window bounds are
+// Main owns these keys (window bounds / zoom / capture / analyst / theme; the renderer mirrors
+// layout, active tab and targets in localStorage). `theme` is the ONE source of truth for the
+// desktop app: main applies it to `nativeTheme.themeSource` (so the three site pages use their own
+// dark themes) and reports it to the renderer, which paints its own palette from it; the
+// renderer's `triplex.theme` localStorage entry is only a first-paint mirror.
+//
+// Writes are tmp-in-same-dir + rename. Window bounds are
 // debounced (`queueWindowBounds`) and clamped at launch to the work area of the display that
 // matches them (`screen.getDisplayMatching`, injected). No electron import: `fs`, `screen` and the
 // timers are arguments so node --test drives everything with a temp dir and fakes.
@@ -23,6 +29,14 @@ export const MIN_WINDOW = Object.freeze({ width: 640, height: 480 })
 export const ZOOM = Object.freeze({ min: 0.5, max: 2.0, step: 0.1 })
 export const BOUNDS_DEBOUNCE_MS = 500
 export const ANALYST_CHOICES = Object.freeze([...SLOTS, null])
+/** The three-way theme choice (contract §5 `settings.theme`; 'system' follows the OS). */
+export const THEMES = Object.freeze(['light', 'dark', 'system'])
+export const DEFAULT_THEME = 'dark'
+
+/** `theme` if it is one of THEMES, else `fallback` (default: null — "not a theme"). */
+export function asTheme(value, fallback = null) {
+  return THEMES.includes(value) ? value : fallback
+}
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v)
@@ -42,6 +56,7 @@ export function defaultSettings() {
     capture: perSlot(false),
     analyst: 'chatgpt',
     analystVisible: false,
+    theme: DEFAULT_THEME,
   }
 }
 
@@ -107,6 +122,7 @@ export function sanitizeSettings(raw) {
   }
   if (raw.analyst === null || SLOTS.includes(raw.analyst)) out.analyst = raw.analyst
   if (typeof raw.analystVisible === 'boolean') out.analystVisible = raw.analystVisible
+  out.theme = asTheme(raw.theme, out.theme)
   return out
 }
 
@@ -120,6 +136,7 @@ export function sanitizeSettings(raw) {
  *   getCapture() / setCapture(slot, on)          Stage 2 callers; saves immediately
  *   getAnalyst() / setAnalyst(slot|null)                             Stage 3 callers; save immediately
  *   getAnalystVisible() / setAnalystVisible(bool)                    the analyst view's fourth-tab mirror
+ *   getTheme() / setTheme('light'|'dark'|'system')                   the shell + nativeTheme choice; saves immediately
  *   windowBoundsForLaunch()        {x?, y?, width, height, maximized} clamped to screen.getDisplayMatching(...).workArea
  *   queueWindowBounds(bounds, maximized)   debounced save of the (normal) window bounds
  *   flushWindowBounds()            write a pending bounds update now (window close / before-quit)
@@ -256,6 +273,18 @@ export function createSettings({
     return doc.analystVisible
   }
 
+  function getTheme() {
+    return asTheme(doc.theme, DEFAULT_THEME)
+  }
+
+  function setTheme(theme) {
+    if (!THEMES.includes(theme)) throw new Error(`settings: unknown theme ${String(theme)}`)
+    doc.theme = theme
+    save()
+    notify('theme', doc.theme)
+    return doc.theme
+  }
+
   function workAreaFor(bounds) {
     if (!screen || typeof screen.getDisplayMatching !== 'function') return null
     try {
@@ -328,6 +357,8 @@ export function createSettings({
     setAnalyst,
     getAnalystVisible,
     setAnalystVisible,
+    getTheme,
+    setTheme,
     windowBoundsForLaunch,
     queueWindowBounds,
     flushWindowBounds,

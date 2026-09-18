@@ -8,7 +8,8 @@
 // banner state on a drop), no prompt:send handler, openChats (null → every pane kept) / signOut /
 // snapshot, a request holding `ready` until a New-chat navigation commits, the renderer's origin
 // guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the Bluetooth
-// chooser, the health + zoom + bridge + analyst replay, crash recreation, the bounds → settings.json
+// chooser, the health + zoom + bridge + analyst + theme replay, the theme channel (settings.json →
+// nativeTheme.themeSource + panes:theme), crash recreation, the bounds → settings.json
 // flush on close and the Stage 3 hidden analyst page (hello.analyst, a `web:chatgpt:analyst` request
 // creating the view lazily on persist:chatgpt and observing with capture off, auto-reveal on a
 // challenge, the `analyst` rect, panes:setAnalyst switching the partition + the `analyst` frame +
@@ -321,9 +322,23 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     ['panes:zoom', { slot: 'grok', factor: 1.2 }],
     ['panes:bridge', { connected: false }],
     ['panes:analyst', { slot: 'chatgpt', visible: false, health: null }],
+    ['panes:theme', { theme: 'light' }],
   ]
   assert.deepEqual(p.replay, expectedReplay)
   assert.deepEqual(p.replayOnGetInfo, expectedReplay)
+
+  // theme: settings.json (default dark) is applied to nativeTheme at start; panes:setTheme
+  // persists + applies + announces; a bad payload or a foreign sender changes nothing
+  assert.equal(p.themeAtStart, 'dark', 'the shell default reaches nativeTheme.themeSource at start')
+  assert.equal(p.themeInGetInfo, 'dark', 'getInfo carries the theme the renderer paints from')
+  assert.deepEqual(p.setTheme, { ok: true, value: { theme: 'light' } })
+  assert.equal(p.themeAfterSet, 'light', 'the SITE views follow through nativeTheme')
+  assert.deepEqual(p.themeSentToRenderer, [{ theme: 'light' }])
+  assert.equal(p.setThemeBad.ok, false)
+  assert.equal(p.setThemeBad.error, 'bad_request')
+  assert.equal(p.setThemeForeign.error, 'bad_request', 'only the renderer may set the theme')
+  assert.equal(p.themeAfterBad, 'light', 'a refused call leaves themeSource alone')
+  assert.equal(p.themeSettings, 'light')
 
   assert.deepEqual(p.crashHealth, ['view_crashed'])
   assert.equal(p.recreated, 1)
@@ -334,6 +349,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.settingsFile.capture, { claude: true, chatgpt: false, grok: false }, 'the capture switch persisted')
   assert.equal(p.settingsFile.analyst, 'chatgpt')
   assert.equal(p.settingsFile.analystVisible, false)
+  assert.equal(p.settingsFile.theme, 'light', 'the theme choice is persisted for the next launch')
   for (const key of ['views', 'analystViews', 'orchestrator', 'settings', 'bridge', 'chats', 'backend']) assert.ok(p.testGlobal.includes(key), key)
 
   // the token never reaches a log line

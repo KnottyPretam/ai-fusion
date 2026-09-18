@@ -20,6 +20,9 @@
 // everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`. With an
 // `onNewChatAll` prop (DesktopShell passes the shared ./chats.js handler) the shortcut is a real
 // "New chat everywhere" (new conversation + openChats); without it, Stage 1's newChat(all).
+// Theme: `deck-theme` cycles light → dark → system → light. main's settings.json is authoritative
+// (`getInfo().theme`, `triplex.onTheme`) and `triplex.setTheme` proposes the change; ./theme.js
+// paints `data-theme` on <html> and keeps the localStorage mirror. See ./theme.js.
 // Stage 3 (renderer-drawer): the hidden analyst page. `triplex.onAnalyst` → panes/analyst
 // ({slot, visible, health}: main auto-reveals on challenge | logged_out, the drawer's Settings
 // switch and the pane's Hide button call `showAnalyst`). While `analyst.visible` the deck shows
@@ -33,6 +36,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { LAYOUT_KEYS, rectsFor, sameLayout } from './rects.js'
+import { themeLabel, themeTitle, useTheme } from './theme.js'
 import {
   CAPTURE_LABEL,
   CAPTURE_NOTICE_TEXT,
@@ -140,6 +144,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const analyst = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
   const analystVisible = !!analyst.visible
   const viewports = useRef({})
+  const [theme, cycleTheme] = useTheme(api, info)
   const latest = useRef({ mode, active, sending, onNewChatAll })
   latest.current = { mode, active, sending, onNewChatAll }
 
@@ -338,6 +343,9 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
             Split
           </button>
         </div>
+        <button type="button" className={css.theme} data-testid="deck-theme" data-theme={theme} aria-label={themeTitle(theme)} title={themeTitle(theme)} onClick={cycleTheme}>
+          {themeLabel(theme)}
+        </button>
         {version ? <span className={css.version}>{`desktop v${version}${dev ? ' (dev)' : ''}`}</span> : null}
       </div>
       {noticeOpen ? (

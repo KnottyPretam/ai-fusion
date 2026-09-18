@@ -125,7 +125,7 @@ describe('PaneDeck: layout reporting', () => {
     const { unmount } = mount(fake)
     unmount()
     expect(ro.instances.every((i) => !i.alive)).toBe(true)
-    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1, analyst: 1 })
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1, analyst: 1, theme: 1 })
   })
 
   test('renders without any window.triplex and under a partial stub', () => {

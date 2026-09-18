@@ -206,7 +206,7 @@
 .sendButton {
   padding: 8px 16px;
   background: var(--primary);
-  color: #fff;
+  color: var(--on-accent);
   border: none;
   border-radius: 6px;
   font-weight: 600;

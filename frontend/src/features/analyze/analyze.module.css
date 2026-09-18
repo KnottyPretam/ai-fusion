@@ -2,7 +2,7 @@
 .pane { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .title { font-weight: 600; }
-.btn { padding: 3px 10px; border: 1px solid var(--primary); border-radius: 4px; background: var(--primary); color: #fff; }
+.btn { padding: 3px 10px; border: 1px solid var(--primary); border-radius: 4px; background: var(--primary); color: var(--on-accent); }
 .btnSecondary { background: var(--bg); color: var(--primary); }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-muted); color: var(--fg-muted); }
 .hint { font-size: 12px; color: var(--fg-muted); }

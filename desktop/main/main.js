@@ -14,7 +14,9 @@
 //                and trusted hosts (exit 3) and treats SSO_HOSTS as empty; single-instance lock;
 //                `web-contents-created` backstop (any webContents nobody policed opens nothing
 //                and stays put; the Bluetooth chooser is cancelled everywhere).
-// After ready:   settings.json (window bounds clamped to the matching display, zoom, capture),
+// After ready:   settings.json (window bounds clamped to the matching display, zoom, capture,
+//                theme — applied to nativeTheme.themeSource so the SITE pages switch too, seeded
+//                once from TRIPLEX_THEME when that names light|dark|system),
 //                chats.json (links off the site's hosts dropped), the selectors override (+ fs.watch
 //                hot reload → {op:'config'} to every view), the backend — attached
 //                (`TRIPLEX_BACKEND_URL` + `BRIDGE_TOKEN`) or spawned (`.venv/bin/python -m
@@ -44,7 +46,7 @@ import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
-import { createSettings } from './settings.js'
+import { createSettings, asTheme, DEFAULT_THEME } from './settings.js'
 import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, LOAD_RETRY_MS } from './views.js'
 import { createAnalystViews } from './analyst-views.js'
@@ -238,7 +240,8 @@ function createWindow() {
  * the reload after a renderer crash) is lost, and `panes:getInfo` carries neither. Wired to the
  * renderer's did-finish-load here; ipc.js also replays right after `panes:getInfo`, when the
  * renderer's listeners are known to exist. Stage 3 adds the analyst state, which drives the
- * fourth tab.
+ * fourth tab, and the theme (settings.json is authoritative; the renderer's localStorage copy is
+ * only a first-paint mirror).
  */
 function replayToRenderer() {
   if (!views || !windowAlive()) return
@@ -249,6 +252,7 @@ function replayToRenderer() {
   }
   sendToRenderer('panes:bridge', bridgeState)
   if (analystViews) sendToRenderer('panes:analyst', analystViews.state())
+  if (settings) sendToRenderer('panes:theme', { theme: settings.getTheme() })
 }
 
 /** Decide where the backend is: attach to TRIPLEX_BACKEND_URL (decided in preflight), else prepare a spawn on TRIPLEX_BACKEND_PORT. */
@@ -269,9 +273,14 @@ function resolveBackend(userData) {
  * they are told what the system prefers, and chatgpt.com / claude.ai / grok.com apply their OWN
  * dark themes through `prefers-color-scheme`. A site pinned to light in its own settings stays
  * light, which is correct — that is the user's choice on that site.
+ *
+ * The value always comes from settings.json (`settings.getTheme()`): one source of truth for the
+ * site views, the renderer chrome (which reads it back through `panes:getInfo` / `panes:theme`)
+ * and the next launch. `TRIPLEX_THEME` is a launch-time SEED for that file (dev / screenshots),
+ * never a second value read at runtime.
  */
 function applyTheme(theme) {
-  const next = theme === 'light' || theme === 'dark' || theme === 'system' ? theme : 'dark'
+  const next = asTheme(theme, DEFAULT_THEME)
   try {
     nativeTheme.themeSource = next
   } catch (err) {
@@ -281,7 +290,6 @@ function applyTheme(theme) {
 }
 
 function start() {
-  applyTheme(process.env.TRIPLEX_THEME)
   const userData = app.getPath('userData')
   try {
     fs.mkdirSync(userData, { recursive: true })
@@ -292,6 +300,9 @@ function start() {
 
   settings = createSettings({ dir: userData, screen })
   settings.load()
+  const seedTheme = asTheme(env.TRIPLEX_THEME)
+  if (seedTheme && seedTheme !== settings.getTheme()) settings.setTheme(seedTheme)
+  applyTheme(settings.getTheme())
 
   chats = createChats({ dir: userData, sites })
   chats.load()
@@ -450,6 +461,7 @@ function start() {
     orchestrator,
     selectors,
     settings,
+    applyTheme,
     chats,
     sites,
     version: PKG.version,

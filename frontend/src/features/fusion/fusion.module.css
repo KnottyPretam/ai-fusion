@@ -6,7 +6,7 @@
 .stepper { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
 .stepBtn { width: 24px; height: 24px; padding: 0; line-height: 1; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); }
 .stepInput { width: 44px; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; text-align: center; color: var(--fg); background: var(--bg); }
-.runBtn { height: 26px; padding: 0 12px; border: 1px solid var(--fusion); border-radius: 4px; background: var(--fusion); color: #fff; font-weight: 600; }
+.runBtn { height: 26px; padding: 0 12px; border: 1px solid var(--fusion); border-radius: 4px; background: var(--fusion); color: var(--on-accent); font-weight: 600; }
 .runBtn:disabled { background: var(--fusion-soft); color: var(--fusion); }
 .hint { color: var(--fg-muted); font-size: 12px; }
 .state { margin-left: auto; font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--fg-muted); background: var(--bg-muted); }

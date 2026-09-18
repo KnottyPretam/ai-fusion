@@ -22,7 +22,11 @@
 .modes button { padding: 3px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted); }
 .modes button:first-child { border-radius: 4px 0 0 4px; }
 .modes button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
-.modes button[aria-pressed='true'] { background: var(--primary); border-color: var(--primary); color: #fff; }
+.modes button[aria-pressed='true'] { background: var(--primary); border-color: var(--primary); color: var(--on-accent); }
+/* theme button (light / dark / system); same chrome as a mode button, always the unpressed look.
+   min-width holds the bar still while the label cycles between Light / Dark / System. */
+.theme { flex: 0 0 auto; min-width: 86px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); text-align: center; }
+.theme:hover { color: var(--fg); }
 .version { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; }
 
 /* first-run capture / terms-of-service notice (in the flow above the panes, never over a view) */
@@ -33,11 +37,14 @@
 .dot[data-level='ok'] { background: var(--ok); }
 .dot[data-level='warn'] { background: var(--warn); }
 .dot[data-level='bad'] { background: var(--err); }
-.badge { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; line-height: 16px; color: #fff; background: var(--err); }
+/* Badge/attention ink is the page ground, not #fff: white is 5.4:1 on the light --err but only
+   3.3:1 on the dark one and 2.5:1 on the dark --warn at 10px. `var(--bg)` is #fff in light (these
+   badges are unchanged there) and near-black in dark, where it reads 5.7:1 / 7.5:1. */
+.badge { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; line-height: 16px; color: var(--bg); background: var(--err); }
 .badge[data-session='logged_out'] { background: var(--warn); }
 .badge[data-session='challenge'] { background: var(--err); }
 .badge[data-session='blocked'] { background: var(--err); }
-.attention { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: #fff; font-size: 10px; font-weight: 700; line-height: 1; }
+.attention { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--warn); color: var(--bg); font-size: 10px; font-weight: 700; line-height: 1; }
 
 /* ---- panes ------------------------------------------------------------------------------ */
 .panes { display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; min-width: 0; gap: 4px; padding: 4px; }
@@ -58,7 +65,9 @@
 .actions { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .actions button { padding: 0 6px; height: 20px; font-size: 11px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg-muted); line-height: 18px; }
 .actions button:hover { color: var(--fg); }
-.actions button:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.6; cursor: not-allowed; }
+/* 0.6 left these at 2.9:1 (dark) / 2.6:1 (light) — unreadable. The muted ink + ground and the
+   cursor carry "disabled"; 0.8 keeps the label legible (4.3:1 / 3.8:1). */
+.actions button:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.8; cursor: not-allowed; }
 .zoom { display: inline-flex; align-items: center; margin-left: 4px; }
 .zoom button { min-width: 22px; padding: 0 4px; }
 .zoom button:first-child { border-radius: 3px 0 0 3px; }
@@ -85,7 +94,7 @@
 .composer { flex: 1 1 auto; min-width: 0; min-height: 40px; max-height: 160px; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
 .composer:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
 .composer[readonly] { background: var(--bg-muted); color: var(--fg-muted); cursor: default; }
-.sendBtn { flex: 0 0 auto; padding: 6px 14px; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: #fff; font-weight: 600; }
+.sendBtn { flex: 0 0 auto; padding: 6px 14px; border: 1px solid var(--primary); border-radius: 6px; background: var(--primary); color: var(--on-accent); font-weight: 600; }
 .sendBtn:disabled { opacity: 0.6; cursor: not-allowed; }
 .promptMeta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--fg-muted); }
 .targets { display: inline-flex; align-items: center; gap: 10px; }
@@ -95,7 +104,7 @@
 .target[data-slot='grok'] { color: var(--grok); }
 .newChat { padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg-muted); font-size: 12px; }
 .newChat:hover { color: var(--fg); }
-.newChat:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.6; cursor: not-allowed; }
+.newChat:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.8; cursor: not-allowed; }
 .results { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
 .result { color: var(--fg-muted); }
 .result[data-ok='true'] { color: var(--ok); }

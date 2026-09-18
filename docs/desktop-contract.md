@@ -68,7 +68,7 @@ sender is the renderer webContents AND the sender frame's origin is the renderer
 
 ```ts
 triplex.version: string; triplex.slots: ['claude','chatgpt','grok']
-getInfo(): Promise<{version, dev, sites:{[slot]:{url,newChatUrl,partition}}, backend:{port:number,url:string}|null, layout:{mode:'tabs'|'split',active:slot}|null}>   // invoke 'panes:getInfo'
+getInfo(): Promise<{version, dev, sites:{[slot]:{url,newChatUrl,partition}}, backend:{port:number,url:string}|null, layout:{mode:'tabs'|'split',active:slot}|null, theme:'light'|'dark'|'system'}>   // invoke 'panes:getInfo'
 setLayout(layout:{[slot|'analyst']: {x,y,width,height}|null}): void       // send 'panes:layout' (CSS px = DIP at zoomFactor 1; main rounds, min 1; null = hidden)
 setActive({mode, active}): void                                          // send 'panes:active'
 newChat(targets: slot[]): Promise<void>                                  // invoke 'panes:newChat' → loadURL(newChatUrl)
@@ -89,6 +89,9 @@ saveDomSnapshot(slot): Promise<{path}>                                          
 // Stage 3:
 setAnalyst(slot|null): Promise<void>; showAnalyst(visible:boolean): Promise<void>       // invoke 'panes:setAnalyst'|'panes:showAnalyst'
 onAnalyst(cb:({slot, visible, health})=>void): ()=>void                                // on 'panes:analyst'
+// Theme:
+setTheme(theme:'light'|'dark'|'system'): Promise<{theme}>                              // invoke 'panes:setTheme' (persists settings.theme, sets nativeTheme.themeSource so the SITE pages follow with their own dark themes; anything else → bad_request)
+onTheme(cb:({theme})=>void): ()=>void                                                  // on 'panes:theme' (main emits the CURRENT theme on did-finish-load and after getInfo, like health/zoom/bridge)
 ```
 
 Shortcuts (`desktop/main/shortcuts.js`, `before-input-event` on every site view and the
@@ -208,14 +211,14 @@ Desktop env: `TRIPLEX_RENDERER_URL` (dev; default `http://127.0.0.1:<backend>/ap
 `TRIPLEX_BACKEND_PORT` (8021), `TRIPLEX_BACKEND_URL` (attach, no spawn; must name a loopback host — 127.0.0.1 / localhost / ::1 — else exit 2 unless `TRIPLEX_ALLOW_REMOTE_BACKEND=1`, which warns loudly), `TRIPLEX_DATA_DIR`
 (default `<userData>/data`), `TRIPLEX_USER_DATA_DIR` (→ `app.setPath('userData')` before
 ready), `TRIPLEX_SITES_JSON`, `TRIPLEX_GROK_SURFACE`, `TRIPLEX_SELECTORS_FILE`,
-`TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_E2E_APP=1` (exposes
+`TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_THEME` (a launch-time seed written into `settings.theme`, never a second runtime source), `TRIPLEX_E2E_APP=1` (exposes
 `global.__triplexTest = {views, orchestrator, settings}` and refuses non-loopback site URLs),
 `TRIPLEX_FAKE_PORT` (5199), `TRIPLEX_OLLAMA=1` (export `OLLAMA_*` to the backend).
 Files under `userData` (`~/.config/triplex-desktop/`): `settings.json`
-`{"version":1,"window":{"x","y","width","height","maximized"},"zoom":{"claude":1,"chatgpt":1,"grok":1},"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":"chatgpt","analystVisible":false}`,
+`{"version":1,"window":{"x","y","width","height","maximized"},"zoom":{"claude":1,"chatgpt":1,"grok":1},"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":"chatgpt","analystVisible":false,"theme":"dark"}`,
 `chats.json` `{"<convId>":{"claude":"https://claude.ai/chat/…","chatgpt":"…","grok":"…"}}` (a link is stored, loaded or navigated only when it is an https URL on `sites[slot].hosts` — plain http only on a loopback host, i.e. the fake site; anything else is dropped with a warning and `views.loadUrl` refuses it with code `navigation`, since `loadURL` bypasses `will-navigate`),
 `selectors.json`, `snapshots/`, `logs/backend.log`, `Partitions/`. Renderer `localStorage`:
-`triplex.panes.mode|active|targets|drawerOpen`, `triplex.desktop.analyst`.
+`triplex.panes.mode|active|targets|drawerOpen`, `triplex.desktop.analyst`, `triplex.theme` (a FIRST-PAINT MIRROR only — `settings.json.theme` in main is authoritative; the renderer applies what `getInfo()`/`onTheme` reports and only proposes changes through `setTheme`).
 
 `desktop/package.json`: `{"name":"triplex-desktop","private":true,"version":"0.1.0","type":"module","main":"main/main.js","scripts":{"start":"electron .","test":"node --test 'test/unit/**/*.test.js'","test:adapters":"playwright test --project adapters","test:app":"TRIPLEX_E2E_APP=1 playwright test --project app"},"devDependencies":{"electron":"^44.4.1","@playwright/test":"^1.63.0"},"overrides":{"@electron-internal/extract-zip":">=1.0.4"}}`.
 Worktree agents run `cd desktop && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci`; only the

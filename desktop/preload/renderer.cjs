@@ -28,6 +28,9 @@
 //   invoke 'panes:setAnalyst'   (slot|null)              choose the hidden analyst page's login (null = none)
 //   invoke 'panes:showAnalyst'  (visible:boolean)        reveal / hide the analyst view as a fourth tab
 //   on     'panes:analyst'      cb({slot, visible, health})
+//   Theme:
+//   invoke 'panes:setTheme'     ('light'|'dark'|'system')  persists settings.theme + nativeTheme → {theme}
+//   on     'panes:theme'        cb({theme})               replayed like health/zoom/bridge
 //
 // Main validates every payload and rejects violations with Error('bad_request').
 
@@ -81,6 +84,9 @@ const api = Object.freeze({
   setAnalyst: (slot) => ipcRenderer.invoke('panes:setAnalyst', slot),
   showAnalyst: (visible) => ipcRenderer.invoke('panes:showAnalyst', visible),
   onAnalyst: subscribe('panes:analyst'),
+  // Theme (settings.json is authoritative; the renderer mirrors it into localStorage for the first paint):
+  setTheme: (theme) => ipcRenderer.invoke('panes:setTheme', theme),
+  onTheme: subscribe('panes:theme'),
 })
 
 contextBridge.exposeInMainWorld('triplex', api)

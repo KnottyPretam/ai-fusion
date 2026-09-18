@@ -29,11 +29,19 @@
 // `panes:health` chip and never in the slot-keyed bridge `health` frame, both of which describe
 // the PANE. `panes:layout` carries its rect under the `analyst` key.
 //
+// Theme: `panes:setTheme('light'|'dark'|'system')` persists settings.theme, applies it to
+// `nativeTheme.themeSource` through the injected `applyTheme` (so the three SITE pages switch to
+// their own dark themes — Triplex never injects CSS into a page it does not own) and answers the
+// renderer with `panes:theme {theme}`. settings.json is the ONE source of truth: `panes:getInfo`
+// carries `theme` and `panes:theme` is replayed with health / zoom / bridge / analyst, so a change
+// made anywhere (the deck button, the menu, another window) reaches the renderer.
+//
 // No electron import: `ipcMain`, the view managers, settings, chats, `fs` and the timers are injected.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SLOTS, publicSites } from './sites.js'
+import { THEMES, DEFAULT_THEME } from './settings.js'
 import { normalizeLayout } from './layout.js'
 import { isExternalUrl } from './policy.js'
 
@@ -82,6 +90,12 @@ export function requireBoolean(v) {
 export function requireAnalystChoice(slot) {
   if (slot === null || slot === undefined) return null
   return requireSlot(slot)
+}
+
+/** The theme for `panes:setTheme`: 'light' | 'dark' | 'system'. */
+export function requireTheme(theme) {
+  if (typeof theme !== 'string' || !THEMES.includes(theme)) throw badRequest()
+  return theme
 }
 
 /** A conversation id for `panes:openChats`: null, or a non-empty string ≤ 200 chars. */
@@ -146,7 +160,8 @@ export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = 
  *   layoutState         mutable {mode, active} shared with shortcuts (updated from 'panes:active')
  *   orchestrator        {inflight(slot)} (Stage 2: `run` is driven by the bridge client, not IPC)
  *   selectors           {current, reload, lastError}
- *   settings            {getCapture, setCapture}
+ *   settings            {getCapture, setCapture, getTheme, setTheme}
+ *   applyTheme(theme)   nativeTheme.themeSource = theme (main owns the electron import)
  *   chats               {get(convId, slot)}
  *   sites               the resolved site table
  *   version, dev        for 'panes:getInfo' / 'adapter:config'
@@ -167,6 +182,7 @@ export function registerIpc({
   orchestrator = null,
   selectors,
   settings = null,
+  applyTheme = null,
   chats = null,
   sites,
   version,
@@ -210,7 +226,10 @@ export function registerIpc({
     }
   }
 
-  /** Cached health + zoom of every view and the bridge state, re-sent to the renderer. */
+  /** settings.theme, or the default when this launch has no settings object (tests, Stage 1 wiring). */
+  const currentTheme = () => (settings && typeof settings.getTheme === 'function' ? settings.getTheme() : DEFAULT_THEME)
+
+  /** Cached health + zoom of every view, the bridge state, the analyst state and the theme, re-sent to the renderer. */
   const replayState = () => {
     if (typeof views.slots === 'function') {
       for (const slot of views.slots()) {
@@ -229,6 +248,7 @@ export function registerIpc({
       if (b && typeof b.connected === 'boolean') emit('panes:bridge', publicBridgeState(b))
     }
     if (analystViews && typeof analystViews.state === 'function') emit('panes:analyst', analystViews.state())
+    emit('panes:theme', { theme: currentTheme() })
   }
 
   const inflight = (slot) => !!(orchestrator && typeof orchestrator.inflight === 'function' && orchestrator.inflight(slot))
@@ -306,7 +326,7 @@ export function registerIpc({
       const b = getBackend()
       if (b && typeof b.url === 'string' && Number.isInteger(b.port)) backend = { port: b.port, url: b.url }
     }
-    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend, layout }
+    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend, layout, theme: currentTheme() }
   })
 
   on('panes:layout', (event, layout) => {
@@ -421,6 +441,18 @@ export function registerIpc({
     requireBoolean(visible)
     if (!analystViews || typeof analystViews.setVisible !== 'function') throw new Error('analyst_unavailable')
     analystViews.setVisible(visible)
+  })
+
+  // --- theme ------------------------------------------------------------------------------------
+  handle('panes:setTheme', async (event, theme) => {
+    requireRenderer(event)
+    requireTheme(theme)
+    if (!settings || typeof settings.setTheme !== 'function') throw new Error('theme_unavailable')
+    const next = settings.setTheme(theme)
+    // The renderer paints its own palette; the SITE pages follow nativeTheme (their own dark modes).
+    if (typeof applyTheme === 'function') applyTheme(next)
+    emit('panes:theme', { theme: next })
+    return { theme: next }
   })
 
   // --- site preload → main ---------------------------------------------------------------------

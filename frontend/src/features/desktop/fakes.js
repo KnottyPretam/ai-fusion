@@ -2,7 +2,8 @@
 //
 // fakeTriplex()  — the `window.triplex` surface of desktop/preload/renderer.cjs (contract §2,
 //                  Stage 1 + Stage 2: getCapture/setCapture/onBridge/onTurn/openChats/signOut/
-//                  saveDomSnapshot; `sendPrompt` is gone; Stage 3: setAnalyst/showAnalyst/onAnalyst)
+//                  saveDomSnapshot; `sendPrompt` is gone; Stage 3: setAnalyst/showAnalyst/onAnalyst;
+//                  Theme: setTheme/onTheme)
 //                  with vi.fn() methods; `emit.health(slot, h)`
 //                  / `emit.shortcut(name)` / `emit.zoom({slot, factor})` / `emit.bridge({connected})`
 //                  / `emit.turn({slot, phase})` / `emit.analyst({slot, visible, health})` drive the
@@ -24,7 +25,7 @@ export const RECTS = {
   grok: { x: 1000, y: 40, width: 500, height: 600 },
 }
 
-export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst']
+export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst', 'theme']
 
 /** A rect for the analyst viewport (tests pass `{...RECTS, analyst: ANALYST_RECT}` to pinViewportRects). */
 export const ANALYST_RECT = { x: 1500, y: 40, width: 400, height: 600 }
@@ -72,6 +73,9 @@ export function fakeTriplex(over = {}) {
     setAnalyst: vi.fn(async () => {}),
     showAnalyst: vi.fn(async () => {}),
     onAnalyst: subscribe('analyst'),
+    // Theme (main's settings.json is authoritative; getInfo carries it, onTheme announces changes)
+    setTheme: vi.fn(async (theme) => ({ theme })),
+    onTheme: subscribe('theme'),
     ...over,
   }
   api.listeners = listeners
@@ -94,6 +98,9 @@ export function fakeTriplex(over = {}) {
     },
     analyst: (msg) => {
       for (const cb of [...listeners.analyst]) cb(msg)
+    },
+    theme: (msg) => {
+      for (const cb of [...listeners.theme]) cb(msg)
     },
   }
   return api

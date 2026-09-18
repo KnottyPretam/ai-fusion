@@ -619,6 +619,18 @@ async function probe() {
   await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'chatgpt'))
   probes.analystViewsAfterRestore = views.length - viewsBeforeAnalyst
 
+  // --- theme: settings.json is the source, nativeTheme follows, the renderer is told ----------
+  probes.themeAtStart = report.themeSource
+  probes.themeInGetInfo = (await settle(ipcMain.invoke('panes:getInfo', renderer))).value.theme
+  const themeSentBefore = win.webContents.sent.filter(([c]) => c === 'panes:theme').length
+  probes.setTheme = await settle(ipcMain.invoke('panes:setTheme', renderer, 'light'))
+  probes.themeAfterSet = report.themeSource
+  probes.themeSentToRenderer = win.webContents.sent.filter(([c]) => c === 'panes:theme').slice(themeSentBefore).map(([, m]) => m)
+  probes.setThemeBad = await settle(ipcMain.invoke('panes:setTheme', renderer, 'chartreuse'))
+  probes.setThemeForeign = await settle(ipcMain.invoke('panes:setTheme', mainFrameEvent(views[0].webContents), 'dark'))
+  probes.themeAfterBad = report.themeSource
+  probes.themeSettings = t && t.settings ? t.settings.get().theme : null
+
   // a socket drop → banner state to the renderer; the client schedules a reconnect (a new socket)
   if (ws) ws.close(1006, '')
   await sleep(10)

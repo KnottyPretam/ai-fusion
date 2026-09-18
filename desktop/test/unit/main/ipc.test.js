@@ -5,18 +5,20 @@
 // forwarding, the cached health + zoom + bridge state (with its error text) replayed after
 // panes:getInfo, getInfo.backend; the Stage 3 channels (panes:setAnalyst / panes:showAnalyst —
 // sender + payload validation) and the analyst view's own seam (adapter:config, health → the
-// analyst state and never the pane's chip, the `analyst` layout rect, panes:analyst replayed).
+// analyst state and never the pane's chip, the `analyst` layout rect, panes:analyst replayed);
+// panes:setTheme (validated, persisted in settings.json, applied to nativeTheme through the
+// injected applyTheme, answered + replayed as panes:theme, carried by getInfo).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 
-function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false } = {}) {
+function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
   const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
@@ -64,6 +66,8 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
   }
   const selectors = { current: () => ({ version: 1, chatgpt: { composer: ['#x'] }, claude: {}, grok: {} }), reload: () => calls.push(['selectors.reload']), lastError: () => null }
   const capture = { claude: false, chatgpt: false, grok: false }
+  const themeState = { value: theme }
+  const themeApplied = []
   const settings = {
     getCapture: () => ({ ...capture }),
     setCapture: (s, on) => {
@@ -71,6 +75,17 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
       calls.push(['setCapture', s, on])
       return on
     },
+    // main's settings.json is the one source of truth for the theme (settings.js getTheme/setTheme)
+    ...(noThemeSettings
+      ? {}
+      : {
+          getTheme: () => themeState.value,
+          setTheme: (t) => {
+            themeState.value = t
+            calls.push(['setTheme', t])
+            return t
+          },
+        }),
   }
   const analystWc = fakeWebContents({ id: 21 })
   // A stand-in for analyst-views.js: one hidden view on the chosen slot's partition.
@@ -117,6 +132,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     getBackend: () => backend,
     getBridgeState: () => bridge,
     snapshotsDir,
+    applyTheme: (t) => themeApplied.push(t), // main's nativeTheme.themeSource setter
     openExternal: async (u) => opened.push(u),
     sendToRenderer: (channel, ...args) => sent.push([channel, ...args]),
     now: () => 1710000000000,
@@ -124,7 +140,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     ...(timers ? { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout } : {}),
   })
   const fromRenderer = eventFrom(renderer)
-  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current }
+  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current, themeState, themeApplied }
 }
 
 const rejects = (p, re = /bad_request/) => assert.rejects(p, re)
@@ -150,6 +166,8 @@ test('validators: unknown slot, non-string / oversize text, bad targets, bad dir
   assert.equal(requireConvId(CONV), CONV)
   assert.equal(requireConvId('x'.repeat(MAX_CONV_ID_CHARS)).length, MAX_CONV_ID_CHARS)
   for (const bad of ['', 42, {}, [], 'x'.repeat(MAX_CONV_ID_CHARS + 1)]) assert.throws(() => requireConvId(bad), /bad_request/)
+  for (const t of ['light', 'dark', 'system']) assert.equal(requireTheme(t), t)
+  for (const bad of ['Dark', 'auto', '', null, undefined, 1, ['dark'], { theme: 'dark' }]) assert.throws(() => requireTheme(bad), /bad_request/)
   assert.equal(snapshotFileName('grok', 1710000000000.4), 'grok-1710000000000.html')
   assert.throws(() => snapshotFileName('bing', 1), /bad_request/)
 })
@@ -171,6 +189,7 @@ test('every renderer channel rejects bad_request for a non-renderer sender (a si
     await rejects(ipcMain.invoke('panes:openChats', ev, null))
     await rejects(ipcMain.invoke('panes:signOut', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:snapshot', ev, 'claude'))
+    await rejects(ipcMain.invoke('panes:setTheme', ev, 'light'))
   }
   const stage3 = setup({ withAnalyst: true })
   for (const ev of [eventFrom(stage3.siteWc.claude), { sender: stage3.renderer, senderFrame: { parent: {} } }, { sender: null }, undefined]) {
@@ -219,6 +238,7 @@ test('panes:getInfo reports version, dev, public sites, the layout once known an
   assert.equal(info.dev, true)
   assert.equal(info.backend, null)
   assert.equal(info.layout, null)
+  assert.equal(info.theme, 'dark', 'settings.json is what the renderer paints from')
   assert.deepEqual(Object.keys(info.sites), ['claude', 'chatgpt', 'grok'])
   assert.deepEqual(info.sites.claude, { url: 'http://127.0.0.1:5199/?site=claude', newChatUrl: 'http://127.0.0.1:5199/?site=claude', partition: 'persist:claude' })
   assert.equal('hosts' in info.sites.claude, false)
@@ -246,6 +266,7 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
     ['panes:health', 'grok', h],
     ['panes:zoom', { slot: 'grok', factor: 1 }],
     ['panes:bridge', { connected: true, since: 1710000000000 }],
+    ['panes:theme', { theme: 'dark' }],
   ])
   sent.length = 0
   await rejects(ipcMain.invoke('panes:getInfo', eventFrom(siteWc.claude)))
@@ -254,7 +275,7 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
   delete views.getHealth
   delete views.zoomFactor
   assert.equal((await ipcMain.invoke('panes:getInfo', fromRenderer)).dev, true)
-  assert.deepEqual(sent, [['panes:bridge', { connected: true, since: 1710000000000 }]])
+  assert.deepEqual(sent, [['panes:bridge', { connected: true, since: 1710000000000 }], ['panes:theme', { theme: 'dark' }]])
   const off = setup({ bridge: { connected: false } })
   await off.ipcMain.invoke('panes:getInfo', off.fromRenderer)
   assert.deepEqual(off.sent.filter(([c]) => c === 'panes:bridge'), [['panes:bridge', { connected: false }]])
@@ -530,5 +551,40 @@ test('panes:getInfo replays panes:analyst after the bridge state', async () => {
   assert.deepEqual(sent, [
     ['panes:bridge', { connected: false }],
     ['panes:analyst', { slot: 'chatgpt', visible: true, health: { session: 'ok' } }],
+    ['panes:theme', { theme: 'dark' }],
   ])
+})
+
+test('panes:setTheme persists the choice, applies nativeTheme and answers the renderer with panes:theme', async () => {
+  const { ipcMain, fromRenderer, sent, calls, themeState, themeApplied } = setup({ theme: 'dark' })
+  assert.deepEqual(await ipcMain.invoke('panes:setTheme', fromRenderer, 'light'), { theme: 'light' })
+  assert.equal(themeState.value, 'light', 'settings.json holds the choice')
+  assert.deepEqual(themeApplied, ['light'], 'the SITE pages follow through nativeTheme.themeSource')
+  assert.deepEqual(calls.filter(([c]) => c === 'setTheme'), [['setTheme', 'light']])
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:theme'), [['panes:theme', { theme: 'light' }]])
+  // every choice, in the button's cycle order
+  await ipcMain.invoke('panes:setTheme', fromRenderer, 'system')
+  await ipcMain.invoke('panes:setTheme', fromRenderer, 'dark')
+  assert.deepEqual(themeApplied, ['light', 'system', 'dark'])
+  assert.equal((await ipcMain.invoke('panes:getInfo', fromRenderer)).theme, 'dark')
+})
+
+test('panes:setTheme rejects anything that is not one of the three, and persists/applies nothing', async () => {
+  const { ipcMain, fromRenderer, themeState, themeApplied, sent } = setup({ theme: 'dark' })
+  for (const bad of ['Dark', 'auto', '', null, undefined, 1, ['light'], { theme: 'light' }]) {
+    await rejects(ipcMain.invoke('panes:setTheme', fromRenderer, bad))
+  }
+  assert.equal(themeState.value, 'dark')
+  assert.deepEqual(themeApplied, [])
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:theme'), [])
+})
+
+test('panes:setTheme without a settings object is theme_unavailable; getInfo and the replay fall back to the default', async () => {
+  const { ipcMain, fromRenderer, views, sent, themeApplied } = setup({ noThemeSettings: true, bridge: { connected: false } })
+  views.slots = () => []
+  await assert.rejects(ipcMain.invoke('panes:setTheme', fromRenderer, 'light'), /theme_unavailable/)
+  assert.deepEqual(themeApplied, [])
+  const info = await ipcMain.invoke('panes:getInfo', fromRenderer)
+  assert.equal(info.theme, 'dark')
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:theme'), [['panes:theme', { theme: 'dark' }]])
 })
