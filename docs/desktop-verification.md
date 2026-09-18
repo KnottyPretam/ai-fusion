@@ -41,6 +41,7 @@ text), so the table is the history of what was seen on which day.
 | 26. Analyst unset → Analyze disabled with the hint; a pre-pivot conversation (OpenRouter models) → Send yields `transport_disabled`, nothing reaches OpenRouter. | S7 | | | | | | |
 | 27. Rate-limit / "Unusual activity" observed? → recorded; no automatic retry happened. | S7 | | | | | | |
 | 28. Read stop/done selectors for claude.ai and grok.com from devtools; record them. | S7 | 2026-09-17 | chatgpt | pass | stop `button[data-testid='stop-button']` (aria-label "Stop answering"), done `copy-turn-action-button`, assistant `[data-message-author-role='assistant']`, text `.markdown` (`.whitespace-pre-wrap` no longer matches, kept as a free fallback; `.prose` also matches) | — | measured live with a one-prompt probe; claude and grok stop/done selectors still to read |
+| 28. (claude, grok) | S7 | 2026-09-17 | claude, grok | pass | claude `.font-claude-response:not(#markdown-artifact)` + innerText (`.prose` holds the body); grok `div[id^='response-']` + `.response-content-markdown` | — | read-only from settled chats, no prompts sent. NO false `stop` match on either settled page (the failure mode that freezes a capture). Streaming-state selectors NOT verified (needs a live reply); claude's `action-bar-copy` is a candidate `done` marker, deliberately not adopted while the current cascade works |
 
 ## How to record
 

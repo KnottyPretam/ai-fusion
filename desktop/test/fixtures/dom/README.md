@@ -108,3 +108,24 @@ that does not work. The fake site replays it with `?webUrlMs`.
    row above saying what was measured and when.
 4. Run `node --test 'test/unit/**/*.test.js'`. The lint and the shape test refuse anything that
    still carries identity or an attribute outside the allow-list.
+
+## claude.ai and grok.com — verified live 2026-09-17 (read-only, settled chats, no prompts sent)
+
+Read from the user's own completed chats with a logged-in probe, so these are facts, not research:
+
+| | claude.ai | grok.com |
+|---|---|---|
+| `assistant` | `.font-claude-response:not(#markdown-artifact)` matched (1 container) | `div[id^='response-']` matched (2 containers) |
+| reply text | container `innerText` 2754 chars; `.prose` holds 2717 of them (our `assistantText` is empty, so the innerText fallback is what runs — it works) | `.response-content-markdown` 5588 chars, our first entry — exact |
+| `stop` | **no match on a settled page**, and no visible button whose testid/aria mentions "stop" | **no match on a settled page**, same |
+| `done` | our cascade is empty; the page does carry `button[data-testid='action-bar-copy']` (aria "Copy") next to thumbs-up/down and Retry | our cascade is empty; the copy controls carry aria only ("Copy", "Copy response", "Regenerate"), no testid |
+
+The `stop` result is the load-bearing one: a FALSE POSITIVE there is what freezes a capture (the sample
+keeps saying "still replying" and the budget is the only way out), and neither site produces one.
+Both sites captured successfully in live runs (claude 2880 and 3489 chars, grok 7068), so the
+stop-gone / quiet path demonstrably ends their captures.
+
+NOT verified, deliberately: what either page looks like WHILE streaming — that needs a prompt sent
+into the user's own account. `claude`'s `action-bar-copy` is therefore a CANDIDATE `done` marker, not
+an adopted one: if that action bar is also present during streaming it would end a capture early, and
+the current cascade already works. Adopt it only after watching one live reply.
