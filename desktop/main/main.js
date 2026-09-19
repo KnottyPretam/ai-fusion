@@ -92,7 +92,12 @@ function fail(code, message) {
   return false
 }
 
-if (env.TRIPLEX_USER_DATA_DIR) app.setPath('userData', path.resolve(env.TRIPLEX_USER_DATA_DIR))
+// The profile FIRST, then the name. On Linux `app.getName()` is both the WM_CLASS the dock labels
+// the window with AND the default userData directory — which holds the three logged-in sessions.
+// Pinning the resolved path before renaming means the taskbar can say "Solomon's Judgment" while
+// the profile stays exactly where it is (~/.config/triplex-desktop), signed in.
+app.setPath('userData', env.TRIPLEX_USER_DATA_DIR ? path.resolve(env.TRIPLEX_USER_DATA_DIR) : app.getPath('userData'))
+app.setName(APP_TITLE)
 
 /** {port, url} of the backend this launch talks to (attached or spawned); set in start(). */
 let backendInfo = null

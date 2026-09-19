@@ -355,7 +355,7 @@ def html_headings(text: str) -> list[tuple[int, str]]:
     """Heading TEXT, unescaped, so it compares like-for-like with `md_headings`.
 
     The HTML builder escapes every value, so a title holding an apostrophe, `&` or `<` reaches the
-    markup as an entity (`Solomon&#x27;s Judgement`). Comparing the two renderings is a comparison of
+    markup as an entity (`Solomon&#x27;s Judgment`). Comparing the two renderings is a comparison of
     what a reader sees, not of the bytes; that the escaping happens at all is `test_escaping.py`.
     """
     return [(int(m.group(1)), unescape(m.group(2)).strip()) for m in _HTML_HEADING_RE.finditer(text)]

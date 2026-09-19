@@ -1,6 +1,6 @@
-# CLAUDE.md - Technical Notes for Solomon's Judgement (codename Triplex)
+# CLAUDE.md - Technical Notes for Solomon's Judgment (codename Triplex)
 
-**Naming (2026-09-19).** The product is **Solomon's Judgement**; `triplex` remains the codename
+**Naming (2026-09-19).** The product is **Solomon's Judgment**; `triplex` remains the codename
 throughout the code and this document. Renaming stopped at what a user reads — window title,
 menu, sidebar brand, page title, exported document titles, the copy in the panes — and the string
 lives in exactly three places: `desktop/main/branding.js` (`APP_TITLE`), `frontend/src/branding.js`

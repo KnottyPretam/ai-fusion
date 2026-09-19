@@ -16,5 +16,22 @@ cp icon-256.png ../../frontend/public/icon-256.png
 from `frontend/index.html` (Vite rewrites the path under `VITE_BASE=/app/`).
 
 The artwork is a generated emblem: Solomon on the throne between two machines, the name around the
-rim. It came from the user on 2026-09-19; the second version, which spells "Judgement" the way the
+rim. It came from the user on 2026-09-19; the second version, which spells "Judgment" the way the
 app does.
+
+## Dock / taskbar name
+
+X11 takes the window-list label from `WM_CLASS`, which Electron 44 derives from `package.json`'s
+`name` — `triplex-desktop`. Neither `app.setName()` nor Chromium's `--class` switch changes it
+(both measured 2026-09-19), and the `name` itself must not change: Electron builds the userData path
+from it, so renaming the package would point the app at an empty profile and sign the user out of
+all three sites.
+
+The supported fix is a desktop entry, which maps that WM_CLASS to a display name and this icon:
+
+```sh
+cp desktop/solomons-judgment.desktop ~/.local/share/applications/
+update-desktop-database ~/.local/share/applications 2>/dev/null || true
+```
+
+`Exec` and `Icon` in that file are absolute paths into this checkout; edit them if the repo moves.

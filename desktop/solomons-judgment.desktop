@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Solomon's Judgment
+Comment=Three model subscriptions in one window, with Analyze and Fusion over their answers
+Exec=/home/pretam/dev/ai-fusion/scripts/desktop.sh
+Icon=/home/pretam/dev/ai-fusion/desktop/assets/icon.png
+Terminal=false
+Categories=Development;
+StartupWMClass=triplex-desktop

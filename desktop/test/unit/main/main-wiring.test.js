@@ -108,6 +108,17 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // the application menu: the accelerator table + the Site menu
   assert.ok(report.menu)
   assert.deepEqual(report.menu.labels, [APP_TITLE, 'Panes', 'Site', 'Edit'])
+
+  // The product name is taken, and the window carries it and the icon.
+  assert.equal(report.appName, APP_TITLE)
+  // ORDER IS THE POINT: Electron derives the default userData path from app.getName(), so the
+  // profile that holds the three logged-in sessions must be pinned BEFORE the app is renamed.
+  // Reverse these two and the app comes up on an empty profile, signed out of all three sites.
+  const pinned = report.order.indexOf('setPath:userData')
+  const named = report.order.indexOf('setName')
+  assert.ok(pinned !== -1 && named !== -1, `both calls happened: ${report.order.join(', ')}`)
+  assert.ok(pinned < named, `userData is pinned before the rename (${report.order.join(', ')})`)
+  assert.equal(report.paths.userData, userData, 'and it is the directory that was asked for')
   for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
   }

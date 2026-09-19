@@ -1,6 +1,6 @@
 // desktop/main/branding.js — the product name and the window/taskbar icon, in ONE place.
 //
-// The app is called "Solomon's Judgement": three models answer, their claims are weighed as R1/R2/R3,
+// The app is called "Solomon's Judgment": three models answer, their claims are weighed as R1/R2/R3,
 // and a disagreement that will not resolve is reported standing rather than split down the middle.
 //
 // Renaming stopped at what a user reads. Every INTERNAL identifier keeps the `triplex` codename on
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
 /** The product name: window title, menu, and the `APP_TITLE` handed to the backend. */
-export const APP_TITLE = "Solomon's Judgement"
+export const APP_TITLE = "Solomon's Judgment"
 
 /** Where the generated PNGs live (`assets/icon-<px>.png`, plus `icon.png` = the 512). */
 export const ASSETS_DIR = path.join(HERE, '..', 'assets')

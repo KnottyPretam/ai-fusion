@@ -28,6 +28,8 @@ if (!process.env.TRIPLEX_BACKEND_URL) process.env.TRIPLEX_BACKEND_URL = 'http://
 if (!process.env.BRIDGE_TOKEN) process.env.BRIDGE_TOKEN = 'wiring'
 
 const report = {
+  /** Ordered record of the calls whose SEQUENCE matters (setPath / setName). */
+  order: [],
   paths: {},
   dialogSaveCalls: 0,
   switches: [],
@@ -392,8 +394,16 @@ app.commandLine = {
 app.setPath = (key, value) => {
   paths[key] = value
   report.paths[key] = value
+  report.order.push(`setPath:${key}`)
 }
 app.getPath = (key) => paths[key]
+// The product name. Recorded WITH the ordering, because taking the name before the profile is
+// pinned is what would move userData and sign the user out of all three sites.
+app.setName = (value) => {
+  report.appName = value
+  report.order.push('setName')
+}
+app.getName = () => report.appName || 'triplex-desktop'
 app.disableHardwareAcceleration = () => {
   report.hwAccelDisabled = true
 }
