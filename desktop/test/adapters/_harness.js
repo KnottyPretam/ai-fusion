@@ -84,8 +84,10 @@ export function installFakeIpc({ site, selectors, dev }) {
  * Open a fake-site page with the fake IPC + site.cjs installed. `site` is the page's look-alike;
  * `ipcSite` what adapter:config answers (null = inert). The fake site's own query keys are passed
  * through: state, thread, sendDelayMs, composer (grok only), and Stage 2 replyMs / reply / nostop /
- * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json`, `rich` or, from S7, `fidelity` —
- * all RENDERED as markdown with real code-block chrome), plus the S7-review lifecycle keys
+ * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json`, `rich`, `fidelity` from S7 or
+ * `openfence` from S9 — all RENDERED as markdown with real code-block chrome), the S9 keys
+ * codeCopyDone / lullMs / stopBlinkMs (the code block's copy control carrying the TURN marker's
+ * testid, one pause in the stream, a stop button that blinks out mid-stream), plus the S7-review lifecycle keys
  * remountMs / placeholderMs / webUrlMs (the measured chatgpt placeholder-then-remount turn and its
  * placeholder `/c/WEB:<uuid>` url) and the S8 key `thinking` (claude's thinking-widget turn shape,
  * whose summary line is in the DOM twice). `path` picks the page path (the SPA fallback serves
@@ -96,7 +98,7 @@ export async function open(page, opts = {}) {
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking']
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -126,8 +128,13 @@ export const replyState = (page) =>
     placeholderGoneAt: window.__fake.placeholderGoneAt,
     remountedAt: window.__fake.remountedAt,
     stopEvents: window.__fake.stopEvents,
+    lullAt: window.__fake.lullAt,
+    lullEndAt: window.__fake.lullEndAt,
+    stopBlinkAt: window.__fake.stopBlinkAt,
+    stopBlinkEndAt: window.__fake.stopBlinkEndAt,
     urls: window.__fake.urls,
     replyText: window.__fake.replyText(),
+    replySource: window.__fake.replySource(),
   }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
 export const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)

@@ -30,6 +30,11 @@
  * grok's <code>, so the header is the only clue there) — instead of being dropped into the container as
  * text. A streaming PREFIX is re-rendered the same way, so an unterminated fence shows as an open code
  * block. The echo (?replyMs alone) stays plain text in a pre-wrap container, byte for byte.
+ *   ?reply=openfence (S9) CANNED_OPEN_FENCE: a reply that ENDS inside a code block — its last fence is
+ *                    never closed, so the page shows an open code block when the model stops. The
+ *                    capture must still end normally (a markdown re-render always closes the block it
+ *                    opens, which is why the captured text's fence count carries no "is it finished?"
+ *                    information — see the S9 note below)
  *   ?nostop=1        no stop button while streaming (the adapter's quiet detection)
  *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt)
  *   ?blockAfterMs=N  N ms after a submit the "Unusual activity" alert appears and the reply freezes
@@ -38,6 +43,24 @@
  *                    (chatgpt's copy button) and the stop button dropped (every site) while the text keeps
  *                    re-rendering — a capture that resolves on the first end signal reads a pre-final text
  *                    (window.__fake.doneSignalAt < lastRenderAt, rendersAfterSignal > 0)
+ *
+ * S9 — the fenced-reply capture defect, MEASURED live on 2026-09-18 (docs: the site.cjs header,
+ * test/fixtures/dom/README.md). A real Analyze degraded twice on captures that were FRAGMENTS of a
+ * reply still being typed: "```JSON\n{\n```" (13 characters) and `{"agre` (6). The analyst prompt asks
+ * a web session for a ```json fence, so chatgpt opens a code block at the first character — and the
+ * block carries its own copy control. Two options replay the two halves of that:
+ *   ?codeCopyDone=1  chatgpt: the code block's copy button ALSO carries data-testid=
+ *                    "copy-turn-action-button" — the turn marker's testid — as soon as the block
+ *                    opens. It is a hypothesis about the live markup (the code-block button is
+ *                    unverified, test/fixtures/dom/README.md), and the RULE it pins does not depend
+ *                    on it: a done match inside the message body is never the end of the turn.
+ *   ?stopBlinkMs=N   the stop button vanishes for N ms mid-stream and comes back (a re-render, an
+ *                    animated swap, one frame missed) while the text keeps streaming: a capture that
+ *                    LATCHES "stop button seen then gone" ends on the fragment it had.
+ *   ?lullMs=N        one pause of N ms in the stream, after LULL_AT of the reply has rendered — the
+ *                    ordinary gap between two token batches, and what lets a premature end signal
+ *                    resolve. Composes with both options above (the blink starts at the same point).
+ *
  *   ?twoTurns=1      the reply is TWO assistant containers: a first "tool" container (a fixed
  *                    'Searching the web…', marked done at once — chatgpt gets its copy button — while the
  *                    stop button stays up) and, TWO_TURNS_LAG_MS later, the answer container streaming as
@@ -151,6 +174,8 @@
   const REWIND_FACTOR = 0.6
   /** ?twoTurns=1: the answer container follows the tool container after this many ms. */
   const TWO_TURNS_LAG_MS = 300
+  /** ?lullMs / ?stopBlinkMs (S9): the fraction of the reply that is on the page when the stream pauses. */
+  const LULL_AT = 0.35
   const TOOL_TEXT = 'Searching the web…'
   /**
    * ?remountMs: the placeholder turn chatgpt.com mounts before it unmounts everything (measured
@@ -233,6 +258,21 @@
     '```',
   ].join('\n')
 
+  /**
+   * Canned markdown for ?reply=openfence (S9): a reply that STOPS inside a code block — the opening
+   * fence is there, the closing one never arrives. The page renders an open code block, and a
+   * markdown re-render of that DOM closes it again, so the captured text holds TWO fence markers
+   * where the reply held one. That is why "an odd number of fence markers means the reply is still
+   * streaming" is not a usable rule on a captured text (and why a rule built on it would hang here).
+   */
+  const CANNED_OPEN_FENCE = [
+    'Here is the extraction:',
+    '',
+    '```json',
+    '{"agreements": [{"topic": "Upper gyroscope range", "models": ["R1", "R3"]}],',
+    ' "divergences": []',
+  ].join('\n')
+
   const params = new URLSearchParams(location.search)
   const site = Object.prototype.hasOwnProperty.call(SITES, params.get('site')) ? params.get('site') : 'chatgpt'
   const cfg = SITES[site]
@@ -246,8 +286,13 @@
   const replyOpts = {
     enabled: params.has('replyMs') || params.has('reply'),
     ms: Math.max(0, Number(params.get('replyMs')) || 0),
-    kind: ['json', 'rich', 'fidelity'].includes(params.get('reply')) ? params.get('reply') : 'echo',
+    kind: ['json', 'rich', 'fidelity', 'openfence'].includes(params.get('reply')) ? params.get('reply') : 'echo',
     nostop: params.get('nostop') === '1',
+    // S9: the code block's own copy control carries the turn marker's testid (chatgpt only)
+    codeCopyDone: params.get('codeCopyDone') === '1' && site === 'chatgpt',
+    // S9: one pause in the stream, and a stop button that blinks out mid-stream and comes back
+    lullMs: params.has('lullMs') ? Math.max(0, Number(params.get('lullMs')) || 0) : null,
+    stopBlinkMs: params.has('stopBlinkMs') ? Math.max(0, Number(params.get('stopBlinkMs')) || 0) : null,
     nodone: params.get('nodone') === '1',
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
     doneLagMs: params.has('doneLagMs') ? Math.max(0, Number(params.get('doneLagMs')) || 0) : null,
@@ -294,6 +339,11 @@
     doneSignalAt: null,
     lastRenderAt: null,
     rendersAfterSignal: 0,
+    /** S9: when the one stream pause (?lullMs) began and ended, and the stop-button blink (?stopBlinkMs). */
+    lullAt: null,
+    lullEndAt: null,
+    stopBlinkAt: null,
+    stopBlinkEndAt: null,
     // ?remountMs: the placeholder turn's text and the three moments of the measured lifecycle
     placeholderText: replyOpts.remountMs === null ? null : PLACEHOLDER_TEXT,
     placeholderAt: null,
@@ -454,6 +504,7 @@
 
   function replyFor(text) {
     if (replyOpts.kind === 'fidelity') return CANNED_FIDELITY
+    if (replyOpts.kind === 'openfence') return CANNED_OPEN_FENCE
     if (replyOpts.kind === 'rich') return CANNED_RICH
     if (replyOpts.kind === 'json') {
       const canned = cannedFor(text)
@@ -598,7 +649,8 @@
       const sticky = el('div', 'code-sticky')
       const copy = document.createElement('button')
       copy.type = 'button'
-      copy.setAttribute('data-testid', 'copy-code-button')
+      // ?codeCopyDone=1 (S9): the same testid the TURN's copy button carries, mounted with the block
+      copy.setAttribute('data-testid', replyOpts.codeCopyDone ? 'copy-turn-action-button' : 'copy-code-button')
       copy.setAttribute('aria-label', 'Copy code')
       copy.textContent = 'Copy code'
       sticky.appendChild(copy)
@@ -920,6 +972,23 @@
     if (!replyOpts.nostop) actions.streaming(true)
     const t0 = Date.now()
     let ticks = 0
+    let paused = 0 // ?lullMs: the stream's own clock stops during the pause, so the rest still streams
+    let lullDone = false
+    let blinkDone = false
+    /**
+     * ?stopBlinkMs (S9): the stop button vanishes for a beat mid-stream and comes back — a re-render,
+     * an animated swap, one frame missed. The text keeps streaming the whole time, so a capture that
+     * LATCHES "stop button seen then gone" on that one sample ends on a fragment.
+     */
+    const blinkStop = () => {
+      if (replyOpts.nostop) return
+      fake.stopBlinkAt = Date.now()
+      actions.streaming(false)
+      setTimeout(() => {
+        fake.stopBlinkEndAt = Date.now()
+        if (fake.replying) actions.streaming(true)
+      }, replyOpts.stopBlinkMs)
+    }
     /** The end signal — the done marker (chatgpt) mounted, the stop button gone — once; under ?doneLagMs it lands BEFORE the last render. */
     const signalEnd = () => {
       if (reply.ended) return
@@ -935,7 +1004,7 @@
       fake.done = true
     }
     const step = () => {
-      const elapsed = Date.now() - t0
+      const elapsed = Date.now() - t0 - paused
       const p = replyOpts.ms === 0 ? 1 : Math.min(1, elapsed / replyOpts.ms)
       if (p >= 1) {
         finish()
@@ -947,6 +1016,22 @@
       const rewind = ticks % REWIND_EVERY === 0 && n > 8
       if (rewind) fake.rewinds += 1
       renderReply(reply.full.slice(0, rewind ? Math.floor(n * REWIND_FACTOR) : n))
+      // S9: the stop button blinks out, and the stream pauses, once LULL_AT of the reply is rendered
+      if (replyOpts.stopBlinkMs !== null && !blinkDone && p >= LULL_AT) {
+        blinkDone = true
+        blinkStop()
+      }
+      if (replyOpts.lullMs !== null && !lullDone && p >= LULL_AT) {
+        lullDone = true
+        const from = Date.now()
+        fake.lullAt = from
+        reply.timer = setTimeout(() => {
+          paused += Date.now() - from
+          fake.lullEndAt = Date.now()
+          step()
+        }, replyOpts.lullMs)
+        return
+      }
       reply.timer = setTimeout(step, RENDER_MS)
     }
     step()

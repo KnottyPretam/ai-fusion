@@ -170,3 +170,57 @@ replayed offline by the fake site's `?thinking=1` (claude) and pinned by
 NOT verified, still: what claude's widget looks like WHILE it streams, and whether the second copy is
 the collapsed panel, an `aria-live` announcement or a transition leftover — that needs devtools on a
 live reply. The fix does not depend on which of them it is.
+
+## The fenced-reply capture defect, measured 2026-09-18 (why a `done` match inside the message body never counts)
+
+A real Analyze against the hidden chatgpt analyst view degraded with
+`parse_error: no JSON object found in the response (output may be truncated)`, and its two persisted raw
+attempts were, complete (conversation `17f7b1b1`, turn `17c8e7d5`):
+
+```
+attempt 1 (13 chars)  ```JSON\n{\n```
+attempt 2 (6 chars)   {"agre
+```
+
+Both are FRAGMENTS of a reply that was still streaming, and the same Send captured all three panes in
+full (claude 3001, chatgpt 12049, grok 5244 characters): only the analyst truncated. The 13 characters
+are not what a model types — they are what `toMarkdown` makes of a code block whose body is one `{`,
+with the block's header ("JSON") folded in as the fence language. What changed the day before: the
+analyst prompt began asking a `web:` model for a ```json fence (commit e13bb50, because a rendered
+paragraph eats backslash escapes), so chatgpt now opens a CODE BLOCK at the first character of the
+analyst's answer — and it renders a copy control on a code block as soon as the block appears.
+
+`observe` accepted that control as the turn's done marker: `findDone` asked only for a match that is
+the container, inside it, or after it (`onOrAfter`), and the copy control is inside it. Running the
+pre-fix `site.cjs` over exactly that DOM reproduces the artifact byte for byte — `doneBy:
+done_selector`, 13 characters, `"```JSON\n{\n```"` — which is what turned the hypothesis into the cause.
+The end signal also used to be LATCHED: once seen it was never reconsidered, so the capture resolved at
+the first ~100 ms lull in the render even while the model kept typing (attempt 2 holds no code block at
+all, so its end signal was a `stop_gone` latched from one sample that missed the stop button).
+
+The two rules that follow, pinned by `test/unit/preload/observe.test.js` (a deterministic clock) and
+`test/adapters/observe.spec.js` (real CSS and timers, the fake site's `?codeCopyDone` / `?stopBlinkMs` /
+`?lullMs` / `?reply=openfence`):
+
+1. a `done` match inside the reply BODY is not a turn marker — not inside an `assistantText` block, not
+   inside a `pre`/`code`. Chrome is outside the message on all three sites: chatgpt's action bar is a
+   sibling of `.markdown` inside the article (`chatgpt-done.html`), claude's `action-bar-copy` sits
+   outside `.prose`, grok's copy controls outside `.response-content-markdown`. A container with no body
+   element (the placeholder turn) keeps its old behaviour — only the `pre`/`code` half applies.
+2. no end signal is latched: every sample re-reads the stop button and a visible one WITHDRAWS a pending
+   `done_selector` / `stop_gone` / `quiet`, and the settle window is four throttle ticks (400 ms), not
+   one — a 100 ms gap between two token batches is ordinary mid-stream. The tolerance for a stop button
+   a sample missed is therefore that settle window.
+
+NOT verified, deliberately: whether chatgpt's code-block copy button really carries
+`data-testid="copy-turn-action-button"` (the row above still says unverified; the fake site mounts it
+only under `?codeCopyDone=1`). The rule does not depend on it — a copy control inside the message is
+never the end of the turn whatever its testid — and rule 1 makes that markup harmless either way.
+
+Open, and worth one live reading: the ordering in `observe` means a visible stop button SUPPRESSES the
+done check, so at the sample that ended each of those captures `findStop()` returned null while the
+model was still typing. Whether that is a transient miss (a re-render, an animated swap) or a
+persistent one (the analyst view is `setVisible(false)`, so its layout may not answer `isVisible`) is
+not decidable offline: read `panes:analyst.health.stop` while the analyst streams. If it never goes
+true, the analyst's only end signal is `quiet`, and the follow-up is a per-view `quietMs` (contract §4),
+not another rule here.

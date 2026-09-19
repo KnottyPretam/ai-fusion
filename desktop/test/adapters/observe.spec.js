@@ -788,3 +788,111 @@ test.describe("?thinking=1 — claude's doubled thinking summary", () => {
     })
   }
 })
+
+/**
+ * S9 — the fenced-reply capture defect, MEASURED live on 2026-09-18.
+ *
+ * A real Analyze against the hidden chatgpt analyst page degraded with
+ * `parse_error: no JSON object found in the response`, and its two raw attempts were, complete:
+ * "```JSON\n{\n```" (13 characters) and `{"agre` (6). Both are FRAGMENTS of a reply that was still
+ * streaming — the 13 characters are a markdown re-render of a code block holding one `{`. The same
+ * Send captured all three panes in full (3001 / 12049 / 5244 characters): only the analyst truncated,
+ * and only since the analyst prompt began asking a web session for a ```json fence (so chatgpt opens a
+ * code block, with its own copy control, at the FIRST character of the answer).
+ *
+ * Two rules come out of it, and these specs pin both against the fake site's real CSS and timers:
+ *   1. a `done` match INSIDE the message body is never a turn marker (?codeCopyDone=1 mounts the
+ *      turn marker's testid on the code block, the way the live page may);
+ *   2. an end signal is never LATCHED — a stop button that comes back withdraws it (?stopBlinkMs),
+ *      because "no stop button" is one sample's reading and a sample can miss a button that is
+ *      re-rendering. The tolerance is SETTLE_MS: the end must still look like the end after the text
+ *      has held still that long.
+ * ?lullMs pauses the stream once a third of the reply is on the page — the ordinary gap between two
+ * token batches, and what lets a premature end signal resolve into a truncated capture.
+ */
+test.describe('S9: a fenced reply, its code block’s copy control, and a stop button that blinks out', () => {
+  const EXTRACTION = fenced(fixtureText('analyst.extraction.1.jsonl'))
+  const ANALYST_PROMPT =
+    'Compare the three responses.\n\n<<<R1>>>\nThe BMI088 gyroscope range is selectable up to 2000 deg/s.\n<<<END R1>>>\n<<<R2>>>\n1000 deg/s.\n<<<END R2>>>'
+
+  test('chatgpt: the code block carries the TURN marker’s testid from the moment it opens — the capture keeps waiting and returns the whole fenced body, never the fragment', async ({ page }) => {
+    // No stop button at all (the live analyst sample that ended the capture saw none either) and a
+    // quiet window far longer than the reply, so the ONLY thing that could end this capture early is
+    // the copy control inside the code block.
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 900,
+      lullMs: 700,
+      codeCopyDone: 1,
+      nostop: 1,
+      selectors: withOverride('chatgpt', { quietMs: 8000 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    expect(sent.ok).toBe(true)
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, EXTRACTION, 'done_selector') // the TURN's action bar, mounted when the reply ended
+    expect(JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)).divergences.length).toBe(2)
+
+    // the page really did mount a done-cascade match inside the <pre>, and it is still there
+    const inBody = page.locator(`${DEFAULT_SELECTORS.chatgpt.assistant[0]} pre ${CHATGPT_DONE}`)
+    await expect(inBody).toHaveCount(1)
+    await expect(page.locator(CHATGPT_DONE)).toHaveCount(2) // the block's + the turn's action bar
+    const r = await replyState(page)
+    expect(r.lullAt).not.toBeNull()
+    expect(r.lullEndAt - r.lullAt).toBeGreaterThanOrEqual(600) // the stream really sat still mid-reply
+    expect(res.ms).toBeGreaterThan(700) // the capture spanned the lull instead of resolving inside it
+    expect(r.replyText).toContain('Copy code') // the chrome is in the DOM…
+    expect(res.text).not.toContain('Copy code') // …and never in the capture
+  })
+
+  test('chatgpt: a SHORT fenced reply with the same in-block marker is neither truncated nor left hanging — it ends on its action bar, long before the quiet window', async ({ page }) => {
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 150,
+      codeCopyDone: 1,
+      nostop: 1,
+      selectors: withOverride('chatgpt', { quietMs: 8000 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, EXTRACTION, 'done_selector')
+    expect(res.ms).toBeLessThan(5000) // nowhere near quietMs (8000) or the budget: the marker still works
+  })
+
+  for (const site of SLOTS) {
+    test(`${site}: a stop button that blinks out mid-stream (?stopBlinkMs=250) no longer ends the capture — the whole reply comes back (${DONE_BY[site]})`, async ({ page }) => {
+      await open(page, { site, reply: 'json', replyMs: 900, lullMs: 700, stopBlinkMs: 250, selectors: withOverride(site, { quietMs: 8000 }) })
+      const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+      expect(sent.ok).toBe(true)
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      expectObserved(res, EXTRACTION, DONE_BY[site])
+      const r = await replyState(page)
+      // the button really went away and came back while the text sat still — [up, down, up, down]
+      expect(r.stopBlinkAt).not.toBeNull()
+      expect(r.stopBlinkEndAt - r.stopBlinkAt).toBeGreaterThanOrEqual(200)
+      expect(r.stopEvents.map((e) => e.on)).toEqual([true, false, true, false])
+      expect(r.lullAt).not.toBeNull()
+      expect(res.ms).toBeGreaterThan(700)
+      await expect(page.locator(STOP[site])).toHaveCount(0) // gone for good by the end
+    })
+
+    test(`${site}: a reply that ENDS inside a code block (?reply=openfence) still ends normally, and the captured text closes the fence the reply never closed`, async ({ page }) => {
+      await open(page, { site, reply: 'openfence', replyMs: 300, codeCopyDone: 1, selectors: withOverride(site, { quietMs: 8000 }) })
+      const sent = await request(page, { op: 'insertAndSubmit', text: 'give me the extraction' })
+      const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+      const r = await replyState(page)
+      expect(res.ok).toBe(true)
+      expect(res.doneBy).toBe(DONE_BY[site])
+      expect(res.ms).toBeLessThan(8000) // no hang: an open fence is not a veto on the end signal
+      expect(res.text).toContain('Here is the extraction:')
+      expect(res.text).toContain('"divergences": []')
+      // WHY no fence-parity rule: the reply's fence is unterminated (ONE marker), the capture's is
+      // closed by the markdown re-render (TWO). Parity of a captured text says nothing about whether
+      // the model had finished — the 13-character live fragment was balanced too.
+      expect((r.replySource.match(/```/g) || []).length).toBe(1)
+      expect((res.text.match(/```/g) || []).length).toBe(2)
+    })
+  }
+})

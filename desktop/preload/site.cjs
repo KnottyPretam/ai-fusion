@@ -50,14 +50,21 @@
 //   * "the done selector on the last container" = a VISIBLE, clickable `done` match (not `opacity:0`
 //     or `pointer-events:none` — a hover-revealed action bar is not a marker) that is the last
 //     container, inside it, or after it in document order (an older turn's copy button never
-//     counts), and only while NO stop button is visible: the site's own "still replying" signal
-//     wins over a marker (a finished tool turn's action bar while the answer is still streaming).
+//     counts) and OUTSIDE its reply body (S9: not inside an `assistantText` block, not inside a
+//     `pre`/`code` — a code block's own copy control is part of the message, and chatgpt mounts one
+//     the moment a fenced block opens; see `insideReplyBody`), and only while NO stop button is
+//     visible: the site's own "still replying" signal wins over a marker (a finished tool turn's
+//     action bar while the answer is still streaming).
 //   * "stop button seen then gone" = seen during THIS observe; while it is visible the reply is
 //     never quiet; when it was never seen (the reply finished before observe started) quiet applies.
-//   * an end signal (done selector, stop gone) never resolves on the sample that saw it: one more
-//     sample is taken OBSERVE_THROTTLE_MS later and the capture resolves once the text has not
-//     moved between two samples (the final markdown render may land a frame after the marker or
-//     the stop button); past the budget the latest text is returned with that doneBy, not `timeout`.
+//   * an end signal (done selector, stop gone) never resolves on the sample that saw it and is never
+//     LATCHED (S9): every further sample re-reads the stop button, and a visible one WITHDRAWS the
+//     signal (a sample that missed a button mid-re-render or mid-transition used to end the capture
+//     on the next lull, mid-reply); the capture resolves once the text has not moved for SETTLE_MS
+//     (four throttle ticks — a 100 ms lull between token batches is ordinary mid-stream) with the
+//     signal still standing; past the budget the latest text is returned with that doneBy, not
+//     `timeout`. `quiet` goes through the same machinery (its own stillness requirement is already
+//     met, so it costs one settle window) so that a stop button can take it back too.
 //   * cadence: a mutation tick only reads the thread; the session (wall / challenge / banner) is
 //     re-checked on the 300 ms poll and on any sample about to give a terminal answer (a reply
 //     frozen by a banner is `site_error`, never `stop_gone`); every sample walks the open shadow
@@ -1729,11 +1736,59 @@
       return false
     }
 
-    /** A visible, clickable `done` match on or after `container` (the "done selector on the last container"); null without a done cascade. */
+    /** `el` is inside a `pre` or `code` element that is under `container` — a code block's own chrome. */
+    function insideCodeBlock(container, el) {
+      let node = el
+      for (let hops = 0; hops < MAX_ANCESTOR_HOPS; hops += 1) {
+        if (!node || node === container) return false
+        const tag = typeof node.tagName === 'string' ? node.tagName.toLowerCase() : ''
+        if (tag === 'pre' || tag === 'code') return true
+        let next = null
+        try {
+          next = node.parentNode || node.host || null // a shadow root has no parentNode; it has a host
+        } catch (_e) {
+          return false
+        }
+        if (!next || next === node) return false
+        node = next
+      }
+      return false
+    }
+
+    /**
+     * `el` is inside the rendered MESSAGE rather than the turn's chrome: inside one of the
+     * container's `assistantText` body blocks, or inside a `pre`/`code` under it.
+     *
+     * WHY (S9, measured live on 2026-09-18): a real Analyze degraded with `parse_error` on two
+     * captures that were FRAGMENTS of a reply still being typed — "```JSON\n{\n```" (13 characters)
+     * and `{"agre` (6). Since the analyst prompt asks a web session for a ```json fence, chatgpt
+     * opens a code block at the FIRST character of the answer — and it renders a copy control on
+     * that block as soon as it opens, inside the `pre`. `findDone` accepted it (`onOrAfter` counts a
+     * descendant of the container) and the capture ended on one character of JSON. A
+     * turn-completion marker is chrome and chrome is never inside the message body: chatgpt's action
+     * bar is a SIBLING of `.markdown` inside the assistant article (test/fixtures/dom/chatgpt-done.html),
+     * claude's `action-bar-copy` sits outside `.prose` and grok's copy controls outside
+     * `.response-content-markdown`. When the `assistantText` cascade matches nothing the body is not
+     * a distinguishable subtree, so only the `pre`/`code` rule applies — a container with no body
+     * element (chatgpt's placeholder turn) keeps behaving exactly as before.
+     */
+    function insideReplyBody(container, el, blocks) {
+      if (!el || el === container) return false
+      if (insideCodeBlock(container, el)) return true
+      for (const block of blocks || replyBlocks(container)) if (block === el || containsDeep(block, el)) return true
+      return false
+    }
+
+    /**
+     * A visible, clickable `done` match on or after `container` and OUTSIDE its reply body (the "done
+     * selector on the last container"); null without a done cascade. See `insideReplyBody` for the
+     * body rule and why a code block's copy control is not a done marker.
+     */
     function findDone(container) {
       const cascade = nonEmptyCascade(sel.done)
       if (cascade.length === 0) return null
-      return findFirst(cascade, { clickable: true, accept: (el) => onOrAfter(container, el) })
+      const blocks = replyBlocks(container)
+      return findFirst(cascade, { clickable: true, accept: (el) => onOrAfter(container, el) && !insideReplyBody(container, el, blocks) })
     }
 
     /**
@@ -1761,13 +1816,23 @@
      * thinking summary, which is why `claude.assistantText` stopped being empty).
      */
     function replyText(container) {
+      const blocks = replyBlocks(container)
+      return blocks.length > 0 ? blocks.map(blockText).join('\n\n') : blockText(container)
+    }
+
+    /**
+     * The reply BODY blocks of `container`: every match of the first `assistantText` entry that
+     * matches, in document order, a match nested in another dropped (`containsDeep`) — exactly the
+     * set `replyText` reads. `[]` when no entry matches: the text then comes from the container
+     * itself and the body is not a distinguishable subtree (see `insideReplyBody`).
+     */
+    function replyBlocks(container) {
       for (const selector of nonEmptyCascade(sel.assistantText)) {
         const hits = deepQuerySelectorAll(container, selector)
         if (hits.length === 0) continue
-        const blocks = hits.filter((el) => !hits.some((other) => other !== el && containsDeep(other, el)))
-        return blocks.map(blockText).join('\n\n')
+        return hits.filter((el) => !hits.some((other) => other !== el && containsDeep(other, el)))
       }
-      return blockText(container)
+      return []
     }
 
     function cascadeText(cascade) {
@@ -2095,15 +2160,19 @@
      *                 seen ONCE: a container that is unmounted again (chatgpt's placeholder turn,
      *                 measured 2026-09-17) is dropped and the gap counts as "still replying"
      *   done          `done_selector`  a visible, clickable `done` match on or after the last container
-     *                                  while NO stop button is visible (the site's "still replying"
-     *                                  signal wins over a finished tool turn's action bar)
+     *                                  and outside its reply body (`insideReplyBody`: a code block's
+     *                                  own copy control is not a turn marker) while NO stop button is
+     *                                  visible (the site's "still replying" signal wins over a
+     *                                  finished tool turn's action bar)
      *                 `stop_gone`      a stop button was seen during this observe and is gone now
      *                 `quiet`          the text is non-blank and unchanged for `quietMs` while no stop
      *                                  button is visible (the only signal when stop + done are empty)
-     *                 an end signal (done selector, stop gone) is never resolved on the sample that
-     *                 saw it: one more sample is taken OBSERVE_THROTTLE_MS later, and the capture
-     *                 resolves once the text has not moved between two samples — the final markdown
-     *                 render may land a frame after the marker; past the budget the latest text is
+     *                 an end signal (done selector, stop gone, quiet) is never resolved on the sample
+     *                 that saw it and never latched: every sample re-reads the stop button and a
+     *                 visible one withdraws the signal, and the capture resolves once the text has not
+     *                 moved for SETTLE_MS with the signal still standing — the final markdown render may
+     *                 land a frame after the marker, and a sample that merely MISSED the stop button
+     *                 must not end a reply that is still arriving; past the budget the latest text is
      *                 returned with that doneBy rather than `timeout`
      *   budget        `timeoutMs` (default `captureTimeoutMs`) elapsed → `timeout` with the partial text,
      *                 a gap with no container at all included (a site that unmounts its reply and never
@@ -2130,7 +2199,11 @@
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
       const SETTLE = Symbol('settle') // the end was seen; take one more sample before resolving
-      const SETTLE_MS = OBSERVE_THROTTLE_MS // how long the text must hold still after the end signal
+      // How long the text must hold still after an end signal. Four throttle ticks, not one (S9): a
+      // single 100 ms lull between two token batches is ordinary mid-stream, and resolving inside one
+      // is how a capture ends on a fragment. It costs one 400 ms wait at the end of a capture that
+      // takes seconds, and the budget still overrides it.
+      const SETTLE_MS = 4 * OBSERVE_THROTTLE_MS
       let container = null
       let text = ''
       let lastText = null
@@ -2224,17 +2297,29 @@
             lastChangeAt = now
           }
           let result = null
-          if (endSeen === null) {
-            const stop = findStop()
-            if (stop) {
-              seenStop = true
-              lastChangeAt = now // the site says it is still replying: never quiet, and a marker does not count yet
-            } else if (findDone(container)) {
+          const stop = findStop()
+          if (stop) {
+            seenStop = true
+            lastChangeAt = now // the site says it is still replying: never quiet, and a marker does not count yet
+            // …and it WITHDRAWS a pending end signal (S9): an end signal is one sample's reading of
+            // the DOM, and a sample can miss a button that is re-rendering, animating in, or one
+            // frame behind — after which `done_selector` / `stop_gone` used to be latched forever and
+            // the capture resolved on the next lull, mid-reply. The site's own "still replying"
+            // signal outranks a marker before the signal, so it outranks it afterwards too. It
+            // re-fires by itself on the next sample once the button is really gone, and the capture
+            // stays bounded by the budget exactly as a stop button that never disappears always was.
+            endSeen = null
+          } else if (endSeen === null) {
+            if (findDone(container)) {
               endSeen = 'done_selector'
             } else if (seenStop) {
               endSeen = 'stop_gone'
             } else if (!isBlank(text) && now - lastChangeAt >= quiet) {
-              result = 'quiet'
+              // quiet goes through the same settle/withdraw machinery as the other two (S9): it is
+              // also a reading of one sample, and a stop button that appears in the settle window
+              // must be able to take it back. Its own stillness requirement is already met, so this
+              // costs one settle window and nothing else.
+              endSeen = 'quiet'
             }
             if (endSeen !== null) endSeenAt = now
           }
@@ -2369,6 +2454,8 @@
       snapshot,
       assistantContainers,
       replyText,
+      replyBlocks,
+      findDone, // exposed for the S9 unit tests: the body rule is asserted directly, not only through a capture
     }
   }
 

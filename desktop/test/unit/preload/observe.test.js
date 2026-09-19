@@ -298,3 +298,105 @@ test('the two-turn (tool call) shape with a finished EARLIER turn on the page: t
   assert.ok(!state.value.text.includes(TOOL_TEXT) && !state.value.text.includes(OLD_ANSWER))
   assert.equal(state.value.doneBy, 'stop_gone')
 })
+
+// ---- S9: the fenced-reply capture defect, MEASURED live on 2026-09-18 ------------------------------
+//
+// A real Analyze against the hidden chatgpt analyst page degraded with `parse_error`, and its two raw
+// attempts were, complete: "```JSON\n{\n```" (13 characters) and `{"agre` (6) — FRAGMENTS of a reply
+// still being typed. The 13 characters are what `toMarkdown` makes of a code block holding one `{`.
+// Since the analyst prompt asks a web session for a ```json fence, chatgpt opens a code block at the
+// FIRST character of the answer, and it renders a copy control on that block as soon as it opens.
+// The two rules that come out of it (the same ones test/adapters/observe.spec.js pins in a browser):
+//   * a `done` match inside the reply BODY is never a turn-completion marker (the turn's action bar is
+//     a sibling of `.markdown`, not a descendant of it);
+//   * an end signal is never LATCHED: every sample re-reads the stop button and a visible one
+//     withdraws it, because "no stop button" is one sample's reading of a DOM that re-renders.
+
+/** The code block the first render of a fenced reply mounts: a header, its own copy control, one character. */
+const openBlock = (body, done) =>
+  `<article data-message-author-role="assistant"><div class="markdown"><pre><div class="code-header">json</div>${done}` +
+  `<code class="language-json"><span>${body}</span></code></pre></div></article>`
+
+test('S9: a copy control INSIDE the message body (the code block chatgpt opens at the first character of a fenced reply) is not the end of the turn — the capture waits for the whole body', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove() // the live sample that ended the capture saw no stop button either
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000 }))
+
+  // the measured first render: an open code block holding `{`, with the turn marker's testid on the
+  // block's own copy button — this is the DOM the 13-character capture came from
+  const real = mount(doc, thread, openBlock('{', CHATGPT_DONE))
+  await clock.advance(3000) // 7× SETTLE_MS, and the text has not moved: the old rule resolved here
+  assert.equal(state.done, false, 'the capture must still be waiting for the body')
+
+  const code = real.querySelector('code')
+  mount(doc, code, '<span>"agreements": []}</span>')
+  await clock.advance(1000)
+  assert.equal(state.done, false, 'still no end signal: the only marker is inside the message')
+
+  // the reply ends and the TURN's action bar is mounted — outside `.markdown`, where chrome lives
+  mount(doc, real, CHATGPT_DONE)
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.doneBy, 'done_selector') // the body rule did not kill the done path
+  assert.match(state.value.text, /^```json\n\{"agreements": \[\]\}\n```$/)
+  assert.ok(!state.value.text.includes('Copy'))
+})
+
+test('S9: the body rule needs a body — a container whose `assistantText` cascade matches nothing (chatgpt\'s placeholder shape) still ends on a done marker directly inside it', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000 }))
+  // no `.markdown` child at all: the text comes from the container itself, so the body is not a
+  // distinguishable subtree and only the `pre`/`code` half of the rule applies
+  const real = mount(doc, thread, `<article data-message-author-role="assistant">${ANSWER}${CHATGPT_DONE}</article>`)
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.value.doneBy, 'done_selector')
+  assert.ok(state.value.text.startsWith(ANSWER))
+})
+
+test('S9: an end signal is never LATCHED — a stop button that comes back withdraws `stop_gone`, and the capture returns the whole reply', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  const form = stop.parentNode
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000 }))
+  const real = mount(doc, thread, streaming('The gyroscope range is'))
+  await clock.advance(600) // the stop button is up: the site says it is replying
+  assert.equal(state.done, false)
+
+  // ONE sample misses the button — a re-render, an animated swap, a frame behind — while the text
+  // happens to sit still (the ordinary gap between two token batches)
+  stop.remove()
+  await clock.advance(300) // the sample that used to latch stop_gone for good
+  form.appendChild(stop) // it is back, and the text still has not moved
+  await clock.advance(2000)
+  assert.equal(state.done, false, 'a missed button must never end a reply that is still arriving')
+
+  // the rest of the reply arrives, and then the button goes for good
+  mount(doc, real.querySelector('.markdown'), '<span> selectable up to 2000 deg/s.</span>')
+  await clock.advance(300)
+  stop.remove()
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.doneBy, 'stop_gone') // the path claude and grok rely on, unchanged
+  assert.equal(state.value.text, 'The gyroscope range is selectable up to 2000 deg/s.')
+})
+
+test('S9: the rule itself — `findDone` rejects a match inside the reply body and accepts the turn\'s action bar', () => {
+  const { doc, adapter, thread } = setup()
+  // an open code block with the turn marker's testid on the block's own copy control: no done match
+  const streamingTurn = mount(doc, thread, openBlock('{', CHATGPT_DONE))
+  assert.equal(adapter.replyBlocks(streamingTurn).length, 1) // the `.markdown` body
+  assert.equal(adapter.findDone(streamingTurn), null)
+  // the same page once the turn ends: the action bar is a SIBLING of `.markdown`, and it counts
+  mount(doc, streamingTurn, CHATGPT_DONE)
+  const done = adapter.findDone(streamingTurn)
+  assert.ok(done !== null)
+  assert.equal(done.selector, DEFAULT_SELECTORS.chatgpt.done[0])
+  assert.equal(streamingTurn.querySelector('.markdown').contains(done.el), false) // outside the message
+  // and with no body element at all (the placeholder shape) a marker inside the container still counts
+  const bodyless = mount(doc, thread, `<article data-message-author-role="assistant">${ANSWER}${CHATGPT_DONE}</article>`)
+  assert.equal(adapter.replyBlocks(bodyless).length, 0)
+  assert.ok(adapter.findDone(bodyless) !== null)
+})

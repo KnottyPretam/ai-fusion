@@ -1179,7 +1179,7 @@ test('observe: a done match painted at opacity 0 (a hover-revealed action bar) n
   copyStyle.opacity = '1'
   const t1 = Date.now()
   assert.equal((await a.observe({ baselineCount: 0 })).doneBy, 'done_selector')
-  assert.ok(Date.now() - t1 < 300) // the first sample saw it, one settle sample later it resolved
+  assert.ok(Date.now() - t1 < 800) // the first sample saw it, SETTLE_MS (400) of held-still text later it resolved
   delete doc.match["button[data-testid='copy-turn-action-button']"]
   doc.match["button[data-testid='stop-button']"] = [styled({ pointerEvents: 'none' })]
   assert.equal(a.health().stop, false)
