@@ -29,10 +29,13 @@ import {
   targetPaths,
   renderPdf,
   closePrintWindow,
+  printHeaderTemplate,
+  PRINT_FOOTER_TEMPLATE,
   PDF_CLOSE_TIMEOUT_MS,
   exportTurn,
 } from '../../../main/export.js'
 import { fakeLog } from './_fakes.js'
+import { MAX_LOGO_BYTES, PRINT_LOGO_PX, logoDataUri } from '../../../main/branding.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 const TURN = '7b2c1d0e-3f4a-4b5c-8d9e-0f1a2b3c4d5e'
@@ -375,7 +378,13 @@ test('pdf only: the HTML is fetched as the print source but no .html file is wri
   assert.match(win.webContents.loads[0], /^file:\/\/.*document\.html$/)
   const print = win.webContents.printCalls[0]
   assert.equal(print.printBackground, true)
-  assert.equal(print.displayHeaderFooter, false, 'no title or local path is stamped into the PDF')
+  // A header IS stamped now, but only ours: the mark and the product name. Chromium's own
+  // title / file path / date / page numbers stay off, which is what the empty footer is for.
+  assert.equal(print.displayHeaderFooter, true)
+  assert.match(print.headerTemplate, /<img src="data:image\/png;base64,/)
+  assert.match(print.headerTemplate, /Solomon/)
+  assert.equal(print.footerTemplate, PRINT_FOOTER_TEMPLATE)
+  assert.doesNotMatch(print.headerTemplate, /file:\/\/|document\.html|\bdate\b|pageNumber|totalPages/i)
   assert.equal(print.pageSize, 'A4')
   assert.deepEqual(print.margins, { ...PDF_MARGINS })
 })
@@ -667,4 +676,58 @@ test('closePrintWindow: a window that closes reports closed, and the default tim
   assert.equal(win.closeCalls, 1)
   assert.equal(win.destroyCalls, 0)
   assert.ok(PDF_CLOSE_TIMEOUT_MS >= 1000 && PDF_CLOSE_TIMEOUT_MS <= 10000, 'bounded, not instant')
+})
+
+// ---------------------------------------------------------------------------------------------
+// The printed page header: the mark and the product name, in the margin of every sheet. Chromium
+// draws headerTemplate itself once per page — the CSS alternative (`position: fixed` in the
+// document) was measured laying out at the FOOT of the page instead, 2026-09-19.
+// ---------------------------------------------------------------------------------------------
+
+test('the print header carries the mark and the name, and nothing of Chromium\'s own', () => {
+  const html = printHeaderTemplate("Solomon's Judgment", 'data:image/png;base64,AAAA')
+  assert.match(html, /<img src="data:image\/png;base64,AAAA"/)
+  assert.match(html, /Solomon&#39;s Judgment/, 'the name, escaped')
+  // The template is a page header, not a title block: no page numbers, no path, no date.
+  for (const token of ['pageNumber', 'totalPages', 'title', 'url', 'date']) {
+    assert.doesNotMatch(html, new RegExp(`class="[^"]*\\b${token}\\b`), token)
+  }
+  // Chromium's default header font is ~8px and unreadable; the size is set explicitly.
+  assert.match(html, /font-size:\s*\d+px/)
+})
+
+test('the print header survives a missing logo, a hostile title, and an empty one', () => {
+  const noLogo = printHeaderTemplate('Name', null)
+  assert.doesNotMatch(noLogo, /<img/)
+  assert.match(noLogo, /Name/)
+
+  const hostile = printHeaderTemplate('<script>alert(1)</script> & "x"', null)
+  assert.doesNotMatch(hostile, /<script/)
+  assert.match(hostile, /&lt;script&gt;/)
+  assert.match(hostile, /&amp;/)
+  assert.match(hostile, /&quot;x&quot;/)
+
+  for (const empty of ['', '   ', null, undefined, 42]) {
+    assert.equal(typeof printHeaderTemplate(empty, null), 'string', String(empty))
+  }
+})
+
+test('the top margin leaves room for the header it now draws', () => {
+  assert.ok(PDF_MARGINS.top > PDF_MARGINS.bottom, 'the header needs more room than the footer')
+  assert.ok(PDF_MARGINS.top >= 0.8 && PDF_MARGINS.top <= 1.5, `${PDF_MARGINS.top} in`)
+})
+
+test('logoDataUri: a PNG becomes a data URI; anything else is null, never a throw', () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('body')])
+  assert.equal(logoDataUri(64, '/assets', () => png), `data:image/png;base64,${png.toString('base64')}`)
+
+  assert.equal(logoDataUri(64, '/assets', () => Buffer.alloc(0)), null, 'empty')
+  assert.equal(logoDataUri(64, '/assets', () => Buffer.from('GIF89a')), null, 'not a PNG')
+  assert.equal(logoDataUri(64, '/assets', () => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(MAX_LOGO_BYTES + 1)])), null, 'oversized')
+  assert.equal(logoDataUri(64, '/assets', () => { throw new Error('ENOENT') }), null, 'missing')
+})
+
+test('the shipped asset really is readable at the size the header asks for', () => {
+  const uri = logoDataUri(PRINT_LOGO_PX)
+  assert.ok(uri && uri.startsWith('data:image/png;base64,'), 'desktop/assets/icon-64.png')
 })

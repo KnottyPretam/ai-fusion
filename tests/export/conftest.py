@@ -399,3 +399,20 @@ def md_fences(text: str) -> list[str]:
             continue
         buf.append(line)
     return out
+
+#: A `data:` payload in a rendered document: our own logo, embedded because the document carries no
+#: external reference. It is opaque bytes, not prose, and base64 of ANY image contains arbitrary
+#: letter pairs -- "R1" among them -- so a substring scan for labels or vendor names has to run on
+#: the document with these excised. `logo_uris` then pins what was excised to the known asset, so
+#: nothing can hide inside the part that is not scanned.
+_DATA_URI_RE = re.compile(r"data:image/[a-z+.-]+;base64,[A-Za-z0-9+/=]+")
+
+
+def without_assets(text: str) -> str:
+    """The document minus every embedded asset payload -- what a reader actually reads."""
+    return _DATA_URI_RE.sub("data:image/png;base64,<asset>", text)
+
+
+def logo_uris(text: str) -> list[str]:
+    """Every embedded asset payload, in order."""
+    return _DATA_URI_RE.findall(text)

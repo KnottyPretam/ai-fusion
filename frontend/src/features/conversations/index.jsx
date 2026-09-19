@@ -11,6 +11,7 @@ import { api, createConversation, deleteConversation, loadConversations, renameC
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import css from './conversations.module.css'
 import { APP_NAME } from '../../branding.js'
+import logoUrl from '../../assets/logo.png'
 
 export const STREAM_FEATURES = ['send', 'analyze', 'fusion']
 const CREATING = Symbol('creating')
@@ -203,6 +204,13 @@ export default function Sidebar() {
           loading…
         </div>
       )}
+      {/* The mark, in the bottom-left corner of the window (user request). It sits in the sidebar
+          footer rather than floating: the site views are native surfaces painted OVER the renderer,
+          so anything overlapping a pane would be behind a page. The sidebar is never under one. */}
+      <footer className={css.mark} data-testid="brand-mark" title={`${APP_NAME} — three model subscriptions in one window`}>
+        <img src={logoUrl} alt="" width="28" height="28" />
+        <span>{APP_NAME}</span>
+      </footer>
     </div>
   )
 }

@@ -141,7 +141,16 @@ test('an Analyze export is written byte for byte, with R-labels and no slot in t
   // the PDF is printed from that same HTML, unmodified, with nothing stamped around it
   const printed = [...fsFake.files.entries()].find(([p]) => p.startsWith('/tmp/triplex-export-'))
   assert.equal(printed[1], ANALYZE_HTML, 'the print source is the fetched HTML, not a rewrite')
-  assert.equal(seen.print[0].displayHeaderFooter, false, 'Chromium stamps no title or file path into the page')
+  // A header IS stamped on every page now, and it is OURS: the mark and the product name. What
+  // matters here is that it says nothing about which model answered — it is built from the app
+  // name and an asset, never from the document — and that Chromium's own title / path / page
+  // numbers stay off, which is what the empty footer template is for.
+  const print = seen.print[0]
+  assert.equal(print.displayHeaderFooter, true)
+  assert.deepEqual(leaks(print.headerTemplate), [], 'the printed header names no model')
+  assert.equal(print.footerTemplate, '<span></span>', 'no page numbers, no file path')
+  assert.doesNotMatch(print.headerTemplate, /file:\/\/|\/tmp\/|document\.html/, 'no local path')
+  assert.doesNotMatch(print.headerTemplate, /why-is-the-sky-blue|analyze/i, 'nothing from the document')
   // the request and the file name carry no slot either
   for (const url of fetchImpl.calls) {
     assert.deepEqual(leaks(url), [], url)

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import Sidebar, { fmtWhen } from './index.jsx'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
+import { APP_NAME } from '../../branding.js'
 
 const CFG = {
   slots: { claude: { model: 'a', effort: 'medium' }, chatgpt: { model: 'b', effort: 'medium' }, grok: { model: 'c', effort: 'medium' } },
@@ -338,4 +339,27 @@ test('fmtWhen tolerates garbage', () => {
   expect(fmtWhen('')).toBe('')
   expect(fmtWhen('not a date')).toBe('not a date')
   expect(fmtWhen('2026-09-07T12:30:00.000Z')).not.toBe('')
+})
+
+describe('the mark in the corner', () => {
+  test('the sidebar is footed by the logo and the product name', async () => {
+    stubFetch()
+    renderWithStore(<Sidebar />)
+    const mark = await screen.findByTestId('brand-mark')
+    expect(mark).toHaveTextContent(APP_NAME)
+    const img = mark.querySelector('img')
+    expect(img, 'the mark is an image, not just the name').toBeTruthy()
+    expect(img.getAttribute('src')).toBeTruthy()
+    // Decorative: the name beside it is the accessible text, so a reader is not told it twice.
+    expect(img.getAttribute('alt')).toBe('')
+    // LAST in the sidebar, which is what puts it in the window's bottom-left corner.
+    expect(screen.getByTestId('conversations').lastElementChild).toBe(mark)
+  })
+
+  test('it is there with no conversations at all', async () => {
+    stubFetch([])
+    renderWithStore(<Sidebar />)
+    await screen.findByTestId('conv-empty')
+    expect(screen.getByTestId('brand-mark')).toBeInTheDocument()
+  })
 })

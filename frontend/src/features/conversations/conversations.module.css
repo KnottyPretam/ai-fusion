@@ -18,3 +18,32 @@
 .empty { padding: 12px 10px; color: var(--fg-muted); font-style: italic; }
 .error { margin: 4px 10px; padding: 2px 6px; color: var(--err); background: var(--err-soft); border: 1px solid var(--err); border-radius: 4px; font-size: 12px; }
 .hint { padding: 4px 10px; color: var(--fg-muted); font-style: italic; font-size: 12px; }
+
+/* The mark in the bottom-left corner of the window. `margin-top: auto` pins it to the foot of the
+   sidebar however short the list is, and it never scrolls away with the conversations. */
+.mark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.mark img {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: block;
+  flex: 0 0 auto;
+}
+.mark span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

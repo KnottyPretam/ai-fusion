@@ -38,7 +38,12 @@ def test_html_renders_hostile_text_inert_and_readable(hostile):
     html = export.render_html(hostile, hostile.turns[0].id)
     # Nothing executable survives: no tag from the reply is a tag in the document.
     assert "<script" not in html.lower()
-    assert "<img" not in html.lower()
+    # The ONLY <img> in the document is the brand mark in the running header; the `<img src=x
+    # onerror=...>` in the reply is text, not a tag.
+    lowered_html = html.lower()
+    assert lowered_html.count("<img") == 1
+    assert '<header class="brand"><img src="data:image/png;base64,' in lowered_html
+    assert "<img src=x" not in lowered_html
     assert "<style>body" not in html.lower()
     assert "onerror" in html  # as text, inside the escaped body
     # Every ampersand is an entity, and the quotes are escaped.
@@ -96,18 +101,21 @@ def test_html_references_no_external_resource(rich_send, add_analyze, add_fusion
         assert "<script" not in lowered
         assert "@import" not in lowered
         assert "url(" not in lowered  # no CSS-loaded font or image
-        assert "src=" not in lowered  # no img/iframe/script source at all
+        # An embedded `data:` image is not a reference, it IS the document; anything else under
+        # `src=` would be a fetch at open time. Strip the data URIs, then require none left.
+        assert "src=" not in re.sub(r'src="data:image/[a-z+.-]+;base64,[a-z0-9+/=]+"', "", lowered)
         # The stylesheet is embedded, once.
         assert lowered.count("<style>") == 1
-        # Every attribute URL is a citation anchor on an http(s) scheme, and nothing else.
+        # Every attribute URL is a citation anchor on an http(s) scheme, or the embedded logo.
         attrs = re.findall(r'(?:href|src|action|data|poster)\s*=\s*"([^"]*)"', html)
         for value in attrs:
-            assert value.startswith("https://www.bosch-sensortec.com"), value
+            assert value.startswith("https://www.bosch-sensortec.com") or value.startswith("data:image/png;base64,"), value[:60]
         anchors = re.findall(r"<a [^>]*>", html)
         for anchor in anchors:
             assert anchor.startswith('<a href="https://')
             assert 'rel="noreferrer noopener"' in anchor
         # An Analyze / Fusion document cites nothing at all.
         if turn_id != conv.turns[0].id:
-            assert not attrs and not anchors
+            cited = [a for a in attrs if not a.startswith("data:image/png;base64,")]
+            assert not cited and not anchors, "the embedded logo is not a citation"
             assert "http://" not in lowered and "https://" not in lowered

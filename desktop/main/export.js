@@ -36,6 +36,7 @@ import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { APP_TITLE, logoDataUri } from './branding.js'
 
 /** The formats a step can be written as, in the order files are written. */
 export const FORMATS = Object.freeze(['md', 'html', 'pdf'])
@@ -57,7 +58,38 @@ export const PDF_TIMEOUT_MS = 20000
 /** How long the offscreen window may take to close before it is destroyed outright. */
 export const PDF_CLOSE_TIMEOUT_MS = 3000
 export const PDF_PAGE_SIZE = 'A4'
-export const PDF_MARGINS = Object.freeze({ top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 })
+export const PDF_MARGINS = Object.freeze({ top: 0.85, bottom: 0.6, left: 0.6, right: 0.6 })
+
+/**
+ * The running page header: the mark and the product name, in the top margin of EVERY sheet.
+ *
+ * Chromium draws `headerTemplate` itself, once per page — the reliable way to do this. The CSS
+ * alternative, a `position: fixed` block in the document, was measured on 2026-09-19 laying out at
+ * the FOOT of the page instead, so `backend/export.py` hides its in-flow header for print and this
+ * takes over. The template runs with no network and no file access, hence the inline image.
+ *
+ * Template quirks worth knowing: the default font-size is ~8px unless set, the template is clipped
+ * to the page margin (so `margins.top` has to leave room), and an EMPTY footerTemplate is required
+ * or Chromium stamps its own page numbers and URL.
+ */
+export function printHeaderTemplate(title, logoUri) {
+  const name = escapeHtml(typeof title === 'string' && title.trim() ? title.trim() : '')
+  const mark = logoUri ? `<img src="${escapeHtml(logoUri)}" style="width:17px;height:17px;display:block;border-radius:3px">` : ''
+  return (
+    '<div style="width:100%;margin:0 12mm;padding:0 0 2px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;' +
+    'font-size:8px;color:#5b6672;border-bottom:.5px solid #e4e9ee;">' +
+    `<div style="display:flex;align-items:center;gap:5px;">${mark}<span>${name}</span></div>` +
+    '</div>'
+  )
+}
+
+/** Chromium needs a footer template or it stamps its own page number and file URL. */
+export const PRINT_FOOTER_TEMPLATE = '<span></span>'
+
+/** Minimal HTML escaping for the two values that reach the template. */
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
+}
 
 /** A coded error: `message` IS the code, so the renderer can switch on it. */
 export function codedError(code, detail) {
@@ -315,7 +347,7 @@ export async function closePrintWindow(win, { log = console, timeoutMs = PDF_CLO
   return how === 'no_event' ? 'closed' : how
 }
 
-export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.tmpdir, timeoutMs = PDF_TIMEOUT_MS, closeTimeoutMs = PDF_CLOSE_TIMEOUT_MS, pageSize = PDF_PAGE_SIZE, log = console, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
+export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.tmpdir, timeoutMs = PDF_TIMEOUT_MS, closeTimeoutMs = PDF_CLOSE_TIMEOUT_MS, pageSize = PDF_PAGE_SIZE, headerTemplate = null, log = console, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
   if (typeof BrowserWindow !== 'function') throw codedError('export_unavailable', 'no BrowserWindow')
   if (typeof html !== 'string' || html === '') throw codedError('export_pdf_failed', 'empty document')
 
@@ -390,7 +422,10 @@ export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.
           pageSize,
           printBackground: true,
           margins: { ...PDF_MARGINS },
-          displayHeaderFooter: false, // no title, no file path, no date stamped into the page
+          // The ONLY thing stamped is our own header: the mark and the product name. Never a
+          // title, a file path or a date — and the empty footer keeps Chromium's defaults off.
+          displayHeaderFooter: Boolean(headerTemplate),
+          ...(headerTemplate ? { headerTemplate, footerTemplate: PRINT_FOOTER_TEMPLATE } : {}),
           landscape: false,
         }),
         'export_pdf_timeout',
@@ -492,7 +527,16 @@ export async function exportTurn({
 
   let pdf = null
   if (req.formats.includes('pdf')) {
-    pdf = await renderPdf({ html: docs.html, BrowserWindow, fs, tmpdir, timeoutMs: pdfTimeoutMs, closeTimeoutMs: pdfCloseTimeoutMs, log })
+    pdf = await renderPdf({
+      html: docs.html,
+      BrowserWindow,
+      fs,
+      tmpdir,
+      timeoutMs: pdfTimeoutMs,
+      closeTimeoutMs: pdfCloseTimeoutMs,
+      headerTemplate: printHeaderTemplate(APP_TITLE, logoDataUri()),
+      log,
+    })
   }
 
   const stem = defaultFileName({ title: req.title, turnType: req.turnType, ts: now() })

@@ -790,7 +790,11 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     expect(md, 'the Send export names the slots, as its columns do').toMatch(/Claude/)
     expect(md).toContain(PROMPT_A)
     const html = fs.readFileSync(paths.html, 'utf8')
-    expect(html, 'self-contained: no external reference of any kind').not.toMatch(/<(script|link)\b|\bsrc=|https?:\/\/(?!www\.w3\.org)/i)
+    // The embedded brand mark is a `data:` image — part of the document, not a fetch. Everything
+    // else under src=/link/script would be loaded from somewhere at open time.
+    const withoutAssets = html.replace(/src="data:image\/[a-z+.-]+;base64,[A-Za-z0-9+/=]+"/gi, '')
+    expect(withoutAssets, 'self-contained: no external reference of any kind').not.toMatch(/<(script|link)\b|\bsrc=|https?:\/\/(?!www\.w3\.org)/i)
+    expect(html, 'and the mark IS embedded').toMatch(/<header class="brand"><img src="data:image\/png;base64,/)
 
     // 2. The Analyze step keeps R1/R2/R3 all the way out to the files the shell wrote.
     const second = await exportTurn({ conversationId: convId, turnId: analyze.id, formats: ['md', 'pdf'], title: PROMPT_A, turnType: 'analyze' })

@@ -16,9 +16,10 @@ from html import escape
 
 import pytest
 
-from backend import export
+from backend import branding, export
 from backend.config import FORBIDDEN_IDENTITY_STRINGS
 from backend.schemas import LABELS, SLOT_IDS
+from tests.export.conftest import logo_uris, without_assets
 from tests.helpers import find_identity_leaks
 
 OTHER_MAP = {"R1": "grok", "R2": "claude", "R3": "chatgpt"}  # not the conftest default
@@ -48,7 +49,7 @@ def fused(rich_send, add_analyze, add_fusion):
 def test_analyze_and_fusion_exports_are_r_labels_only(fused, which, fmt):
     conv, analyze, fusion = fused()
     turn = analyze if which == "analyze" else fusion
-    doc = export.render_doc(export.build_document(conv, turn.id), fmt)
+    doc = without_assets(export.render_doc(export.build_document(conv, turn.id), fmt))
 
     # Nothing allowed: the whole document is Triplex-authored plus vendor-free quoted text.
     assert find_identity_leaks(doc) == []
@@ -76,7 +77,7 @@ def test_only_quoted_text_may_carry_a_vendor_name(fused, which):
     planted = (VENDOR_PROMPT, VENDOR_CLAIM, VENDOR_JUSTIFICATION)
 
     for fmt in ("md", "html"):
-        doc = export.render_doc(export.build_document(conv, turn.id), fmt)
+        doc = without_assets(export.render_doc(export.build_document(conv, turn.id), fmt))
         # The HTML escapes quoted text (`OpenAI's` -> `OpenAI&#x27;s`), so the allow list carries
         # both spellings -- which is itself proof that the quoted text was escaped.
         allow = (*planted, *(escape(p, quote=True) for p in planted))
@@ -106,7 +107,7 @@ def test_send_export_names_the_slots_and_uses_no_r_labels(fused):
     """The counterpart decision: a Send document is a copy of the labelled columns on screen."""
     conv, _, _ = fused()
     for fmt in ("md", "html"):
-        doc = export.render_doc(export.build_document(conv, conv.turns[0].id), fmt)
+        doc = without_assets(export.render_doc(export.build_document(conv, conv.turns[0].id), fmt))
         for name in export.SLOT_NAMES.values():
             assert name in doc
         for label in LABELS:
@@ -119,3 +120,21 @@ def test_slot_ids_and_vendors_are_all_in_the_scanned_vocabulary():
     of `FORBIDDEN_IDENTITY_STRINGS` (mirrors the assertion in tests/e2e/test_leaks.py)."""
     assert set(SLOT_IDS) <= set(FORBIDDEN_IDENTITY_STRINGS)
     assert {n.lower() for n in export.SLOT_NAMES.values()} <= set(FORBIDDEN_IDENTITY_STRINGS)
+
+
+@pytest.mark.parametrize("fmt", ["md", "html"])
+@pytest.mark.parametrize("which", ["send", "analyze", "fusion"])
+def test_the_only_thing_excised_from_the_scan_is_our_own_logo(fused, which, fmt):
+    """The scans above run on the document with `data:` payloads removed, because base64 of any
+    image contains arbitrary letter pairs -- "R1" among them -- and a substring scan would fire on
+    noise. That is only safe while the payloads are exactly the asset we ship: this pins them, so
+    nothing can ride along inside the part that is not read."""
+    conv, analyze, fusion = fused()
+    turn = {"send": conv.turns[0], "analyze": analyze, "fusion": fusion}[which]
+    raw = export.render_doc(export.build_document(conv, turn.id), fmt)
+    expected = branding.logo_data_uri(branding.MARKDOWN_LOGO_PX if fmt == "md" else branding.HTML_LOGO_PX)
+
+    found = logo_uris(raw)
+    assert found == ([expected] if expected else []), "exactly one payload, and it is the logo"
+    # And removing it removes nothing else: the readable document is the rest, byte for byte.
+    assert without_assets(raw).replace("data:image/png;base64,<asset>", "") == raw.replace(found[0] if found else "", "")

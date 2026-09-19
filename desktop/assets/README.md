@@ -5,13 +5,17 @@
 
 ```sh
 cd desktop/assets
-for sz in 16 32 64 128 256; do convert icon-master.jpg -resize ${sz}x${sz} -strip icon-${sz}.png; done
+for sz in 16 32 48 64 128 256; do convert icon-master.jpg -resize ${sz}x${sz} -strip icon-${sz}.png; done
 convert icon-master.jpg -resize 512x512 -strip icon.png
 convert icon-16.png icon-32.png icon-64.png icon-128.png icon-256.png ../../frontend/public/favicon.ico
 cp icon-256.png ../../frontend/public/icon-256.png
 ```
 
 `icon.png` (512 px) is what `main/branding.js` hands Electron as the window and taskbar icon;
+`icon-48.png` is the mark in the printed page header (`PRINT_LOGO_PX`, embedded per page by
+Chromium, so the size matters), `icon-64.png` and `icon-128.png` are what the backend embeds in
+an exported Markdown and HTML document, and `frontend/src/assets/logo.png` (a copy of the 128) is
+the mark in the window's bottom-left corner;
 `frontend/public/favicon.ico` is the browser-tab icon for both the web app and the renderer, linked
 from `frontend/index.html` (Vite rewrites the path under `VITE_BASE=/app/`).
 

@@ -56,6 +56,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from . import api_errors
+from .branding import HTML_LOGO_PX, MARKDOWN_LOGO_PX, logo_data_uri
 from .config import settings
 from .schemas import (
     LABELS,
@@ -956,12 +957,28 @@ def _md_block(block: Any) -> str:
     raise TypeError(f"unknown block {type(block).__name__}")  # pragma: no cover
 
 
+#: The reference name the markdown logo is defined under, at the FOOT of the document.
+MD_LOGO_REF = "sj-logo"
+
+
 def render_markdown_doc(doc: Document) -> str:
-    """GFM. The marker rides in an HTML comment (invisible in every renderer)."""
+    """GFM. The marker rides in an HTML comment (invisible in every renderer).
+
+    The logo heads the document as a REFERENCE image, with its data URI defined on the last line:
+    a reader opening the .md in an editor sees the title, not a screenful of base64.
+    """
     marker = " ".join(f"{k}={v}" for k, v in _marker_fields(doc))
-    parts = [f"<!-- {marker} -->", f"# {_md_inline(doc.title)}"]
+    uri = logo_data_uri(MARKDOWN_LOGO_PX)
+    title = settings().app_title
+    parts = [f"<!-- {marker} -->"]
+    if uri:
+        parts.append(f"![{_md_inline(title)}][{MD_LOGO_REF}]")
+    parts.append(f"# {_md_inline(doc.title)}")
     parts.extend(_md_block(block) for block in doc.blocks)
-    return "\n\n".join(part for part in parts if part).rstrip() + "\n"
+    body = "\n\n".join(part for part in parts if part).rstrip()
+    if uri:
+        body += f"\n\n[{MD_LOGO_REF}]: {uri}"
+    return body + "\n"
 
 
 # --------------------------------------------------------------------------- html renderer
@@ -1010,12 +1027,21 @@ th { background: var(--panel); font-weight: 600; }
 a { color: var(--link); }
 details { margin: 8px 0 16px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: var(--panel); }
 summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-@page { margin: 16mm; }
+.brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; }
+.brand img { width: 34px; height: 34px; display: block; }
+.brand span { font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--muted); }
+/* The top margin holds the printed page header (the mark and the name). */
+@page { margin: 24mm 16mm 16mm; }
 @media print {
   .doc { max-width: none; padding: 0; }
   h2, h3, h4 { break-after: avoid; }
   tr, li, pre.body, pre.code, details { break-inside: avoid; }
   a { color: inherit; }
+  /* On paper the mark is the PAGE header, drawn in the margin of every sheet by the printer (the
+     shell's `printToPDF` headerTemplate). `position: fixed` was tried first and Chromium laid it
+     out at the FOOT of the page, measured 2026-09-19 -- so the in-flow copy simply goes away here
+     rather than appearing twice or in the wrong place. */
+  .brand { display: none; }
 }
 """
 
@@ -1094,6 +1120,18 @@ def render_html_doc(doc: Document) -> str:
         f"<title>{_esc(doc.title)}</title>\n"
         f"<style>{CSS}</style>\n"
         "</head>\n<body>\n"
-        f'<main class="doc">\n<h1>{_esc(doc.title)}</h1>\n{blocks}\n</main>\n'
+        f'<main class="doc">\n{_html_brand()}<h1>{_esc(doc.title)}</h1>\n{blocks}\n</main>\n'
         "</body>\n</html>\n"
+    )
+
+
+def _html_brand() -> str:
+    """The running header: the mark and the product name, embedded, or nothing at all."""
+    uri = logo_data_uri(HTML_LOGO_PX)
+    title = settings().app_title
+    if not uri:
+        return f'<header class="brand"><span>{_esc(title)}</span></header>\n'
+    return (
+        f'<header class="brand"><img src="{_esc(uri)}" alt="" width="34" height="34">'
+        f"<span>{_esc(title)}</span></header>\n"
     )

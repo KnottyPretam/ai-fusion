@@ -90,6 +90,17 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 **`features/meter/`** — `slice.js`: last-invocation rows + per-conversation cumulative rows + total, recomputed from persisted turns on `conversation/loaded`; Fusion multiplier = last Fusion cost / cost of the Send it fused (`analyzeOfTurn` → `sendCostByTurn`); cached `analyze_done` books nothing, `analyze_degraded` does; any event carrying `cost_cap_exceeded` sets the persistent `costCapExceeded` flag; `index.jsx` renders the table, `×N vs Send` badge, truncated count and the cap warning
 **`features/conversations/index.jsx`** — sidebar: New / select / delete are DISABLED while any stream runs (a switch mid-stream would snap back and book usage into the wrong conversation); latest-select-wins sequence; inline rename; deleting the open conversation dispatches `conversation/cleared`
 
+**The mark** — `desktop/assets/` is the one source (see its README). It appears in three places: the
+window's bottom-left corner (the sidebar footer, `brand-mark`, from `frontend/src/assets/logo.png`),
+at the head of an exported Markdown or HTML document (`backend/branding.py` embeds it as a data URI —
+markdown as a REFERENCE image whose definition is the last line, so an editor opens on the title), and
+in the top margin of EVERY printed page (`printHeaderTemplate` in `desktop/main/export.js`, drawn by
+Chromium's `headerTemplate`; the CSS `position: fixed` alternative was measured laying out at the foot
+of the page, so the document's in-flow header is `display: none` in print). A logo that cannot be read
+is absent, never fatal. Base64 payloads are excised before the export leak scans (`without_assets`) and
+pinned to the shipped asset, because base64 of any image contains arbitrary letter pairs — `R1` among
+them — and a substring scan would fire on noise.
+
 **Tooltips** — `frontend/src/components/TooltipLayer.jsx`, mounted once beside the root in `main.jsx`, so both
 shells get it. It is DELEGATED: it listens on the document and reads the description off the nearest
 ancestor carrying `data-tip` (preferred) or `title`, shows it after `TOOLTIP_DELAY_MS` (1000 ms on hover,
