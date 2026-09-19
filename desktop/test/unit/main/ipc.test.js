@@ -8,6 +8,9 @@
 // analyst state and never the pane's chip, the `analyst` layout rect, panes:analyst replayed);
 // panes:setTheme (validated, persisted in settings.json, applied to nativeTheme through the
 // injected applyTheme, answered + replayed as panes:theme, carried by getInfo).
+// panes:export (the renderer-only channel: every bad payload shape rejected before the injected
+// runner is called, the validated request — and nothing else — handed over, export_unavailable when
+// no runner is wired).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -18,7 +21,7 @@ import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 
-function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false } = {}) {
+function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false, withExport = true, exportResult = null } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
   const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
@@ -116,6 +119,12 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
   const opened = []
   const layoutState = { mode: null, active: null }
   const snapshotsDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-ipc-')), 'snapshots')
+  // export.js's exportTurn, already bound in main.js; ipc.js only validates and hands over.
+  const exportCalls = []
+  const exportRunner = async (req) => {
+    exportCalls.push(req)
+    return exportResult || { cancelled: false, formats: req.formats, files: { md: '/out/x.md' }, paths: ['/out/x.md'], defaultName: 'x' }
+  }
   const ipc = registerIpc({
     ipcMain,
     isRenderer: (event) => !!event && event.sender === renderer && (!event.senderFrame || !event.senderFrame.parent),
@@ -132,6 +141,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     getBackend: () => backend,
     getBridgeState: () => bridge,
     snapshotsDir,
+    ...(withExport ? { exportTurn: exportRunner } : {}),
     applyTheme: (t) => themeApplied.push(t), // main's nativeTheme.themeSource setter
     openExternal: async (u) => opened.push(u),
     sendToRenderer: (channel, ...args) => sent.push([channel, ...args]),
@@ -140,7 +150,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     ...(timers ? { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout } : {}),
   })
   const fromRenderer = eventFrom(renderer)
-  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current, themeState, themeApplied }
+  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current, themeState, themeApplied, exportCalls }
 }
 
 const rejects = (p, re = /bad_request/) => assert.rejects(p, re)
@@ -190,6 +200,7 @@ test('every renderer channel rejects bad_request for a non-renderer sender (a si
     await rejects(ipcMain.invoke('panes:signOut', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:snapshot', ev, 'claude'))
     await rejects(ipcMain.invoke('panes:setTheme', ev, 'light'))
+    await rejects(ipcMain.invoke('panes:export', ev, { conversationId: CONV, turnId: 't1', formats: ['md'] }))
   }
   const stage3 = setup({ withAnalyst: true })
   for (const ev of [eventFrom(stage3.siteWc.claude), { sender: stage3.renderer, senderFrame: { parent: {} } }, { sender: null }, undefined]) {
@@ -587,4 +598,53 @@ test('panes:setTheme without a settings object is theme_unavailable; getInfo and
   const info = await ipcMain.invoke('panes:getInfo', fromRenderer)
   assert.equal(info.theme, 'dark')
   assert.deepEqual(sent.filter(([c]) => c === 'panes:theme'), [['panes:theme', { theme: 'dark' }]])
+})
+
+test('panes:export hands the VALIDATED request to the runner and nothing else', async () => {
+  const { ipcMain, fromRenderer, exportCalls } = setup()
+  const res = await ipcMain.invoke('panes:export', fromRenderer, {
+    conversationId: CONV,
+    turnId: 't1',
+    formats: ['pdf', 'md', 'md'],
+    title: 'Why is the sky blue?',
+    turnType: 'analyze',
+    slot: 'claude', // a field the renderer has no business sending: dropped, never forwarded
+  })
+  assert.deepEqual(exportCalls, [{ conversationId: CONV, turnId: 't1', formats: ['md', 'pdf'], title: 'Why is the sky blue?', turnType: 'analyze' }])
+  assert.deepEqual(res.paths, ['/out/x.md'])
+  // a cancel is the runner's answer, not an error
+  const cancelled = setup({ exportResult: { cancelled: true, formats: ['md'], files: {}, paths: [], defaultName: 'x' } })
+  const out = await cancelled.ipcMain.invoke('panes:export', cancelled.fromRenderer, { conversationId: CONV, turnId: 't1', formats: ['md'] })
+  assert.equal(out.cancelled, true)
+})
+
+test('panes:export rejects every bad payload shape BEFORE the runner is called', async () => {
+  const { ipcMain, fromRenderer, exportCalls } = setup()
+  const bad = [
+    undefined,
+    null,
+    'md',
+    [],
+    { turnId: 't1', formats: ['md'] },
+    { conversationId: CONV, formats: ['md'] },
+    { conversationId: '', turnId: 't1', formats: ['md'] },
+    { conversationId: CONV, turnId: '', formats: ['md'] },
+    { conversationId: CONV, turnId: 't1' },
+    { conversationId: CONV, turnId: 't1', formats: [] },
+    { conversationId: CONV, turnId: 't1', formats: 'md' },
+    { conversationId: CONV, turnId: 't1', formats: ['md', 'docx'] },
+    { conversationId: CONV, turnId: 't1', formats: ['MD'] },
+    { conversationId: CONV, turnId: 't1', formats: ['md'], title: 42 },
+    { conversationId: CONV, turnId: 't1', formats: ['md'], title: 'x'.repeat(201) },
+    { conversationId: CONV, turnId: 't1', formats: ['md'], turnType: 'everything' },
+    { conversationId: 'x'.repeat(201), turnId: 't1', formats: ['md'] },
+  ]
+  for (const payload of bad) await rejects(ipcMain.invoke('panes:export', fromRenderer, payload), /bad_request/)
+  assert.deepEqual(exportCalls, [], 'a refused payload never reaches export.js')
+})
+
+test('panes:export without a runner is export_unavailable (validation still runs first)', async () => {
+  const { ipcMain, fromRenderer } = setup({ withExport: false })
+  await assert.rejects(ipcMain.invoke('panes:export', fromRenderer, { conversationId: CONV, turnId: 't1', formats: ['md'] }), /export_unavailable/)
+  await rejects(ipcMain.invoke('panes:export', fromRenderer, { conversationId: CONV, turnId: 't1', formats: ['docx'] }), /bad_request/)
 })

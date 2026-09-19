@@ -24,6 +24,10 @@
 //   invoke 'panes:openChats'    (convId|null)             → {[slot]: 'navigated'|'new'|'kept'}
 //   invoke 'panes:signOut'      (slot)                   clearStorageData for that partition only, then newChatUrl
 //   invoke 'panes:snapshot'     (slot)                   → {path}   (scrubbed HTML under userData/snapshots/)
+//   Export (a step → files):
+//   invoke 'panes:export'       ({conversationId, turnId, formats, title?, turnType?})
+//                               formats = a non-empty subset of ['md','html','pdf']; ONE save dialog per call,
+//                               so all three formats are one dialog and three files beside each other
 //   Stage 3:
 //   invoke 'panes:setAnalyst'   (slot|null)              choose the hidden analyst page's login (null = none)
 //   invoke 'panes:showAnalyst'  (visible:boolean)        reveal / hide the analyst view as a fourth tab
@@ -80,6 +84,7 @@ const api = Object.freeze({
   openChats: (convId) => ipcRenderer.invoke('panes:openChats', convId),
   signOut: (slot) => ipcRenderer.invoke('panes:signOut', slot),
   saveDomSnapshot: (slot) => ipcRenderer.invoke('panes:snapshot', slot),
+  exportTurn: (req) => ipcRenderer.invoke('panes:export', req),
   // Stage 3 (handlers arrive with analyst-view; until then main rejects them as unregistered):
   setAnalyst: (slot) => ipcRenderer.invoke('panes:setAnalyst', slot),
   showAnalyst: (visible) => ipcRenderer.invoke('panes:showAnalyst', visible),

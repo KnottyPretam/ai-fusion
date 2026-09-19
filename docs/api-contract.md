@@ -377,3 +377,17 @@ web app never sends the new field.
 - **`GET /api/models`** under `TRIPLEX_DESKTOP=1` returns `webmodels.desktop_catalog()` (`web:<slot>`,
   `web:<slot>:analyst` ×3, `ollama:<name>` per `OLLAMA_MODELS`; all `efforts=["off"]`,
   `structured_outputs=False`) instead of the OpenRouter catalog (Stage 3, §6); otherwise byte-identical.
+
+## Export addendum (turn exports)
+
+`GET /api/conversations/{conv_id}/export/{turn_id}?format=md|html` (`backend/routers/export.py`) → 200
+`text/markdown; charset=utf-8` or `text/html; charset=utf-8`: ONE self-contained document for that one
+turn (`send`, `continue`, `analyze`, `fusion`), built by the pure `backend/export.py` (`build_document`
+→ `render_markdown_doc` / `render_html_doc`, one document model rendered twice so the formats cannot
+drift). `format` accepts `md`/`markdown`/`html`/`htm` in any case and defaults to `md`; an unknown value
+is 422 `unknown_format`, an unknown conversation or turn is 404 `not_found`. Headers carry a suggested
+filename (`Content-Disposition`, `X-Triplex-Export-Filename`, `-Type`, `-Turn`).
+
+There is deliberately NO `pdf` format: the desktop shell prints the PDF from this HTML in an offscreen
+window, so the document is authored once. Analyze and Fusion documents keep the R1/R2/R3 labels and are
+asserted leak-free; a Send document names the slots, as its columns do on screen.

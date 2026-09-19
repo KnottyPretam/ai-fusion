@@ -221,3 +221,8 @@
   color: var(--err);
   border: 1px solid var(--err);
 }
+
+/* Export row: sits between the columns and the composer, right-aligned, so the in-flow export
+   menu opens downward while the grid (flex 1) shrinks. Present with and without the composer
+   (the desktop drawer's Captured tab renders the pane composer-less). */
+.toolbar { flex: 0 0 auto; display: flex; justify-content: flex-end; align-items: flex-start; }

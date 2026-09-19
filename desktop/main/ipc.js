@@ -29,6 +29,13 @@
 // `panes:health` chip and never in the slot-keyed bridge `health` frame, both of which describe
 // the PANE. `panes:layout` carries its rect under the `analyst` key.
 //
+// Export: `panes:export({conversationId, turnId, formats, title?, turnType?})` writes the step the
+// user is looking at — a Send turn, an Analyze turn or a Fusion turn — as Markdown, HTML, PDF or
+// all three (export.js owns the files, the dialog and the offscreen print window; this module only
+// validates and hands the request over). `formats` is a non-empty subset of md|html|pdf; `title`
+// and `turnType` only shape the default file name and are never sent to the backend, which renders
+// the document itself and keeps Analyze / Fusion anonymous (R1/R2/R3).
+//
 // Theme: `panes:setTheme('light'|'dark'|'system')` persists settings.theme, applies it to
 // `nativeTheme.themeSource` through the injected `applyTheme` (so the three SITE pages switch to
 // their own dark themes — Triplex never injects CSS into a page it does not own) and answers the
@@ -44,6 +51,7 @@ import { SLOTS, publicSites } from './sites.js'
 import { THEMES, DEFAULT_THEME } from './settings.js'
 import { normalizeLayout } from './layout.js'
 import { isExternalUrl } from './policy.js'
+import { requireExportRequest } from './export.js'
 
 export const MAX_PROMPT_CHARS = 32768
 export const MAX_CONV_ID_CHARS = 200
@@ -163,6 +171,7 @@ export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = 
  *   settings            {getCapture, setCapture, getTheme, setTheme}
  *   applyTheme(theme)   nativeTheme.themeSource = theme (main owns the electron import)
  *   chats               {get(convId, slot)}
+ *   exportTurn(req)     export.js's exportTurn, already bound to the backend URL / dialog / BrowserWindow
  *   sites               the resolved site table
  *   version, dev        for 'panes:getInfo' / 'adapter:config'
  *   getBackend()        {port, url} | null for 'panes:getInfo'
@@ -184,6 +193,7 @@ export function registerIpc({
   settings = null,
   applyTheme = null,
   chats = null,
+  exportTurn = null,
   sites,
   version,
   dev = false,
@@ -458,6 +468,19 @@ export function registerIpc({
     if (typeof applyTheme === 'function') applyTheme(next)
     emit('panes:theme', { theme: next })
     return { theme: next }
+  })
+
+  // --- export ----------------------------------------------------------------------------------
+  // Same discipline as every other channel: the sender must be the renderer and the payload is
+  // validated (ids bounded non-empty strings, formats a non-empty subset of md|html|pdf, an
+  // optional title ≤ 200 chars and an optional turn kind) BEFORE anything is fetched, printed or
+  // written. The runner (export.js) is injected, so a launch without it answers
+  // `export_unavailable` rather than failing silently.
+  handle('panes:export', async (event, payload) => {
+    requireRenderer(event)
+    const req = requireExportRequest(payload)
+    if (typeof exportTurn !== 'function') throw new Error('export_unavailable')
+    return exportTurn(req)
   })
 
   // --- site preload → main ---------------------------------------------------------------------

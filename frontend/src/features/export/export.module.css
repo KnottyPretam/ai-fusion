@@ -1,0 +1,48 @@
+/* Export control. Palette tokens from the frozen index.css. The menu is in flow (never absolute):
+   it must not overlay a site view in the desktop shell and must not be clipped by the drawer. */
+.wrap { display: inline-flex; flex-direction: column; gap: 4px; min-width: 0; }
+.row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+
+.trigger {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.trigger:disabled { color: var(--fg-muted); background: var(--bg-muted); }
+.trigger[data-open='true'] { border-color: var(--primary); color: var(--primary); }
+.trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+.menu {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  max-width: 260px;
+}
+.item {
+  text-align: left;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.item:hover { background: var(--bg-muted); }
+.item:focus-visible { outline: 2px solid var(--primary); outline-offset: -1px; }
+.itemAll { border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; margin-top: 2px; }
+.note { font-size: 11px; color: var(--fg-muted); padding: 2px 8px 0; white-space: normal; }
+
+.result { font-size: 11px; color: var(--fg-muted); font-family: var(--mono); overflow-wrap: anywhere; }
+.resultError { color: var(--err); }

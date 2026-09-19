@@ -9,7 +9,8 @@
 // snapshot, a request holding `ready` until a New-chat navigation commits, the renderer's origin
 // guard + foreign-frame IPC refusal, child-window / redirect / backstop policy, the Bluetooth
 // chooser, the health + zoom + bridge + analyst + theme replay, the theme channel (settings.json →
-// nativeTheme.themeSource + panes:theme), crash recreation, the bounds → settings.json
+// nativeTheme.themeSource + panes:theme), the export channel (validated in main and pointed at the
+// attached backend), crash recreation, the bounds → settings.json
 // flush on close and the Stage 3 hidden analyst page (hello.analyst, a `web:chatgpt:analyst` request
 // creating the view lazily on persist:chatgpt and observing with capture off, auto-reveal on a
 // challenge, the `analyst` rect, panes:setAnalyst switching the partition + the `analyst` frame +
@@ -97,7 +98,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
 
   // every §2 channel is registered once; prompt:send (removed in Stage 2) is not registered at all
   const handles = report.ipcHandles
-  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot', 'panes:setAnalyst', 'panes:showAnalyst']) {
+  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot', 'panes:setAnalyst', 'panes:showAnalyst', 'panes:export']) {
     assert.equal(handles.filter((h) => h === c).length, 1, c)
   }
   assert.equal(handles.includes('prompt:send'), false, 'prompt:send is gone')
@@ -352,6 +353,17 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.setThemeForeign.error, 'bad_request', 'only the renderer may set the theme')
   assert.equal(p.themeAfterBad, 'light', 'a refused call leaves themeSource alone')
   assert.equal(p.themeSettings, 'light')
+
+  // export: registered, validated in main, and wired to the backend this launch talks to. The
+  // attached backend answers nothing, so the fetch fails BEFORE any dialog opens and before any
+  // print window exists — a wiring run writes nothing and adds no window.
+  assert.equal(p.exportBadPayload.error, 'bad_request', 'an empty conversation id is a bad_request')
+  assert.equal(p.exportBadFormat.error, 'bad_request', 'an unknown format is a bad_request')
+  assert.equal(p.exportForeign.error, 'bad_request', 'only the renderer may export')
+  assert.equal(p.exportUnreachable.ok, false)
+  assert.equal(p.exportUnreachable.error, 'export_fetch_failed', 'the runner fetched the attached backend and failed with a code')
+  assert.equal(p.exportDialogCalls, 0, 'no save dialog opens when the document could not be fetched')
+  assert.equal(report.dialogSaveCalls, 0)
 
   assert.deepEqual(p.crashHealth, ['view_crashed'])
   assert.equal(p.recreated, 1)

@@ -68,6 +68,7 @@ export function fakeTriplex(over = {}) {
     onTurn: subscribe('turn'),
     openChats: vi.fn(async () => ({ claude: 'kept', chatgpt: 'kept', grok: 'kept' })),
     signOut: vi.fn(async () => {}),
+  exportTurn: vi.fn(async () => ({ cancelled: false, formats: ['md'], files: { md: '/tmp/x.md' }, paths: ['/tmp/x.md'], defaultName: 'x' })),
     saveDomSnapshot: vi.fn(async () => ({ path: '/tmp/snapshot.html' })),
     // Stage 3
     setAnalyst: vi.fn(async () => {}),

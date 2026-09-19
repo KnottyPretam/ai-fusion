@@ -92,6 +92,8 @@ onAnalyst(cb:({slot, visible, health})=>void): ()=>void                         
 // Theme:
 setTheme(theme:'light'|'dark'|'system'): Promise<{theme}>                              // invoke 'panes:setTheme' (persists settings.theme, sets nativeTheme.themeSource so the SITE pages follow with their own dark themes; anything else → bad_request)
 onTheme(cb:({theme})=>void): ()=>void                                                  // on 'panes:theme' (main emits the CURRENT theme on did-finish-load and after getInfo, like health/zoom/bridge)
+// Export (a step → files):
+exportTurn({conversationId, turnId, formats, title?, turnType?}): Promise<{cancelled, formats, files, paths, defaultName}>   // invoke 'panes:export'; formats is a non-empty subset of ['md','html','pdf'] — ONE save dialog per call, so all three are one dialog and three files beside each other. md/html come from GET /api/conversations/{id}/export/{turnId}?format=…; the PDF is printed from that HTML in an offscreen window.
 ```
 
 Shortcuts (`desktop/main/shortcuts.js`, `before-input-event` on every site view and the
@@ -323,7 +325,7 @@ from Stage 2 `lastSend[slot]` is `{ok, code?, message?, ms}` recorded by the pan
 `pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`, `prompt-banner` (S2: role=alert for a pre-stream failure of a Send or of New chat everywhere),
 `prompt-newchat`, `prompt-result-<slot>`, `bridge-banner` (S2), `capture-notice` (S2),
 `desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),
-`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp). Renderer chrome never overlaps a
+`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8). Renderer chrome never overlaps a
 view rect (deck bar above, headers above viewports, prompt bar/drawer below; no modals).
 
 ### 8. Freeze list

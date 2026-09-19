@@ -7,6 +7,7 @@
 //   analyze-rerun                Re-run button (POST {force:true}); rendered once a turn exists
 //   analyze-hint                 why the buttons are disabled
 //   analyze-cached               "cached" chip (analyze_done.cached)
+//   export-analyze               the Export control (features/export; R1/R2/R3 documents only)
 //   analyze-status               running indicator
 //   analyze-retry                retry indicator (analyze_retry), with the validation error
 //   analyze-error                error box (terminal error event / pre-stream failure)
@@ -18,6 +19,7 @@
 //                                analyze-cell-<id>-<label>, analyze-materiality-<id>,
 //                                analyze-not-fused-<id>
 import { useCallback, useRef } from 'react'
+import ExportControl from '../export/ExportControl.jsx'
 import { loadConversation } from '../../api/http.js'
 import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -111,6 +113,13 @@ export default function AnalyzePane() {
             cached
           </span>
         )}
+        <ExportControl
+          feature="analyze"
+          conversationId={conversation.id}
+          turnId={turn && turn.id ? turn.id : null}
+          title={conversation.title}
+          busy={streaming || analyze.status === 'running' || analyze.status === 'retrying'}
+        />
         {hint && (
           <span className={css.hint} data-testid="analyze-hint">
             {hint}

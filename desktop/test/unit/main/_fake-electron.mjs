@@ -29,6 +29,7 @@ if (!process.env.BRIDGE_TOKEN) process.env.BRIDGE_TOKEN = 'wiring'
 
 const report = {
   paths: {},
+  dialogSaveCalls: 0,
   switches: [],
   windows: [],
   views: [],
@@ -321,6 +322,25 @@ export const ipcMain = {
   },
   emit(channel, event, ...args) {
     for (const fn of [...(this.listeners.get(channel) || [])]) fn(event, ...args)
+  },
+}
+
+/**
+ * The save dialog main.js hands to export.js. A wiring run must never open a real one and must
+ * never write a file, so every call is recorded and answered `canceled: true`; the export probes
+ * only prove the channel, its validation and the backend URL it was wired with.
+ */
+export const dialog = {
+  saveCalls: [],
+  messageCalls: [],
+  async showSaveDialog(...args) {
+    dialog.saveCalls.push(args)
+    report.dialogSaveCalls = dialog.saveCalls.length
+    return { canceled: true }
+  },
+  async showMessageBox(...args) {
+    dialog.messageCalls.push(args)
+    return { response: 0 }
   },
 }
 
@@ -660,6 +680,16 @@ async function probe() {
   probes.setThemeForeign = await settle(ipcMain.invoke('panes:setTheme', mainFrameEvent(views[0].webContents), 'dark'))
   probes.themeAfterBad = report.themeSource
   probes.themeSettings = t && t.settings ? t.settings.get().theme : null
+
+  // --- export: the channel, its validation and the backend URL it was wired with ---------------
+  // Only the failing paths run here: the attached backend (127.0.0.1:1) answers nothing, so the
+  // fetch fails before any dialog opens and before any print window is created — a wiring run
+  // never writes a file and never adds a window (report.windows stays at one).
+  probes.exportBadPayload = await settle(ipcMain.invoke('panes:export', renderer, { conversationId: '', turnId: 't', formats: ['md'] }))
+  probes.exportBadFormat = await settle(ipcMain.invoke('panes:export', renderer, { conversationId: CONV, turnId: 't1', formats: ['docx'] }))
+  probes.exportForeign = await settle(ipcMain.invoke('panes:export', mainFrameEvent(views[0].webContents), { conversationId: CONV, turnId: 't1', formats: ['md'] }))
+  probes.exportUnreachable = await settle(ipcMain.invoke('panes:export', renderer, { conversationId: CONV, turnId: 't1', formats: ['md'], title: 'Wiring run', turnType: 'analyze' }))
+  probes.exportDialogCalls = dialog.saveCalls.length
 
   // a socket drop → banner state to the renderer; the client schedules a reconnect (a new socket)
   if (ws) ws.close(1006, '')

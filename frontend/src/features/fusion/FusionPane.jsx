@@ -1,18 +1,22 @@
 // W11: the Fusion pane. Fusion button + iterations stepper, live per-divergence timeline derived
 // from `fusion.rounds`, final report (exit reason, standing items with both sides' latest
 // justifications) and the usage summary. Bench instrument, not a product demo.
+// The toolbar also carries the Export control (features/export, test id `export-fusion`): it writes
+// the fusion turn shown here out as Markdown / HTML / PDF, R1/R2/R3 only.
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useRunStream } from '../../api/runStream.js'
 import { loadConversation } from '../../api/http.js'
+import ExportControl from '../export/ExportControl.jsx'
 import {
   MAX_ITERATIONS,
   MIN_ITERATIONS,
   RANK,
   STANCE_VERB,
   analyzeTurnById,
+  anyStreaming,
   buildTimeline,
   clampIterations,
   divergenceMap,
@@ -313,6 +317,14 @@ export default function FusionPane() {
         <button type="button" className={css.runBtn} data-testid="fusion-run" disabled={!gate.enabled} onClick={onRun} title={gate.reason || (gate.autoAnalyze ? 'no Analyze result yet: Analyze runs first' : 'run Fusion on the standing divergences')}>
           Fusion
         </button>
+        <ExportControl
+          feature="fusion"
+          conversationId={conversation.id}
+          turnId={fusion.turnId}
+          title={conversation.title}
+          busy={running || anyStreaming(streams)}
+          busyReason={running ? 'Fusion is running' : null}
+        />
         <span className={css.hint} data-testid="fusion-gate-hint">
           {gate.enabled ? (gate.autoAnalyze ? 'will run Analyze first' : nextStanding ? `${nextStanding.length} standing divergence${nextStanding.length === 1 ? '' : 's'}` : '') : gate.reason}
         </span>

@@ -33,6 +33,10 @@
 //                (menu.js), every IPC channel (ipc.js), the cached health + zoom + bridge state +
 //                analyst state replayed to the renderer on every did-finish-load; global.__triplexTest
 //                under TRIPLEX_E2E_APP=1.
+// Export:        `panes:export` (ipc.js → export.js) writes the step the renderer names as .md /
+//                .html / .pdf: the document comes from the backend this launch is talking to
+//                (`backendInfo.url`), the PDF is printed by an offscreen BrowserWindow, and the
+//                destination is asked for with one `dialog.showSaveDialog` per export.
 // Stage 3:       the hidden analyst view (analyst-views.js) on persist:<settings.analyst> —
 //                created lazily, never shown unless the renderer asks — its `panes:analyst` state
 //                pushed to the renderer, the bridge `analyst` frame re-sent from the settings
@@ -43,7 +47,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme } from 'electron'
+import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme, dialog } from 'electron'
 import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
@@ -54,6 +58,7 @@ import { createViewManager, buildWindowOptions, loadWithRetry, backgroundFor, LO
 import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
 import { registerIpc, saveDomSnapshot } from './ipc.js'
+import { exportTurn } from './export.js'
 import { createShortcuts } from './shortcuts.js'
 import { buildMenuTemplate } from './menu.js'
 import { isMainFrameOf } from './adapter-client.js'
@@ -193,6 +198,19 @@ function openExternal(url) {
 
 function activeSlot() {
   return layoutState.active || DEFAULT_ACTIVE
+}
+
+/** Where the export dialog starts: Documents, else Downloads, else the home directory. */
+function exportDir() {
+  for (const name of ['documents', 'downloads', 'home']) {
+    try {
+      const dir = app.getPath(name)
+      if (typeof dir === 'string' && dir !== '') return dir
+    } catch (_e) {
+      /* not every platform knows every path name */
+    }
+  }
+  return ''
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -499,6 +517,18 @@ function start() {
     settings,
     applyTheme,
     chats,
+    // The file side of "export this step": the backend renders the document (anonymous for Analyze
+    // and Fusion), export.js asks for a destination once and writes the files.
+    exportTurn: (req) =>
+      exportTurn({
+        ...req,
+        backendUrl: backendInfo ? backendInfo.url : null,
+        dialog,
+        BrowserWindow,
+        parentWindow: windowAlive() ? win : null,
+        defaultDir: exportDir(),
+        log: console,
+      }),
     sites,
     version: PKG.version,
     dev: DEV,

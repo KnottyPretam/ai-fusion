@@ -10,6 +10,8 @@
 import { useEffect, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { loadModels } from '../../api/http.js'
+import ExportControl from '../export/ExportControl.jsx'
+import { latestChatTurn } from '../export/formats.js'
 import SlotColumn from './SlotColumn.jsx'
 import { SLOT_IDS } from './slice.js'
 import { useSendTurn } from './useSendTurn.js'
@@ -52,6 +54,9 @@ export default function SendPane({ composer = true }) {
   }
 
   const grounded = !!(slotConfig && slotConfig.grounded)
+  // Export writes out the newest chat step these columns are showing: the latest Send turn, or the
+  // solo Continue after it. Derived from the loaded conversation, no extra fetch.
+  const latestChat = latestChatTurn(conversation)
 
   return (
     <div className={styles.pane} data-testid="send-grid-root">
@@ -71,6 +76,16 @@ export default function SendPane({ composer = true }) {
           {banner}
         </div>
       ) : null}
+      <div className={styles.toolbar}>
+        <ExportControl
+          feature="send"
+          conversationId={currentId}
+          turnId={latestChat ? latestChat.id : null}
+          turnType={latestChat ? latestChat.type : null}
+          title={conversation ? conversation.title : ''}
+          busy={locked}
+        />
+      </div>
       {composer ? (
         <form
           className={styles.composer}
