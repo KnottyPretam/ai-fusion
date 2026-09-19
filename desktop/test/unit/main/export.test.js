@@ -28,6 +28,8 @@ import {
   saveDialogOptions,
   targetPaths,
   renderPdf,
+  closePrintWindow,
+  PDF_CLOSE_TIMEOUT_MS,
   exportTurn,
 } from '../../../main/export.js'
 import { fakeLog } from './_fakes.js'
@@ -107,13 +109,22 @@ function makeFetch({ md = '# markdown\n', html = '<h1>html</h1>', fail = null, s
   return impl
 }
 
-/** A BrowserWindow class whose webContents emits did-finish-load (or the failure asked for). */
+/**
+ * A BrowserWindow class whose webContents emits did-finish-load (or the failure asked for).
+ * The window itself is an EventEmitter like the real one: `close()` tears it down asynchronously
+ * and emits `closed` (mode `closestall`: never closes, so the destroy fallback is exercised;
+ * mode `closethrow`: `close()` raises). `destroyCalls` counts bare destroys — the real Electron
+ * one poisons the next file:// load in the process, so the happy path must never reach it.
+ */
 function makeBrowserWindow({ mode = 'ok', pdf = Buffer.from('%PDF-1.7 fake'), stall = false } = {}) {
   const instances = []
-  class FakeWindow {
+  class FakeWindow extends EventEmitter {
     constructor(options) {
+      super()
       this.options = options
       this.destroyed = false
+      this.destroyCalls = 0
+      this.closeCalls = 0
       this.shown = 0
       this.focused = 0
       const wc = new EventEmitter()
@@ -144,7 +155,17 @@ function makeBrowserWindow({ mode = 'ok', pdf = Buffer.from('%PDF-1.7 fake'), st
       }
       this.isDestroyed = () => this.destroyed
       this.destroy = () => {
+        this.destroyCalls += 1
         this.destroyed = true
+      }
+      this.close = () => {
+        this.closeCalls += 1
+        if (mode === 'closethrow') throw new Error('close refused')
+        if (mode === 'closestall') return
+        setImmediate(() => {
+          this.destroyed = true
+          this.emit('closed')
+        })
       }
       instances.push(this)
     }
@@ -549,4 +570,101 @@ function base() {
 test('every format is covered by EXTENSIONS (a new format cannot be half-wired)', () => {
   assert.deepEqual(Object.keys(EXTENSIONS), [...FORMATS])
   for (const f of FORMATS) assert.match(EXTENSIONS[f], /^\.[a-z]+$/)
+})
+
+/** Every WARNING line a fakeLog collected, joined. */
+function warnings(log) {
+  return log.lines
+    .filter(([level]) => level === 'warn')
+    .map(([, line]) => line)
+    .join('\n')
+}
+
+// ---------------------------------------------------------------------------------------------
+// Print-window teardown. Electron 44.4.1 / Chromium 152, measured 2026-09-18: destroying an
+// offscreen window that loaded a file:// URL makes the NEXT file:// load in this process fail
+// with ERR_FAILED, and the third destroy kills the browser process with SIGTRAP. So the happy
+// path must CLOSE, and destroy is only the bounded fallback for a window that refuses to.
+// ---------------------------------------------------------------------------------------------
+
+test('the print window is closed, never destroyed, on the happy path', async () => {
+  const BrowserWindow = makeBrowserWindow()
+  const { promise } = run({ formats: ['pdf'], BrowserWindow, dialog: makeDialog({ filePath: '/out/r' }) })
+  await promise
+  const win = BrowserWindow.instances[0]
+  assert.equal(win.closeCalls, 1, 'closed once')
+  assert.equal(win.destroyCalls, 0, 'never destroyed — that poisons the next file:// load')
+  assert.equal(win.destroyed, true, 'and it is gone')
+})
+
+test('a second and third render in the same process each get a fresh window, closed the same way', async () => {
+  // The regression this guards is process-wide, so the offline proof is the contract: every
+  // render builds its own window and tears it down with close(), leaving nothing destroyed.
+  const BrowserWindow = makeBrowserWindow()
+  const html = '<p>x</p>'
+  for (let i = 0; i < 3; i += 1) {
+    const pdf = await renderPdf({ html, BrowserWindow, fs: makeFs() })
+    assert.ok(pdf.length > 0, `render ${i + 1}`)
+  }
+  assert.equal(BrowserWindow.instances.length, 3)
+  for (const win of BrowserWindow.instances) {
+    assert.equal(win.closeCalls, 1)
+    assert.equal(win.destroyCalls, 0)
+  }
+})
+
+for (const mode of ['loadfail', 'printfail']) {
+  test(`the print window is closed, not destroyed, after a ${mode}`, async () => {
+    const BrowserWindow = makeBrowserWindow({ mode })
+    await assert.rejects(renderPdf({ html: '<p>x</p>', BrowserWindow, fs: makeFs() }), /export_pdf_failed/)
+    const win = BrowserWindow.instances[0]
+    assert.equal(win.closeCalls, 1, mode)
+    assert.equal(win.destroyCalls, 0, mode)
+  })
+}
+
+test('a window that will not close is destroyed after the close timeout, with a warning', async () => {
+  const BrowserWindow = makeBrowserWindow({ mode: 'closestall' })
+  const log = fakeLog()
+  const pdf = await renderPdf({ html: '<p>x</p>', BrowserWindow, fs: makeFs(), closeTimeoutMs: 15, log })
+  assert.ok(pdf.length > 0, 'the PDF is still returned — teardown never fails the export')
+  const win = BrowserWindow.instances[0]
+  assert.equal(win.closeCalls, 1)
+  assert.equal(win.destroyCalls, 1, 'the bounded fallback')
+  assert.match(warnings(log), /did not close within 15 ms/)
+})
+
+test('closePrintWindow: close() throwing, no close(), already destroyed, and no window', async () => {
+  const log = fakeLog()
+
+  const [Throws] = [makeBrowserWindow({ mode: 'closethrow' })]
+  const throws = new Throws({})
+  assert.equal(await closePrintWindow(throws, { log, timeoutMs: 15 }), 'destroyed')
+  assert.equal(throws.destroyCalls, 1)
+  assert.match(warnings(log), /could not close the print window: close refused/)
+
+  // A minimal window object (an older fake, or a stub): destroy is all there is.
+  let destroyed = 0
+  const bare = { destroy: () => { destroyed += 1 }, isDestroyed: () => destroyed > 0 }
+  assert.equal(await closePrintWindow(bare, { log, timeoutMs: 15 }), 'destroyed')
+  assert.equal(destroyed, 1)
+
+  const Gone = makeBrowserWindow()
+  const gone = new Gone({})
+  gone.destroyed = true
+  assert.equal(await closePrintWindow(gone, { log, timeoutMs: 15 }), 'already')
+  assert.equal(gone.closeCalls, 0, 'a destroyed window is not closed again')
+  assert.equal(gone.destroyCalls, 0)
+
+  assert.equal(await closePrintWindow(null, { log }), 'none')
+  assert.equal(await closePrintWindow(undefined, { log }), 'none')
+})
+
+test('closePrintWindow: a window that closes reports closed, and the default timeout is sane', async () => {
+  const W = makeBrowserWindow()
+  const win = new W({})
+  assert.equal(await closePrintWindow(win, { log: fakeLog() }), 'closed')
+  assert.equal(win.closeCalls, 1)
+  assert.equal(win.destroyCalls, 0)
+  assert.ok(PDF_CLOSE_TIMEOUT_MS >= 1000 && PDF_CLOSE_TIMEOUT_MS <= 10000, 'bounded, not instant')
 })

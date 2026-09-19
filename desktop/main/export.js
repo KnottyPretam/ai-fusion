@@ -25,7 +25,7 @@
 // the clock, the timers), so `node --test` drives all of it without a binary. Errors are CODED —
 // `bad_request` | `export_unavailable` | `export_fetch_failed` | `export_pdf_failed` |
 // `export_pdf_timeout` | `export_dialog_failed` | `export_write_failed` — never a crash, and the
-// offscreen PDF window is destroyed on every path.
+// offscreen PDF window is closed on every path (gracefully — see `closePrintWindow`).
 //
 // Backend seam (the sibling workstream owns the endpoint):
 //   GET <backend>/api/conversations/<id>/export/<turnId>?format=md|html
@@ -54,6 +54,8 @@ export const FALLBACK_STEP = 'turn'
 export const FETCH_TIMEOUT_MS = 30000
 /** A pathological document must not hang the app: the load and the print are each bounded. */
 export const PDF_TIMEOUT_MS = 20000
+/** How long the offscreen window may take to close before it is destroyed outright. */
+export const PDF_CLOSE_TIMEOUT_MS = 3000
 export const PDF_PAGE_SIZE = 'A4'
 export const PDF_MARGINS = Object.freeze({ top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 })
 
@@ -248,11 +250,70 @@ export async function fetchDocument({ backendUrl, conversationId, turnId, format
  * The HTML is printed by an OFFSCREEN window: `show:false`, not focusable, never shown, never
  * added to the deck's contentView (so it cannot appear between the panes or steal the keyboard),
  * sandboxed and context-isolated with scripting off — an exported document is static, and a
- * document that cannot run code cannot reach out of the print. The window is destroyed in a
+ * document that cannot run code cannot reach out of the print. The window is torn down in a
  * `finally` on EVERY path (load failure, print failure, timeout) together with the temp file, and
- * both the load and the print are bounded by `timeoutMs`.
+ * both the load and the print are bounded by `timeoutMs`. Teardown goes through
+ * `closePrintWindow`, never a bare `destroy()` — see the note there.
  */
-export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.tmpdir, timeoutMs = PDF_TIMEOUT_MS, pageSize = PDF_PAGE_SIZE, log = console, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
+/**
+ * Tear the offscreen print window down the way a window is meant to go: `close()`, wait for
+ * `closed`, and only `destroy()` if it did not close within `timeoutMs`.
+ *
+ * `destroy()` is NOT interchangeable here. Measured on this box with Electron 44.4.1 /
+ * Chromium 152 (2026-09-18, three documents and three identical ones, six teardown strategies):
+ * destroying an offscreen window that had loaded a `file://` URL leaves the NEXT `file://` load
+ * in a brand-new window failing with `ERR_FAILED (-2)`, and the third destroy takes the whole
+ * browser process down with SIGTRAP. It reproduces with `printToPDF` and without it, whether or
+ * not the temp directory is kept, and with the destroy delayed by a tick or 100 ms — so it is the
+ * abrupt teardown, not the print and not the file. `close()` and "never destroy" are the only
+ * strategies under which three renders in one process all succeed. The app renders one PDF per
+ * export, so without this the user's SECOND pdf export of a session fails and the third crashes
+ * the app. Returns how it went, for the caller's log: 'closed' | 'destroyed' | 'already' | 'none'.
+ */
+export async function closePrintWindow(win, { log = console, timeoutMs = PDF_CLOSE_TIMEOUT_MS, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
+  const warn = (line) => {
+    if (log && typeof log.warn === 'function') log.warn(line)
+  }
+  const force = (why) => {
+    try {
+      if (typeof win.destroy === 'function' && !(typeof win.isDestroyed === 'function' && win.isDestroyed())) win.destroy()
+    } catch (e) {
+      warn(`[export] could not destroy the print window (${why}): ${(e && e.message) || e}`)
+    }
+    return 'destroyed'
+  }
+
+  if (!win) return 'none'
+  if (typeof win.isDestroyed === 'function' && win.isDestroyed()) return 'already'
+  if (typeof win.close !== 'function') return force('no close()')
+
+  let settle = null
+  const done = new Promise((resolve) => {
+    settle = resolve
+  })
+  let timer = setT(() => {
+    timer = null
+    settle('timeout')
+  }, timeoutMs)
+  if (typeof win.once === 'function') win.once('closed', () => settle('closed'))
+  else settle('no_event') // a window without events: close() is all there is to wait for
+  try {
+    win.close()
+  } catch (e) {
+    warn(`[export] could not close the print window: ${(e && e.message) || e}`)
+    settle('error')
+  }
+  const how = await done
+  if (timer !== null) clearT(timer)
+  if (how === 'timeout') {
+    warn(`[export] the print window did not close within ${timeoutMs} ms; destroying it`)
+    return force('timeout')
+  }
+  if (how === 'error') return force('close() threw')
+  return how === 'no_event' ? 'closed' : how
+}
+
+export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.tmpdir, timeoutMs = PDF_TIMEOUT_MS, closeTimeoutMs = PDF_CLOSE_TIMEOUT_MS, pageSize = PDF_PAGE_SIZE, log = console, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
   if (typeof BrowserWindow !== 'function') throw codedError('export_unavailable', 'no BrowserWindow')
   if (typeof html !== 'string' || html === '') throw codedError('export_pdf_failed', 'empty document')
 
@@ -339,11 +400,9 @@ export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.
     if (!data || typeof data.length !== 'number' || data.length === 0) throw codedError('export_pdf_failed', 'empty PDF')
     return data
   } finally {
-    try {
-      if (win && (typeof win.isDestroyed !== 'function' || !win.isDestroyed()) && typeof win.destroy === 'function') win.destroy()
-    } catch (e) {
-      if (log && typeof log.warn === 'function') log.warn(`[export] could not destroy the print window: ${(e && e.message) || e}`)
-    }
+    // Graceful close, never a bare destroy: a destroyed offscreen window poisons the next
+    // file:// load in this process. See closePrintWindow.
+    if (win) await closePrintWindow(win, { log, timeoutMs: closeTimeoutMs, setTimeout: setT, clearTimeout: clearT })
     if (dir) {
       try {
         if (typeof fs.rmSync === 'function') fs.rmSync(dir, { recursive: true, force: true })
@@ -412,6 +471,7 @@ export async function exportTurn({
   defaultDir = '',
   fetchTimeoutMs = FETCH_TIMEOUT_MS,
   pdfTimeoutMs = PDF_TIMEOUT_MS,
+  pdfCloseTimeoutMs = PDF_CLOSE_TIMEOUT_MS,
   tmpdir = os.tmpdir,
   log = console,
 } = {}) {
@@ -430,7 +490,7 @@ export async function exportTurn({
 
   let pdf = null
   if (req.formats.includes('pdf')) {
-    pdf = await renderPdf({ html: docs.html, BrowserWindow, fs, tmpdir, timeoutMs: pdfTimeoutMs, log })
+    pdf = await renderPdf({ html: docs.html, BrowserWindow, fs, tmpdir, timeoutMs: pdfTimeoutMs, closeTimeoutMs: pdfCloseTimeoutMs, log })
   }
 
   const stem = defaultFileName({ title: req.title, turnType: req.turnType, ts: now() })
