@@ -50,7 +50,9 @@ const SLOTS = ['claude', 'chatgpt', 'grok']
 const PROMPT = 'hello `x` "y" ${z}\nline2'
 const BOUNDS_DEBOUNCE_MS = 500
 /** The fake site's chat URLs (`/c/<id>?site=…`) for the selectors override the Stage 2 block installs. */
-const FAKE_CHAT_URL_PATTERN = '^http://127\\.0\\.0\\.1:5199/c/[A-Za-z0-9]+'
+const FAKE_CHAT_URL_PATTERN = `^${FAKE_BASE.replace(/[.]/g, '\\.')}/c/[A-Za-z0-9]+`
+/** The port the app should report for the backend it attached to. */
+const BACKEND_PORT = Number(new URL(BACKEND_URL).port || '80')
 
 /** `query` is appended to every site URL (Stage 2: `replyMs=150` makes the fake site stream `Echo: <text>`). */
 function sitesJson(query = '') {
@@ -393,7 +395,7 @@ test.describe('desktop send (bridge)', () => {
     await expect.poll(() => app.evaluate(() => globalThis.__triplexTest.bridge.status().connected), { timeout: 5_000 }).toBe(true)
     await expect(page.getByTestId('bridge-banner')).toBeHidden({ timeout: 10_000 })
     const info = await page.evaluate(() => window.triplex.getInfo())
-    expect(info.backend).toEqual({ port: 8021, url: BACKEND_URL })
+    expect(info.backend).toEqual({ port: BACKEND_PORT, url: BACKEND_URL })
   })
 
   test('a Send from the PromptBar persists a SendTurn with not_captured errors (capture off by default)', async () => {
@@ -693,6 +695,86 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     const analyst = await analystFakeState()
     expect(analyst.submitted.at(-1)).toContain('<<<DIVERGENCES>>>')
     expect(analyst.url, 'a fresh analyst chat, not the extraction one').not.toBe(analystChatBefore)
+  })
+
+  // The export path had no app-level cover: `node --test` drives main/export.js with a fake
+  // BrowserWindow, and the vitest suite never reaches IPC. This is the whole path — the renderer's
+  // invoke, one save dialog per export, the offscreen print, the files on disk, the anonymity of an
+  // Analyze document, and a cancel writing nothing. The repeated pdf exports are cheap insurance on
+  // print-window reuse; they do NOT reproduce the Chromium teardown behaviour that
+  // `scripts/check-pdf-render.mjs` watches, because that needs the print window to be the last one
+  // in the process and this app's main window is always open (measured 2026-09-18).
+  test('Export writes md + html + pdf for a step, keeps Analyze anonymous, and repeats without failing', async () => {
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-export-'))
+    // One save dialog per export, so stub it in main: no modal, and a record of what was asked.
+    await app.evaluate(({ dialog }, dir) => {
+      globalThis.__exportDialogs = []
+      dialog.showSaveDialog = async (...args) => {
+        const options = args[args.length - 1]
+        globalThis.__exportDialogs.push({ defaultPath: options && options.defaultPath, filters: options && options.filters })
+        return { canceled: false, filePath: `${dir}/step-${globalThis.__exportDialogs.length}` }
+      }
+      dialog.showMessageBox = async () => ({ response: 0 }) // an overwrite confirmation, if one comes
+    }, outDir)
+
+    const conv = await backend(`/api/conversations/${convId}`)
+    const send = lastSendTurn(conv)
+    const analyze = [...conv.turns].reverse().find((t) => t.type === 'analyze' && t.status === 'ok')
+    expect(send && analyze, 'the Send and the ok Analyze this describe produced').toBeTruthy()
+
+    const exportTurn = (req) => page.evaluate((r) => window.triplex.exportTurn(r), req)
+
+    // 1. All three formats for the Send step: ONE dialog, three files beside each other.
+    const first = await exportTurn({ conversationId: convId, turnId: send.id, formats: ['md', 'html', 'pdf'], title: PROMPT_A, turnType: 'send' })
+    expect(first.cancelled).toBe(false)
+    expect(first.formats).toEqual(['md', 'html', 'pdf'])
+    expect(await app.evaluate(() => globalThis.__exportDialogs.length), 'one dialog for all three').toBe(1)
+    const asked = await app.evaluate(() => globalThis.__exportDialogs[0])
+    expect(asked.defaultPath, 'the default stem carries the title and the step').toMatch(/gyroscope.*send/)
+
+    const paths = { md: `${outDir}/step-1.md`, html: `${outDir}/step-1.html`, pdf: `${outDir}/step-1.pdf` }
+    for (const [format, file] of Object.entries(paths)) {
+      expect(fs.existsSync(file), `${format} written`).toBe(true)
+      expect(fs.statSync(file).size, `${format} not empty`).toBeGreaterThan(200)
+    }
+    expect(fs.readFileSync(paths.pdf).subarray(0, 5).toString('latin1'), 'a real PDF').toBe('%PDF-')
+    const md = fs.readFileSync(paths.md, 'utf8')
+    expect(md, 'the Send export names the slots, as its columns do').toMatch(/Claude/)
+    expect(md).toContain(PROMPT_A)
+    const html = fs.readFileSync(paths.html, 'utf8')
+    expect(html, 'self-contained: no external reference of any kind').not.toMatch(/<(script|link)\b|\bsrc=|https?:\/\/(?!www\.w3\.org)/i)
+
+    // 2. The Analyze step keeps R1/R2/R3 all the way out to the files the shell wrote.
+    const second = await exportTurn({ conversationId: convId, turnId: analyze.id, formats: ['md', 'pdf'], title: PROMPT_A, turnType: 'analyze' })
+    expect(second.cancelled).toBe(false)
+    const analyzeMd = fs.readFileSync(`${outDir}/step-2.md`, 'utf8')
+    expect(analyzeMd).toMatch(/\bR1\b/)
+    for (const name of ['Claude', 'ChatGPT', 'Grok', 'claude', 'chatgpt', 'grok', 'anthropic', 'openai', 'anon_map']) {
+      expect(analyzeMd, `the Analyze export must not name ${name}`).not.toContain(name)
+    }
+    expect(fs.readFileSync(`${outDir}/step-2.pdf`).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+
+    // 3. The regression: a third and fourth PDF in the SAME app process still render. With the old
+    //    teardown the second already failed with ERR_FAILED and the third took the app down.
+    for (const n of [3, 4]) {
+      const again = await exportTurn({ conversationId: convId, turnId: send.id, formats: ['pdf'], title: PROMPT_A, turnType: 'send' })
+      expect(again.cancelled, `pdf export ${n}`).toBe(false)
+      const file = `${outDir}/step-${n}.pdf`
+      expect(fs.existsSync(file), `pdf export ${n} written`).toBe(true)
+      expect(fs.readFileSync(file).subarray(0, 5).toString('latin1'), `pdf export ${n} is a PDF`).toBe('%PDF-')
+    }
+    // Every print window closed: none is left attached to the app.
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length), 'only the app window remains').toBe(1)
+
+    // 4. A cancelled dialog writes nothing.
+    await app.evaluate(({ dialog }) => {
+      dialog.showSaveDialog = async () => ({ canceled: true, filePath: undefined })
+    })
+    const cancelled = await exportTurn({ conversationId: convId, turnId: send.id, formats: ['md'], title: PROMPT_A, turnType: 'send' })
+    expect(cancelled.cancelled).toBe(true)
+    expect(fs.readdirSync(outDir).filter((f) => f.endsWith('.md')).sort()).toEqual(['step-1.md', 'step-2.md'])
+
+    fs.rmSync(outDir, { recursive: true, force: true })
   })
 
   test('a challenge on the analyst page auto-reveals it as the fourth tab (deck-tab-analyst)', async () => {

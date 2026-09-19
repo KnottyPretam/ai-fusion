@@ -64,14 +64,15 @@ build log in `docs/decisions.md`, with a pointer from the row.
 Repeated PDF exports (needs a display, no ports, no sign-in): `cd desktop && npx electron
 scripts/check-pdf-render.mjs` renders the same document three times through `main/export.js` in one
 Electron process and exits non-zero if any render fails, if the sizes drift, or if a print window is
-left behind (`PDF_CHECK_RUNS=6` for a longer run). It exists because the failure it guards is a
-Chromium behaviour that neither `node --test` nor the app Playwright project can see: on Electron
-44.4.1 / Chromium 152 (measured 2026-09-18), tearing the offscreen print window down with
-`destroy()` rather than `close()` made the SECOND render in a process fail with `ERR_FAILED (-2)` on
-its own `file://` document and the THIRD take the browser process down with SIGTRAP — i.e. the
-second pdf export of a session failed and the third crashed the app. Run it at a gate and after any
-Electron upgrade; with the pre-fix teardown put back it fails at render 2, which is how it was
-verified to bite.
+left behind (`PDF_CHECK_RUNS=6` for a longer run). It is a canary for a Chromium teardown behaviour
+that neither `node --test` nor the app spec can see: on Electron 44.4.1 / Chromium 152 (measured
+2026-09-18), tearing the offscreen print window down with `destroy()` rather than `close()` made the
+SECOND render in the process fail with `ERR_FAILED (-2)` on its own `file://` document and the THIRD
+take the browser process down with SIGTRAP. That happens only while the print window is the LAST
+window in the process, which is exactly the shape this script has and exactly what the running app
+never has — its main window is always open, so the app's export path was not affected. Run the
+script at a gate and after an Electron upgrade: with the pre-fix `destroy()` put back it fails at
+render 2, which is how it was verified to bite, and the app spec's export test passes either way.
 
 DOM snapshots: for each site, in the **composer** (idle, signed in), **streaming** (stop button
 visible), **done** (reply complete) and **logged-out** states, use the menu item *Save DOM snapshot*

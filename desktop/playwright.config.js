@@ -7,10 +7,13 @@ import { defineConfig } from '@playwright/test'
 // (Vite 5184, backend 8021) are only listed when TRIPLEX_E2E_APP is set: a plain
 // `playwright test --project adapters` starts only the fake site.
 
+// Ports are env-overridable so a run can stand beside a Triplex that is already using the
+// defaults (the app holds 8021 and, in dev, 5184); nothing changes when they are unset.
 const FAKE_PORT = process.env.TRIPLEX_FAKE_PORT || '5199'
 const APP = !!process.env.TRIPLEX_E2E_APP
-const VITE_PORT = '5184'
-const BACKEND_PORT = '8021'
+const VITE_PORT = process.env.VITE_PORT || '5184'
+const BACKEND_PORT = process.env.TRIPLEX_BACKEND_PORT || process.env.BACKEND_PORT || '8021'
+const DATA_DIR = process.env.TRIPLEX_E2E_DATA_DIR || './data/e2e-desktop'
 
 const fakeSite = {
   command: `node test/fake-site/serve.js`,
@@ -35,7 +38,7 @@ const backend = {
   timeout: 60_000,
   env: {
     PORT: BACKEND_PORT,
-    DATA_DIR: './data/e2e-desktop',
+    DATA_DIR,
     TRIPLEX_DESKTOP: '1',
     BRIDGE_TOKEN: 'e2e',
     SLOT_CLAUDE_MODEL: 'web:claude',

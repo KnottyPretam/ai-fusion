@@ -259,16 +259,18 @@ export async function fetchDocument({ backendUrl, conversationId, turnId, format
  * Tear the offscreen print window down the way a window is meant to go: `close()`, wait for
  * `closed`, and only `destroy()` if it did not close within `timeoutMs`.
  *
- * `destroy()` is NOT interchangeable here. Measured on this box with Electron 44.4.1 /
- * Chromium 152 (2026-09-18, three documents and three identical ones, six teardown strategies):
- * destroying an offscreen window that had loaded a `file://` URL leaves the NEXT `file://` load
- * in a brand-new window failing with `ERR_FAILED (-2)`, and the third destroy takes the whole
- * browser process down with SIGTRAP. It reproduces with `printToPDF` and without it, whether or
- * not the temp directory is kept, and with the destroy delayed by a tick or 100 ms — so it is the
- * abrupt teardown, not the print and not the file. `close()` and "never destroy" are the only
- * strategies under which three renders in one process all succeed. The app renders one PDF per
- * export, so without this the user's SECOND pdf export of a session fails and the third crashes
- * the app. Returns how it went, for the caller's log: 'closed' | 'destroyed' | 'already' | 'none'.
+ * Measured on this box with Electron 44.4.1 / Chromium 152 (2026-09-18, six teardown strategies):
+ * `destroy()` on an offscreen window that had loaded a `file://` URL leaves the NEXT `file://` load
+ * in a brand-new window failing with `ERR_FAILED (-2)`, and the third destroy takes the browser
+ * process down with SIGTRAP — but ONLY while that window is the LAST one in the process. Keep any
+ * other window open (`about:blank` is enough) and `destroy()` is harmless, which is why the app
+ * spec never saw it: Triplex's own main window is always there. So this is robustness, not a live
+ * bug fix — it drops the dependency on "some other window happens to be open", which would bite a
+ * print during shutdown or from a future window-less mode, and it matches how `views.js` and
+ * `analyst-views.js` already tear their webContents down (`wc.close()`, never destroy).
+ * It reproduces with `printToPDF` removed, whether or not the temp directory is kept, and with the
+ * destroy delayed by a tick or 100 ms, so the trigger is the abrupt teardown, not the print.
+ * Returns how it went, for the caller's log: 'closed' | 'destroyed' | 'already' | 'none'.
  */
 export async function closePrintWindow(win, { log = console, timeoutMs = PDF_CLOSE_TIMEOUT_MS, setTimeout: setT = globalThis.setTimeout, clearTimeout: clearT = globalThis.clearTimeout } = {}) {
   const warn = (line) => {
@@ -400,8 +402,8 @@ export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.
     if (!data || typeof data.length !== 'number' || data.length === 0) throw codedError('export_pdf_failed', 'empty PDF')
     return data
   } finally {
-    // Graceful close, never a bare destroy: a destroyed offscreen window poisons the next
-    // file:// load in this process. See closePrintWindow.
+    // Graceful close, never a bare destroy: destroying the last window in a process poisons the
+    // next file:// load in it. See closePrintWindow.
     if (win) await closePrintWindow(win, { log, timeoutMs: closeTimeoutMs, setTimeout: setT, clearTimeout: clearT })
     if (dir) {
       try {

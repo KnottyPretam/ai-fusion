@@ -3,14 +3,17 @@
 //   cd desktop && npx electron scripts/check-pdf-render.mjs          # 3 renders (default)
 //   PDF_CHECK_RUNS=6 npx electron scripts/check-pdf-render.mjs
 //
-// Why a script and not a unit test: the failure this guards is a Chromium behaviour, invisible to
-// `node --test` (which drives `renderPdf` with a fake BrowserWindow) and to the app Playwright
-// project (which needs a save dialog). Measured on Electron 44.4.1 / Chromium 152, 2026-09-18:
-// tearing the offscreen print window down with `destroy()` instead of `close()` made the SECOND
-// render in a process fail with `ERR_FAILED (-2)` on its own `file://` document and the THIRD kill
-// the browser process with SIGTRAP — so the user's second pdf export of a session failed and the
-// third crashed the app. `main/export.js` closes the window (`closePrintWindow`); this script is
-// what shows that it still holds on a new Electron.
+// Why a script and not a unit test: what it watches is a Chromium behaviour, invisible to
+// `node --test` (which drives `renderPdf` with a fake BrowserWindow). Measured on Electron 44.4.1 /
+// Chromium 152, 2026-09-18: tearing the offscreen print window down with `destroy()` instead of
+// `close()` made the SECOND render in a process fail with `ERR_FAILED (-2)` on its own `file://`
+// document and the THIRD kill the browser process with SIGTRAP.
+//
+// Read the scope honestly: that only happens while the print window is the LAST window in the
+// process — which is the shape THIS script has, and is never the shape of the running app, whose
+// main window is always open. So this is a canary for the teardown behaviour itself (and for an
+// Electron upgrade changing it), not a reproduction of a user-visible failure; the app spec's
+// export test covers the app's own path and passes with either teardown.
 //
 // Self-contained: no backend, no ports, no site, its own userData directory. Needs a display.
 // Exits 0 when every render succeeded and no window was left behind, 1 otherwise, 2 on bad input.
