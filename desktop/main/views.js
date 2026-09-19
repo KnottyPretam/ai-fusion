@@ -24,6 +24,7 @@ import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.
 import { applyLayout as applyLayoutToViews, normalizeLayout } from './layout.js'
 import { stepZoom, clampZoom, asTheme, DEFAULT_THEME } from './settings.js'
 import { createAdapterClient, isMainFrameOf, REQUEST_CHANNEL } from './adapter-client.js'
+import { APP_TITLE } from './branding.js'
 
 export const LOAD_RETRY_MS = 1000
 export const LOAD_RETRY_MAX = 30
@@ -89,9 +90,10 @@ export function buildViewOptions(site, { preload, zoomFactor = 1 } = {}) {
 
 /**
  * webPreferences for the renderer window (same hardening; preload/renderer.cjs) plus the ground
- * Electron paints before the renderer's first paint (`backgroundColor`, default light).
+ * Electron paints before the renderer's first paint (`backgroundColor`, default light) and the
+ * window/taskbar icon (`icon`, a PNG path; omitted when not given, as the tests do).
  */
-export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex', backgroundColor = BACKGROUND_LIGHT } = {}) {
+export function buildWindowOptions({ preload, bounds = {}, title = APP_TITLE, backgroundColor = BACKGROUND_LIGHT, icon = null } = {}) {
   if (typeof preload !== 'string' || preload === '') throw new Error('buildWindowOptions: preload is required')
   const out = {
     width: bounds.width,
@@ -109,6 +111,7 @@ export function buildWindowOptions({ preload, bounds = {}, title = 'Triplex', ba
       webviewTag: false,
     },
   }
+  if (typeof icon === 'string' && icon !== '') out.icon = icon
   if (typeof bounds.x === 'number') out.x = bounds.x
   if (typeof bounds.y === 'number') out.y = bounds.y
   return out

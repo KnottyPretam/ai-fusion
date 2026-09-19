@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.config import settings
 from backend import export
 from tests.export.conftest import (
     CITATIONS,
@@ -30,7 +31,7 @@ def test_send_markdown_sections_in_order(conv):
     turn = conv.turns[0]
     text = export.render_markdown(conv, turn.id)
     headings = md_headings(text)
-    assert headings[0] == (1, "Triplex Send — Test conversation")
+    assert headings[0] == (1, f"{settings().app_title} Send — Test conversation")
     assert [h for h in headings if h[0] == 2] == [
         (2, "Prompt"),
         (2, "Claude"),
@@ -87,7 +88,7 @@ def test_send_html_has_the_same_sections_and_marker(conv):
     html = export.render_html(conv, turn.id)
     assert html.startswith("<!doctype html>")
     headings = html_headings(html)
-    assert headings[0] == (1, "Triplex Send — Test conversation")
+    assert headings[0] == (1, f"{settings().app_title} Send — Test conversation")
     assert [h for h in headings if h[0] == 2] == [
         (2, "Prompt"),
         (2, "Claude"),
@@ -113,7 +114,7 @@ def test_both_formats_are_built_from_the_same_document(conv):
 def test_continue_turn_is_a_single_named_slot(conv, add_continue):
     turn = add_continue(conv, slot="chatgpt")
     text = export.render_markdown(conv, turn.id)
-    assert md_headings(text)[0] == (1, "Triplex Continue — Test conversation")
+    assert md_headings(text)[0] == (1, f"{settings().app_title} Continue — Test conversation")
     assert [h for h in md_headings(text) if h[0] == 2] == [(2, "Prompt"), (2, "ChatGPT")]
     assert "**turn type:** continue" in text
     assert turn.response in text

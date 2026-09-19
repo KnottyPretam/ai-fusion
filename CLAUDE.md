@@ -1,4 +1,16 @@
-# CLAUDE.md - Technical Notes for Triplex
+# CLAUDE.md - Technical Notes for Solomon's Judgement (codename Triplex)
+
+**Naming (2026-09-19).** The product is **Solomon's Judgement**; `triplex` remains the codename
+throughout the code and this document. Renaming stopped at what a user reads — window title,
+menu, sidebar brand, page title, exported document titles, the copy in the panes — and the string
+lives in exactly three places: `desktop/main/branding.js` (`APP_TITLE`), `frontend/src/branding.js`
+(`APP_NAME`) and the backend's existing `APP_TITLE` setting, which `backend.js` pins for the
+spawned backend. Everything else keeps the codename ON PURPOSE: `window.triplex`, `TRIPLEX_*`,
+`triplex.*` localStorage keys, `persist:<slot>` partitions, the python package, every
+`data-testid`, and above all `desktop/package.json`'s `name` — Electron derives the userData path
+from `app.getName()`, so a `productName` there would point the app at an empty profile and sign
+the user out of all three sites. The icon is `desktop/assets/` (see its README); the favicon is
+`frontend/public/favicon.ico`.
 
 PLAN.md is the spec. Work one stage at a time (phase→stage map in Appendix B). Check off items and update the decisions log (`docs/decisions.md`, "Build log").
 
@@ -77,6 +89,15 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 **`features/config/index.jsx`** — global bar: analyst model (structured-outputs models grouped first), default iterations, materiality threshold, grounded toggle; a save sequence counter lets only the LATEST PUT's response land, and never for a conversation no longer selected
 **`features/meter/`** — `slice.js`: last-invocation rows + per-conversation cumulative rows + total, recomputed from persisted turns on `conversation/loaded`; Fusion multiplier = last Fusion cost / cost of the Send it fused (`analyzeOfTurn` → `sendCostByTurn`); cached `analyze_done` books nothing, `analyze_degraded` does; any event carrying `cost_cap_exceeded` sets the persistent `costCapExceeded` flag; `index.jsx` renders the table, `×N vs Send` badge, truncated count and the cap warning
 **`features/conversations/index.jsx`** — sidebar: New / select / delete are DISABLED while any stream runs (a switch mid-stream would snap back and book usage into the wrong conversation); latest-select-wins sequence; inline rename; deleting the open conversation dispatches `conversation/cleared`
+
+**Tooltips** — `frontend/src/components/TooltipLayer.jsx`, mounted once beside the root in `main.jsx`, so both
+shells get it. It is DELEGATED: it listens on the document and reads the description off the nearest
+ancestor carrying `data-tip` (preferred) or `title`, shows it after `TOOLTIP_DELAY_MS` (1000 ms on hover,
+400 ms on keyboard focus), and while it is up it takes the element's `title` away — the only way to stop
+the browser drawing a second tooltip on top — restoring it on hide, on unmount, and pointing
+`aria-describedby` at the bubble meanwhile. Placement (`components/tooltipPlacement.js`, pure) avoids the
+native site views, which cover anything the renderer paints inside a pane viewport rect. Every button in
+the app carries a description; add `title` (or a longer `data-tip`) and it is covered automatically.
 
 **Styling** — light theme, primary `#4a90e2`; palette tokens and `.markdown-content` (12px padding; every ReactMarkdown wrapped) in `index.css`; `App.css` is layout only (main column scrolls, Send grid 62vh, `.app-analyze:empty`/`.app-fusion:empty` hidden); each feature ships its own `*.module.css`
 

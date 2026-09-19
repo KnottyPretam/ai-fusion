@@ -12,6 +12,7 @@
 // node --test walks the template and clicks the items.
 
 import { SLOTS } from './sites.js'
+import { APP_TITLE } from './branding.js'
 
 export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok' })
 
@@ -25,7 +26,7 @@ export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude',
  *   actions.signOut(slot)        → Promise
  */
 export function buildMenuTemplate({ shortcuts, dev = false, getActive, actions = {}, log = console } = {}) {
-  const base = shortcuts && typeof shortcuts.menuTemplate === 'function' ? shortcuts.menuTemplate() : [{ label: 'Triplex', submenu: [{ role: 'quit' }] }]
+  const base = shortcuts && typeof shortcuts.menuTemplate === 'function' ? shortcuts.menuTemplate() : [{ label: APP_TITLE, submenu: [{ role: 'quit' }] }]
   const active = () => {
     const slot = typeof getActive === 'function' ? getActive() : null
     return SLOTS.includes(slot) ? slot : SLOTS[0]

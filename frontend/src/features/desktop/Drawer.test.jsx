@@ -15,6 +15,7 @@ import { PERSIST_KEYS, initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { CFG, RECTS, conv, fakeTriplex, installFakeResizeObserver, jsonResponse, pinViewportRects, seqOf, stubFetch, syncFrames } from './fakes.js'
+import { APP_NAME } from '../../branding.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -389,7 +390,7 @@ describe('Drawer: the analyst the hidden page is actually on', () => {
     mount(fake, { conversation: convWith([sendTurn('t1', 'a')]), slotConfig: CFG })
     fireEvent.click(tab('settings'))
     const settings = screen.getByTestId('drawer-panel-settings')
-    expect(settings).toHaveTextContent('Triplex labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it.')
+    expect(settings).toHaveTextContent(`${APP_NAME} labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it.`)
     expect(settings).not.toHaveTextContent('The analyst reads only R1/R2/R3-labelled text')
   })
 })
@@ -508,7 +509,7 @@ describe('CostMeter: desktop mode', () => {
     expect(heads).toEqual(['feature', 'tokens in / out', 'latency', 'calls', 'tokens in / out', 'latency', 'calls'])
     // and the footer says what is actually true of the two desktop transports
     expect(screen.getByTestId('meter-truncated')).toHaveTextContent('truncated replies: 1')
-    expect(meter).toHaveTextContent('a web session reports no tokens and is billed by the site, not by Triplex; a local Ollama analyst reports its tokens at no cost')
+    expect(meter).toHaveTextContent(`a web session reports no tokens and is billed by the site, not by ${APP_NAME}; a local Ollama analyst reports its tokens at no cost`)
   })
 
   test('the default follows window.triplex: desktop columns under the Electron preload, the web columns otherwise', () => {

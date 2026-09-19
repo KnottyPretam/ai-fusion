@@ -47,6 +47,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+
 import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme, dialog } from 'electron'
 import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
@@ -55,6 +56,7 @@ import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attach
 import { createSettings, asTheme, DEFAULT_THEME } from './settings.js'
 import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, backgroundFor, LOAD_RETRY_MS } from './views.js'
+import { APP_TITLE, iconPath } from './branding.js'
 import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
 import { registerIpc, saveDomSnapshot } from './ipc.js'
@@ -222,7 +224,7 @@ function createWindow() {
   // The ground Electron paints until the renderer's first paint: the resolved theme's `--bg`, not
   // Electron's white default (a dark launch would otherwise flash white for as long as the load
   // takes, and `loadWithRetry` can retry for seconds against a backend that is still starting).
-  win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: 'Triplex', backgroundColor: currentBackground() }))
+  win = new BrowserWindow(buildWindowOptions({ preload: RENDERER_PRELOAD, bounds, title: APP_TITLE, backgroundColor: currentBackground(), icon: iconPath() }))
   if (bounds.maximized) win.maximize()
 
   // The renderer never opens windows itself and never leaves its own origin: window.open, a

@@ -56,6 +56,7 @@ import { useOpenChats } from './chats.js'
 import { desktopApi } from './PaneDeck.jsx'
 import { NOT_CAPTURED, SLOT_IDS, SLOT_LABELS, initialPanes, selectedTargets } from './slice.js'
 import css from './desktop.module.css'
+import { APP_NAME } from '../../branding.js'
 
 /** 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '✗ send_not_found' | '' */
 export function formatResult(r) {
@@ -78,7 +79,7 @@ export function resultTitle(r) {
   return parts.join('\n')
 }
 
-export const BRIDGE_BANNER_TEXT = 'Not connected to the Triplex backend bridge — a Send fails with bridge_unavailable until Electron reconnects (automatic).'
+export const BRIDGE_BANNER_TEXT = `Not connected to the ${APP_NAME} backend bridge — a Send fails with bridge_unavailable until Electron reconnects (automatic).`
 
 export default function PromptBar({ api = desktopApi(), composerRef = null, chats = null }) {
   const dispatch = useDispatch()
@@ -250,7 +251,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
           className={css.newChat}
           data-testid="prompt-newchat"
           disabled={busy || creating}
-          title={busy ? 'a stream is running' : 'Start a new Triplex conversation and a new chat in every site (Ctrl+Shift+N)'}
+          title={busy ? 'a stream is running' : `Start a new ${APP_NAME} conversation and a new chat in every site (Ctrl+Shift+N)`}
           onClick={newChat}
         >
           New chat everywhere

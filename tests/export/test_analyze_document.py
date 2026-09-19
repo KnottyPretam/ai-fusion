@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.config import settings
 from backend import export
 from tests.export.conftest import (
     AGREEMENTS,
@@ -25,7 +26,7 @@ def test_analyze_markdown_names_the_send_and_quotes_its_prompt(conv, add_analyze
     send = conv.turns[0]
     turn = add_analyze(conv)
     text = export.render_markdown(conv, turn.id)
-    assert md_headings(text)[0] == (1, "Triplex Analyze — Test conversation")
+    assert md_headings(text)[0] == (1, f"{settings().app_title} Analyze — Test conversation")
     assert f"**analysed send turn:** {send.id}" in text
     assert "## The Send that was analysed" in text
     assert f"**send turn:** {send.id}" in text

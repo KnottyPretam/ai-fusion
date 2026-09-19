@@ -459,7 +459,7 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
           disabled={anyStreaming || !conversation}
           rows={1}
         />
-        <button type="submit" data-testid={`slot-${slot}-continue`} disabled={anyStreaming || !conversation || !draft.trim()}>
+        <button type="submit" data-testid={`slot-${slot}-continue`} disabled={anyStreaming || !conversation || !draft.trim()} title={`Ask ${SLOT_LABELS[slot]} alone. The other two threads are left byte-for-byte as they were.`}>
           Continue
         </button>
       </form>

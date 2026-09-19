@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { buildMenuTemplate, findMenuItem, SITE_LABELS } from '../../../main/menu.js'
 import { createShortcuts } from '../../../main/shortcuts.js'
 import { fakeLog, tick } from './_fakes.js'
+import { APP_TITLE } from '../../../main/branding.js'
 
 function setup({ dev = true, active = 'grok', failSnapshot = false, showAnalyst = true } = {}) {
   const calls = []
@@ -30,11 +31,11 @@ function setup({ dev = true, active = 'grok', failSnapshot = false, showAnalyst 
   return { template, calls, log }
 }
 
-test('the template keeps Triplex / Panes / Edit and inserts Site before Edit with the five items', () => {
+test('the template keeps <app title> / Panes / Edit and inserts Site before Edit with the five items', () => {
   const { template } = setup()
   assert.deepEqual(
     template.map((m) => m.label),
-    ['Triplex', 'Panes', 'Site', 'Edit'],
+    [APP_TITLE, 'Panes', 'Site', 'Edit'],
   )
   const site = template[2]
   // one "Sign out of <site>" per slot, in SLOTS order (claude, chatgpt, grok)
@@ -74,6 +75,6 @@ test('a failing or missing action is logged, never thrown; an unknown active slo
   assert.doesNotThrow(() => findMenuItem(bare, 'Reload selectors').click())
   assert.deepEqual(
     bare.map((m) => m.label),
-    ['Triplex', 'Site'],
+    [APP_TITLE, 'Site'],
   )
 })

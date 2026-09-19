@@ -15,6 +15,7 @@ import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
 import { FEATURE_ROWS, initialMeter, meterReducer } from './slice.js'
 import css from './meter.module.css'
+import { APP_NAME } from '../../branding.js'
 
 registerSlice('meter', meterReducer, initialMeter)
 
@@ -144,7 +145,7 @@ export default function CostMeter({ desktop = isDesktop() }) {
         </span>
         <span>
           {desktop
-            ? 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · a web session reports no tokens and is billed by the site, not by Triplex; a local Ollama analyst reports its tokens at no cost'
+            ? `last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · a web session reports no tokens and is billed by the site, not by ${APP_NAME}; a local Ollama analyst reports its tokens at no cost`
             : 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock'}
         </span>
       </div>

@@ -35,6 +35,7 @@ import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { SLOTS, LOOPBACK_HOSTS } from './sites.js'
+import { APP_TITLE } from './branding.js'
 
 export const DEFAULT_PORT = 8021
 export const START_TIMEOUT_MS = 45000
@@ -45,7 +46,7 @@ export const RESTART_DELAY_MS = 1000
 export const STOP_GRACE_MS = 5000
 export const LOG_FILE = 'backend.log'
 /** Parent-environment keys never handed to the spawned backend (§6: never OPENROUTER_API_KEY). */
-export const ENV_DENYLIST = Object.freeze(['OPENROUTER_API_KEY', 'PORT', 'BACKEND_PORT', 'HOST', 'DATA_DIR', 'TRIPLEX_DESKTOP', 'BRIDGE_TOKEN', 'ANALYST_MODEL', 'TRIPLEX_APP_DIR', 'LOG_LEVEL'])
+export const ENV_DENYLIST = Object.freeze(['OPENROUTER_API_KEY', 'PORT', 'BACKEND_PORT', 'HOST', 'DATA_DIR', 'TRIPLEX_DESKTOP', 'BRIDGE_TOKEN', 'ANALYST_MODEL', 'TRIPLEX_APP_DIR', 'LOG_LEVEL', 'APP_TITLE'])
 export const ENV_DENY_PREFIXES = Object.freeze(['MOCK_', 'SLOT_'])
 /** Keys pinned to '' in the spawn env so the repo `.env` (dotenv, override=False) cannot fill them in. */
 export const ENV_PINNED_EMPTY = Object.freeze(['OPENROUTER_API_KEY'])
@@ -104,6 +105,9 @@ export function buildSpawnSpec({ repoDir, userData, port = DEFAULT_PORT, token, 
   out.HOST = '127.0.0.1'
   out.DATA_DIR = dataDir || (env && env.TRIPLEX_DATA_DIR) || path.join(userData, 'data')
   out.TRIPLEX_DESKTOP = '1'
+  // The product name the backend stamps on an exported document ("<app title> Send — <title>").
+  // Pinned here, not left to .env, so the app and its exports always agree.
+  out.APP_TITLE = APP_TITLE
   out.BRIDGE_TOKEN = token
   out.MOCK_OPENROUTER = '0'
   out.SLOT_CLAUDE_MODEL = 'web:claude'

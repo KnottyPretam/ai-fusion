@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.config import settings
 from backend import export
 from tests.export.conftest import html_headings, md_headings, md_tables
 
@@ -25,7 +26,7 @@ def scenario(rich_send, add_analyze, add_fusion):
 def test_fusion_markdown_header_and_lineage(scenario):
     conv, analyze, fusion = scenario()
     text = export.render_markdown(conv, fusion.id)
-    assert md_headings(text)[0] == (1, "Triplex Fusion — Test conversation")
+    assert md_headings(text)[0] == (1, f"{settings().app_title} Fusion — Test conversation")
     assert f"**fused analyze turn:** {analyze.id}" in text
     assert f"**rounds:** {len(fusion.rounds)} of {fusion.max_iterations}" in text
     assert f"**exit reason:** {fusion.exit_reason}" in text

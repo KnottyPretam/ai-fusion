@@ -1,0 +1,38 @@
+/* The bubble. `position: fixed` in a body portal, so no ancestor's overflow or stacking context can
+   clip it; `pointer-events: none` so it can never swallow a click meant for the control under it. */
+.bubble {
+  position: fixed;
+  z-index: 2147483000; /* above every pane, drawer and banner this app paints */
+  max-width: 340px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-muted);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+  pointer-events: none;
+  opacity: 0;
+  animation: tipIn 90ms ease-out forwards;
+}
+
+/* Measured off-screen before it is placed: same box, no paint, no animation. */
+.measuring {
+  left: -10000px;
+  top: -10000px;
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes tipIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble { animation: none; opacity: 1; }
+}

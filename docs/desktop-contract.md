@@ -325,8 +325,11 @@ from Stage 2 `lastSend[slot]` is `{ok, code?, message?, ms}` recorded by the pan
 `pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`, `prompt-banner` (S2: role=alert for a pre-stream failure of a Send or of New chat everywhere),
 `prompt-newchat`, `prompt-result-<slot>`, `bridge-banner` (S2), `capture-notice` (S2),
 `desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),
-`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8). Renderer chrome never overlaps a
-view rect (deck bar above, headers above viewports, prompt bar/drawer below; no modals).
+`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8), `tooltip` (S9: the one delegated hover description, portalled to `document.body`; `data-placement` names the side it chose).  Renderer chrome never overlaps a
+view rect (deck bar above, headers above viewports, prompt bar/drawer below; no modals). The ONE thing the
+renderer paints that floats is the tooltip, and it is placed against those same viewport rects: it
+tries below, above, right, left and takes the first side clear of every `[data-testid$="-viewport"]`
+box, because anything inside one is behind a site page and simply invisible.
 
 ### 8. Freeze list
 

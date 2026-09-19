@@ -13,6 +13,7 @@ round in which one label was unavailable, and a revise flagged by the anti-sycop
 from __future__ import annotations
 
 import re
+from html import unescape
 from typing import Any
 
 import pytest
@@ -351,7 +352,13 @@ def md_headings(text: str) -> list[tuple[int, str]]:
 
 
 def html_headings(text: str) -> list[tuple[int, str]]:
-    return [(int(m.group(1)), m.group(2).strip()) for m in _HTML_HEADING_RE.finditer(text)]
+    """Heading TEXT, unescaped, so it compares like-for-like with `md_headings`.
+
+    The HTML builder escapes every value, so a title holding an apostrophe, `&` or `<` reaches the
+    markup as an entity (`Solomon&#x27;s Judgement`). Comparing the two renderings is a comparison of
+    what a reader sees, not of the bytes; that the escaping happens at all is `test_escaping.py`.
+    """
+    return [(int(m.group(1)), unescape(m.group(2)).strip()) for m in _HTML_HEADING_RE.finditer(text)]
 
 
 def md_tables(text: str) -> list[list[list[str]]]:

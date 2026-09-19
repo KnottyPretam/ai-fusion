@@ -25,6 +25,7 @@ import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { LABELS, NOT_CAPTURED_MESSAGE_PREFIX, RANK, initial, isSendTurnComplete, latestSendTurn } from './slice.js'
 import css from './analyze.module.css'
+import { APP_NAME } from '../../branding.js'
 
 export default function AnalyzePane() {
   const dispatch = useDispatch()
@@ -91,7 +92,7 @@ export default function AnalyzePane() {
   if (!send) hint = 'send a prompt first'
   else if (streaming) hint = 'a stream is running'
   else if (notCaptured.length && !errored.length) {
-    hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so Triplex never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
+    hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
   } else if (errored.length) {
     hint = `no reply came back from ${reasons(errored)}${notCaptured.length ? ` (and capture was off for ${list(notCaptured)})` : ''}. This turn cannot be analyzed — Send again.`
   } else if (!complete) hint = 'waiting for all three responses'

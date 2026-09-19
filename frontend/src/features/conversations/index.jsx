@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, createConversation, deleteConversation, loadConversations, renameConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import css from './conversations.module.css'
+import { APP_NAME } from '../../branding.js'
 
 export const STREAM_FEATURES = ['send', 'analyze', 'fusion']
 const CREATING = Symbol('creating')
@@ -111,8 +112,8 @@ export default function Sidebar() {
   return (
     <div className={css.sidebar} data-testid="conversations">
       <div className={css.header}>
-        <span className={css.brand}>Triplex</span>
-        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew} disabled={busy}>
+        <span className={css.brand}>{APP_NAME}</span>
+        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew} disabled={busy} title="Start an empty conversation with its own three threads. Disabled while a stream is running.">
           + New conversation
         </button>
       </div>
@@ -162,10 +163,10 @@ export default function Sidebar() {
                 ) : isConfirming ? (
                   <div className={css.confirm} data-testid="conv-delete-prompt">
                     <span>Delete?</span>
-                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)} disabled={busy}>
+                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)} disabled={busy} title="Delete this conversation, its three threads and every report on it. This cannot be undone.">
                       Delete
                     </button>
-                    <button type="button" data-testid="conv-delete-cancel" onClick={() => setConfirming(null)}>
+                    <button type="button" data-testid="conv-delete-cancel" onClick={() => setConfirming(null)} title="Keep it.">
                       Cancel
                     </button>
                   </div>
@@ -181,10 +182,10 @@ export default function Sidebar() {
                 )}
                 {!isEditing && !isConfirming && (
                   <div className={css.actions}>
-                    <button type="button" data-testid="conv-rename" onClick={() => startRename(c)}>
+                    <button type="button" data-testid="conv-rename" onClick={() => startRename(c)} title="Rename it. Enter saves, Escape cancels; the first prompt named it.">
                       Rename
                     </button>
-                    <button type="button" data-testid="conv-delete" onClick={() => setConfirming(c.id)} disabled={busy}>
+                    <button type="button" data-testid="conv-delete" onClick={() => setConfirming(c.id)} disabled={busy} title="Delete this conversation. You are asked to confirm first.">
                       Delete
                     </button>
                   </div>

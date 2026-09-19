@@ -344,6 +344,54 @@ test.describe('desktop shell', () => {
     await expect.poll(() => viewState(app, 'claude').then((v) => v && v.zoom), { timeout: 10_000 }).toBeCloseTo(1, 5)
   })
 
+  // The tooltip is the first thing this shell paints that FLOATS, so it is the first that can land
+  // inside a pane rect — where the native site view would simply cover it. What matters is not
+  // which side it picks (the pane header leaves a band of chrome, and below is fine when it fits)
+  // but that it never ends up behind a view. Both pane-header controls are checked, including the
+  // capture switch, which is the last chrome above the viewport.
+  test('a pane-header button shows its description after a beat, and it never lands behind a site view', async () => {
+    await page.getByTestId('deck-mode-split').click()
+    await expect.poll(() => boundsMatch(app, page, 'claude'), { timeout: 15_000 }).toBe('ok')
+
+    /** '' when the tooltip is clear of every viewport, else which one it overlaps. */
+    const overlap = () =>
+      page.evaluate(() => {
+        const t = document.querySelector('[data-testid="tooltip"]')
+        if (!t) return 'no tooltip'
+        const a = t.getBoundingClientRect()
+        for (const el of document.querySelectorAll('[data-testid$="-viewport"]')) {
+          const b = el.getBoundingClientRect()
+          if (b.width < 1 || b.height < 1) continue
+          if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) return el.dataset.testid
+        }
+        return ''
+      })
+
+    const tip = page.getByTestId('tooltip')
+    expect(await tip.count(), 'nothing floating before a hover').toBe(0)
+
+    const reload = page.getByTestId('pane-claude-reload')
+    await reload.hover()
+    await page.waitForTimeout(300)
+    expect(await tip.count(), 'and nothing until the pointer has rested').toBe(0)
+    await expect(tip).toBeVisible({ timeout: 5_000 })
+    expect((await tip.textContent()).trim().length).toBeGreaterThan(5)
+    expect(await overlap()).toBe('')
+    // The browser's own tooltip is out of the way while ours is up.
+    expect(await reload.getAttribute('title')).toBeNull()
+
+    // The capture switch sits hard against the top of the site view: below is not an option there.
+    await page.getByTestId('pane-claude-capture').hover()
+    await expect(tip).toBeVisible({ timeout: 5_000 })
+    expect(await overlap()).toBe('')
+    expect(await tip.getAttribute('data-placement'), 'flipped out of the view').toBe('top')
+
+    // Moving away puts the native title back and takes the bubble down.
+    await page.getByTestId('prompt-composer').hover()
+    await expect(tip).toBeHidden()
+    expect(await reload.getAttribute('title')).not.toBeNull()
+  })
+
   test('Reload reloads the pane in place; New chat navigates it to newChatUrl', async () => {
     const before = await fakeState(app, 'claude')
     expect(before.submitted).toHaveLength(1)

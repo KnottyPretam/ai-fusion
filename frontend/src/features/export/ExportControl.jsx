@@ -16,12 +16,13 @@
 // Test ids: export-<feature> (trigger), export-menu-<feature>, export-format-md|html|pdf|all,
 // export-<feature>-result.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FEATURE_TURN_LABEL, FORMAT_LABELS, allLabel, availableFormats, defaultBaseName, formatsFor } from './formats.js'
+import { FEATURE_TURN_LABEL, FORMAT_LABELS, FORMAT_TIPS, allLabel, availableFormats, defaultBaseName, formatsFor } from './formats.js'
 import { isDesktop, resultLine, runExport } from './runExport.js'
 import css from './export.module.css'
+import { APP_NAME } from '../../branding.js'
 
 const MENU_TITLE_DESKTOP = 'One save dialog each time, with a default file name. "All three" asks once for a base path and writes the .md, .html and .pdf beside each other.'
-const MENU_TITLE_BROWSER = 'PDF is not available in the browser: the Triplex desktop app renders it. Markdown and HTML download here.'
+const MENU_TITLE_BROWSER = `PDF is not available in the browser: the ${APP_NAME} desktop app renders it. Markdown and HTML download here.`
 
 export default function ExportControl({ feature, conversationId, turnId, title, turnType = null, busy = false, busyReason = null }) {
   const [open, setOpen] = useState(false)
@@ -126,11 +127,11 @@ export default function ExportControl({ feature, conversationId, turnId, title, 
       {open ? (
         <span className={css.menu} ref={menuRef} role="menu" aria-label={`Export the ${FEATURE_TURN_LABEL[feature] || 'turn'}`} data-testid={`export-menu-${feature}`} title={desktop ? MENU_TITLE_DESKTOP : MENU_TITLE_BROWSER}>
           {formats.map((f) => (
-            <button key={f} type="button" role="menuitem" className={css.item} data-testid={`export-format-${f}`} data-feature={feature} data-format={f} onClick={() => choose(f)}>
+            <button key={f} type="button" role="menuitem" className={css.item} data-testid={`export-format-${f}`} data-feature={feature} data-format={f} onClick={() => choose(f)} title={FORMAT_TIPS[f]}>
               {FORMAT_LABELS[f]}
             </button>
           ))}
-          <button type="button" role="menuitem" className={`${css.item} ${css.itemAll}`} data-testid="export-format-all" data-feature={feature} data-format="all" onClick={() => choose('all')}>
+          <button type="button" role="menuitem" className={`${css.item} ${css.itemAll}`} data-testid="export-format-all" data-feature={feature} data-format="all" onClick={() => choose('all')} title="Every format at once, from ONE save dialog: the files land side by side under the name you give.">
             {allLabel(desktop)}
           </button>
           {desktop ? null : (

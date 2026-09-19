@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { APP_TITLE } from '../../../main/branding.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const DESKTOP = path.resolve(HERE, '..', '..', '..')
@@ -106,7 +107,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
 
   // the application menu: the accelerator table + the Site menu
   assert.ok(report.menu)
-  assert.deepEqual(report.menu.labels, ['Triplex', 'Panes', 'Site', 'Edit'])
+  assert.deepEqual(report.menu.labels, [APP_TITLE, 'Panes', 'Site', 'Edit'])
   for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
   }

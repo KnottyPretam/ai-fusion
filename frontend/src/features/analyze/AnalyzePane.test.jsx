@@ -8,6 +8,7 @@ import { NOT_CAPTURED_MESSAGE_PREFIX } from './slice.js'
 // (the constant is duplicated with a pointer, like SLOT_VENDORS), so this assertion is the guard
 // that the two copies still say the same thing.
 import { NOT_CAPTURED_MESSAGE_PREFIX as DESKTOP_NOT_CAPTURED_MESSAGE_PREFIX } from '../desktop/slice.js'
+import { APP_NAME } from '../../branding.js'
 
 const SLOT_NAMES = /claude|chatgpt|grok|anthropic|openai|x-ai/i
 
@@ -266,14 +267,14 @@ describe('AnalyzePane: the incomplete-turn hint', () => {
 
   test('desktop, capture off for one slot: the wording is singular and points at that pane header', () => {
     const hint = hintFor({ grok: CAPTURE_OFF('grok') }, { responses: { claude: 'a', chatgpt: 'b', grok: null } })
-    expect(hint).toHaveTextContent('grok replied on screen but capture was off, so Triplex never read it')
+    expect(hint).toHaveTextContent(`grok replied on screen but capture was off, so ${APP_NAME} never read it`)
     expect(hint).toHaveTextContent('Turn Capture on in that pane header and Send again: capture applies to the next Send, not this one.')
     expect(hint.textContent).not.toContain('no reply came back')
   })
 
   test('desktop, capture off for all three: the wording is plural', () => {
     const hint = hintFor({ claude: CAPTURE_OFF('claude'), chatgpt: CAPTURE_OFF('chatgpt'), grok: CAPTURE_OFF('grok') })
-    expect(hint).toHaveTextContent('claude, chatgpt, grok replied on screen but capture were off, so Triplex never read them')
+    expect(hint).toHaveTextContent(`claude, chatgpt, grok replied on screen but capture were off, so ${APP_NAME} never read them`)
     expect(hint).toHaveTextContent('those pane headers')
   })
 

@@ -1,9 +1,16 @@
-# Triplex
+# Solomon's Judgement
 
 A three-slot model council — **Claude / ChatGPT / Grok** via OpenRouter — with three separately
 triggered features: **Send** (parallel, streamed, per-slot threads), **Analyze** (agreements and
 divergences as strict JSON) and **Fusion** (an iterative defend/revise loop with a user-set
 iteration cap; stalemate is a valid outcome). Bench instrument, not a product.
+
+The app is **Solomon's Judgement** to anyone using it — the window, the menu, the taskbar icon
+and every exported document. `triplex` stays the codename in the code: `window.triplex`, the
+`TRIPLEX_*` variables, the `triplex.*` storage keys, the python package, the `data-testid`s and
+the userData directory `~/.config/triplex-desktop`, which holds the three logged-in sessions and
+must not move. The one string lives in `desktop/main/branding.js`, `frontend/src/branding.js` and
+the backend's `APP_TITLE`.
 
 `PLAN.md` is the spec; `CLAUDE.md` has the technical notes; `docs/` holds the frozen contracts
 (`api-contract.md`, `semantics.md`, `fixtures.md`) and the build log (`decisions.md`).

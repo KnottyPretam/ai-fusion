@@ -1,3 +1,4 @@
+import { APP_NAME } from '../../branding.js'
 // Desktop `panes` slice (renderer-desktop Stage 1, renderer-desktop-2 Stage 2). Registered under key
 // 'panes' from ./index.jsx.
 //
@@ -73,9 +74,9 @@ export const SESSION_BADGES = { logged_out: 'SIGN IN', challenge: 'CHALLENGE', b
 export const NOT_CAPTURED = 'not_captured'
 
 /** The capture switch label (plan Stage 2 row, verbatim) and the ToS wording next to it / in the notice. */
-export const CAPTURE_LABEL = 'Capture reply text from this page into Triplex (needed for Analyze/Fusion)'
+export const CAPTURE_LABEL = `Capture reply text from this page into ${APP_NAME} (needed for Analyze/Fusion)`
 export const CAPTURE_NOTICE_TEXT =
-  'Capture is off by default for every site. Switching it on for a pane makes Triplex read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, and xAI’s forbid automated access beyond a conventional browser. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the three switches has been set once.'
+  'Capture is off by default for every site. Switching it on for a pane makes ' + APP_NAME + ' read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, and xAI’s forbid automated access beyond a conventional browser. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the three switches has been set once.'
 export const CAPTURE_TITLE = 'Reads the reply out of this page, the act the site’s terms of service name. Off by default; your decision per site.'
 
 export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets', drawerOpen: 'triplex.panes.drawerOpen' }

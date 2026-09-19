@@ -60,12 +60,13 @@ import { analystSlotOf, isDesktopAnalyst, loadAnalyst, persistAnalyst } from './
 import { desktopApi } from './PaneDeck.jsx'
 import { SLOT_LABELS, initialPanes, isSlotId, notCapturedSlots } from './slice.js'
 import css from './desktop.module.css'
+import { APP_NAME } from '../../branding.js'
 
 export const DRAWER_TABS = [
-  { key: 'analyze', label: 'Analyze' },
-  { key: 'fusion', label: 'Fusion' },
-  { key: 'captured', label: 'Captured' },
-  { key: 'settings', label: 'Settings' },
+  { key: 'analyze', label: 'Analyze', tip: 'What the three answers agree on and where they differ, labelled R1/R2/R3. Needs captured replies.' },
+  { key: 'fusion', label: 'Fusion', tip: 'Put each difference back to the models that hold it, round by round, and report what converged and what still stands.' },
+  { key: 'captured', label: 'Captured', tip: 'The reply text read out of each site, as stored: this is exactly what Analyze and Fusion see.' },
+  { key: 'settings', label: 'Settings', tip: 'Which page answers as the analyst, how many Fusion rounds, and the materiality floor for fusing a difference.' },
 ]
 export const TAB_KEYS = DRAWER_TABS.map((t) => t.key)
 export const CHOOSE_ANALYST_HINT = 'choose an analyst'
@@ -163,7 +164,7 @@ export default function Drawer({ api = desktopApi() }) {
         </button>
         <div className={css.drawerTabs} role="tablist" aria-label="Drawer">
           {DRAWER_TABS.map((t) => (
-            <button key={t.key} type="button" role="tab" className={css.drawerTab} data-testid={`drawer-tab-${t.key}`} aria-selected={open && tab === t.key} onClick={() => select(t.key)}>
+            <button key={t.key} type="button" role="tab" className={css.drawerTab} data-testid={`drawer-tab-${t.key}`} aria-selected={open && tab === t.key} onClick={() => select(t.key)} title={t.tip}>
               {t.label}
             </button>
           ))}
@@ -217,7 +218,7 @@ export default function Drawer({ api = desktopApi() }) {
                 {analystPageText(pageSlot, effectiveAnalyst)}
               </p>
               <p className={css.hint}>
-                Triplex labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it. A web session runs the analyst in a
+                {APP_NAME} labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it. A web session runs the analyst in a
                 hidden page signed in as that site (a fresh chat per Analyze); local Ollama needs a running server. New conversations start with the choice above; the open conversation is updated in place.
               </p>
             </div>

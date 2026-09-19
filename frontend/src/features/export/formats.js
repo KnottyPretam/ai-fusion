@@ -16,6 +16,12 @@ export const FORMATS = ['md', 'html', 'pdf']
 export const BROWSER_FORMATS = ['md', 'html']
 
 export const FORMAT_LABELS = { md: 'Markdown (.md)', html: 'HTML (.html)', pdf: 'PDF (.pdf)' }
+/** What each format is good for, for the hover description on the menu item. */
+export const FORMAT_TIPS = {
+  md: 'Plain GitHub-flavoured Markdown: the model bodies verbatim, for pasting into an editor or a repo.',
+  html: 'One self-contained page with no external reference of any kind. Opens anywhere, prints as it looks.',
+  pdf: 'Printed from that same HTML by the desktop app, A4 with page breaks. Fixed layout, for sending on.',
+}
 
 /** Blob type per format (browser downloads only; the desktop writes the bytes itself). */
 export const FORMAT_MIME = { md: 'text/markdown;charset=utf-8', html: 'text/html;charset=utf-8', pdf: 'application/pdf' }

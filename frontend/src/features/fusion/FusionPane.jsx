@@ -277,6 +277,7 @@ export default function FusionPane() {
             type="button"
             className={css.stepBtn}
             data-testid="fusion-iterations-dec"
+            title="One round fewer. A round is: every model holding a position defends or revises it, then the analyst checks what converged."
             disabled={running || iterations <= MIN_ITERATIONS}
             onClick={() => stepIterations(-1)}
             aria-label="fewer iterations"
@@ -307,6 +308,7 @@ export default function FusionPane() {
             type="button"
             className={css.stepBtn}
             data-testid="fusion-iterations-inc"
+            title="One round more, up to five. More rounds cost more calls to every site; Fusion stops early the moment nothing is still standing."
             disabled={running || iterations >= MAX_ITERATIONS}
             onClick={() => stepIterations(1)}
             aria-label="more iterations"

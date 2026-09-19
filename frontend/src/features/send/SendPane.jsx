@@ -111,7 +111,7 @@ export default function SendPane({ composer = true }) {
               rows={3}
             />
           </div>
-          <button type="submit" className={styles.sendButton} data-testid="send-button" disabled={locked || !prompt.trim()}>
+          <button type="submit" className={styles.sendButton} data-testid="send-button" disabled={locked || !prompt.trim()} title="Send this prompt to all three models at once. Each answers in its own thread, with its own history.">
             {sendStreaming ? 'Streaming…' : 'Send'}
           </button>
         </form>

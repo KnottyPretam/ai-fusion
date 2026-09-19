@@ -56,6 +56,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from . import api_errors
+from .config import settings
 from .schemas import (
     LABELS,
     MATERIALITY_RANK,
@@ -232,7 +233,7 @@ class Document:
     turn_id: str
     conversation_id: str
     conversation_title: str
-    title: str  # the <title> / H1: "Triplex Send — <conversation title>"
+    title: str  # the <title> / H1: "<app title> Send — <conversation title>"
     ts: str  # the turn's ISO timestamp
     blocks: tuple[Any, ...] = field(default_factory=tuple)
 
@@ -870,7 +871,7 @@ def build_document(conv: Conversation | None, turn_id: str) -> Document:
         turn_id=turn.id,
         conversation_id=conv.id,
         conversation_title=conv.title,
-        title=f"Triplex {KIND_TITLES[turn.type]} — {conv.title}",
+        title=f"{settings().app_title} {KIND_TITLES[turn.type]} — {conv.title}",
         ts=turn.ts,
         blocks=tuple(blocks),
     )

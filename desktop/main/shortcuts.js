@@ -16,6 +16,7 @@
 // Pure module: everything (views, renderer, Menu) is injected.
 
 import { SLOTS } from './sites.js'
+import { APP_TITLE } from './branding.js'
 
 export const SHORTCUT_NAMES = Object.freeze(['tab-1', 'tab-2', 'tab-3', 'toggle-mode', 'focus-prompt', 'new-chat-all'])
 
@@ -142,7 +143,7 @@ export function createShortcuts({ getActive, zoom, reload, inspect, focusRendere
     ]
     if (dev) panes.push(item('Inspect pane', 'F12', { kind: 'inspect' }))
     return [
-      { label: 'Triplex', submenu: [{ role: 'quit' }] },
+      { label: APP_TITLE, submenu: [{ role: 'quit' }] },
       { label: 'Panes', submenu: panes },
       { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
     ]
