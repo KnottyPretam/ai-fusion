@@ -350,3 +350,40 @@ test('states: challenge renders the local Turnstile stand-in; blocked renders th
   await expect(page.locator(DEFAULT_SELECTORS.grok.composer[0])).toHaveCount(1, { timeout: 6000 })
   await expect(page.locator(GROK_HELPER)).toHaveCount(1)
 })
+
+// S10: the two keys that let the fake site be long in BYTES and stall more than once (see its header).
+
+test('?replyChars pads the reply and ?lulls stalls the stream N times; a bad ?lulls value is simply no pauses', async ({ page }) => {
+  // the echo kind pads by repeating its own source, blank-line separated
+  await page.goto('/?site=claude&replyMs=1200&replyChars=800&lulls=2,150')
+  await page.locator(DEFAULT_SELECTORS.claude.composer[0]).click()
+  await page.keyboard.type('pad me')
+  await page.locator("button[aria-label='Send message']").click()
+  await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
+  const echo = await page.evaluate(() => ({ source: window.__fake.replySource(), text: window.__fake.replyText(), lulls: window.__fake.lulls }))
+  expect(echo.source.length).toBeGreaterThanOrEqual(800)
+  expect(echo.source.startsWith('Echo: pad me\n\nEcho: pad me')).toBe(true)
+  expect(echo.text).toBe(echo.source) // the final render is the whole padded source
+  expect(echo.lulls).toHaveLength(2)
+  for (const lull of echo.lulls) expect(lull.endAt - lull.at).toBeGreaterThanOrEqual(100)
+
+  // the fenced JSON kind pads INSIDE its object, so the reply is still ONE parseable document
+  await page.goto('/?site=claude&reply=json&replyMs=0&replyChars=4000')
+  await page.locator(DEFAULT_SELECTORS.claude.composer[0]).click()
+  await page.keyboard.type('<<<R1>>> compare these')
+  await page.locator("button[aria-label='Send message']").click()
+  await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
+  const json = await page.evaluate(() => window.__fake.replySource())
+  expect(json.length).toBeGreaterThanOrEqual(4000)
+  const body = JSON.parse(json.slice('```json\n'.length, -'\n```'.length))
+  expect(body.divergences).toHaveLength(2) // the canned document is still all there, after the filler
+  expect(json.lastIndexOf('}')).toBe(json.length - '\n```'.length - 1) // it closes at its very last character
+
+  // an unusable ?lulls is no pauses at all, never a crash or a stall of NaN ms
+  await page.goto('/?site=claude&replyMs=300&lulls=oops')
+  await page.locator(DEFAULT_SELECTORS.claude.composer[0]).click()
+  await page.keyboard.type('no pauses')
+  await page.locator("button[aria-label='Send message']").click()
+  await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
+  expect(await page.evaluate(() => window.__fake.lulls)).toEqual([])
+})

@@ -11,7 +11,7 @@
 // checked by protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator } from '../../../main/orchestrator.js'
+import { createOrchestrator, ANALYST_PATIENCE } from '../../../main/orchestrator.js'
 import { validate } from '../../../main/protocol.js'
 import { fakeLog, fakeTimers, tick } from './_fakes.js'
 
@@ -81,6 +81,7 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
   /** main's memory of which analyst chat each conversation used (analyst-views.js). */
   const analystChats = new Map(Object.entries(analystChatMemory))
   let clock = 1000.4
+  const log = fakeLog()
   const orch = createOrchestrator({
     adapterFor: (slot) => panes[slot] || null,
     analystAdapterFor: (slot) => {
@@ -115,7 +116,7 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
     focusView: (slot) => trace.push(`${slot}:focus`),
     restoreRendererFocus: () => trace.push('renderer:focus'),
     timeoutsFor: () => ({ composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 }),
-    captureTimeoutsFor: () => ({ quietMs: 250, firstTokenMs: 3000, captureTimeoutMs: 4000 }),
+    captureTimeoutsFor: () => ({ quietMs: 250, settleMs: 200, firstTokenMs: 3000, captureTimeoutMs: 4000 }),
     chatUrlPatternFor: () => PATTERN,
     getHealth: (slot) => paneHealth[slot] || null,
     getCapture: () => ({ claude: false, chatgpt: false, grok: false, ...capture }),
@@ -134,11 +135,11 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
     },
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
-    log: fakeLog(),
+    log,
   })
   const emitted = []
   const emit = (frame) => emitted.push(frame)
-  return { orch, panes, analystClient, analyst, analystChats, trace, timers, phases, chatsSet, emitted, emit }
+  return { orch, panes, analystClient, analyst, analystChats, trace, timers, phases, chatsSet, emitted, emit, log }
 }
 
 const analystRequest = (slot = 'chatgpt', extra = {}) => ({
@@ -556,4 +557,53 @@ test('the analyst chat is recorded only for a URL that matches the site’s chat
   analystClient.settle('observe', { ok: true, op: 'observe', text: '{}', doneBy: 'quiet', ms: 1, url: 'https://x.test/' })
   assert.equal((await done).ok, true)
   assert.equal(analystChats.size, 0, 'nothing recorded for a URL that is not a chat')
+})
+
+// --- S10: the analyst page holds the longest, most structured reply in the system ------------------
+//
+// `budgets()` was keyed on the slot alone, so the hidden analyst view was given a PANE's timings —
+// the ones tuned for a chat answer a human is watching. On 2026-09-20 that ended two analyst captures
+// mid-document (13 and 6 characters, reported as `ok`), and Analyze degraded on both. The analyst view
+// therefore waits ANALYST_PATIENCE times as long for stillness, is told that its reply is a JSON
+// document, and is sent the first-token budget main never used to send at all.
+
+test('S10: the analyst view waits ANALYST_PATIENCE× as long for stillness and is told to expect JSON; the overall capture budget is unchanged (the bridge request timeout sits above it)', async () => {
+  const { orch, analystClient, emit } = setup()
+  const done = orch.run(analystRequest('chatgpt'), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 2 })
+  await settleAll()
+  const obs = analystClient.last()
+  assert.equal(obs.op, 'observe')
+  assert.ok(ANALYST_PATIENCE >= 3, 'quiet and settle at least ×3')
+  assert.deepEqual(obs.payload, {
+    baselineCount: 2,
+    quietMs: 250 * ANALYST_PATIENCE,
+    settleMs: 200 * ANALYST_PATIENCE,
+    timeoutMs: 4000,
+    firstTokenMs: 3000,
+    expect: 'json',
+  })
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 7 })
+  const result = await done
+  assert.equal(result.ok, true)
+  assert.equal(result.done_by, 'quiet')
+})
+
+test('S10: the analyst capture is logged like any other — length, signal and time, and no reply text', async () => {
+  const { orch, analystClient, emit, log } = setup()
+  const done = orch.run(analystRequest('chatgpt'), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '{"agreements": []}', doneBy: 'stop_gone', ms: 78500 })
+  await done
+  const line = log.lines.map(([, m]) => m).find((m) => m.includes('captured'))
+  assert.ok(line, `no capture line in ${JSON.stringify(log.lines)}`)
+  assert.match(line, /analyst page \(chatgpt\): captured 18 chars by stop_gone in 78500 ms/)
+  for (const [, m] of log.lines) assert.equal(m.includes('agreements'), false, m)
 })

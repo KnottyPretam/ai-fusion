@@ -28,7 +28,8 @@
 //      did-navigate / did-navigate-in-page matching the site's chatUrlPattern within
 //      CHAT_URL_WAIT_MS → chats.set(conversation_id, slot, url). Only matching URLs are ever
 //      recorded, so a matching link is never overwritten by a non-matching URL.
-//   7. capture[slot] on → `observe{baselineCount: assistantCount, quietMs, timeoutMs}` →
+//   7. capture[slot] on → `observe{baselineCount: assistantCount, quietMs, settleMs, timeoutMs,
+//      firstTokenMs}` (plus `expect:'json'` on the analyst view, S10) →
 //      `result ok:true captured:true {text, url, ms, done_by}`; off → `captured:false {url, ms}`.
 //      A submit result without a usable assistantCount omits baselineCount: the adapter then
 //      samples the count itself (at least "now", never "nothing" — baseline 0 on a thread with
@@ -91,6 +92,22 @@ export function insertAndSubmitBudgetMs({ composerWaitMs, sendWaitMs, submitVeri
 export function observeBudgetMs({ firstTokenMs, captureTimeoutMs }) {
   return firstTokenMs + captureTimeoutMs
 }
+
+/**
+ * How much more patient a turn on the hidden ANALYST view is than a pane turn (S10).
+ *
+ * `budgets()` used to be keyed on the slot alone, so the analyst page was given the timings tuned for a
+ * chat answer someone is watching — while it holds the longest and most structured reply in the system:
+ * three whole replies quoted into one prompt, answered as a JSON document. On 2026-09-20 that ended two
+ * analyst captures mid-document (13 and 6 characters, both reported as `ok`) and Analyze degraded twice.
+ * It multiplies the two STILLNESS windows only — how long a lull has to last before the reply counts as
+ * finished. The overall capture budget is deliberately NOT multiplied: the backend's own bridge request
+ * timeout sits above it, and a capture that outlived that would be reported by the wrong layer.
+ */
+/** The purposes whose reply is a JSON document, and so must be captured whole (S10). */
+export const STRUCTURED_PURPOSES = Object.freeze(['extraction', 'defense', 'convergence'])
+
+export const ANALYST_PATIENCE = 3
 
 /** A promise-chain mutex: `lock()` resolves with the release function once the lock is yours. */
 export function createMutex() {
@@ -167,7 +184,7 @@ function adapterFailure(e) {
  *   focusView(slot)                `webContents.focus()` on the view (may be async)
  *   restoreRendererFocus()         called once the last queued insert phase has finished
  *   timeoutsFor(slot)              {composerWaitMs, sendWaitMs, submitVerifyMs} from the merged selectors
- *   captureTimeoutsFor?(slot)      {quietMs, firstTokenMs, captureTimeoutMs} (v2; defaults when absent)
+ *   captureTimeoutsFor?(slot)      {quietMs, settleMs, firstTokenMs, captureTimeoutMs} (v2; defaults when absent)
  *   chatUrlPatternFor?(slot)       the site's chatUrlPattern source (nothing recorded when absent)
  *   getHealth?(slot)               the cached Health object (null → proceed)
  *   setHealth?(slot, h)            store a fresh Health read back into the cache (renderer replay uses it)
@@ -216,19 +233,25 @@ export function createOrchestrator({
   const active = new Map()
   let insertsQueued = 0
 
-  const budgets = (slot) => {
+  const budgets = (slot, view) => {
     const t = (typeof timeoutsFor === 'function' && timeoutsFor(slot)) || {}
     const composer = Number.isFinite(t.composerWaitMs) ? t.composerWaitMs : 15000
     const send = Number.isFinite(t.sendWaitMs) ? t.sendWaitMs : 18000
     const verify = Number.isFinite(t.submitVerifyMs) ? t.submitVerifyMs : 5000
     const c = (typeof captureTimeoutsFor === 'function' && captureTimeoutsFor(slot)) || {}
-    const quietMs = Number.isFinite(c.quietMs) ? c.quietMs : 2500
+    // the two stillness windows are scaled for the analyst view (S10); a config that predates `settleMs`
+    // gets the contract default, never the per-site value of whichever site is the analyst
+    const patience = view === 'analyst' ? ANALYST_PATIENCE : 1
+    const quietMs = (Number.isFinite(c.quietMs) ? c.quietMs : 2500) * patience
+    const settleMs = (Number.isFinite(c.settleMs) ? c.settleMs : 400) * patience
     const firstTokenMs = Number.isFinite(c.firstTokenMs) ? c.firstTokenMs : 90000
     const captureTimeoutMs = Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000
     return {
       readyMs: composer,
       submitMs: insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle }),
       quietMs,
+      settleMs,
+      firstTokenMs,
       captureTimeoutMs,
       observeMs: observeBudgetMs({ firstTokenMs, captureTimeoutMs }),
     }
@@ -469,7 +492,7 @@ export function createOrchestrator({
     const elapsed = () => Math.max(0, Math.round(now() - started))
     const signal = entry.controller.signal
     const client = seam.client
-    const { readyMs, submitMs, quietMs, captureTimeoutMs, observeMs } = budgets(slot)
+    const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs } = budgets(slot, entry.view)
     const emitPhase = (p, code) => {
       if (seam.phases) phase(slot, p, code)
     }
@@ -522,12 +545,26 @@ export function createOrchestrator({
       }
       cancelled()
       emitPhase('replying')
-      const observePayload = { quietMs, timeoutMs: captureTimeoutMs }
+      // every budget the adapter honours is sent, so the site's own `settleMs` / `firstTokenMs` are
+      // never silently the adapter's fallbacks, and the analyst's multiplied windows actually arrive
+      const observePayload = { quietMs, settleMs, timeoutMs: captureTimeoutMs, firstTokenMs }
+      // Every turn Triplex asks for in a STRUCTURED shape answers with a JSON document, so a capture
+      // of half a document ends nothing (S10): the adapter keeps sampling until the braces balance.
+      // Gated on the PURPOSE, not the view: `chat` is the user's own prose in a pane and must never
+      // wait for braces, while `extraction` (the analyst), `defense` and `convergence` (Fusion,
+      // which runs on the PANES, not the analyst page) are all JSON and were all exposed to the same
+      // mid-document truncation. Anything unrecognised is left ungated.
+      if (STRUCTURED_PURPOSES.includes(request && request.purpose)) observePayload.expect = 'json'
       if (Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0) observePayload.baselineCount = submitted.assistantCount
       else warn(`${label}: the submit result carried no usable assistantCount; the adapter samples the baseline itself`)
       const observed = await client.request('observe', observePayload, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
+      // ONE line per captured turn (S10). `doneBy` used to be computed here and thrown away, which is
+      // why the 13-character analyst capture of 2026-09-20 could only be diagnosed by counting
+      // characters in the persisted conversation: nothing on the way through said how a capture ended.
+      // The length, never the text — the reply does not go in the log.
+      info(`${label}: captured ${text.length} chars by ${doneBy} in ${Number.isFinite(observed.ms) ? Math.round(observed.ms) : elapsed()} ms`)
       const finalUrl = (typeof observed.url === 'string' && observed.url) || resultUrl()
       noteAnalystChat(seam, slot, convId, finalUrl)
       return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: finalUrl, ms: elapsed(), done_by: doneBy }

@@ -15,7 +15,7 @@ starlette `TestClient` websocket mixed with the async ASGI `client` fixture (pla
   (`planted(name)` reads `backend/llm/fixtures/scenarios/planted_factual/<name>` through
   `tests.e2e.conftest.fixture_text`), `"not_captured"` = `result captured:false`,
   `{"reject": code}` = `rejected`, `{"error": code, "partial"?: str}` = `result ok:false`,
-  `{"delay_ms": n, "text"?: str}` = `accepted` now and the result after `n` ms,
+  `{"delay_ms": n, "text"?: str, "done_by"?: str}` = `accepted` now and the result after `n` ms,
   `"drop"` = no frame at all (no ack), `{"delay_ms": n, "drop": True}` = accepted then silence.
   A list is consumed one entry per request, sticky-last (the analyst retry). Pings are answered
   with pongs; `cancel` frames are recorded in `cancels`; every `request` in `requests`.
@@ -243,7 +243,8 @@ class FakeDesktop:
                 }
             )
         else:
-            text = entry.get("text", "(delayed reply)") if isinstance(entry, dict) else entry
+            is_dict = isinstance(entry, dict)
+            text = entry.get("text", "(delayed reply)") if is_dict else entry
             dispatch(
                 {
                     "type": "result",
@@ -253,7 +254,10 @@ class FakeDesktop:
                     "text": text,
                     "url": url,
                     "ms": 7,
-                    "done_by": "quiet",
+                    # Which end signal ended the capture: a script entry may name it, because the
+                    # signal is what tells a short answer apart from a capture that stopped while
+                    # the site was still typing (the 2026-09-20 analyze failure).
+                    "done_by": (entry.get("done_by", "quiet") if is_dict else "quiet"),
                 }
             )
 

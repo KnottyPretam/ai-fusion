@@ -31,7 +31,21 @@ schema_model=Extraction, effort=config.ANALYST_EFFORT, max_tokens=MAX_TOKENS_STA
 retries=0)` and drives its single retry ITSELF: on validation failure it appends
 `assistant: <raw>` + `user: "Your previous output failed validation: <error>. Return only the
 corrected JSON."`, emits `analyze_retry{error}`, and calls again; both raw texts go to
-`raw_attempts`. A second failure → `status="degraded"`, Fusion refused for that turn.
+`raw_attempts`. A second failure → `status="degraded"`, Fusion refused for that turn. On a `web:`
+transport that correction carries the fenced-block rule too (`retry_message(fenced=True)`), because
+`bridge.text_for` types only the last message, so the original instruction is not in front of the
+model any more (measured 2026-09-20: the correction came back unfenced and unparseable).
+
+**Size bound (S10).** At or under `SPLIT_MIN_CHARS` (12,000) of quoted replies nothing above
+changes: one message, one call, one retry. Over it the replies are condensed FIRST, one call per
+label (`purpose="extraction"`, its claims asked for and read back as JSON so a truncated
+condensation fails instead of being quoted as a whole reply), each announced with the existing
+`analyze_retry{error}` and its raw text appended to `raw_attempts`; the comparison then runs over
+the condensed blocks with its own single correction retry — up to five analyst calls for one
+Analyze. A condensation that fails degrades the turn before the comparison runs. A single reply over
+`REPLY_BUDGET_CHARS` (30,000) cannot be condensed either, so the turn degrades naming the label and
+both numbers, with NO analyst call and `raw_attempts == []` — never a silent truncation, because a
+comparison that quietly drops half an answer is worse than no comparison.
 **Cache rule:** without `force`, the newest analyze turn with `status=="ok"` for `of_turn` is
 returned as `analyze_start{turn_id:<existing id>, of_turn}` + `analyze_done{turn, cached:true}`
 (the meter ignores usage on cached hits); degraded turns are never served from cache — a new

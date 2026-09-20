@@ -61,6 +61,10 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   partial}`, `turn_done{turn_id, usage}`, `error{message}`.
 - `POST …/analyze {of_turn?, force?}` → `analyze_start{turn_id, of_turn}`,
   `analyze_retry{error}`, `analyze_done{turn, cached}` | `analyze_degraded{turn}`.
+  `analyze_retry` carries two kinds of `error`: a failed attempt being sent back, and — from
+  S10, on a conversation over the size bound — one per label as its reply is condensed before
+  the comparison (`error` then begins `splitting the analyst prompt`). No new event type was
+  added for the split, so a client that ignores the distinction still behaves correctly.
 - `POST …/fusion {of_analyze?, max_iterations (required, 1..5)}` → (if Analyze must be auto-run:
   the full `analyze_*` sequence first) `fusion_start{turn_id, of_analyze, max_iterations,
   standing}`, `round_start{round}`, `exchange{round, …Exchange}`, `round_done{round,

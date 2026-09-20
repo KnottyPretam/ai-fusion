@@ -27,6 +27,14 @@ import { LABELS, NOT_CAPTURED_MESSAGE_PREFIX, RANK, initial, isSendTurnComplete,
 import css from './analyze.module.css'
 import { APP_NAME } from '../../branding.js'
 
+/** The prefix `features/analyze.py split_notice()` writes when it condenses a reply first. */
+export const SPLIT_NOTICE_PREFIX = 'splitting the analyst prompt'
+
+/** True when an `analyze_retry` is narrating the split step rather than a failed attempt. */
+export function isSplitNotice(error) {
+  return typeof error === 'string' && error.startsWith(SPLIT_NOTICE_PREFIX)
+}
+
 export default function AnalyzePane() {
   const dispatch = useDispatch()
   const run = useRunStream()
@@ -135,12 +143,23 @@ export default function AnalyzePane() {
       )}
       {analyze.status === 'retrying' && (
         <div className={css.retry} data-testid="analyze-retry">
-          Retrying: the analyst output failed validation; sending the error back once.
-          {analyze.error && (
-            <details>
-              <summary>validation error</summary>
-              <pre className={css.raw}>{analyze.error}</pre>
-            </details>
+          {/* The same event narrates two different things, because the event alphabet is frozen: a
+              failed attempt being sent back, and — on a long conversation — each reply being
+              condensed before the comparison. Announcing a condensation as a validation failure
+              would be three wrong sentences in a row, so the message speaks for itself when the
+              backend wrote one. */}
+          {isSplitNotice(analyze.error) ? (
+            analyze.error
+          ) : (
+            <>
+              Retrying: the analyst output failed validation; sending the error back once.
+              {analyze.error && (
+                <details>
+                  <summary>validation error</summary>
+                  <pre className={css.raw}>{analyze.error}</pre>
+                </details>
+              )}
+            </>
           )}
         </div>
       )}

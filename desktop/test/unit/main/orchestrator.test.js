@@ -6,7 +6,7 @@
 // every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
@@ -79,6 +79,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
   const current = { ...urls }
   let restored = 0
   let clock = 1000.4
+  const log = fakeLog()
   const orch = createOrchestrator({
     adapterFor: (slot) => table[slot] || null,
     ...(analyst ? { analystAdapterFor: analyst } : {}),
@@ -88,7 +89,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
       trace.push('renderer:focus')
     },
     timeoutsFor: () => (timeouts === undefined ? { composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 } : timeouts),
-    captureTimeoutsFor: () => (timeouts === undefined ? { quietMs: 250, firstTokenMs: 3000, captureTimeoutMs: 4000 } : timeouts),
+    captureTimeoutsFor: () => (timeouts === undefined ? { quietMs: 250, settleMs: 200, firstTokenMs: 3000, captureTimeoutMs: 4000 } : timeouts),
     chatUrlPatternFor: () => pattern,
     getHealth: (slot) => health[slot] || null,
     setHealth,
@@ -121,7 +122,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
     },
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
-    log: fakeLog(),
+    log,
     ...(insertSettleMs !== undefined ? { insertSettleMs } : {}),
   })
   const emitted = []
@@ -130,7 +131,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
     current[slot] = url
     if (navCbs[slot]) navCbs[slot](url, { inPage: true })
   }
-  return { orch, table, trace, timers, phases, loads, chatsSet, chatsDoc, current, emitted, emit, navigate, restored: () => restored, navCbs }
+  return { orch, table, trace, timers, phases, loads, chatsSet, chatsDoc, current, emitted, emit, navigate, restored: () => restored, navCbs, log }
 }
 
 const request = (slot, extra = {}) => ({ type: 'request', req_id: `req-${slot}`, model: `web:${slot}`, slot, view: 'pane', fresh: false, text: 'hello `x`', role: slot, purpose: 'chat', conversation_id: CONV, timeout_s: 600, ...extra })
@@ -291,7 +292,7 @@ test('capture on: observe is called with baselineCount = the submit result assis
   await settleAll()
   const obs = table.claude.last()
   assert.equal(obs.op, 'observe')
-  assert.deepEqual(obs.payload, { baselineCount: 3, quietMs: 250, timeoutMs: 4000 })
+  assert.deepEqual(obs.payload, { baselineCount: 3, quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000 })
   assert.equal(obs.opts.timeoutMs, observeBudgetMs({ firstTokenMs: 3000, captureTimeoutMs: 4000 }) + TIMEOUT_GRACE_MS)
   assert.deepEqual(phases, ['claude:typing', 'claude:submitted', 'claude:replying'])
   obs.resolve({ ok: true, op: 'observe', text: 'At sea level water boils at 100 °C.', doneBy: 'stop_gone', ms: 900, url: 'https://x.test/c/abc' })
@@ -312,7 +313,7 @@ test('a missing / bogus assistantCount omits baselineCount from observe (the ada
   table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: -1 })
   await settleAll()
   assert.equal(table.grok.last().op, 'observe')
-  assert.deepEqual(table.grok.last().payload, { quietMs: 250, timeoutMs: 4000 }, 'no baselineCount at all')
+  assert.deepEqual(table.grok.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000 }, 'no baselineCount at all')
   assert.equal('baselineCount' in table.grok.last().payload, false)
   table.grok.last().resolve({ ok: true, op: 'observe', text: '', doneBy: 'weird', ms: 1 })
   const final = await done
@@ -662,7 +663,8 @@ test('insertAndSubmit budget = composer + send + 2×verify + 2×INSERT_SETTLE_MS
   insert.resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1 })
   await settleAll()
   const obs = table.chatgpt.last()
-  assert.deepEqual(obs.payload, { baselineCount: 1, quietMs: 2500, timeoutMs: 300000 })
+  // a capture config that predates `settleMs` falls back to the contract default (400), never to chatgpt's
+  assert.deepEqual(obs.payload, { baselineCount: 1, quietMs: 2500, settleMs: 400, timeoutMs: 300000, firstTokenMs: 90000 })
   assert.equal(obs.opts.timeoutMs, 90000 + 300000 + TIMEOUT_GRACE_MS)
   obs.resolve({ ok: true, op: 'observe', text: 't', doneBy: 'quiet', ms: 1 })
   await done
@@ -710,4 +712,60 @@ test('an emit() that throws is logged, never fails the turn', async () => {
   table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true })
   const final = await done
   assert.equal(final.ok, true)
+})
+
+// --- S10: what main tells the adapter about the capture, and what it says about the one it got ------
+
+test('S10: a pane turn is never told to expect a shape, and its capture budget is the site\'s own (no patience multiplier)', async () => {
+  const { orch, table, emit } = setup({ capture: { chatgpt: true } })
+  const done = orch.run(request('chatgpt'), emit)
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  const obs = table.chatgpt.last()
+  assert.equal(obs.op, 'observe')
+  assert.equal('expect' in obs.payload, false, 'a pane reply is whatever the user asked for')
+  assert.deepEqual([obs.payload.quietMs, obs.payload.settleMs], [250, 200])
+  obs.resolve({ ok: true, op: 'observe', text: 'hi', doneBy: 'quiet', ms: 5 })
+  await done
+})
+
+test("S10: Fusion's own replies get the JSON gate too — it follows the PURPOSE, not the view", async () => {
+  // A defense reply is a DefenseReply document typed into a PANE (`web:<slot>`, view 'pane'), so a
+  // gate keyed on the analyst view would have left Fusion exposed to the identical mid-document
+  // truncation that broke Analyze — the user's very next step after this fix.
+  for (const purpose of STRUCTURED_PURPOSES) {
+    const { orch, table, emit } = setup({ capture: { chatgpt: true } })
+    const done = orch.run(request('chatgpt', { purpose }), emit)
+    await settleAll()
+    table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+    await settleAll()
+    table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+    await settleAll()
+    const obs = table.chatgpt.last()
+    assert.equal(obs.payload.expect, 'json', purpose)
+    obs.resolve({ ok: true, op: 'observe', text: '{"a":1}', doneBy: 'quiet', ms: 5 })
+    await done
+  }
+  assert.deepEqual([...STRUCTURED_PURPOSES], ['extraction', 'defense', 'convergence'])
+  assert.equal(STRUCTURED_PURPOSES.includes('chat'), false, "a pane's own chat is prose and must never wait for braces")
+})
+
+test('S10: one log line per captured turn names the length, the signal it ended on and the time — the reading this failure could not be diagnosed without', async () => {
+  const { orch, table, emit, log } = setup({ capture: { claude: true } })
+  const done = orch.run(request('claude'), emit)
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1 })
+  await settleAll()
+  table.claude.last().resolve({ ok: true, op: 'observe', text: '```json\n{}\n```', doneBy: 'done_selector', ms: 1234 })
+  await done
+  const line = log.lines.map(([, m]) => m).find((m) => m.includes('captured'))
+  assert.ok(line, `no capture line in ${JSON.stringify(log.lines)}`)
+  assert.match(line, /claude: captured 14 chars by done_selector in 1234 ms/)
+  // and no reply text in the log, ever (the no-text-in-logs rule)
+  for (const [, m] of log.lines) assert.equal(m.includes('json'), false, m)
 })

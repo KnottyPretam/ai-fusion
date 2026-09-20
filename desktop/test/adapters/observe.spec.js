@@ -896,3 +896,85 @@ test.describe('S9: a fenced reply, its code block’s copy control, and a stop b
     })
   }
 })
+
+/**
+ * S10 — the same defect one effort level up, MEASURED on 2026-09-20.
+ *
+ * With the reasoning effort raised inside chatgpt and claude the three replies Analyze compares grew to
+ * 4992 / 13677 / 8583 characters, and the analyst's own answer grew with them. Both attempts came back
+ * as fragments the bridge reported as `ok` — "```JSON\n{\n```" (13 characters, 78.5 s) and `{"agre` (6,
+ * 13.3 s) — and Analyze degraded with `parse_error: no JSON object found in the response`.
+ *
+ * What the fake site could not express before this: `?replyMs` stretched the same ~1.2 KB canned body
+ * over more time, so "long" never meant long in BYTES, and `?lullMs` pauses exactly ONCE. A reply that
+ * lulls repeatedly gives the capture a fresh chance to end early at every pause, and the analyst's reply
+ * is a JSON document — so the rule that makes this class of failure impossible is: while a JSON document
+ * is expected, no end signal resolves until the braces balance.
+ *
+ * This is the whole failure in one page: a multi-KB fenced document, streamed for half a minute, with
+ * three pauses each longer than quietMs + settleMs and the measured chatgpt container gap in the middle.
+ */
+test.describe('S10: a long, slow, repeatedly stalling fenced JSON reply', () => {
+  const ANALYST_PROMPT =
+    'Compare the three responses.\n\n<<<R1>>>\nThe BMI088 gyroscope range is selectable up to 2000 deg/s.\n<<<END R1>>>\n<<<R2>>>\n1000 deg/s.\n<<<END R2>>>'
+
+  test('chatgpt: several KB of fenced JSON over ~30 s, three pauses longer than the quiet+settle windows and one container gap — captured WHOLE', async ({ page }) => {
+    test.setTimeout(150000) // the reply alone streams for 30 s (playwright.config.js is frozen at 60 s)
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 30000,
+      replyChars: 6000,
+      lulls: '3,1200', // each pause outlasts quietMs (400) + settleMs (400) — an unguarded capture ends in the first one
+      remountMs: 500, // the measured lifecycle: placeholder, no container at all, then the real reply
+      placeholderMs: 150,
+      nostop: 1, // as in the live failure: the sample that ended the capture saw no stop button
+      selectors: withOverride('chatgpt', { quietMs: 400, settleMs: 400 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    expect(sent.ok).toBe(true)
+
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, expect: 'json' })
+    // read the page's own account only once it has finished streaming: a capture that ended early would
+    // otherwise be diagnosed as "the fixture had one pause", which is the symptom, not the defect
+    await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 60000 })
+    const r = await replyState(page)
+    // the fixture really was the hostile shape: a document of several KB, three stalls, and a gap
+    expect(r.replySource.length).toBeGreaterThan(5500)
+    expect(r.lulls).toHaveLength(3)
+    for (const lull of r.lulls) expect(lull.endAt - lull.at).toBeGreaterThanOrEqual(1100)
+    expect(r.placeholderGoneAt).not.toBeNull()
+    expect(r.remountedAt).toBeGreaterThan(r.placeholderGoneAt)
+    expect(r.rewinds).toBeGreaterThan(0)
+
+    // …and the capture is the whole document, byte for byte, not a prefix of it (the length first, so a
+    // truncation reports as two numbers rather than 6 KB of diff)
+    expect(res.text.length).toBe(r.replySource.length)
+    expectObserved(res, r.replySource, 'quiet')
+    expect(res.text).not.toContain('Placeholder')
+    const body = JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length))
+    expect(body.divergences).toHaveLength(2)
+    expect(Object.keys(body).filter((k) => k.startsWith('filler_')).length).toBeGreaterThan(10)
+    expect(res.ms).toBeGreaterThan(30000) // it waited out every pause and the gap
+  })
+
+  test('the same reply with no `expect` still comes back whole once the pauses are shorter than the quiet window: the gate is the only thing that changed', async ({ page }) => {
+    test.setTimeout(60000)
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 4000,
+      replyChars: 3000,
+      lulls: '2,300',
+      selectors: withOverride('chatgpt', { quietMs: 2500 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 30000 })
+    const r = await replyState(page)
+    expect(r.replySource.length).toBeGreaterThan(2900)
+    expect(r.lulls).toHaveLength(2)
+    expectObserved(res, r.replySource, 'done_selector') // the stop button was up throughout, then the turn marker
+    expect(JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)).agreements).toHaveLength(1)
+  })
+})

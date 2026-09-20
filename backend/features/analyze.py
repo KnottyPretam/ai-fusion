@@ -40,6 +40,36 @@ analysts are untouched (goldens byte-identical). The transport half of the rule 
 review, "Fusion's convergence retry re-types the whole payload into a NEW hidden analyst chat"):
 one rule, two enforcement points -- Analyze drives its second attempt itself (`retries=0`), Fusion
 lets `complete_json` drive it (`retries=1`).
+
+Size bound / the condense ("split") step (2026-09-20; PLAN Workstream D). MEASURED on the
+conversation that kept degrading: at high reasoning effort inside the sites the three replies came
+back 4,992 / 13,677 / 8,583 characters long and the analyst prompt reached 29,958 characters typed
+into ONE chat message, 27,252 of it quoted replies, against a 32,768-character ceiling
+(`desktop/main/ipc.js` MAX_PROMPT_CHARS). Nothing bounded it anywhere. So, before the comparison:
+
+- At or under `SPLIT_MIN_CHARS` of quoted replies nothing changes -- one message, one analyst call,
+  the same bytes as before (the tests/analyze and tests/e2e goldens are the proof).
+- Over it, each label's reply is condensed on its own first (`_condense`, one call per label,
+  `purpose="extraction"` -- the frozen `Purpose` literal has no room for a new one and the meter
+  reads it as analyst work, which it is). The text is taken directly, with no schema: a
+  condensation is quoted data for the next prompt, not a validated artifact. The three condensed
+  blocks then go through the normal comparison prompt, which still returns a real `Extraction`.
+  Each sub-call is narrated with the EXISTING alphabet -- `analyze_retry{error}` before the call,
+  the raw bullets appended to `raw_attempts` -- because a new event type would mean editing the
+  frozen docs/api-contract.md.
+- A reply over `REPLY_BUDGET_CHARS` on its own cannot be condensed either (its own condense
+  message would not fit), so the turn degrades naming the label and both numbers, with NO analyst
+  call at all. Never a silent truncation: a comparison that quietly drops half an answer is worse
+  than no comparison.
+- A condensation that fails degrades there and then (`condense_failure`), without the comparison
+  call: falling back to the raw reply would rebuild exactly the oversized prompt this avoids.
+
+The bound is transport-independent on purpose. The ceiling that produced the failure is the web
+transport's, but a 27 KB analyst prompt is a bad prompt everywhere -- it is the input against which
+`MAX_TOKENS_STAGE["extraction"]` (4000) has to produce the whole comparison -- and one rule that
+every transport takes is one rule to reason about. It costs nothing in practice: no committed
+scenario comes near `SPLIT_MIN_CHARS`, so every fixture, golden and offline test runs the
+single-call path unchanged.
 """
 
 from __future__ import annotations
@@ -53,8 +83,10 @@ from typing import Any
 from .. import anon, api_errors
 from ..config import ANALYST_EFFORT, MAX_TOKENS_STAGE
 from ..llm import client
+from ..llm.errors import COST_CAP_EXCEEDED, TRANSPORT_ERROR
 from ..prompts import analyze as prompts
 from ..schemas import (
+    LABELS,
     SLOT_IDS,
     AnalyzeTurn,
     Conversation,
@@ -72,6 +104,16 @@ ROLE = "analyst"
 PURPOSE = "extraction"
 # One retry driven here (docs/semantics.md): at most ATTEMPTS analyst calls per Analyze.
 ATTEMPTS = 2
+
+# The size bound (module docstring). SPLIT_MIN_CHARS is the total of the three quoted replies above
+# which each one is condensed first; at or under it the prompt is built exactly as it always was.
+# 12,000 sits well clear of every scenario fixture (the largest corpus total is 1,884) and well
+# under the single-message ceiling, so a normal conversation never takes the split path.
+SPLIT_MIN_CHARS = 12_000
+# The most ONE reply may be: a web analyst is typed one message at a time and Electron refuses
+# anything over 32,768 characters (`desktop/main/ipc.js` MAX_PROMPT_CHARS), so 30,000 leaves 2,768
+# for the question and the condense instruction that ride along with it.
+REPLY_BUDGET_CHARS = 30_000
 
 _END = None  # queue sentinel
 # Strong references to running producer tasks (asyncio keeps only weak ones): a task must survive
@@ -112,6 +154,49 @@ def responses_by_label(conv: Conversation, send_turn: SendTurn) -> dict[Label, s
     return {label: send_turn.responses[slot] or "" for label, slot in anon.labels(conv).items()}
 
 
+# --------------------------------------------------------------------------- the size bound (pure)
+def quoted_chars(responses: dict[Label, str]) -> int:
+    """Characters of quoted reply the comparison prompt would carry (the part that grows)."""
+    return sum(len(text) for text in responses.values())
+
+
+def needs_split(responses: dict[Label, str]) -> bool:
+    return quoted_chars(responses) > SPLIT_MIN_CHARS
+
+
+def oversize_reply(responses: dict[Label, str]) -> tuple[Label, int] | None:
+    """`(label, chars)` of the first reply -- in R1/R2/R3 order, not size order -- that is over
+    the per-message budget on its own, so not even its own condense call would fit; else None."""
+    for label in LABELS:
+        chars = len(responses.get(label, ""))
+        if chars > REPLY_BUDGET_CHARS:
+            return label, chars
+    return None
+
+
+def oversize_message(label: Label | str, chars: int) -> str:
+    """The loud failure: the label and both numbers, so the user knows what to shorten."""
+    return (
+        f"{label}'s reply is {chars:,} characters, over the {REPLY_BUDGET_CHARS:,} the analyst "
+        f"can take in one message. Ask that slot again for a shorter answer, or analyze a Send "
+        f"whose replies fit — Triplex will not compare a truncated one."
+    )
+
+
+def split_notice(label: Label | str, chars: int, total: int) -> str:
+    """What `analyze_retry` carries for one condense sub-call. The event alphabet is frozen, so
+    this string is the only place the split can announce itself (module docstring)."""
+    return (
+        f"splitting the analyst prompt: {total:,} characters of replies is over "
+        f"{SPLIT_MIN_CHARS:,}, so {label}'s reply ({chars:,} characters) is being condensed to "
+        f"its substantive claims first"
+    )
+
+
+def condense_failure(label: Label | str, error: str) -> str:
+    return f"could not condense {label}'s reply for the comparison: {error}"
+
+
 # --------------------------------------------------------------------------- producer
 async def _attempt(
     *, model: str, messages: list[dict[str, Any]]
@@ -130,7 +215,95 @@ async def _attempt(
     return extraction, raw, usage, error
 
 
-def retry_follow_up(raw: str, error: str | None) -> list[dict[str, str]]:
+async def _condense(
+    *, model: str, question: str, label: Label, response: str
+) -> tuple[str, FeatureUsage, str | None]:
+    """One condense sub-call: that label's reply in, its claims out as bullet lines.
+
+    Streamed for its TEXT rather than through `complete_json`, because the claims are quoted data
+    for the comparison prompt and there is no schema to add for them -- but they are asked for and
+    read back as JSON all the same. That is what makes a TRUNCATED condensation fail instead of
+    being quoted as though it were the whole reply: a half-written object does not parse, and on a
+    web session the capture will not even end on one (S10, `looksComplete`). Never raises -- the LLM
+    layer does not -- and an empty reply is a failure, because an empty block would silently drop
+    one label out of the comparison."""
+    usage = FeatureUsage()
+    parts: list[str] = []
+    error: str | None = None
+    async for d in client.stream_completion(
+        role=ROLE,
+        purpose=PURPOSE,
+        model=model,
+        messages=prompts.condense_messages(
+            question, label, response, fenced=client.transport_kind(model) == "web"
+        ),
+        effort=ANALYST_EFFORT,
+        max_tokens=MAX_TOKENS_STAGE[PURPOSE],
+    ):
+        if d.kind == "text":
+            parts.append(d.text)
+        elif d.kind == "done":
+            if d.usage is not None:
+                usage.add(d.usage)
+        elif d.kind == "error":
+            # Same rule as `complete_json`: the cap keeps its stable key (the UI's persistent
+            # warning is keyed on it), every other failure keeps its reason.
+            if d.code == COST_CAP_EXCEEDED:
+                error = COST_CAP_EXCEEDED
+            else:
+                error = d.message or (str(d.code) if d.code is not None else TRANSPORT_ERROR)
+    text = "".join(parts)
+    if error is None and not text.strip():
+        error = "the condense pass returned no text"
+    if error is not None:
+        return "", usage, error
+    # The claims arrive as JSON so a half-written answer cannot pass for a whole one; they are
+    # rendered back to bullet lines here, because what the comparison prompt quotes is prose.
+    value, perr = client.extract_json(text, repair=client.transport_kind(model) == "web")
+    if value is None:
+        return "", usage, f"the condense pass returned no usable claims: {perr}"
+    claims = value.get("claims")
+    if not isinstance(claims, list) or not claims:
+        return "", usage, "the condense pass returned no claims"
+    lines = [f"- {str(c).strip()}" for c in claims if str(c).strip()]
+    if not lines:
+        return "", usage, "the condense pass returned no claims"
+    return "\n".join(lines), usage, None
+
+
+async def _condense_all(
+    *,
+    model: str,
+    question: str,
+    responses: dict[Label, str],
+    usage: FeatureUsage,
+    raw_attempts: list[str],
+    queue: asyncio.Queue[dict[str, Any] | None],
+) -> tuple[dict[Label, str] | None, str | None]:
+    """The three condense sub-calls, in R1/R2/R3 order. Returns `(condensed, None)` or
+    `(None, error)` on the first failure -- the comparison call never runs on a partial set.
+
+    `usage` and `raw_attempts` are the caller's, appended to as each sub-call returns, so a run
+    that fails on the second label still reports what it spent and what the first one produced."""
+    total = quoted_chars(responses)
+    condensed: dict[Label, str] = {}
+    for label in LABELS:
+        response = responses[label]
+        queue.put_nowait(
+            {"type": "analyze_retry", "error": split_notice(label, len(response), total)}
+        )
+        text, call_usage, error = await _condense(
+            model=model, question=question, label=label, response=response
+        )
+        usage.merge(call_usage)
+        raw_attempts.append(text)
+        if error is not None:
+            return None, condense_failure(label, error)
+        condensed[label] = text
+    return condensed, None
+
+
+def retry_follow_up(raw: str, error: str | None, *, fenced: bool = False) -> list[dict[str, str]]:
     """The messages appended to the first attempt's request before the retry.
 
     docs/semantics.md "Analyze" + "Analyze on a transport error": no output at all (a transport
@@ -138,10 +311,15 @@ def retry_follow_up(raw: str, error: str | None) -> list[dict[str, str]]:
     request is re-sent. Any output that failed lenient parsing / validation gets the correction
     message; it is echoed back as the assistant turn only when it is not blank — providers
     reject empty assistant content (the client applies the same `raw.strip()` rule to its own
-    internal retry), so whitespace-only output is never echoed."""
+    internal retry), so whitespace-only output is never echoed.
+
+    `fenced` is the transport flag `build_messages` already gets: on a web session the correction
+    message is the ONLY thing typed into the analyst's chat (`bridge.text_for` sends
+    `messages[-1]`), so it has to restate the fenced-block rule itself."""
     if not raw:
         return []
-    follow_up = [{"role": "user", "content": prompts.retry_message(error or "unknown error")}]
+    message = prompts.retry_message(error or "unknown error", fenced=fenced)
+    follow_up = [{"role": "user", "content": message}]
     if raw.strip():
         follow_up.insert(0, {"role": "assistant", "content": raw})
     return follow_up
@@ -176,23 +354,47 @@ async def _produce(
         # a chat page whose reply is read back out of rendered markdown, so it is asked for a
         # ```json fence; every API transport keeps Appendix A's "no prose, no code fences".
         fenced = client.transport_kind(model) == "web"
-        messages = prompts.build_messages(
-            send_turn.prompt, responses_by_label(conv, send_turn), fenced=fenced
-        )
+        responses = responses_by_label(conv, send_turn)
         usage = FeatureUsage()
         raw_attempts: list[str] = []
+        extraction: Extraction | None = None
+        error: str | None = None
+        condensed = False
 
-        extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
-        usage.merge(attempt_usage)
-        raw_attempts.append(raw)
-        for _ in range(ATTEMPTS - 1):
-            if extraction is not None or web_retry_suppressed(model, raw, error):
-                break
-            queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
-            messages = [*messages, *retry_follow_up(raw, error)]
+        # The size bound (module docstring), decided before anything is typed anywhere.
+        over = oversize_reply(responses)
+        if over is not None:
+            error = oversize_message(*over)  # loud, and not one analyst call
+        elif needs_split(responses):
+            condensed = True
+            reduced, error = await _condense_all(
+                model=model,
+                question=send_turn.prompt,
+                responses=responses,
+                usage=usage,
+                raw_attempts=raw_attempts,
+                queue=queue,
+            )
+            if reduced is not None:
+                responses = reduced
+
+        if error is None:
+            messages = prompts.build_messages(
+                send_turn.prompt, responses, fenced=fenced, condensed=condensed
+            )
             extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
             usage.merge(attempt_usage)
             raw_attempts.append(raw)
+            for _ in range(ATTEMPTS - 1):
+                if extraction is not None or web_retry_suppressed(model, raw, error):
+                    break
+                queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
+                messages = [*messages, *retry_follow_up(raw, error, fenced=fenced)]
+                extraction, raw, attempt_usage, error = await _attempt(
+                    model=model, messages=messages
+                )
+                usage.merge(attempt_usage)
+                raw_attempts.append(raw)
 
         usage.set_wall_clock(max(1, int((time.monotonic() - started) * 1000)))
         turn = AnalyzeTurn(
@@ -264,12 +466,20 @@ async def run_analyze(
 __all__ = [
     "ATTEMPTS",
     "PURPOSE",
+    "REPLY_BUDGET_CHARS",
     "ROLE",
+    "SPLIT_MIN_CHARS",
     "cached_ok_turn",
+    "condense_failure",
     "missing_responses",
+    "needs_split",
+    "oversize_message",
+    "oversize_reply",
+    "quoted_chars",
     "resolve_send_turn",
     "responses_by_label",
     "retry_follow_up",
     "run_analyze",
+    "split_notice",
     "web_retry_suppressed",
 ]

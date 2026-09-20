@@ -900,8 +900,12 @@ function container(text, { parts = {}, inside = [], parentNode = null } = {}) {
   }
   return el
 }
-/** Short capture timings: first token 250 ms, quiet 120 ms, budget 1500 ms (the poll runs every 300 ms). */
-const CAPTURE = { firstTokenMs: 250, quietMs: 120, captureTimeoutMs: 1500 }
+/**
+ * Short capture timings: first token 250 ms, quiet 120 ms, budget 1500 ms (the poll runs every 300 ms).
+ * `settleMs` is pinned to the 400 ms every site but chatgpt uses (S10 made it a per-site selector, and
+ * chatgpt's 1200 would be a third of the budget here): the per-site value is asserted in observe.test.js.
+ */
+const CAPTURE = { firstTokenMs: 250, quietMs: 120, settleMs: 400, captureTimeoutMs: 1500 }
 const captureSelectors = (site, extra = {}) => fastSelectors(site, { ...CAPTURE, ...extra })
 
 test('observe constants: mutations are throttled to 100 ms and the poll runs every 300 ms', () => {

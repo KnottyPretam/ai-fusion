@@ -166,7 +166,11 @@ async def test_invalid_output_then_valid_is_corrected_in_the_same_chat(
     first, second = desk.of(*ANALYST)  # two requests: the prompt, then the correction
     assert first["fresh"] is True and second["fresh"] is False
     assert first["req_id"] != second["req_id"]
-    assert second["text"] == prompts.retry_message(retry_error)
+    # The correction is the ONLY thing typed into the analyst's chat (`text_for` sends
+    # messages[-1]), so it has to carry the fenced-block rule itself -- see
+    # tests/analyze/test_prompt.py::test_the_web_correction_restates_the_fence.
+    assert second["text"] == prompts.retry_message(retry_error, fenced=True)
+    assert "```json" in second["text"]
     assert second["model"] == "web:chatgpt:analyst" and second["purpose"] == "extraction"
     assert desk.errors == [] and mock.calls == []
 

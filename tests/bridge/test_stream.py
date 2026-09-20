@@ -191,6 +191,42 @@ async def test_info_line_per_request_carries_no_text(fake_desktop, caplog):
         assert secret not in line and "SECRET-REPLY-TEXT" not in line
 
 
+async def test_info_line_names_the_end_signal_and_the_captured_length(fake_desktop, caplog):
+    """Workstream E: the 2026-09-20 analyze failure had to be reconstructed from stored character
+    counts because the one INFO line per request recorded neither which end signal ended the
+    capture nor how much text came back. A 13-character capture ended by `stop_gone` is now
+    visible in the log the moment it happens -- and still without a byte of the reply."""
+    caplog.set_level(logging.INFO, logger="triplex.llm.bridge")
+    fragment = "```JSON\n{\n```"  # byte for byte what the failing analyst capture handed back
+    await fake_desktop(
+        {
+            ("chatgpt", "analyst", "extraction"): {"text": fragment, "done_by": "stop_gone"},
+            ("grok", "pane", "chat"): {"error": "timeout", "partial": "half a reply"},
+        }
+    )
+    await collect(
+        role="analyst", purpose="extraction", model="web:chatgpt:analyst", messages=ANALYST_MSGS
+    )
+    await collect(role="grok", model="web:grok")
+    lines = [r.getMessage() for r in caplog.records if r.name == "triplex.llm.bridge"]
+    assert len(lines) == 2
+    assert " purpose=extraction ok ms=" in lines[0]
+    assert " done_by=stop_gone chars=13" in lines[0]
+    # A failed result reports what the site had produced: the partial is what the caller sees.
+    assert " code=timeout ms=" in lines[1] and " done_by=- chars=12" in lines[1]
+    for line in lines:
+        assert fragment not in line and "half a reply" not in line
+        assert "Compare R1" not in line
+
+
+async def test_the_info_line_reports_no_end_signal_when_nothing_was_captured(fake_desktop, caplog):
+    caplog.set_level(logging.INFO, logger="triplex.llm.bridge")
+    await fake_desktop({"*": NOT_CAPTURED})
+    await collect()
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "triplex.llm.bridge"]
+    assert " code=not_captured ms=" in line and line.endswith(" done_by=- chars=0")
+
+
 # --------------------------------------------------------------------------- pure helpers
 @pytest.mark.parametrize(
     "model,expected",

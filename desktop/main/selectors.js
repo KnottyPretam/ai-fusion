@@ -192,11 +192,17 @@ export function timeoutsFor(config, slot) {
   return { composerWaitMs, sendWaitMs, submitVerifyMs }
 }
 
-/** Selectors v2 capture budgets per site (contract §4 defaults when the config predates v2). */
+/**
+ * Selectors v2 capture budgets per site (contract §4 defaults when the config predates v2).
+ * `settleMs` — how long the reply text must hold still after an end signal — is one of them since S10:
+ * it was a 400 ms constant inside the adapter, which is a plausible pause between two renders of a long
+ * answer, so a site whose composing pauses are longer (chatgpt) needs its own value.
+ */
 export function captureTimeoutsFor(config, slot) {
   const block = blockFor(config, slot)
   return {
     quietMs: numIn(block, 'quietMs', 2500),
+    settleMs: numIn(block, 'settleMs', 400),
     firstTokenMs: numIn(block, 'firstTokenMs', 90000),
     captureTimeoutMs: numIn(block, 'captureTimeoutMs', 300000),
   }

@@ -87,7 +87,9 @@ export function installFakeIpc({ site, selectors, dev }) {
  * nodone / blockAfterMs / doneLagMs / twoTurns (`reply` is `json`, `rich`, `fidelity` from S7 or
  * `openfence` from S9 — all RENDERED as markdown with real code-block chrome), the S9 keys
  * codeCopyDone / lullMs / stopBlinkMs (the code block's copy control carrying the TURN marker's
- * testid, one pause in the stream, a stop button that blinks out mid-stream), plus the S7-review lifecycle keys
+ * testid, one pause in the stream, a stop button that blinks out mid-stream), the S10 keys
+ * replyChars / lulls (a reply long in BYTES rather than only in time, and repeated stream pauses),
+ * plus the S7-review lifecycle keys
  * remountMs / placeholderMs / webUrlMs (the measured chatgpt placeholder-then-remount turn and its
  * placeholder `/c/WEB:<uuid>` url) and the S8 key `thinking` (claude's thinking-widget turn shape,
  * whose summary line is in the DOM twice). `path` picks the page path (the SPA fallback serves
@@ -98,7 +100,7 @@ export async function open(page, opts = {}) {
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs']
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -130,6 +132,7 @@ export const replyState = (page) =>
     stopEvents: window.__fake.stopEvents,
     lullAt: window.__fake.lullAt,
     lullEndAt: window.__fake.lullEndAt,
+    lulls: window.__fake.lulls,
     stopBlinkAt: window.__fake.stopBlinkAt,
     stopBlinkEndAt: window.__fake.stopBlinkEndAt,
     urls: window.__fake.urls,

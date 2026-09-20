@@ -1,0 +1,300 @@
+"""The analyst prompt's size bound: the condense ("split") step.
+
+Why this exists (measured 2026-09-20 on conversation `2b242b5c`, the failing run in the plan): at
+high reasoning effort the three replies came back 4,992 / 13,677 / 8,583 characters long and the
+analyst prompt became 29,958 characters typed into ONE chat message, 27,252 of it quoted replies.
+Nothing bounded it, and the capture of the analyst's own long reply ended mid-stream.
+
+The rule (docs/semantics.md "Analyze", PLAN Workstream D): under
+`feature.SPLIT_MIN_CHARS` of quoted replies nothing changes -- one message, one analyst call,
+goldens byte-identical. Over it, each label's reply is condensed to its substantive claims in its
+own call first (`purpose="extraction"`, no new schema: the condensation is quoted data for the
+next prompt, not a validated artifact) and the three condensed blocks are then compared by the
+normal prompt, which still returns a real `Extraction`. A reply that is over
+`feature.REPLY_BUDGET_CHARS` on its own cannot be condensed either, so the turn degrades naming
+the label and both numbers -- never a silent truncation.
+"""
+
+from __future__ import annotations
+
+import json
+
+from typing import Any
+
+import pytest
+
+from backend.features import analyze as feature
+from backend.llm import mock
+from backend.prompts import analyze as prompts
+from backend.schemas import LABELS
+from tests.analyze.conftest import blocks_of, extraction_calls, outside_blocks, persist
+from tests.bridge import conftest as bridge_fixtures
+from tests.conftest import DEFAULT_PROMPT
+from tests.helpers import messages_text, parse_sse_text
+
+# Fixtures reused from the bridge area (same binding trick as tests/analyze/test_web_no_retry.py:
+# pytest registers a fixture under the module attribute it finds it at).
+_fresh_hub = bridge_fixtures._fresh_hub
+fake_desktop = bridge_fixtures.fake_desktop
+web_env = bridge_fixtures.web_env
+
+ANALYST = ("chatgpt", "analyst", "extraction")
+# One sentence of plausible reply prose, repeated to reach an exact length.
+FILLER = "The gyroscope full-scale range is selectable in four steps up to 2000 deg/s. "
+
+
+def reply(chars: int, marker: str) -> str:
+    """A reply of exactly `chars` characters that starts with `marker` (so a test can tell the
+    three apart inside a payload)."""
+    body = f"{marker}. " + FILLER * (chars // len(FILLER) + 2)
+    return body[:chars]
+
+
+def _types(events: list[dict[str, Any]]) -> list[str]:
+    return [e["type"] for e in events]
+
+
+def responses_of(total: int) -> dict[str, str]:
+    """Three slot replies whose characters sum to exactly `total`."""
+    each = total // 3
+    return {
+        "claude": reply(each, "CLAUDE-BODY"),
+        "chatgpt": reply(each, "CHATGPT-BODY"),
+        "grok": reply(total - 2 * each, "GROK-BODY"),
+    }
+
+
+# --------------------------------------------------------------------------- pure helpers
+def test_quoted_chars_counts_every_label_and_nothing_else():
+    assert feature.quoted_chars({"R1": "abc", "R2": "de", "R3": ""}) == 5
+    assert feature.quoted_chars(dict.fromkeys(LABELS, "")) == 0
+
+
+def test_the_threshold_and_the_budget_leave_room_for_the_scaffold():
+    """`desktop/main/ipc.js` MAX_PROMPT_CHARS is 32768: one reply may fill at most
+    REPLY_BUDGET_CHARS of that, and the question plus the condense instruction ride in the rest."""
+    assert feature.SPLIT_MIN_CHARS == 12_000
+    assert feature.REPLY_BUDGET_CHARS == 30_000
+    assert feature.REPLY_BUDGET_CHARS < 32_768
+    assert feature.SPLIT_MIN_CHARS < feature.REPLY_BUDGET_CHARS
+
+
+def test_needs_split_is_the_total_over_the_threshold():
+    under = {label: "x" * (feature.SPLIT_MIN_CHARS // 3) for label in LABELS}
+    assert feature.quoted_chars(under) <= feature.SPLIT_MIN_CHARS
+    assert not feature.needs_split(under)
+    over = {**under, "R3": "x" * (feature.SPLIT_MIN_CHARS // 3 + 1)}
+    assert feature.needs_split(over)
+
+
+def test_oversize_reply_names_the_first_label_over_the_budget():
+    ok = dict.fromkeys(LABELS, "x" * feature.REPLY_BUDGET_CHARS)  # exactly at the budget is fine
+    assert feature.oversize_reply(ok) is None
+    big = {**ok, "R2": "x" * (feature.REPLY_BUDGET_CHARS + 1)}
+    assert feature.oversize_reply(big) == ("R2", feature.REPLY_BUDGET_CHARS + 1)
+    both = {**big, "R1": "x" * 41_200}
+    assert feature.oversize_reply(both) == ("R1", 41_200)  # R1/R2/R3 order, not size order
+
+
+def test_the_oversize_message_carries_the_label_and_both_numbers():
+    msg = feature.oversize_message("R2", 41_200)
+    assert "R2" in msg and "41,200" in msg and "30,000" in msg
+    assert "characters" in msg
+
+
+# --------------------------------------------------------------------------- below the threshold
+async def test_replies_under_the_threshold_take_exactly_one_analyst_call(
+    make_conversation, analyze
+):
+    """The proof that a normal conversation is untouched: one call, and the user message is
+    `build_user` with the unchanged `Responses:` header (the goldens in tests/analyze and
+    tests/e2e pin the same bytes)."""
+    responses = responses_of(feature.SPLIT_MIN_CHARS)
+    conv = await persist(make_conversation(responses=responses))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "analyze_done"]
+    (call,) = extraction_calls()
+    system, user = call["messages"]
+    assert system["content"] == prompts.SYSTEM
+    expected = {"R1": responses["claude"], "R2": responses["chatgpt"], "R3": responses["grok"]}
+    assert user["content"] == prompts.build_user(DEFAULT_PROMPT, expected)
+    assert prompts.RESPONSES_HEADER in user["content"]
+
+
+# --------------------------------------------------------------------------- above the threshold
+async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
+    make_conversation, analyze, local_fixtures
+):
+    local_fixtures("analyst_split")
+    responses = responses_of(feature.SPLIT_MIN_CHARS + 3)
+    conv = await persist(make_conversation(responses=responses))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    # The existing event alphabet only: one analyze_retry per condense call (no new event type).
+    assert _types(events) == [
+        "analyze_start",
+        "analyze_retry",
+        "analyze_retry",
+        "analyze_retry",
+        "analyze_done",
+    ]
+    for label, event in zip(LABELS, events[1:4], strict=True):
+        assert label in event["error"]
+        assert f"{feature.SPLIT_MIN_CHARS:,}" in event["error"]
+
+    calls = extraction_calls()
+    assert len(calls) == 4  # three condensations, then the comparison
+    expected = {"R1": responses["claude"], "R2": responses["chatgpt"], "R3": responses["grok"]}
+    for label, call in zip(LABELS, calls[:3], strict=True):
+        system, user = call["messages"]
+        assert system["content"] == prompts.CONDENSE_SYSTEM
+        assert blocks_of(user["content"]) == {label: expected[label]}  # exactly one reply quoted
+        assert DEFAULT_PROMPT in user["content"]  # the question, so "substantive" has a referent
+        assert call["response_format"] is None  # bullets are not a validated artifact
+
+    system, user = calls[3]["messages"]
+    assert system["content"] == prompts.SYSTEM
+    condensed = blocks_of(user["content"])
+    assert list(condensed) == list(LABELS)
+    for label in LABELS:
+        assert "2000 dps" in condensed[label] or "1000 dps" in condensed[label]
+        assert expected[label] not in user["content"]  # the raw reply never reaches the comparison
+    assert prompts.CONDENSED_RESPONSES_HEADER in user["content"]
+    assert len(user["content"]) < feature.SPLIT_MIN_CHARS  # the whole point
+
+    turn = events[-1]["turn"]
+    assert turn["status"] == "ok" and turn["extraction"] is not None
+    # Each sub-call's raw text is narrated through raw_attempts (a plain list[str]).
+    assert len(turn["raw_attempts"]) == 4
+    assert turn["raw_attempts"][:3] == [condensed[label] for label in LABELS]
+    assert turn["usage"]["totals"]["calls"] == 4  # every condensation is metered
+
+
+async def test_a_failed_condensation_degrades_before_the_comparison_call(
+    make_conversation, analyze, local_fixtures
+):
+    """A condensation that produced nothing cannot be compared, and falling back to the raw reply
+    would rebuild the oversized prompt: degrade, naming the label."""
+    local_fixtures("analyst_split_condense_error")
+    conv = await persist(make_conversation(responses=responses_of(feature.SPLIT_MIN_CHARS + 3)))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "analyze_retry", "analyze_retry", "analyze_degraded"]
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded" and turn["extraction"] is None
+    assert "R2" in turn["error"] and "Provider disconnected" in turn["error"]
+    assert len(extraction_calls()) == 2  # R1 condensed, R2 failed, no comparison call
+
+
+async def test_no_identity_leak_in_any_split_payload(
+    make_conversation, analyze, local_fixtures, assert_no_identity_leak
+):
+    """The split adds two new Triplex-authored payloads (the condense prompt and the condensed
+    comparison), so the anonymization firewall has to hold across all four calls: vendor words
+    live only inside a delimited block, and no slot id appears anywhere."""
+    local_fixtures("analyst_split")
+    responses = responses_of(feature.SPLIT_MIN_CHARS + 3)
+    conv = await persist(make_conversation(responses=responses))
+    _, events = await analyze(conv.id)
+    assert _types(events)[-1] == "analyze_done"
+    allow = [DEFAULT_PROMPT, *responses.values()]
+    for call in extraction_calls():
+        text = messages_text(call["messages"])
+        assert_no_identity_leak(text, allow=allow)
+        outside = outside_blocks(text)
+        for slot in ("claude", "chatgpt", "grok"):
+            assert slot not in outside.lower(), f"{slot!r} outside a delimited block"
+
+
+# --------------------------------------------------------------------------- oversize
+async def test_a_single_reply_over_the_budget_degrades_loudly_with_no_analyst_call(
+    make_conversation, analyze
+):
+    responses = {
+        "claude": reply(200, "CLAUDE-BODY"),
+        "chatgpt": reply(feature.REPLY_BUDGET_CHARS + 1_200, "CHATGPT-BODY"),
+        "grok": reply(200, "GROK-BODY"),
+    }
+    conv = await persist(make_conversation(responses=responses))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events) == ["analyze_start", "analyze_degraded"]
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded" and turn["extraction"] is None
+    assert turn["raw_attempts"] == []
+    error = turn["error"]
+    assert "R2" in error  # the label, never the slot name
+    assert f"{feature.REPLY_BUDGET_CHARS + 1_200:,}" in error
+    assert f"{feature.REPLY_BUDGET_CHARS:,}" in error
+    for slot in ("chatgpt", "claude", "grok"):
+        assert slot not in error.lower()
+    assert extraction_calls() == []  # nothing was typed anywhere
+    assert turn["usage"]["totals"]["calls"] == 0
+
+
+async def test_the_oversize_degrade_is_never_served_from_cache(make_conversation, analyze):
+    responses = {
+        "claude": reply(200, "CLAUDE-BODY"),
+        "chatgpt": reply(feature.REPLY_BUDGET_CHARS + 1, "CHATGPT-BODY"),
+        "grok": reply(200, "GROK-BODY"),
+    }
+    conv = await persist(make_conversation(responses=responses))
+    ids = []
+    for _ in range(2):
+        _, events = await analyze(conv.id)
+        assert _types(events) == ["analyze_start", "analyze_degraded"]
+        ids.append(events[0]["turn_id"])
+    assert ids[0] != ids[1]  # a degraded turn is never replayed: a fresh attempt is appended
+
+
+# --------------------------------------------------------------------------- the web transport
+async def test_the_split_runs_as_four_fresh_analyst_chats_on_a_web_session(
+    client, web_env, fake_desktop, make_conversation
+):
+    """The transport this was built for: each condensation is its own hidden chat, so no single
+    message carries more than one reply, and the comparison chat only ever sees the bullets."""
+    responses = responses_of(feature.SPLIT_MIN_CHARS + 3)
+    # What a web analyst types back: the claims as a FENCED json object, which is what the condense
+    # prompt asks a web session for and what the capture will not end on until it balances (S10).
+    claim_sets = [["claim one", "claim two"], ["claim three"], ["claim four"]]
+    condensed = ["```json\n" + json.dumps({"claims": c}) + "\n```" for c in claim_sets]
+    conv = make_conversation(responses=responses)
+    conv.slot_config.analyst_model = "web:chatgpt:analyst"
+    stored = await persist(conv)
+    comparison = bridge_fixtures.planted("analyst.extraction.1.jsonl")
+    desk = await fake_desktop({ANALYST: [*condensed, comparison]})
+
+    r = await client.post(f"/api/conversations/{stored.id}/analyze", json={})
+    assert r.status_code == 200, r.text
+    events = parse_sse_text(r.text)
+    assert _types(events)[-1] == "analyze_done"
+    requests = desk.of(*ANALYST)
+    assert len(requests) == 4
+    for req, label in zip(requests[:3], LABELS, strict=True):
+        assert req["fresh"] is True  # one condensation per chat: nothing else is in it
+        assert f"<<<{label}>>>" in req["text"]
+        assert len(req["text"]) <= feature.REPLY_BUDGET_CHARS + 2_768
+        for other in LABELS:
+            if other != label:
+                assert f"<<<{other}>>>" not in req["text"]
+    last = requests[3]
+    assert last["fresh"] is True and prompts.SYSTEM_FENCED in last["text"]
+    # The comparison quotes the CLAIMS, rendered back to bullet lines — never the analyst's raw
+    # JSON envelope, which is transport packaging and has no business in the next prompt.
+    for claims in claim_sets:
+        for claim in claims:
+            assert f"- {claim}" in last["text"]
+    for raw in condensed:
+        assert raw not in last["text"]
+    for slot_reply in responses.values():
+        assert slot_reply not in last["text"]
+    assert desk.errors == [] and mock.calls == []
+
+
+# --------------------------------------------------------------------------- the fenced retry
+@pytest.mark.parametrize("fenced", [False, True])
+def test_retry_follow_up_passes_the_transport_flag_through(fenced):
+    follow_up = feature.retry_follow_up("{not json", "parse_error: x", fenced=fenced)
+    assert follow_up[-1]["content"] == prompts.retry_message("parse_error: x", fenced=fenced)
+    assert ("```json" in follow_up[-1]["content"]) is fenced

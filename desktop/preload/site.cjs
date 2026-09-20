@@ -36,7 +36,7 @@
 // 10 s heartbeat, requests parked during boot.
 //
 // Stage 2 (capture-adapters): selectors v2 (`stop`/`assistant`/`assistantText`/`done`/`quietMs`/
-// `firstTokenMs`/`captureTimeoutMs` per site, contract §4), the `observe` op (final-text capture:
+// `settleMs` (S10)/`firstTokenMs`/`captureTimeoutMs` per site, contract §4), the `observe` op (final-text capture:
 // a new assistant container beyond `baselineCount`, done by done-selector | stop-gone | quiet,
 // `timeout` with the partial text, MutationObserver throttled to 100 ms + a 300 ms poll), the
 // `snapshot` op (`scrubDom`), `errorText` → `site_error` carrying only the matched phrase, and the
@@ -45,8 +45,9 @@
 //   * `DEFAULT_SELECTORS.version` stays 1: v2 is additive per site, and main's loader pins the
 //     version check (an override carrying `version: 2` warns and is otherwise applied).
 //   * observe: `timeoutMs` overrides `captureTimeoutMs`, `quietMs` overrides `quietMs`, an optional
-//     `firstTokenMs` overrides `firstTokenMs` (the first-token wait is capped by the budget); a
-//     missing `baselineCount` means the current `countAssistant()`.
+//     `firstTokenMs` overrides `firstTokenMs` (the first-token wait is capped by the budget) and an
+//     optional `settleMs` overrides `settleMs` (S10); a missing `baselineCount` means the current
+//     `countAssistant()`. `expect: 'json'` (S10) says what KIND of answer this turn is waiting for.
 //   * "the done selector on the last container" = a VISIBLE, clickable `done` match (not `opacity:0`
 //     or `pointer-events:none` — a hover-revealed action bar is not a marker) that is the last
 //     container, inside it, or after it in document order (an older turn's copy button never
@@ -71,7 +72,8 @@
 //     roots at most once (`sampled()` shares one `openShadowRoots(document)` per sample); the
 //     MutationObserver is re-scoped from the document to the reply's parent (the thread) once the
 //     reply container is known — a container appended elsewhere is still caught by the poll.
-//   * quiet needs non-blank text; an empty container waits for the budget (`timeout`, partial "").
+//   * EVERY end signal needs non-blank text (S10; only `quiet` asked for it before): an empty container
+//     waits for the budget (`timeout`, partial "").
 //   * the text is normalised (CRLF → LF, NBSP → space) and never trimmed.
 //   * a banner mid-reply is `site_error` whose message is the configured `errorText` phrase that
 //     matched — never the banner's or the page's text; a wall / challenge mid-reply answers
@@ -178,6 +180,31 @@
 // is absent, so the rule can add a duplicate header back but can never drop the answer. Replayed
 // offline by the fake site's `?thinking=1` (claude) and pinned by `test/adapters/observe.spec.js`,
 // `test/unit/preload/markdown.test.js` and `test/unit/preload/selectors.test.js`.
+//
+// S10 — the capture ended mid-reply once the answers got LONG. Evidence from a real Analyze on
+// 2026-09-20, after the user raised the reasoning effort inside chatgpt and claude (the three replies
+// it compared were 4992 / 13677 / 8583 characters): both analyst attempts came back as fragments the
+// bridge reported as `ok` — "```JSON\n{\n```" (13 characters, after 78.5 s) and `{"agre` (6, after
+// 13.3 s) — and Analyze degraded with `parse_error: no JSON object found in the response`. Four rules
+// follow, and the first three are about the same thing: an end signal is evidence about ONE sample of a
+// DOM that re-renders, and none of them may be trusted over a body that is not there yet.
+//   1. `done_selector` and `stop_gone` need non-blank text, as `quiet` always did. A signal with nothing
+//      captured means the reply has not STARTED; ending there reports a zero-character reply as `ok`.
+//   2. The stillness clocks are FROZEN while there is no container, and `findStop()` is sampled in that
+//      gap too. Both halves matter on chatgpt, whose reply container is unmounted for ~10 s mid-stream
+//      (measured 2026-09-17, above): the clocks used to run on, so a pending signal matured while the
+//      page could not be read, and the withdraw guard was blind exactly where the site was most plainly
+//      still replying — the button stays visible across the whole gap.
+//   3. A container SWAP resets the stillness state. The replacement usually renders the same prefix, so
+//      the sample after a swap would otherwise read "unchanged for quietMs" and end on that prefix.
+//   4. `expect: 'json'` — when the caller knows the answer is a JSON document (main sends it for the
+//      analyst page), no end signal resolves until the braces BALANCE (`looksComplete`), and the budget
+//      still ends it with whatever is there, after one final re-read of the container. A shape is
+//      evidence that a document is whole; a lull never was.
+// `settleMs` became a per-site selector in the same pass (chatgpt 1200, everyone else the four throttle
+// ticks S9 introduced), and main sends the analyst view a multiple of it. Pinned by the S10 block of
+// `test/unit/preload/observe.test.js`, the long-fenced-reply spec in `test/adapters/observe.spec.js`
+// (fake site `?replyChars` / `?lulls`) and `test/unit/main/orchestrator.test.js`.
 
 ;(() => {
   'use strict'
@@ -284,9 +311,9 @@
 
   /**
    * Selector config — contract §4 verbatim: the v1 keys, plus the v2 keys (`stop`, `assistant`,
-   * `assistantText`, `done`, `quietMs`, `firstTokenMs`, `captureTimeoutMs`) added per site in Stage
-   * 2. `version` stays 1: v2 is additive, and an override file written against v1 keeps working
-   * (main's loader warns on any other version). Override file: <userData>/selectors.json.
+   * `assistantText`, `done`, `quietMs`, `settleMs`, `firstTokenMs`, `captureTimeoutMs`) added per site in
+   * Stage 2 (`settleMs` in S10). `version` stays 1: v2 is additive, and an override file written against
+   * v1 keeps working (main's loader warns on any other version). Override: <userData>/selectors.json.
    * Empty `stop` + `done` ⇒ quiet detection (claude and grok have no done marker; their stop
    * buttons are the done signal, quiet the fallback).
    */
@@ -325,6 +352,12 @@
       assistantText: ['.markdown', '.whitespace-pre-wrap'],
       done: ["button[data-testid='copy-turn-action-button']"],
       quietMs: 2500,
+      // S10: three times the 400 ms every other site uses. A chosen value, not a measurement, and the
+      // reason is the failure of 2026-09-20: chatgpt re-renders the WHOLE markdown body on every token
+      // batch, and while it composes a long fenced JSON document at a raised effort the gaps between
+      // two renders are seconds, not frames. 400 ms of stillness is not evidence that such a reply has
+      // finished — it is the ordinary pause while the next batch is being thought about.
+      settleMs: 1200,
       firstTokenMs: 90000,
       captureTimeoutMs: 300000,
     },
@@ -364,6 +397,7 @@
       assistantText: ['.prose'],
       done: [],
       quietMs: 2500,
+      settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
       captureTimeoutMs: 300000,
     },
@@ -398,6 +432,7 @@
       assistantText: ['.response-content-markdown'],
       done: [],
       quietMs: 2500,
+      settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
       captureTimeoutMs: 300000,
     },
@@ -530,6 +565,45 @@
   function nonNegativeInt(v, fallback) {
     const n = Number(v)
     return v !== null && v !== undefined && v !== '' && Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback
+  }
+
+  /**
+   * Does `text` already hold the KIND of answer the caller is waiting for? (S10, contract §3 `expect`.)
+   *
+   * `expect === 'json'` — true once the text contains a BALANCED `{…}` object, fenced or bare. The scan
+   * is string-aware: a brace inside a JSON string is data, and a backslash escapes the next character,
+   * so `{"a": "} not the end"` is not complete. A `}` with nothing open is a stray closer (prose, a
+   * fence's own text) and closes nothing. Anything else — a missing or unknown kind — is always true, so
+   * a capture that expects nothing behaves exactly as it always did.
+   *
+   * Why the capture needs this at all: every end signal is a reading of ONE sample of a DOM that
+   * re-renders, and on 2026-09-20 two analyst captures came back as ````JSON\n{\n```` (13 characters) and
+   * `{"agre` (6) — stamped as finished replies, then reported to the user as a parse error. When the
+   * answer is a document with a shape, the shape is the evidence that it is whole; a lull is not.
+   */
+  function looksComplete(text, expect) {
+    if (expect !== 'json') return true
+    const s = typeof text === 'string' ? text : ''
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') {
+        if (depth > 0) inString = true // a quote outside every object is prose, not a JSON string
+      } else if (ch === '{') depth += 1
+      else if (ch === '}' && depth > 0) {
+        depth -= 1
+        if (depth === 0) return true
+      }
+    }
+    return false
   }
 
   function isResultCode(code) {
@@ -2190,7 +2264,7 @@
      * `quietMs` / `timeoutMs` / `firstTokenMs` in the message override the selectors; a missing
      * `baselineCount` means the current count.
      */
-    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, signal } = {}) {
+    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, signal } = {}) {
       const t0 = clock()
       const given = nonNegativeInt(baselineCount, null)
       let known = null // the containers of EARLIER turns, by node identity; filled by the FIRST sample (same tick as this call, so it shares its one shadow-root walk)
@@ -2199,19 +2273,33 @@
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
       const SETTLE = Symbol('settle') // the end was seen; take one more sample before resolving
+      const REREAD = Symbol('reread') // the budget is spent on an incomplete answer: one last look at the page first
       // How long the text must hold still after an end signal. Four throttle ticks, not one (S9): a
       // single 100 ms lull between two token batches is ordinary mid-stream, and resolving inside one
-      // is how a capture ends on a fragment. It costs one 400 ms wait at the end of a capture that
-      // takes seconds, and the budget still overrides it.
-      const SETTLE_MS = 4 * OBSERVE_THROTTLE_MS
+      // is how a capture ends on a fragment. It costs one settle window at the end of a capture that
+      // takes seconds, and the budget still overrides it. Per site since S10 (`settleMs`: chatgpt holds
+      // the text far longer between two renders of a long answer), and the message overrides the site.
+      const settleWindow = nonNegativeInt(settleMs, nonNegativeInt(sel.settleMs, 4 * OBSERVE_THROTTLE_MS))
+      // How long an answer that never takes the expected SHAPE is waited on after the site says it has
+      // finished. Without this the JSON gate below holds the capture to the whole `captureTimeoutMs`
+      // (five minutes) whenever a model answers a JSON request in prose — a refusal, an apology, a
+      // question back — so the loud failure would arrive ten minutes late. Once the site has signalled
+      // the end and the text has not moved for this long, the answer is as complete as it will get.
+      const incompleteGrace = nonNegativeInt(sel.incompleteGraceMs, 20000)
+      // What KIND of answer this turn is waiting for (S10): `json` refuses to resolve an end signal on a
+      // document whose braces do not balance. Main sends it for the analyst page, whose reply is always a
+      // JSON document; a pane send sends nothing and nothing changes for it.
+      const expectKind = typeof expect === 'string' ? expect : null
       let container = null
       let text = ''
       let lastText = null
       let lastChangeAt = t0
+      let lastSampleAt = t0 // the previous sample's clock: the gap between two samples is what a container gap freezes
       let seenStop = false
       let seenContainer = false // a container has been followed at least once: a later gap is a re-render, not a missing reply, and the count rule is retired
-      let endSeen = null // 'done_selector' | 'stop_gone' once the site signalled the end
+      let endSeen = null // 'done_selector' | 'stop_gone' | 'quiet' once the site signalled the end
       let endSeenAt = 0
+      let rereadTaken = false // the one final re-sample an incomplete expected answer takes at its budget
       const partial = () => (isBlank(text) ? undefined : text)
       /** The LAST container (document order) that was not already on the page when this observe started; null when every one of them was. */
       const lastFresh = (containers) => {
@@ -2239,6 +2327,8 @@
       const check = (full) =>
         sampled(() => {
           const now = clock()
+          const sinceLast = Math.max(0, now - lastSampleAt) // how long the page went unread before this sample
+          lastSampleAt = now
           if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
           if (full) sessionGate()
           const containers = assistantContainers()
@@ -2260,6 +2350,7 @@
           // baseline can never make an EARLIER turn's container — text, done marker and all — the
           // answer while this turn's reply is between two renders.
           const fresh = lastFresh(containers)
+          const before = container
           if (fresh) {
             container = fresh
             seenContainer = true
@@ -2268,6 +2359,17 @@
             seenContainer = true
           }
           else if (container && container.isConnected === false) container = null
+          // A NEW node is a NEW reply body (S10): a site that re-renders its turn into a different
+          // element must not hand the replacement the stillness the node it replaced had accumulated.
+          // The two texts are usually IDENTICAL at the swap (the same prefix, re-rendered), so without
+          // this the sample after a swap can see "unchanged for quietMs" and end the capture on the
+          // prefix — the stale clock belongs to a node that is no longer on the page.
+          if (container !== null && before !== null && container !== before) {
+            lastText = null
+            endSeen = null
+            endSeenAt = 0
+            lastChangeAt = now
+          }
           // Measured on chatgpt.com (2026-09-17): the site mounts a short placeholder turn, then
           // UNMOUNTS the whole container for ~10 s before remounting the real reply. Holding the
           // detached node freezes the text at the placeholder and makes `findDone` unmatchable
@@ -2275,6 +2377,21 @@
           // Dropping it means the gap is simply "still streaming": once a container has been seen
           // the first-token deadline no longer applies, only the overall budget.
           if (!container) {
+            // Freeze the stillness clocks for as long as the DOM is missing (S10). They measure "the
+            // reply has not moved", and a reply whose container is not on the page has not been READ —
+            // letting a pending end signal or a quiet window mature across the measured ~10 s chatgpt
+            // gap is how a capture ends on the FIRST render after the gap, which is one character.
+            lastChangeAt += sinceLast
+            if (endSeen !== null) endSeenAt += sinceLast
+            // …and the stop button is still sampled with no container to read: it is the site saying it
+            // is still replying, and it must be able to WITHDRAW a pending signal during the gap too
+            // (measured on chatgpt.com 2026-09-17: the button stays visible across the whole gap, so
+            // the one guard that could have stopped this capture was blind exactly where it was needed).
+            if (findStop()) {
+              seenStop = true
+              lastChangeAt = now
+              endSeen = null
+            }
             if (!seenContainer && now - t0 >= firstToken) {
               throw new AdapterError(
                 'reply_not_found',
@@ -2309,12 +2426,16 @@
             // re-fires by itself on the next sample once the button is really gone, and the capture
             // stays bounded by the budget exactly as a stop button that never disappears always was.
             endSeen = null
-          } else if (endSeen === null) {
+          } else if (endSeen === null && !isBlank(text)) {
+            // EVERY end signal needs text (S10 — `quiet` always had the guard, the other two did not):
+            // a marker or a vanished stop button over a blank body means the reply has not STARTED, and
+            // ending there hands main a zero-character answer under `ok`. Keep waiting to the budget
+            // instead; `reply_not_found` and `timeout` then apply exactly as they always did.
             if (findDone(container)) {
               endSeen = 'done_selector'
             } else if (seenStop) {
               endSeen = 'stop_gone'
-            } else if (!isBlank(text) && now - lastChangeAt >= quiet) {
+            } else if (now - lastChangeAt >= quiet) {
               // quiet goes through the same settle/withdraw machinery as the other two (S9): it is
               // also a reading of one sample, and a stop button that appears in the settle window
               // must be able to take it back. Its own stillness requirement is already met, so this
@@ -2326,8 +2447,30 @@
           if (endSeen !== null) {
             // settling: resolve once a settle window has passed since the end signal AND since the last
             // text change (two samples a few ms apart never count as "held still"), or the budget is spent
-            const still = now - endSeenAt >= SETTLE_MS && now - lastChangeAt >= SETTLE_MS
-            result = still || now - t0 >= budget ? endSeen : SETTLE
+            const still = now - endSeenAt >= settleWindow && now - lastChangeAt >= settleWindow
+            // …and, when the caller said what kind of answer this is, once the answer actually has that
+            // shape (S10): an end signal over half a JSON document resolves nothing, it just keeps
+            // sampling. The budget always wins in the end, so a reply that is genuinely prose — or one
+            // the model abandoned mid-document — can never hang here; it comes back with its own doneBy,
+            // after ONE final re-read, because the last render often lands after the sample that gave up.
+            const complete = looksComplete(text, expectKind)
+            const gaveUp = now - t0 >= budget || (still && now - lastChangeAt >= incompleteGrace)
+            if (still && complete) result = endSeen
+            else if (gaveUp) {
+              if (complete) result = endSeen
+              else if (!rereadTaken) {
+                // One last look: the final render often lands after the sample that gave up.
+                rereadTaken = true
+                result = REREAD
+              } else {
+                // The answer never took the shape the caller asked for. Returning it as a finished
+                // reply is the whole defect this release is about (S10, measured 2026-09-20: a
+                // 13-character fragment came back `ok` and Analyze compared it), so this FAILS, and
+                // the partial travels with it for the degraded report to quote.
+                if (!full) sessionGate()
+                throw new AdapterError('timeout', `the reply never became a complete ${expectKind} document (${text.length} characters after ${Math.round(now - t0)} ms)`, text)
+              }
+            } else result = SETTLE
           }
           const spent = result === null && now - t0 >= budget
           if (!full && (typeof result === 'string' || spent)) sessionGate() // a terminal answer never bypasses the session check
@@ -2390,7 +2533,7 @@
             settle(() => reject(e))
             return
           }
-          if (r === SETTLE) scheduleSample()
+          if (r === SETTLE || r === REREAD) scheduleSample()
           else if (r) {
             settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0) }))
             return
@@ -2752,6 +2895,7 @@
       tailMatches,
       isBlank,
       nonNegativeInt,
+      looksComplete,
       openShadowRoots,
       deepQuerySelector,
       deepQuerySelectorAll,

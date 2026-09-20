@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import AnalyzePane from './index.jsx'
+import { isSplitNotice } from './AnalyzePane.jsx'
 import { applyEvents, renderWithStore } from '../../state/testing.jsx'
 import { analyzeTurn, conversation, degradedTurn, events, sendTurn } from './fixtures.js'
 import { NOT_CAPTURED_MESSAGE_PREFIX } from './slice.js'
@@ -406,5 +407,33 @@ describe('AnalyzePane: actions', () => {
     await waitFor(() => expect(screen.getByTestId('analyze-run')).toBeEnabled())
     expect(screen.getByTestId('analyze-degraded')).toBeInTheDocument()
     expect(screen.getByTestId('analyze-fusion-disabled')).toBeInTheDocument()
+  })
+})
+
+describe('the retry line narrates a split as a split', () => {
+  const NOTICE =
+    "splitting the analyst prompt: 27,252 characters of replies is over 12,000, so R2's reply " +
+    '(13,677 characters) is being condensed to its substantive claims first'
+
+  test('a condense notice is shown as itself, not as a validation failure', () => {
+    renderPane(stateWith([{ type: 'sse/start', feature: 'analyze' }, events.start(), events.retry(NOTICE)]))
+    const line = screen.getByTestId('analyze-retry')
+    expect(line).toHaveTextContent('is being condensed')
+    expect(line).not.toHaveTextContent('failed validation')
+    expect(line.querySelector('details')).toBeNull()
+  })
+
+  test('a real validation failure still reads as one, with the error tucked away', () => {
+    renderPane(stateWith([{ type: 'sse/start', feature: 'analyze' }, events.start(), events.retry('parse_error: no JSON object found')]))
+    const line = screen.getByTestId('analyze-retry')
+    expect(line).toHaveTextContent('failed validation')
+    expect(line.querySelector('details')).not.toBeNull()
+  })
+
+  test('isSplitNotice keys on the prefix the backend actually writes', () => {
+    expect(isSplitNotice(NOTICE)).toBe(true)
+    expect(isSplitNotice('parse_error: no JSON object found')).toBe(false)
+    expect(isSplitNotice(null)).toBe(false)
+    expect(isSplitNotice(undefined)).toBe(false)
   })
 })

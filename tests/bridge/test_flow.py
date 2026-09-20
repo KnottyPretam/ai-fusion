@@ -252,7 +252,10 @@ async def test_analyst_correction_retry_continues_the_same_chat(client, web_env,
 
     first, second = desk.of("chatgpt", "analyst", "extraction")
     assert first["fresh"] is True and second["fresh"] is False
-    assert second["text"] == analyze_prompts.retry_message(events[1]["error"])
+    # The correction is the whole message the analyst sees, so it carries the fenced-block rule
+    # itself (tests/analyze/test_prompt.py::test_the_web_correction_restates_the_fence).
+    assert second["text"] == analyze_prompts.retry_message(events[1]["error"], fenced=True)
+    assert "```json" in second["text"]
     assert events[1]["error"].startswith("parse_error")
     assert second["req_id"] != first["req_id"] and second["conversation_id"] == cid
     assert mock.calls == [] and desk.errors == []

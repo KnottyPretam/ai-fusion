@@ -26,7 +26,10 @@ env keys) are normative; `bridge_protocol.py` (frozen) validates every frame at 
   capture and analyst frames only update the caches `status()` reports.
 - `stream(...)`: the transport `client.stream_completion` dispatches `web:*` models to. NEVER
   raises: exactly the section 1 delta mapping, one INFO line per request (`bridge req=<id> slot
-  view purpose ok|code ms`) that never contains any text, no frame body is ever logged.
+  view purpose ok|code ms done_by chars`) that never contains any text, no frame body is ever
+  logged. `done_by` is the end signal the adapter reported (`-` when nothing was captured) and
+  `chars` the length of the captured text (of `partial` on a failed result, 0 otherwise): the
+  pair that tells a genuinely short answer apart from a capture that ended mid-reply.
   `max_tokens`, `response_format`, `plugins` and `reasoning` are ignored (the site decides); the
   `done` delta carries a zero-token, zero-cost `Usage` (`stream_completion` stamps latency). A
   failed `result` that carries `partial` text yields that text as one `text` delta BEFORE the
@@ -539,6 +542,13 @@ async def stream(
     slot: str = "-"
     view: str = "-"
     outcome = "ok"
+    # What the INFO line reports about the capture itself (Workstream E, 2026-09-20): which end
+    # signal ended it and how many characters came back. The failure that prompted this -- a
+    # 13-character analyst reply stamped `ok` after 78 s, because the capture ended while the site
+    # was still typing -- had to be reconstructed afterwards from the persisted raw_attempts,
+    # since the log said only `ok ms=78512`. Counts and the signal name only: never any text.
+    done_by = "-"
+    chars = 0
     try:
         try:
             slot, view = parse_web_model(model)
@@ -582,6 +592,7 @@ async def stream(
                         outcome = reply["code"]
                         partial = reply.get("partial")
                         if isinstance(partial, str) and partial:
+                            chars = len(partial)  # what the site had produced before it failed
                             yield Delta(kind="text", text=partial)
                         yield _error(reply["code"], reply["message"], ERROR_TYPE_SITE)
                         return
@@ -594,6 +605,8 @@ async def stream(
                         )
                         return
                     text = reply["text"]
+                    done_by = reply.get("done_by") or "-"
+                    chars = len(text)
                     if text.strip():
                         yield Delta(kind="text", text=text)
                     yield Delta(
@@ -618,13 +631,15 @@ async def stream(
         yield _error(TRANSPORT_ERROR, f"{type(e).__name__}: {e}", ERROR_TYPE_TRIPLEX)
     finally:
         log.info(
-            "bridge req=%s slot=%s view=%s purpose=%s %s ms=%d",
+            "bridge req=%s slot=%s view=%s purpose=%s %s ms=%d done_by=%s chars=%d",
             req_id,
             slot,
             view,
             purpose,
             "ok" if outcome == "ok" else f"code={outcome}",
             int((time.monotonic() - started) * 1000),
+            done_by,
+            chars,
         )
 
 

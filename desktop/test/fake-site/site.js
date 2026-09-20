@@ -61,6 +61,18 @@
  *                    ordinary gap between two token batches, and what lets a premature end signal
  *                    resolve. Composes with both options above (the blink starts at the same point).
  *
+ * S10 — the same defect at the next effort level up: the analyst's reply became LONG (a JSON document of
+ * several KB taking half a minute, with repeated pauses), and the capture ended inside it. The two keys
+ * below are what the fake site was missing to express that at all — ?replyMs only ever stretched the same
+ * ~1.2 KB canned body over more time, and ?lullMs pauses exactly ONCE:
+ *   ?replyChars=N    pad the reply to at least N characters. A fenced JSON body is padded INSIDE its
+ *                    object (one `filler_<i>` member per repetition), so the reply stays ONE balanced
+ *                    JSON document that closes only at its very last character — the shape a real
+ *                    analyst reply has. Any other reply is its own source repeated, blank-line
+ *                    separated. Composes with every option above.
+ *   ?lulls=N,ms      N pauses of `ms` each, spread evenly through the stream (at 1/(N+1), 2/(N+1) …).
+ *                    Takes precedence over ?lullMs. window.__fake.lulls records every one of them.
+ *
  *   ?twoTurns=1      the reply is TWO assistant containers: a first "tool" container (a fixed
  *                    'Searching the web…', marked done at once — chatgpt gets its copy button — while the
  *                    stop button stays up) and, TWO_TURNS_LAG_MS later, the answer container streaming as
@@ -141,8 +153,8 @@
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
  * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
- *                  reply: {enabled, ms, kind, nostop, nodone, blockAfterMs, doneLagMs, twoTurns,
- *                  remountMs, placeholderMs, webUrlMs}, replying,
+ *                  reply: {enabled, ms, kind, chars, lulls, nostop, nodone, blockAfterMs, doneLagMs,
+ *                  twoTurns, remountMs, placeholderMs, webUrlMs}, replying,
  *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
  *                  placeholderText, placeholderAt, placeholderGoneAt, remountedAt, stopEvents, urls,
  *                  replyText(), replySource()} (the site's own debug surface; `replySource()` is the reply's
@@ -150,8 +162,9 @@
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
  * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
  * ms of the end signal and the last text render, null before; `rendersAfterSignal` the renders that
- * landed after the end signal; `placeholderText` the placeholder turn's text (null when ?remountMs is
- * off), `placeholderAt` / `placeholderGoneAt` / `remountedAt` epoch ms of its mount, its removal and the
+ * landed after the end signal; `lulls` every stream pause as {at, endAt} (S10); `placeholderText` the
+ * placeholder turn's text (null when ?remountMs is off), `placeholderAt` / `placeholderGoneAt` /
+ * `remountedAt` epoch ms of its mount, its removal and the
  * real container's mount; `stopEvents` every stop-button transition as {on, ts} — [{on:true},{on:false}]
  * means the button was up continuously across the gap; `urls` every pushState/replaceState as
  * {how:'push'|'replace', href, ts}).
@@ -273,6 +286,14 @@
     ' "divergences": []',
   ].join('\n')
 
+  /** `?lulls=N,ms` → {count, ms}; anything unusable (a missing count or interval) is no pauses at all. */
+  function parseLulls(raw) {
+    if (typeof raw !== 'string' || raw === '') return null
+    const [n, ms] = raw.split(',').map((x) => Number(x))
+    if (!Number.isFinite(n) || !Number.isFinite(ms) || n < 1 || ms < 0) return null
+    return { count: Math.floor(n), ms: Math.floor(ms) }
+  }
+
   const params = new URLSearchParams(location.search)
   const site = Object.prototype.hasOwnProperty.call(SITES, params.get('site')) ? params.get('site') : 'chatgpt'
   const cfg = SITES[site]
@@ -292,6 +313,9 @@
     codeCopyDone: params.get('codeCopyDone') === '1' && site === 'chatgpt',
     // S9: one pause in the stream, and a stop button that blinks out mid-stream and comes back
     lullMs: params.has('lullMs') ? Math.max(0, Number(params.get('lullMs')) || 0) : null,
+    // S10: a reply that is long in BYTES, and repeated pauses rather than one
+    chars: params.has('replyChars') ? Math.max(0, Number(params.get('replyChars')) || 0) : null,
+    lulls: parseLulls(params.get('lulls')),
     stopBlinkMs: params.has('stopBlinkMs') ? Math.max(0, Number(params.get('stopBlinkMs')) || 0) : null,
     nodone: params.get('nodone') === '1',
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
@@ -342,6 +366,8 @@
     /** S9: when the one stream pause (?lullMs) began and ended, and the stop-button blink (?stopBlinkMs). */
     lullAt: null,
     lullEndAt: null,
+    /** S10: every pause of ?lulls=N,ms as {at, endAt} (?lullMs contributes its single one too). */
+    lulls: [],
     stopBlinkAt: null,
     stopBlinkEndAt: null,
     // ?remountMs: the placeholder turn's text and the three moments of the measured lifecycle
@@ -503,14 +529,58 @@
   }
 
   function replyFor(text) {
-    if (replyOpts.kind === 'fidelity') return CANNED_FIDELITY
-    if (replyOpts.kind === 'openfence') return CANNED_OPEN_FENCE
-    if (replyOpts.kind === 'rich') return CANNED_RICH
+    if (replyOpts.kind === 'fidelity') return padTo(CANNED_FIDELITY, replyOpts.chars)
+    if (replyOpts.kind === 'openfence') return padTo(CANNED_OPEN_FENCE, replyOpts.chars)
+    if (replyOpts.kind === 'rich') return padTo(CANNED_RICH, replyOpts.chars)
     if (replyOpts.kind === 'json') {
       const canned = cannedFor(text)
-      if (canned !== null) return '```json\n' + canned + '\n```'
+      if (canned !== null) return padTo('```json\n' + canned + '\n```', replyOpts.chars)
     }
-    return 'Echo: ' + text
+    return padTo('Echo: ' + text, replyOpts.chars)
+  }
+
+  /** The filler sentence ?replyChars repeats. Plain ASCII: no quote, backslash or brace to confuse a parser. */
+  const FILLER = 'the datasheet repeats this sentence so the reply is long enough to stream for a while'
+
+  /**
+   * ?replyChars=N — pad a reply to at least N characters (see the header). A fenced JSON body gains one
+   * `filler_<i>` member per repetition INSIDE its object, so the whole reply is still ONE balanced JSON
+   * document whose closing brace is its last character but one: that is what a long analyst reply looks
+   * like, and it is the only shape in which "the object has not closed yet" means "not finished yet".
+   * Anything else is its own source repeated, blank-line separated.
+   */
+  function padTo(src, chars) {
+    if (!chars || src.length >= chars) return src
+    const fence = /^```json\n(\{[\s\S]*\})\n```$/.exec(src)
+    if (fence) {
+      const inner = fence[1].slice(1, -1).trim()
+      const members = []
+      let length = '```json\n{}\n```'.length + inner.length
+      for (let i = 0; length < chars; i += 1) {
+        const member = `"filler_${i}": "${FILLER}"`
+        members.push(member)
+        length += member.length + 2 // the member and its ", " separator
+      }
+      if (inner !== '') members.push(inner)
+      return '```json\n{' + members.join(', ') + '}\n```'
+    }
+    let out = src
+    while (out.length < chars) out += '\n\n' + src
+    return out
+  }
+
+  /**
+   * Where the stream pauses: ?lulls=N,ms spreads N pauses evenly through it (S10 — a long reply lulls
+   * repeatedly, and every lull is a chance for a capture to end early, which ONE pause cannot show),
+   * else ?lullMs is a single pause after LULL_AT of the reply (S9).
+   */
+  function pausePoints() {
+    if (replyOpts.lulls) {
+      const out = []
+      for (let i = 1; i <= replyOpts.lulls.count; i += 1) out.push({ at: i / (replyOpts.lulls.count + 1), ms: replyOpts.lulls.ms })
+      return out
+    }
+    return replyOpts.lullMs === null ? [] : [{ at: LULL_AT, ms: replyOpts.lullMs }]
   }
 
   // --- markdown → DOM (Stage 3) --------------------------------------------------------------
@@ -972,8 +1042,9 @@
     if (!replyOpts.nostop) actions.streaming(true)
     const t0 = Date.now()
     let ticks = 0
-    let paused = 0 // ?lullMs: the stream's own clock stops during the pause, so the rest still streams
-    let lullDone = false
+    let paused = 0 // a pause stops the stream's own clock, so the rest of the reply still streams
+    const pauses = pausePoints()
+    let nextPause = 0
     let blinkDone = false
     /**
      * ?stopBlinkMs (S9): the stop button vanishes for a beat mid-stream and comes back — a re-render,
@@ -1021,15 +1092,19 @@
         blinkDone = true
         blinkStop()
       }
-      if (replyOpts.lullMs !== null && !lullDone && p >= LULL_AT) {
-        lullDone = true
+      if (nextPause < pauses.length && p >= pauses[nextPause].at) {
+        const pause = pauses[nextPause]
+        nextPause += 1
         const from = Date.now()
-        fake.lullAt = from
+        if (fake.lullAt === null) fake.lullAt = from
+        const record = { at: from, endAt: null }
+        fake.lulls.push(record)
         reply.timer = setTimeout(() => {
           paused += Date.now() - from
           fake.lullEndAt = Date.now()
+          record.endAt = fake.lullEndAt
           step()
-        }, replyOpts.lullMs)
+        }, pause.ms)
         return
       }
       reply.timer = setTimeout(step, RENDER_MS)

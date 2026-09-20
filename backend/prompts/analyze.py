@@ -24,6 +24,19 @@ JSON_INSTRUCTION_FENCED)`, pinned by tests/analyze/test_prompt.py).
   `parse_error: no JSON object found in the response` on both attempts. Inside a fenced code
   block markdown resolves nothing, so the bytes survive the round trip (proved end to end by the
   fake site's `?reply=fidelity`, whose fenced body carries `\\"quote\\"` and still JSON-parses).
+
+The correction message carries that same clause on a web transport (`retry_message(fenced=True)`,
+MEASURED live on 2026-09-20): `bridge.text_for` types only `messages[-1]` into the analyst's chat,
+so the system prompt's packaging rule is not in front of the analyst when the correction arrives --
+and the failing run's second attempt duly came back unfenced (`{"agre`). Every API transport keeps
+`RETRY_USER_MESSAGE` byte for byte (pinned in tests/analyze/test_prompt.py).
+
+The condense (split) prompts serve the size bound (`features/analyze.py` SPLIT_MIN_CHARS): one
+label's reply at a time, quoted the same inert way, rewritten as short bullets. Its output is
+quoted data for the comparison prompt that follows, not a validated artifact, so it asks for no
+JSON and no schema checks it; `CONDENSED_RESPONSES_HEADER` then tells the comparison that its
+blocks are condensed, because an analyst that thinks it is reading full replies would read silence
+into a bullet list that simply dropped a restatement.
 """
 
 from __future__ import annotations
@@ -67,25 +80,90 @@ SYSTEM_FENCED = _SYSTEM_RULES + JSON_INSTRUCTION_FENCED + "\n" + _SCHEMA
 RETRY_USER_MESSAGE = (
     "Your previous output failed validation: {error}. Return only the corrected JSON."
 )
+# Appended on a web transport only (module docstring): the correction is typed on its own into the
+# analyst's chat, so it has to restate how the reply must be packaged. Same rule, same escape
+# clause as JSON_INSTRUCTION_FENCED, worded as a follow-up.
+RETRY_FENCE_CLAUSE = (
+    " Send it as a fenced code block tagged json — a line with ```json, then the JSON, then a "
+    "closing line with ``` — written exactly as it must be parsed, with every double quote inside "
+    "a string escaped as \\\", and no prose outside the block."
+)
 
 QUESTION_HEADER = "Question:"
 RESPONSES_HEADER = "Responses:"
+# The comparison prompt's header when the blocks are condensed claims rather than the replies
+# themselves (the split step). Says so, so the analyst does not read a dropped restatement as
+# silence on the point.
+CONDENSED_RESPONSES_HEADER = (
+    "Responses, each condensed to its substantive claims by an earlier pass (a label is silent "
+    "only on what its block does not mention):"
+)
+
+# --------------------------------------------------------------------------- the condense step
+CONDENSE_SYSTEM = """You are condensing ONE anonymous expert response so that it can be compared with two others.
+
+Rewrite it as a flat list of short bullet points, one substantive claim per bullet: facts, numbers, limits, register values, recommendations, and for each claim the evidence it cites, if any. Copy every specific value verbatim — a number or a limit that changes is worse than one that is left out. Drop restatements, pleasantries, worked-example prose, and anything that is only about style, order or emphasis. Keep the claims in the order they appear.
+
+Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a shorter copy of one response, not an assessment of it.
+
+Return ONLY a JSON object of the form {"claims": ["<one claim>", "<one claim>", ...]} and nothing else. One claim per string, in the order they appear."""
+
+#: Appended for a web session, which is read back out of RENDERED markdown: the same fence rule the
+#: comparison prompt uses, for the same reason (docs/semantics.md, "Structured output").
+CONDENSE_FENCE_CLAUSE = (
+    " Put the object in a fenced code block tagged json — a line with ```json, then the JSON, then a "
+    "closing line with ``` — and write nothing outside the block."
+)
+
+CONDENSE_HEADER = "Response to condense:"
 
 
-def build_user(question: str, responses: dict[Label, str]) -> str:
+def build_user(question: str, responses: dict[Label, str], *, condensed: bool = False) -> str:
     """The user message: the question, the quoted-data notice, then one delimited block per
-    label in R1/R2/R3 order (`responses` must carry every label)."""
+    label in R1/R2/R3 order (`responses` must carry every label).
+
+    `condensed=True` (the split step ran, so the blocks hold condensed claims instead of the
+    replies) swaps ONLY the responses header; the blocks and their order never change."""
     missing = [label for label in LABELS if label not in responses]
     if missing:
         raise ValueError(f"responses missing labels {missing}")
     blocks = [delimited(label, responses[label]) for label in LABELS]
+    header = CONDENSED_RESPONSES_HEADER if condensed else RESPONSES_HEADER
     return "\n\n".join(
         [
             f"{QUESTION_HEADER}\n{question}",
-            f"{RESPONSES_HEADER}\n{QUOTED_DATA_NOTICE}",
+            f"{header}\n{QUOTED_DATA_NOTICE}",
             *blocks,
         ]
     )
+
+
+def condense_user(question: str, label: Label | str, response: str) -> str:
+    """The condense call's user message: the question (so "substantive" has a referent), the
+    quoted-data notice, and exactly ONE label's reply in its delimited block."""
+    return "\n\n".join(
+        [
+            f"{QUESTION_HEADER}\n{question}",
+            f"{CONDENSE_HEADER}\n{QUOTED_DATA_NOTICE}",
+            delimited(label, response),
+        ]
+    )
+
+
+def condense_messages(
+    question: str, label: Label | str, response: str, *, fenced: bool = False
+) -> list[dict[str, str]]:
+    """`[system(condense instructions), user(question + the one delimited block)]`.
+
+    The claims come back as JSON, not prose, for two reasons that only apply to a web session:
+    the capture refuses to end on a document whose braces do not balance (S10), so a condensation
+    truncated mid-answer FAILS loudly instead of being quoted into the comparison as though it were
+    the whole reply; and `fenced=True` asks for the code block that survives markdown rendering."""
+    system = CONDENSE_SYSTEM + (CONDENSE_FENCE_CLAUSE if fenced else "")
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": condense_user(question, label, response)},
+    ]
 
 
 def system_message(*, fenced: bool = False) -> str:
@@ -96,32 +174,46 @@ def system_message(*, fenced: bool = False) -> str:
 
 
 def build_messages(
-    question: str, responses: dict[Label, str], *, fenced: bool = False
+    question: str,
+    responses: dict[Label, str],
+    *,
+    fenced: bool = False,
+    condensed: bool = False,
 ) -> list[dict[str, str]]:
     """`[system(instructions), user(question + delimited R1/R2/R3 blocks)]`.
 
     `fenced=True` (the caller passes `client.transport_kind(model) == "web"`) swaps ONLY the JSON
-    instruction for the fenced one; the user message never depends on the transport."""
+    instruction for the fenced one; `condensed=True` swaps ONLY the responses header. The two are
+    independent: one is about the transport, the other about what the blocks hold."""
     return [
         {"role": "system", "content": system_message(fenced=fenced)},
-        {"role": "user", "content": build_user(question, responses)},
+        {"role": "user", "content": build_user(question, responses, condensed=condensed)},
     ]
 
 
-def retry_message(error: str) -> str:
-    return RETRY_USER_MESSAGE.format(error=error)
+def retry_message(error: str, *, fenced: bool = False) -> str:
+    """The correction message. `fenced=True` (a web transport) appends the packaging rule, because
+    this message is the only thing typed into the analyst's chat (module docstring)."""
+    message = RETRY_USER_MESSAGE.format(error=error)
+    return message + RETRY_FENCE_CLAUSE if fenced else message
 
 
 __all__ = [
+    "CONDENSED_RESPONSES_HEADER",
+    "CONDENSE_HEADER",
+    "CONDENSE_SYSTEM",
     "JSON_INSTRUCTION",
     "JSON_INSTRUCTION_FENCED",
     "QUESTION_HEADER",
     "RESPONSES_HEADER",
+    "RETRY_FENCE_CLAUSE",
     "RETRY_USER_MESSAGE",
     "SYSTEM",
     "SYSTEM_FENCED",
     "build_messages",
     "build_user",
+    "condense_messages",
+    "condense_user",
     "retry_message",
     "system_message",
 ]

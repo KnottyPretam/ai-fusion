@@ -43,7 +43,7 @@ Rules (readings taken at S6, binding from here): `BridgeHub.request` signals bri
 requests fail `bridge_disconnected`); no `accepted`/`rejected` within
 `BRIDGE_ACCEPT_TIMEOUT_S` (15) → `bridge_no_ack`; no `result` within `timeout_s`
 (`BRIDGE_TIMEOUT_S`, 600) → `cancel` sent + `timeout`; frame bodies are never logged (one INFO
-line per request: `bridge req=<id> slot view purpose ok/code ms`, no text).
+line per request: `bridge req=<id> slot view purpose ok|code=<c> ms=<n> done_by=<signal> chars=<n>`, no text — `done_by` is the adapter's end signal (`-` when nothing was captured) and `chars` the captured length, added at S10 because a capture that ended mid-reply was indistinguishable in the log from a short answer).
 `Health = {"composer":bool,"send":bool,"reply":bool|null,"stop":bool|null,"session":"ok"|"logged_out"|"challenge"|"blocked"|"unknown","matched":{"composer":str|null,"send":str|null,"reply":str|null,"stop":str|null,"error":str|null},"url":str,"host":str,"title":str,"ts":int}`
 (`reply`/`stop` are `null` until selectors v2; `matched.error` names a selector-config problem such as a bad override file, else `null`; `ms`/`ts` are integers — the pydantic models are strict).
 
@@ -110,7 +110,7 @@ main → preload   webContents.send('triplex:adapter', msg)
    {reqId, op:'health'}
    {reqId, op:'ready', timeoutMs}                                   // composer present & no stop button, session ok
    {reqId, op:'insertAndSubmit', text}
-   {reqId, op:'observe', baselineCount:number, quietMs?, firstTokenMs?, timeoutMs?}   // Stage 2 (timeoutMs overrides captureTimeoutMs)
+   {reqId, op:'observe', baselineCount:number, quietMs?, firstTokenMs?, timeoutMs?, settleMs?, expect?}   // Stage 2 (timeoutMs overrides captureTimeoutMs); S10 adds settleMs and expect
    {reqId, op:'snapshot'}                                           // Stage 2 (scrubbed DOM)
    {reqId, op:'cancel', target: reqId}
    {op:'config', selectors}                                         // Stage 2 hot reload, no reply

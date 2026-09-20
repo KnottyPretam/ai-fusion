@@ -12,7 +12,7 @@ const LIST_KEYS = ['composer', 'send', 'loggedOut', 'loggedOutUrl', 'challenge',
 const MS_KEYS = ['composerWaitMs', 'sendWaitMs', 'submitVerifyMs']
 /** Selectors v2 (Stage 2, contract §4), additive per site; the list keys may be empty (empty stop + done ⇒ quiet detection). */
 const V2_LIST_KEYS = ['stop', 'assistant', 'assistantText', 'done']
-const V2_MS_KEYS = ['quietMs', 'firstTokenMs', 'captureTimeoutMs']
+const V2_MS_KEYS = ['quietMs', 'settleMs', 'firstTokenMs', 'captureTimeoutMs']
 const V1_KEYS = ['chatUrlPattern', ...LIST_KEYS, ...MS_KEYS]
 const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS]
 const SAMPLE_CHAT_URL = {
@@ -132,7 +132,7 @@ test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com
   assert.deepEqual(grok.assistant, ["div[id^='response-']"])
   assert.deepEqual(grok.assistantText, ['.response-content-markdown'])
   assert.deepEqual(grok.done, [])
-  assert.deepEqual([grok.quietMs, grok.firstTokenMs, grok.captureTimeoutMs], [2500, 90000, 300000])
+  assert.deepEqual([grok.quietMs, grok.settleMs, grok.firstTokenMs, grok.captureTimeoutMs], [2500, 400, 90000, 300000])
 })
 
 test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and claude (grok above); empty stop + done ⇒ quiet detection', () => {
@@ -152,6 +152,9 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   assert.deepEqual(claude.assistantText, ['.prose'])
   assert.deepEqual(claude.done, [])
   for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, 300000])
+  // S10: the settle window after an end signal is per site — chatgpt holds a long answer far longer
+  // between two renders than the four throttle ticks every other site settles for.
+  assert.deepEqual(SLOTS.map((s) => DEFAULT_SELECTORS[s].settleMs), [400, 1200, 400])
   // every v2 selector compiles (a bad selector would be skipped silently at runtime)
   for (const site of SLOTS) for (const k of V2_LIST_KEYS) for (const s of DEFAULT_SELECTORS[site][k]) assert.doesNotThrow(() => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
@@ -183,9 +186,13 @@ test('mergeSelectors: a v2 merge keeps every v1 key, a v1 merge keeps every v2 k
   const quiet = mergeSelectors(DEFAULT_SELECTORS, { grok: { stop: [], done: [], assistantText: [] } })
   assert.deepEqual(quiet.warnings, [])
   assert.deepEqual([quiet.merged.grok.stop, quiet.merged.grok.done, quiet.merged.grok.assistantText], [[], [], []])
-  const bad = mergeSelectors(DEFAULT_SELECTORS, { grok: { stop: 'button.stop', quietMs: '2500', assistant: [1] } })
+  // S10: `settleMs` is a known key, so an override of it validates and is applied
+  const settle = mergeSelectors(DEFAULT_SELECTORS, { chatgpt: { settleMs: 2500 } })
+  assert.deepEqual(settle.warnings, [])
+  assert.equal(settle.merged.chatgpt.settleMs, 2500)
+  const bad = mergeSelectors(DEFAULT_SELECTORS, { grok: { stop: 'button.stop', quietMs: '2500', settleMs: 'slow', assistant: [1] } })
   assert.deepEqual(bad.merged.grok, DEFAULT_SELECTORS.grok)
-  assert.deepEqual(bad.warnings.sort(), ['grok.assistant: expected a list of strings', 'grok.quietMs: expected number, got string', 'grok.stop: expected array, got string'])
+  assert.deepEqual(bad.warnings.sort(), ['grok.assistant: expected a list of strings', 'grok.quietMs: expected number, got string', 'grok.settleMs: expected number, got string', 'grok.stop: expected array, got string'])
 })
 
 test('mergeSelectors: no override → an equal deep copy, no warnings, defaults untouched', () => {

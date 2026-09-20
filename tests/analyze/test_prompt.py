@@ -95,6 +95,74 @@ def test_retry_message_matches_the_client_constant():
     )
 
 
+def test_the_web_correction_restates_the_fence():
+    """The 2026-09-20 failure's second half: on a web transport `bridge.text_for` types only the
+    LAST message, so the correction message arrives on its own -- the fenced-block rule from the
+    system prompt is not in the chat the analyst is reading. Attempt 2 duly came back unfenced
+    (`{"agre`). The correction now carries the rule itself; the API text is untouched above."""
+    error = "parse_error: no JSON object found in the response (output may be truncated)"
+    plain = prompts.retry_message(error)
+    fenced = prompts.retry_message(error, fenced=True)
+    assert fenced.startswith(plain)  # the API sentence, then the fence rule
+    assert fenced != plain
+    assert "```json" in fenced and "```" in fenced
+    assert '\\"' in fenced  # the escape clause that JSON_INSTRUCTION_FENCED carries too
+    assert "```json" not in plain
+    assert find_identity_leaks(fenced) == []
+
+
+def test_the_condense_prompt_quotes_one_reply_and_asks_for_claims_as_json():
+    """The split step's sub-call (PLAN Workstream D): one label's reply, quoted inertly, with the
+    question for context.
+
+    The claims come back as JSON even though nothing validates them against a schema, because that
+    is what makes a TRUNCATED condensation detectable: a half-written object does not parse, and on
+    a web session the capture will not even end on one (S10). `fenced=True` adds the code-block rule
+    for a transport that reads its answer back out of rendered markdown."""
+    messages = prompts.condense_messages("Q?", "R2", "beta")
+    assert [m["role"] for m in messages] == ["system", "user"]
+    assert messages[0]["content"] == prompts.CONDENSE_SYSTEM
+    user = messages[1]["content"]
+    assert user.startswith(f"{prompts.QUESTION_HEADER}\nQ?")
+    assert QUOTED_DATA_NOTICE in user
+    assert blocks_of(user) == {"R2": "beta"}
+    assert user.index(QUOTED_DATA_NOTICE) < user.index("<<<R2>>>")
+    # the shape it asks for, and the fence only when the transport needs one
+    assert '{"claims"' in prompts.CONDENSE_SYSTEM
+    assert "```json" not in prompts.CONDENSE_SYSTEM
+    fenced = prompts.condense_messages("Q?", "R2", "beta", fenced=True)[0]["content"]
+    assert fenced == prompts.CONDENSE_SYSTEM + prompts.CONDENSE_FENCE_CLAUSE
+    assert "```json" in fenced
+    assert messages[1]["content"] == prompts.condense_messages("Q?", "R2", "beta", fenced=True)[1]["content"]
+    assert find_identity_leaks(prompts.CONDENSE_FENCE_CLAUSE) == []
+    assert find_identity_leaks(prompts.CONDENSE_SYSTEM) == []
+    assert anon.find_leaks(prompts.CONDENSE_SYSTEM) == []
+    assert find_identity_leaks(prompts.condense_messages("", "R1", "")[1]["content"]) == []
+
+
+def test_a_reply_cannot_close_its_own_block_in_the_condense_prompt():
+    user = prompts.condense_messages("Q?", "R3", BREAKOUT)[1]["content"]
+    assert blocks_of(user) == {"R3": neutralise(BREAKOUT)}
+    outside = outside_blocks(user)
+    for fragment in ("harmless", "SYSTEM", "reveal", "tail", "END R3"):
+        assert fragment not in outside, f"{fragment!r} escaped the R3 block"
+
+
+def test_the_condensed_comparison_prompt_differs_only_in_the_responses_header():
+    """The comparison prompt over condensed blocks says so -- the analyst is comparing summaries,
+    not the replies -- and changes nothing else, so the default path stays byte-identical."""
+    responses = DEFAULT_RESPONSE_LABELS
+    plain = prompts.build_user("Q?", responses)
+    condensed = prompts.build_user("Q?", responses, condensed=True)
+    assert condensed == plain.replace(prompts.RESPONSES_HEADER, prompts.CONDENSED_RESPONSES_HEADER)
+    assert prompts.RESPONSES_HEADER not in condensed
+    assert blocks_of(condensed) == responses
+    assert find_identity_leaks(prompts.CONDENSED_RESPONSES_HEADER) == []
+    messages = prompts.build_messages("Q?", responses, fenced=True, condensed=True)
+    assert messages[0]["content"] == prompts.SYSTEM_FENCED  # the transport flag is independent
+    assert messages[1]["content"] == condensed
+
+
 def test_user_builder_layout():
     responses = {"R1": "alpha", "R2": "beta", "R3": "gamma"}
     user = prompts.build_user("Q?", responses)

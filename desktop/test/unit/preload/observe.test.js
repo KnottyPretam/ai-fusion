@@ -26,7 +26,8 @@
 //
 // There is no layout and no MutationObserver here, so every sample is the OBSERVE_POLL_MS poll and every
 // element counts as visible (see the _dom.js header) — which is exactly what makes the stepping
-// deterministic. The Playwright `adapters` project covers the same lifecycle in a real browser
+// deterministic. Every test below runs on a chatgpt-shaped page, so the wait after an end signal allows
+// for chatgpt's own settle window (`settleMs: 1200` since S10, where it was a 400 ms constant). The Playwright `adapters` project covers the same lifecycle in a real browser
 // (`test/adapters/observe.spec.js`, the fake site's `?remountMs`).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -155,7 +156,7 @@ test('the placeholder is mounted, UNMOUNTED and remounted: the detached containe
   // ~14 s: the stop button goes and the copy-turn marker appears
   stop.remove()
   mount(doc, real, CHATGPT_DONE)
-  await clock.advance(1000)
+  await clock.advance(2000) // one chatgpt settle window (S10: settleMs 1200) past the marker
 
   assert.equal(state.error, null)
   assert.equal(state.done, true)
@@ -223,7 +224,7 @@ test('the same gap on a site with no stop button and no done marker (quiet detec
   await clock.advance(4000) // the gap: no container, so quiet cannot fire either
   assert.equal(state.done, false)
   mount(doc, thread, `<article data-message-author-role="assistant"><div class="markdown">${ANSWER}</div></article>`)
-  await clock.advance(2000) // the text is non-blank and has not moved for quietMs
+  await clock.advance(3000) // the text is non-blank and has not moved for quietMs, plus the settle window
   assert.equal(state.done, true)
   assert.equal(state.error, null)
   assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'quiet'])
@@ -257,7 +258,7 @@ test("an EARLIER turn's container is never reported as this turn's reply: a stal
 
   // ~13 s: the real container, the only node that mounted after observe started
   mount(doc, thread, streaming(ANSWER))
-  await clock.advance(1000)
+  await clock.advance(2500)
   assert.equal(state.error, null)
   assert.equal(state.done, true)
   assert.equal(state.value.text, ANSWER)
@@ -275,7 +276,7 @@ test('a baseline INFLATED by the placeholder (containers === baseline) still fol
   assert.equal(state.done, false, 'a container that mounted after observe started is the reply whatever the count says')
   stop.remove()
   mount(doc, real, CHATGPT_DONE)
-  await clock.advance(1000)
+  await clock.advance(2000)
   assert.equal(state.error, null)
   assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'done_selector'])
 })
@@ -292,7 +293,7 @@ test('the two-turn (tool call) shape with a finished EARLIER turn on the page: t
   await clock.advance(600)
   assert.equal(state.done, false)
   stop.remove()
-  await clock.advance(1000)
+  await clock.advance(2000)
   assert.equal(state.error, null)
   assert.equal(state.value.text, ANSWER)
   assert.ok(!state.value.text.includes(TOOL_TEXT) && !state.value.text.includes(OLD_ANSWER))
@@ -335,7 +336,7 @@ test('S9: a copy control INSIDE the message body (the code block chatgpt opens a
 
   // the reply ends and the TURN's action bar is mounted — outside `.markdown`, where chrome lives
   mount(doc, real, CHATGPT_DONE)
-  await clock.advance(1000)
+  await clock.advance(2000)
   assert.equal(state.error, null)
   assert.equal(state.done, true)
   assert.equal(state.value.doneBy, 'done_selector') // the body rule did not kill the done path
@@ -350,7 +351,7 @@ test('S9: the body rule needs a body — a container whose `assistantText` casca
   // no `.markdown` child at all: the text comes from the container itself, so the body is not a
   // distinguishable subtree and only the `pre`/`code` half of the rule applies
   const real = mount(doc, thread, `<article data-message-author-role="assistant">${ANSWER}${CHATGPT_DONE}</article>`)
-  await clock.advance(1000)
+  await clock.advance(2000)
   assert.equal(state.error, null)
   assert.equal(state.value.doneBy, 'done_selector')
   assert.ok(state.value.text.startsWith(ANSWER))
@@ -376,7 +377,7 @@ test('S9: an end signal is never LATCHED — a stop button that comes back withd
   mount(doc, real.querySelector('.markdown'), '<span> selectable up to 2000 deg/s.</span>')
   await clock.advance(300)
   stop.remove()
-  await clock.advance(1000)
+  await clock.advance(2000)
   assert.equal(state.error, null)
   assert.equal(state.done, true)
   assert.equal(state.value.doneBy, 'stop_gone') // the path claude and grok rely on, unchanged
@@ -399,4 +400,255 @@ test('S9: the rule itself — `findDone` rejects a match inside the reply body a
   const bodyless = mount(doc, thread, `<article data-message-author-role="assistant">${ANSWER}${CHATGPT_DONE}</article>`)
   assert.equal(adapter.replyBlocks(bodyless).length, 0)
   assert.ok(adapter.findDone(bodyless) !== null)
+})
+
+
+// ---- S10: the capture must not end mid-reply, and a JSON reply is waited for ------------------------
+//
+// The same conversation as the S9 section, one effort level higher. With the effort raised inside
+// ChatGPT the analyst's reply became long and slow, and Analyze degraded on two captures the bridge
+// reported as `ok`: "```JSON\n{\n```" (13 characters) and `{"agre` (6). What the S9 rules did not
+// cover:
+//   * two of the three end signals accepted BLANK text — only `quiet` asked for any;
+//   * the stillness clocks ran through the measured ~10 s container gap, and `findStop()` was not
+//     sampled while the DOM was missing, so a pending signal matured with the withdraw guard blind;
+//   * a NEW container node inherited the stillness of the node it replaced;
+//   * nothing knew that an analyst reply is supposed to be a JSON DOCUMENT, so any end signal at all
+//     could end the capture on a fragment that cannot parse.
+// The settle window is a per-site value now (`settleMs`, chatgpt 1200), so these tests pass it
+// explicitly wherever the timing is what is being asserted.
+
+/** The rest of the fenced object, appended into the open code block as a streaming render would. */
+const FENCE_TAIL = '<span>"agreements": []}</span>'
+const FENCED = '```json\n{"agreements": []}\n```'
+/** An assistant turn whose body is one empty `.markdown`: the turn exists, the answer has not started. */
+const emptyTurn = `<article data-message-author-role="assistant"><div class="markdown"></div></article>`
+const textTurn = (text) => `<article data-message-author-role="assistant"><div class="markdown">${text}</div></article>`
+
+test('S10: looksComplete — an expected JSON reply is complete only once a {…} object BALANCES; braces inside strings and escaped quotes do not count', () => {
+  const { looksComplete } = require('../../../preload/site.cjs')
+  // the two captures that degraded live, and their shape in general
+  assert.equal(looksComplete('```JSON\n{\n```', 'json'), false)
+  assert.equal(looksComplete('{"agre', 'json'), false)
+  assert.equal(looksComplete('', 'json'), false)
+  assert.equal(looksComplete('no object at all', 'json'), false)
+  assert.equal(looksComplete('}}}', 'json'), false)
+  assert.equal(looksComplete(null, 'json'), false)
+  // balanced, bare or fenced, with prose around it
+  assert.equal(looksComplete('{}', 'json'), true)
+  assert.equal(looksComplete('{"agreements": [], "divergences": [{"id": "d1"}]}', 'json'), true)
+  assert.equal(looksComplete(FENCED, 'json'), true)
+  assert.equal(looksComplete('Here it is: {"a": {"b": []}} — done', 'json'), true)
+  assert.equal(looksComplete('} {"a": 1}', 'json'), true) // a stray closer never closes an object
+  // string-aware: a brace inside a JSON string is data, and an escaped quote does not leave the string
+  assert.equal(looksComplete('{"a": "} not the end"', 'json'), false)
+  assert.equal(looksComplete('{"a": "}"}', 'json'), true)
+  assert.equal(looksComplete('{"a": "x \\" } y"', 'json'), false)
+  assert.equal(looksComplete('{"a": "x \\" } y"}', 'json'), true)
+  assert.equal(looksComplete('{"a": "\\\\"} ', 'json'), true) // the string ends at an escaped BACKSLASH
+  // anything else expects nothing: the capture behaves exactly as it always did
+  assert.equal(looksComplete('{', undefined), true)
+  assert.equal(looksComplete('{', null), true)
+  assert.equal(looksComplete('', 'text'), true)
+  assert.equal(looksComplete('prose', 'json    '), true) // only the exact kind counts
+})
+
+test('S10: `done_selector` needs non-blank text — a turn marked done over an EMPTY body is a reply that has not started', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove() // the sample that ended the live capture saw no stop button either
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000, settleMs: 400 }))
+  // the TURN's action bar (outside the body, so `findDone` accepts it) while the body is still empty
+  const real = mount(doc, thread, `<article data-message-author-role="assistant"><div class="markdown"></div>${CHATGPT_DONE}</article>`)
+  await clock.advance(2000)
+  assert.equal(state.done, false, 'nothing captured means the reply has not started: keep waiting')
+
+  mount(doc, real.querySelector('.markdown'), `<span>${ANSWER}</span>`)
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'done_selector'])
+})
+
+test('S10: `stop_gone` needs non-blank text — the button going while nothing is on the page is not a finished reply', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000, settleMs: 400 }))
+  const real = mount(doc, thread, emptyTurn) // the container is mounted, its body still empty
+  await clock.advance(400) // the stop button is seen while the empty container is up
+  stop.remove()
+  await clock.advance(2000)
+  assert.equal(state.done, false, 'stop_gone over an empty body would hand main a zero-character reply')
+
+  mount(doc, real.querySelector('.markdown'), `<span>${ANSWER}</span>`)
+  await clock.advance(1000)
+  assert.equal(state.error, null)
+  assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'stop_gone'])
+})
+
+test('S10: the stillness clocks are FROZEN while there is no container — a quiet window cannot mature across the measured ~10 s gap', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove() // quiet is the only signal left
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 1500, settleMs: 400 }))
+  const real = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(600)
+  assert.equal(state.done, false)
+
+  // the site unmounts the reply and re-attaches the SAME node three seconds later (a re-parent during a
+  // re-render, so node identity is not what saves this capture): the text is unchanged across the gap
+  real.remove()
+  await clock.advance(3000)
+  assert.equal(state.done, false, 'no container: there is nothing to be quiet about')
+  thread.appendChild(real)
+  await clock.advance(900)
+  assert.equal(state.done, false, 'the quiet window restarts where the DOM went away, not where it came back')
+
+  mount(doc, real.querySelector('code'), FENCE_TAIL)
+  await clock.advance(2200)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.text, FENCED)
+  assert.equal(state.value.doneBy, 'quiet')
+})
+
+test('S10: a stop button visible while there is NO container still withdraws a pending end signal — the text that lands when the DOM comes back is part of the reply', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  const form = stop.parentNode
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000, settleMs: 400 }))
+  const real = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(400) // the stop button is up: the site says it is replying
+  stop.remove() // ONE sample misses it → `stop_gone` is pending
+  await clock.advance(300)
+
+  // the container is unmounted (the measured gap) and the button is up for the whole gap, as it was
+  // measured to be on chatgpt.com: the site is plainly still replying
+  real.remove()
+  form.appendChild(stop)
+  await clock.advance(3000)
+  assert.equal(state.done, false)
+
+  // the gap ends: the container returns with the text it had, and the button goes
+  stop.remove()
+  thread.appendChild(real)
+  await clock.advance(400)
+  assert.equal(state.done, false, 'a signal the gap withdrew must be re-earned once the DOM is back')
+
+  mount(doc, real.querySelector('code'), FENCE_TAIL)
+  await clock.advance(1200)
+  assert.equal(state.error, null)
+  assert.equal(state.value.text, FENCED)
+  assert.equal(state.value.doneBy, 'stop_gone')
+})
+
+test('S10: a NEW container node is a NEW reply body — it never inherits the stillness of the node it replaced', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 1500, settleMs: 400 }))
+  const first = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(1200) // still under quietMs
+  assert.equal(state.done, false)
+
+  // the site re-renders the turn into a DIFFERENT node holding the same text so far
+  first.remove()
+  const second = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(1300) // past the point where the OLD node's stillness would have been quiet enough
+  assert.equal(state.done, false, "the replacement's own quiet window starts at the swap")
+
+  mount(doc, second.querySelector('code'), FENCE_TAIL)
+  await clock.advance(2600)
+  assert.equal(state.error, null)
+  assert.equal(state.value.text, FENCED)
+})
+
+test('S10: expect "json" — an end signal never resolves on an unbalanced fragment, and the whole document is captured', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  const real = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(3000) // quiet, settled, and long past where an unguarded capture ended
+  assert.equal(state.done, false, 'a fragment that cannot parse is not the reply the analyst was asked for')
+
+  mount(doc, real.querySelector('code'), FENCE_TAIL)
+  await clock.advance(1500)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.text, FENCED)
+  assert.equal(state.value.doneBy, 'quiet')
+  assert.deepEqual(JSON.parse(state.value.text.slice('```json\n'.length, -'\n```'.length)), { agreements: [] })
+})
+
+test('S10: expect "json" never hangs — at the budget the capture hands back what is there with its doneBy, after ONE final re-read of the container', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 2000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  const real = mount(doc, thread, openBlock('{', ''))
+  await clock.advance(2000) // the sample that spends the budget: the document is still unbalanced
+  assert.equal(state.done, false, 'the budget return takes one last look first')
+
+  // the last render lands in that window — a markdown renderer finishing a frame after the model stopped
+  mount(doc, real.querySelector('code'), FENCE_TAIL)
+  await clock.advance(300)
+  assert.equal(state.error, null)
+  assert.equal(state.done, true)
+  assert.equal(state.value.text, FENCED, 'the re-read text, not the fragment the sample saw')
+  assert.equal(state.value.doneBy, 'quiet') // the signal it had, never a timeout
+})
+
+test('S10: a reply that never becomes JSON FAILS, carrying the prose as the partial', async () => {
+  // The user's decision (2026-09-20): an answer that did not take the shape it was asked for must
+  // fail loudly, never come back as a finished reply. Returning it `ok` is what let a 13-character
+  // fragment be compared as though it were a report. `expect` only ever rides a structured purpose
+  // (orchestrator STRUCTURED_PURPOSES), so a pane's own prose chat never reaches this path.
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  mount(doc, thread, textTurn('I cannot answer that.'))
+  await clock.advance(30000)
+  assert.equal(state.value, null, 'it must not come back as a finished reply')
+  assert.equal(state.error.code, 'timeout')
+  assert.match(state.error.message, /never became a complete json document/)
+  assert.equal(state.error.partial, 'I cannot answer that.')
+})
+
+test('S10: giving up on an unmet shape is bounded by the grace window, not the whole capture budget', async () => {
+  // Without the grace it waits out captureTimeoutMs — five minutes of a held busy guard before a
+  // failure that was knowable seconds after the site stopped typing.
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const started = clock.now()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  mount(doc, thread, textTurn('still prose'))
+  await clock.advance(40000)
+  assert.equal(state.error.code, 'timeout')
+  assert.ok(clock.now() - started < 120000, `gave up after ${clock.now() - started} ms, not the 300000 ms budget`)
+})
+
+test('S10: settleMs is the per-site settle window: the selectors carry it (chatgpt 1200) and the observe message overrides it', async () => {
+  assert.equal(DEFAULT_SELECTORS.chatgpt.settleMs, 1200)
+  assert.equal(DEFAULT_SELECTORS.claude.settleMs, 400)
+  assert.equal(DEFAULT_SELECTORS.grok.settleMs, 400)
+
+  // the selector value applies when the message carries none: chatgpt holds the text for 1200 ms
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000 }))
+    mount(doc, thread, textTurn(ANSWER))
+    await clock.advance(400)
+    stop.remove() // stop_gone, pending
+    await clock.advance(800)
+    assert.equal(state.done, false, 'chatgpt settles for 1200 ms, not 400')
+    await clock.advance(900)
+    assert.equal(state.done, true)
+    assert.equal(state.value.doneBy, 'stop_gone')
+  }
+  // and the message wins over the selectors
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 30000, settleMs: 2500 }))
+    mount(doc, thread, textTurn(ANSWER))
+    await clock.advance(400)
+    stop.remove()
+    await clock.advance(2000)
+    assert.equal(state.done, false, 'the observe message overrides the site value')
+    await clock.advance(1000)
+    assert.equal(state.done, true)
+  }
 })
