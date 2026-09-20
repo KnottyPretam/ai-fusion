@@ -1,0 +1,108 @@
+# Packaging for Solomon's Judgment — `npm run dist` in desktop/ (see BUILD.md).
+#
+# The app ships THREE things: the Electron shell (this directory), the built renderer
+# (frontend/dist, served by the backend at /app/) and the frozen Python backend
+# (build/pyinstaller/backend, made by packaging/backend.spec). The last two are extraResources, so
+# `main/backend.js` finds them beside the executable and an installed app needs no Python, no uv and
+# no checkout on the machine.
+#
+# `appId` and `productName` name the INSTALLED app; package.json's `name` is left alone on purpose,
+# because Electron derives the userData path from it and moving that would sign the user out of all
+# three sites (see main/branding.js). A side effect worth knowing: an installed build and a
+# checkout share ~/.config/triplex-desktop, so the logins carry over.
+
+appId: dev.knottypretam.solomons-judgment
+productName: Solomon's Judgment
+copyright: Copyright © 2026 Pretam Choudhury
+
+directories:
+  output: ../build/dist
+  buildResources: assets
+
+# Artifacts named for the product, not for the package's internal `name`.
+artifactName: solomons-judgment-${version}-${arch}.${ext}
+
+# The asar. Everything the main process imports at runtime, and nothing else: no tests, no fake
+# site, no Playwright config.
+files:
+  - main/**/*
+  - preload/**/*
+  - protocol/**/*
+  - assets/**/*
+  - package.json
+  - '!test/**/*'
+  - '!**/*.map'
+
+extraResources:
+  # The frozen backend: `resources/backend/triplex-backend` (BUNDLED_BACKEND_DIR in backend.js).
+  - from: ../build/pyinstaller/backend
+    to: backend
+  # The renderer the backend serves at /app/ (BUNDLED_APP_DIR). Built with VITE_BASE=/app/.
+  - from: ../frontend/dist
+    to: app
+
+# Electron's own binary is fetched per target; never rebuild native modules (there are none).
+npmRebuild: false
+buildDependenciesFromSource: false
+
+linux:
+  # The installed executable, and so the WM_CLASS X11 labels the window with.
+  executableName: solomons-judgment
+  maintainer: KnottyPretam <KnottyPretam@users.noreply.github.com>
+  # AppImage runs anywhere (NixOS included, via appimage-run); deb for Ubuntu/Debian; pacman for
+  # Arch. All three come out of one `npm run dist:linux`.
+  target:
+    - AppImage
+    - deb
+    - pacman
+  category: Development
+  icon: assets/icon.png
+  synopsis: Three model subscriptions in one window
+  description: >
+    Claude, ChatGPT and Grok side by side under your own logins, with one prompt bar that asks all
+    three, an Analyze pass that reports where they agree and differ as R1/R2/R3, and a Fusion pass
+    that puts each difference back to the models that hold it.
+  desktop:
+    # A FLAT map of Desktop Entry keys (electron-builder 25). Nesting these under `entry:` writes a
+    # literal `entry=[object Object]` line into the .desktop file — seen, then fixed.
+    #
+    # StartupWMClass is the load-bearing one: it is how the launcher matches a running window back
+    # to this entry, and so whether the dock shows "Solomon's Judgment" with its icon or a generic
+    # box. Electron takes WM_CLASS from package.json's `name`, NOT from productName or the
+    # executable name — measured on the packaged build, whose window reports `triplex-desktop`
+    # while its title reads Solomon's Judgment. That `name` cannot change: the userData path with
+    # the three logged-in sessions is derived from it.
+    StartupWMClass: triplex-desktop
+    Categories: Development;
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+appImage:
+  license: null
+pacman:
+  depends:
+    - gtk3
+    - nss
+    - libxss
+    - libxtst
+    - xdg-utils
+
+win:
+  target:
+    - nsis
+  icon: assets/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Solomon's Judgment

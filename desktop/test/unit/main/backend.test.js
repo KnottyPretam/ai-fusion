@@ -10,7 +10,8 @@ import { PassThrough } from 'node:stream'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildSpawnSpec, attachSpec, createBackend, randomToken, isLoopbackHost, DEFAULT_PORT, START_TIMEOUT_MS, START_POLL_MS, RESTART_LIMIT, RESTART_DELAY_MS, RESTART_WINDOW_MS, STOP_GRACE_MS, LOG_FILE } from '../../../main/backend.js'
+import { APP_TITLE } from '../../../main/branding.js'
+import { buildSpawnSpec, bundledBackendPath, BUNDLED_BACKEND_DIR, BUNDLED_BACKEND_EXE, attachSpec, createBackend, randomToken, isLoopbackHost, DEFAULT_PORT, START_TIMEOUT_MS, START_POLL_MS, RESTART_LIMIT, RESTART_DELAY_MS, RESTART_WINDOW_MS, STOP_GRACE_MS, LOG_FILE } from '../../../main/backend.js'
 import { fakeTimers, fakeLog, tick } from './_fakes.js'
 
 const REPO = '/repo'
@@ -339,4 +340,72 @@ test('once() is available for the fake child (sanity for the harness)', async ()
   const c = fakeChild(1)
   setImmediate(() => c.emit('exit', 0, null))
   assert.deepEqual(await once(c, 'exit'), [0, null])
+})
+
+// ---------------------------------------------------------------------------------------------
+// The bundled backend: an INSTALLED app carries its own interpreter (PyInstaller, shipped as an
+// Electron extraResource), so the machine it runs on needs no Python, no uv and no checkout.
+// ---------------------------------------------------------------------------------------------
+
+const RESOURCES = '/opt/solomons-judgment/resources'
+
+/** The arguments every spec needs, so each test below states only what it is about. */
+const base = () => ({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'chatgpt' }, env: {}, home: '/home/u' })
+
+test('an installed app runs its own bundled backend, ahead of any venv on the machine', () => {
+  const spec = buildSpawnSpec({
+    ...base(),
+    resourcesDir: RESOURCES,
+    platform: 'linux',
+    exists: () => true, // a venv exists too; the bundle still wins
+  })
+  assert.equal(spec.via, 'bundled')
+  assert.equal(spec.command, `${RESOURCES}/backend/triplex-backend`)
+  assert.deepEqual(spec.args, [], 'the frozen binary IS the entry point; there is no module to run')
+  assert.equal(spec.available, true)
+  // Same environment either way: the backend does not know or care how it was started.
+  assert.equal(spec.env.TRIPLEX_DESKTOP, '1')
+  assert.equal(spec.env.OPENROUTER_API_KEY, '')
+  assert.equal(spec.env.APP_TITLE, APP_TITLE)
+})
+
+test('on Windows it is the .exe, and the venv fallback is Scripts/python.exe', () => {
+  const bundled = buildSpawnSpec({ ...base(), resourcesDir: 'C:\\app\\resources', platform: 'win32', exists: () => true })
+  assert.equal(bundled.command, path.join('C:\\app\\resources', 'backend', 'triplex-backend.exe'))
+
+  const fromRepo = buildSpawnSpec({
+    ...base(),
+    platform: 'win32',
+    exists: (p) => p.includes('Scripts'),
+  })
+  assert.equal(fromRepo.via, 'venv')
+  assert.match(fromRepo.command, /Scripts[\\/]python\.exe$/)
+})
+
+test('no resources directory (a checkout) falls through to the venv, then to uv', () => {
+  const venv = buildSpawnSpec({ ...base(), resourcesDir: null, exists: (p) => p.endsWith('/.venv/bin/python') })
+  assert.equal(venv.via, 'venv')
+
+  const uv = buildSpawnSpec({ ...base(), resourcesDir: null, exists: () => false })
+  assert.equal(uv.via, 'uv')
+  assert.equal(uv.available, false, 'and it says so when uv is not there either')
+})
+
+test('a resources directory with no backend in it is not mistaken for a bundle', () => {
+  const spec = buildSpawnSpec({
+    ...base(),
+    resourcesDir: RESOURCES,
+    platform: 'linux',
+    exists: (p) => !p.startsWith(RESOURCES) && p.endsWith('/.venv/bin/python'),
+  })
+  assert.equal(spec.via, 'venv')
+})
+
+test('bundledBackendPath: null without a resources directory, platform-correct with one', () => {
+  assert.equal(bundledBackendPath(null), null)
+  assert.equal(bundledBackendPath(''), null)
+  assert.equal(bundledBackendPath(undefined), null)
+  assert.equal(bundledBackendPath('/r', 'linux'), path.join('/r', BUNDLED_BACKEND_DIR, BUNDLED_BACKEND_EXE))
+  assert.equal(bundledBackendPath('/r', 'darwin'), path.join('/r', BUNDLED_BACKEND_DIR, BUNDLED_BACKEND_EXE))
+  assert.equal(bundledBackendPath('/r', 'win32'), path.join('/r', BUNDLED_BACKEND_DIR, `${BUNDLED_BACKEND_EXE}.exe`))
 })

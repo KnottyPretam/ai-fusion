@@ -12,6 +12,10 @@ the userData directory `~/.config/triplex-desktop`, which holds the three logged
 must not move. The one string lives in `desktop/main/branding.js`, `frontend/src/branding.js` and
 the backend's `APP_TITLE`.
 
+**Installing it:** `BUILD.md` — one command per platform (Ubuntu, Arch, NixOS, Windows), or grab an
+artifact from a release. The packaged app carries its own Python backend, so it needs nothing
+installed.
+
 `PLAN.md` is the spec; `CLAUDE.md` has the technical notes; `docs/` holds the frozen contracts
 (`api-contract.md`, `semantics.md`, `fixtures.md`) and the build log (`decisions.md`).
 

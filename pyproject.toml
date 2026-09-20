@@ -20,6 +20,9 @@ dev = [
   "syrupy>=4.6",
   "ruff>=0.6",
 ]
+packaging = [
+    "pyinstaller>=6.22.3",
+]
 
 [tool.uv]
 package = false

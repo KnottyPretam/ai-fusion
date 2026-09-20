@@ -1,0 +1,123 @@
+# Build installable artifacts for every target. Windows cannot be cross-built from Linux without
+# Wine, and PyInstaller never cross-builds at all (it freezes the interpreter it is running on), so
+# each OS builds its own: ubuntu-latest for AppImage/deb/pacman, windows-latest for the NSIS
+# installer. Artifacts are attached to the run, and to the release when the tag is a version.
+
+name: build
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - name: System packages the Linux targets shell out to
+        # bsdtar for the pacman target, fakeroot/dpkg for the deb, rpm only if a target is added.
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools fakeroot dpkg rpm
+
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: frontend
+      - run: npm ci
+        working-directory: desktop
+
+      - name: Gates
+        run: |
+          uv run pytest -q
+          (cd frontend && npm test)
+          (cd desktop && npm test)
+
+      - name: Package (AppImage, deb, pacman)
+        run: scripts/package.sh --linux
+
+      - name: The bundled backend must answer without a Python on PATH
+        run: |
+          set -e
+          ./build/pyinstaller/backend/triplex-backend &
+          pid=$!
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8021/ >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8021/ | tee /dev/stderr | grep -q '"status":"ok"'
+          kill $pid
+        env:
+          PORT: '8021'
+          HOST: 127.0.0.1
+          TRIPLEX_DESKTOP: '1'
+          LOG_LEVEL: WARNING
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            build/dist/*.AppImage
+            build/dist/*.deb
+            build/dist/*.pacman
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: desktop/package-lock.json }
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+
+      - run: uv sync --frozen
+      - run: npm ci
+        working-directory: frontend
+      - run: npm ci
+        working-directory: desktop
+
+      - name: Renderer
+        run: npm run build
+        working-directory: frontend
+        env: { VITE_BASE: /app/ }
+
+      - name: Backend (PyInstaller)
+        run: uv run --group packaging pyinstaller --noconfirm --distpath build/pyinstaller --workpath build/pyinstaller-work packaging/backend.spec
+
+      - name: The bundled backend must answer
+        shell: pwsh
+        run: |
+          $env:PORT = '8021'; $env:HOST = '127.0.0.1'; $env:TRIPLEX_DESKTOP = '1'; $env:LOG_LEVEL = 'WARNING'
+          $p = Start-Process -FilePath build\pyinstaller\backend\triplex-backend.exe -PassThru
+          foreach ($i in 1..30) { try { Invoke-RestMethod http://127.0.0.1:8021/ | Out-Null; break } catch { Start-Sleep 1 } }
+          $r = Invoke-RestMethod http://127.0.0.1:8021/
+          Stop-Process -Id $p.Id
+          if ($r.status -ne 'ok') { throw "backend did not answer ok" }
+
+      - name: Package (NSIS installer)
+        run: npx electron-builder --win
+        working-directory: desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/dist/*.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

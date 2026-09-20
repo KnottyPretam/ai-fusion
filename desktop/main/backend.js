@@ -57,6 +57,23 @@ export function randomToken() {
   return randomBytes(32).toString('hex')
 }
 
+/** The directory electron-builder unpacks the frozen backend into, under `resourcesPath`. */
+export const BUNDLED_BACKEND_DIR = 'backend'
+/** The directory electron-builder unpacks the built renderer into, under `resourcesPath`. */
+export const BUNDLED_APP_DIR = 'app'
+/** The executable PyInstaller names (see packaging/backend.spec). */
+export const BUNDLED_BACKEND_EXE = 'triplex-backend'
+
+/**
+ * Absolute path of the bundled backend executable, or null when this launch has no resources
+ * directory (a `npm start` from the repo, or a test).
+ */
+export function bundledBackendPath(resourcesDir, platform = process.platform) {
+  if (typeof resourcesDir !== 'string' || resourcesDir === '') return null
+  const exe = platform === 'win32' ? `${BUNDLED_BACKEND_EXE}.exe` : BUNDLED_BACKEND_EXE
+  return path.join(resourcesDir, BUNDLED_BACKEND_DIR, exe)
+}
+
 function analystOf(settings) {
   if (!settings) return null
   const v = typeof settings.getAnalyst === 'function' ? settings.getAnalyst() : settings.analyst
@@ -64,23 +81,39 @@ function analystOf(settings) {
 }
 
 /**
- * buildSpawnSpec({repoDir, userData, port, token, settings, env, home, exists, dataDir, appDir, logLevel})
- *   → {command, args, cwd, env, port, url, via: 'venv'|'uv', available}
+ * buildSpawnSpec({repoDir, userData, port, token, settings, env, home, exists, dataDir, appDir, logLevel,
+ *                 resourcesDir, platform})
+ *   → {command, args, cwd, env, port, url, via: 'bundled'|'venv'|'uv', available}
  */
-export function buildSpawnSpec({ repoDir, userData, port = DEFAULT_PORT, token, settings = null, env = process.env, home = os.homedir(), exists = nodeFs.existsSync, dataDir = null, appDir = null, logLevel = null } = {}) {
+export function buildSpawnSpec({ repoDir, userData, port = DEFAULT_PORT, token, settings = null, env = process.env, home = os.homedir(), exists = nodeFs.existsSync, dataDir = null, appDir = null, logLevel = null, resourcesDir = null, platform = process.platform } = {}) {
   if (typeof repoDir !== 'string' || repoDir === '') throw new Error('buildSpawnSpec: repoDir is required')
   if (typeof userData !== 'string' || userData === '') throw new Error('buildSpawnSpec: userData is required')
   if (typeof token !== 'string' || token === '') throw new Error('buildSpawnSpec: token is required')
   const portNum = Number(port)
   if (!Number.isInteger(portNum) || portNum <= 0) throw new Error('buildSpawnSpec: port must be a positive integer')
 
-  const venvPython = path.join(repoDir, '.venv', 'bin', 'python')
+  // Three ways to reach the backend, in the order a machine is likely to have them.
+  //
+  //   bundled  an INSTALLED app: the PyInstaller build shipped as an Electron extraResource. It
+  //            carries its own interpreter, so the machine needs no Python, no uv and no checkout.
+  //   venv     this repo, developed in (`uv sync`).
+  //   uv       this repo without a venv yet; uv builds one on the first run.
+  //
+  // The bundled one wins when it is there, so an installed app never reaches for a developer's
+  // half-configured checkout, and a checkout with no build still runs from source.
+  const bundled = bundledBackendPath(resourcesDir, platform)
+  const venvPython = path.join(repoDir, '.venv', platform === 'win32' ? 'Scripts' : 'bin', platform === 'win32' ? 'python.exe' : 'python')
   const uv = (env && env.TRIPLEX_UV_BIN) || path.join(home, '.local', 'bin', 'uv')
   let command
   let args
   let via
   let available
-  if (exists(venvPython)) {
+  if (bundled && exists(bundled)) {
+    command = bundled
+    args = []
+    via = 'bundled'
+    available = true
+  } else if (exists(venvPython)) {
     command = venvPython
     args = ['-m', 'backend.main']
     via = 'venv'
@@ -119,7 +152,9 @@ export function buildSpawnSpec({ repoDir, userData, port = DEFAULT_PORT, token, 
   const analyst = analystOf(settings)
   out.ANALYST_MODEL = analyst ? `web:${analyst}:analyst` : '' // '' = no analyst chosen; never a .env slug
   for (const k of ENV_PINNED_EMPTY) out[k] = ''
-  out.TRIPLEX_APP_DIR = appDir || path.join(repoDir, 'frontend', 'dist')
+  // The renderer the backend serves at /app/. An installed app has it beside the frozen backend in
+  // `resources/`; a checkout has it where Vite wrote it.
+  out.TRIPLEX_APP_DIR = appDir || (via === 'bundled' ? path.join(resourcesDir, BUNDLED_APP_DIR) : path.join(repoDir, 'frontend', 'dist'))
   out.LOG_LEVEL = logLevel || (env && (env.TRIPLEX_BACKEND_LOG_LEVEL || env.LOG_LEVEL)) || 'INFO'
 
   return { command, args, cwd: repoDir, env: out, port: portNum, url: `http://127.0.0.1:${portNum}`, via, available }

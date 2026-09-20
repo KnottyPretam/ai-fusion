@@ -90,6 +90,17 @@ Triplex is a three-slot council (Claude, ChatGPT, Grok via OpenRouter) with thre
 **`features/meter/`** — `slice.js`: last-invocation rows + per-conversation cumulative rows + total, recomputed from persisted turns on `conversation/loaded`; Fusion multiplier = last Fusion cost / cost of the Send it fused (`analyzeOfTurn` → `sendCostByTurn`); cached `analyze_done` books nothing, `analyze_degraded` does; any event carrying `cost_cap_exceeded` sets the persistent `costCapExceeded` flag; `index.jsx` renders the table, `×N vs Send` badge, truncated count and the cap warning
 **`features/conversations/index.jsx`** — sidebar: New / select / delete are DISABLED while any stream runs (a switch mid-stream would snap back and book usage into the wrong conversation); latest-select-wins sequence; inline rename; deleting the open conversation dispatches `conversation/cleared`
 
+**Packaging** — `BUILD.md` is the per-platform guide; `scripts/package.sh` is the one command
+(renderer → frozen backend → installer) and `scripts/install-local.sh` puts the AppImage in the
+current user's launcher without root. The backend is frozen by `packaging/backend.spec` (onedir,
+every router a hidden import because `pkgutil.iter_modules` sees nothing inside a frozen archive)
+and shipped as an Electron extraResource, so an installed app needs no Python, no uv and no
+checkout. `buildSpawnSpec` resolves the backend `bundled` → `venv` → `uv`, which is why the same
+code runs from source and from an installer. PyInstaller never cross-builds and NSIS on Linux
+needs Wine, so `.github/workflows/build.yml` builds Linux and Windows on their own runners and
+asserts the frozen backend answers with no Python on PATH. Verified on Ubuntu 20.04 only; the
+Arch, NixOS and Windows paths are configured and documented, not run here.
+
 **The mark** — `desktop/assets/` is the one source (see its README). It appears in three places: the
 window's bottom-left corner (the sidebar footer, `brand-mark`, from `frontend/src/assets/logo.png`),
 at the head of an exported Markdown or HTML document (`backend/branding.py` embeds it as a data URI —

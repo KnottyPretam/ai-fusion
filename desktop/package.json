@@ -8,13 +8,25 @@
     "start": "electron .",
     "test": "node --test 'test/unit/**/*.test.js'",
     "test:adapters": "playwright test --project adapters",
-    "test:app": "TRIPLEX_E2E_APP=1 playwright test --project app"
+    "test:app": "TRIPLEX_E2E_APP=1 playwright test --project app",
+    "dist": "../scripts/package.sh",
+    "dist:linux": "../scripts/package.sh --linux",
+    "dist:win": "../scripts/package.sh --win",
+    "pack": "electron-builder --dir"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "electron": "^44.4.1",
-    "@playwright/test": "^1.63.0"
+    "electron-builder": "^25.1.8"
   },
   "overrides": {
     "@electron-internal/extract-zip": ">=1.0.4"
-  }
+  },
+  "description": "Solomon's Judgment \u2014 Claude, ChatGPT and Grok in one window under your own logins",
+  "homepage": "https://github.com/KnottyPretam/ai-fusion",
+  "author": {
+    "name": "KnottyPretam",
+    "email": "KnottyPretam@users.noreply.github.com"
+  },
+  "license": "UNLICENSED"
 }

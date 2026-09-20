@@ -293,7 +293,17 @@ function resolveBackend(userData) {
     return { token: attached.token, backend: null }
   }
   const token = randomToken()
-  const spec = buildSpawnSpec({ repoDir: REPO_DIR, userData, port: backendPort(), token, settings, env })
+  // `resourcesPath` only means anything in a packaged app; from a checkout it points into the
+  // Electron install, where no bundled backend lives, and buildSpawnSpec falls through to the venv.
+  const spec = buildSpawnSpec({
+    repoDir: REPO_DIR,
+    userData,
+    port: backendPort(),
+    token,
+    settings,
+    env,
+    resourcesDir: app.isPackaged ? process.resourcesPath : null,
+  })
   backendInfo = { port: spec.port, url: spec.url }
   return { token, backend: createBackend({ spec, logDir: path.join(userData, 'logs'), log: console }) }
 }

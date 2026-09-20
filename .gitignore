@@ -27,3 +27,13 @@ desktop/node_modules/
 desktop/test-results/
 desktop/playwright-report/
 data/e2e-desktop/
+
+# packaging (scripts/package.sh) — every artifact is generated, none is committed.
+# NOTE: .gitignore has no trailing comments; a pattern with one matches nothing.
+# build/ holds pyinstaller/, pyinstaller-work/ and dist/ (AppImage, deb, pacman, nsis).
+build/
+packaging/__pycache__/
+*.AppImage
+*.deb
+*.pacman
+*.rpm
