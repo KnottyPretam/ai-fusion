@@ -150,43 +150,78 @@ export function crashedHealth(slot, { url = '', now = Date.now } = {}) {
 }
 
 /**
- * loadURL with a retry on every main-frame `did-fail-load` (1 s × 30 by default; ERR_ABORTED = a
- * newer load superseded this one and is not a failure). Returns a `cancel()` that stops retrying.
+ * loadURL, retried until the page actually loads (1 s × 30 by default). Returns a `cancel()`.
+ *
+ * Two things make this less obvious than it looks, both found by a packaged build coming up as a
+ * black window (2026-09-20) while its backend was still binding its port:
+ *
+ *   1. A failed navigation ALSO emits `did-finish-load`, for Chromium's error page. Treating that
+ *      as success removed the listeners after the first failure, so nothing retried again.
+ *   2. `loadURL` REJECTS on the same failure. That rejection is not a `did-fail-load`, and
+ *      swallowing it (`.catch(() => {})`) hid the only remaining signal that the loop was dead.
+ *
+ * So an attempt is over only when `did-finish-load` arrives with no failure recorded for it, and
+ * BOTH signals — the event and the rejection — schedule the next attempt, whichever comes first.
+ * `ERR_ABORTED` (-3) is not a failure: a newer load superseded this one.
  */
 export function loadWithRetry(wc, url, { tag = 'view', log = console, setTimeout: setT = globalThis.setTimeout, retryMs = LOAD_RETRY_MS, maxRetries = LOAD_RETRY_MAX } = {}) {
   let tries = 0
   let cancelled = false
+  let done = false
+  // Which attempt is in flight, and whether it has already been judged. Both the event and the
+  // rejection can report the same attempt; only the first of them schedules the next one.
+  let attempt = 0
+  let settled = -1
+
   const destroyed = () => typeof wc.isDestroyed === 'function' && wc.isDestroyed()
   const cleanup = () => {
+    done = true
     if (typeof wc.removeListener === 'function') {
       wc.removeListener('did-fail-load', onFail)
       wc.removeListener('did-finish-load', onDone)
     }
   }
-  const onDone = () => cleanup()
-  const onFail = (_event, code, description, _failedUrl, isMainFrame) => {
-    if (cancelled || isMainFrame === false || code === -3) return
+
+  function fail(reason, code) {
+    if (cancelled || done) return
+    if (settled === attempt) return // this attempt already scheduled its successor
+    settled = attempt
     tries += 1
     if (tries > maxRetries) {
-      if (log && typeof log.error === 'function') log.error(`[${tag}] giving up on ${url} after ${maxRetries} retries (${code} ${description})`)
+      if (log && typeof log.error === 'function') log.error(`[${tag}] giving up on ${url} after ${maxRetries} retries (${reason})`)
       cleanup()
       return
     }
-    if (log && typeof log.warn === 'function') log.warn(`[${tag}] load failed (${code} ${description}); retry ${tries}/${maxRetries} in ${retryMs} ms`)
+    if (log && typeof log.warn === 'function') log.warn(`[${tag}] load failed (${reason}); retry ${tries}/${maxRetries} in ${retryMs} ms`)
     setT(() => {
-      if (cancelled || destroyed()) return
-      Promise.resolve()
-        .then(() => wc.loadURL(url))
-        .catch(() => {})
+      if (cancelled || done || destroyed()) return
+      go()
     }, retryMs)
   }
+
+  const onFail = (_event, code, description, _failedUrl, isMainFrame) => {
+    if (isMainFrame === false || code === -3) return
+    fail(`${code} ${description}`, code)
+  }
+  // Success ONLY when this attempt has not already failed; otherwise it is the error page finishing.
+  const onDone = () => {
+    if (cancelled || done) return
+    if (settled === attempt) return
+    cleanup()
+  }
+
+  function go() {
+    attempt += 1
+    Promise.resolve()
+      .then(() => wc.loadURL(url))
+      .catch((e) => fail((e && e.message) || String(e)))
+  }
+
   if (typeof wc.on === 'function') {
     wc.on('did-fail-load', onFail)
     wc.on('did-finish-load', onDone)
   }
-  Promise.resolve()
-    .then(() => wc.loadURL(url))
-    .catch(() => {})
+  go()
   return () => {
     cancelled = true
     cleanup()

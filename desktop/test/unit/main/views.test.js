@@ -4,6 +4,7 @@
 // Bluetooth chooser cancelled per view, child windows policed, ssoHosts passed through.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { buildViewOptions, buildWindowOptions, crashedHealth, loadWithRetry, createViewManager, backgroundFor, paintBackground, BACKGROUND_LIGHT, BACKGROUND_DARK, RECREATE_DELAY_MS, CRASH_LIMIT } from '../../../main/views.js'
 import { SITES, SLOTS } from '../../../main/sites.js'
 import { normalizeLayout } from '../../../main/layout.js'
@@ -372,4 +373,138 @@ test('every site view is created on the theme ground; setBackgroundColor repaint
 test('createViewManager validates its seams', () => {
   assert.throws(() => createViewManager({}), /WebContentsView is required/)
   assert.throws(() => createViewManager({ WebContentsView: class {} }), /contentView is required/)
+})
+
+// ---------------------------------------------------------------------------------------------
+// loadWithRetry against a backend that is still binding its port. This is the shape that shipped a
+// packaged app as a BLACK WINDOW on 2026-09-20: the renderer raced its own backend, the first load
+// was refused, and the retry loop died without a word.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * A webContents that refuses the first `failures` loads. Electron does BOTH things on a refusal —
+ * emits `did-fail-load`, then `did-finish-load` for the error page, and rejects the `loadURL`
+ * promise — so the fake does all three, in that order.
+ */
+function flakyContents({ failures = 1, rejectToo = true, emitFinishOnError = true } = {}) {
+  const wc = new EventEmitter()
+  wc.loads = []
+  wc.isDestroyed = () => false
+  wc.loadURL = (u) => {
+    wc.loads.push(u)
+    if (wc.loads.length <= failures) {
+      setImmediate(() => {
+        wc.emit('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', u, true)
+        if (emitFinishOnError) wc.emit('did-finish-load')
+      })
+      return rejectToo ? Promise.reject(new Error('ERR_CONNECTION_REFUSED (-102)')) : new Promise(() => {})
+    }
+    setImmediate(() => wc.emit('did-finish-load'))
+    return Promise.resolve()
+  }
+  return wc
+}
+
+/** Run every pending retry timer to completion. */
+function makeClock() {
+  const queue = []
+  const setT = (fn) => {
+    queue.push(fn)
+    return queue.length
+  }
+  const drain = async (rounds = 12) => {
+    for (let i = 0; i < rounds; i += 1) {
+      const due = queue.splice(0, queue.length)
+      for (const fn of due) fn()
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+    }
+  }
+  return { setT, drain, pending: () => queue.length }
+}
+
+test('a refused first load is retried until the backend answers (the black-window bug)', async () => {
+  const wc = flakyContents({ failures: 2 })
+  const clock = makeClock()
+  const log = fakeLog()
+  loadWithRetry(wc, 'http://127.0.0.1:8021/app/', { tag: 'renderer', log, setTimeout: clock.setT })
+  await clock.drain()
+  assert.equal(wc.loads.length, 3, 'two refusals then the load that works')
+  assert.deepEqual(new Set(wc.loads), new Set(['http://127.0.0.1:8021/app/']))
+})
+
+test("the error page's did-finish-load is not mistaken for success", async () => {
+  // This is precisely what broke it: `did-finish-load` arrives for Chromium's error page, and
+  // treating it as success removed the listeners after the very first failure.
+  const wc = flakyContents({ failures: 3, emitFinishOnError: true })
+  const clock = makeClock()
+  loadWithRetry(wc, 'http://x/app/', { log: fakeLog(), setTimeout: clock.setT })
+  await clock.drain()
+  assert.equal(wc.loads.length, 4)
+})
+
+test('a rejection with no event at all still drives the loop', async () => {
+  // The other half: `loadURL` rejects and nothing is emitted. Swallowing that rejection was what
+  // made the failure silent.
+  const wc = new EventEmitter()
+  wc.loads = []
+  wc.isDestroyed = () => false
+  wc.loadURL = (u) => {
+    wc.loads.push(u)
+    if (wc.loads.length <= 2) return Promise.reject(new Error('ERR_CONNECTION_REFUSED (-102)'))
+    setImmediate(() => wc.emit('did-finish-load'))
+    return Promise.resolve()
+  }
+  const clock = makeClock()
+  const log = fakeLog()
+  loadWithRetry(wc, 'http://x/app/', { tag: 'renderer', log, setTimeout: clock.setT })
+  await clock.drain()
+  assert.equal(wc.loads.length, 3)
+  assert.match(log.lines.map(([, l]) => l).join('\n'), /ERR_CONNECTION_REFUSED/)
+})
+
+test('the event and the rejection for ONE attempt schedule only one retry', async () => {
+  const wc = flakyContents({ failures: 1, rejectToo: true })
+  const clock = makeClock()
+  loadWithRetry(wc, 'http://x/app/', { log: fakeLog(), setTimeout: clock.setT })
+  await clock.drain()
+  assert.equal(wc.loads.length, 2, 'not 3: the double signal is one failure, not two')
+})
+
+test('it gives up after maxRetries and says so, instead of retrying forever', async () => {
+  const wc = flakyContents({ failures: 99 })
+  const clock = makeClock()
+  const log = fakeLog()
+  loadWithRetry(wc, 'http://x/app/', { tag: 'renderer', log, setTimeout: clock.setT, maxRetries: 3 })
+  await clock.drain(20)
+  assert.equal(wc.loads.length, 4, 'the first load plus three retries')
+  assert.match(log.lines.map(([, l]) => l).join('\n'), /giving up on http:\/\/x\/app\/ after 3 retries/)
+  assert.equal(clock.pending(), 0, 'and nothing is left scheduled')
+})
+
+test('ERR_ABORTED is a superseded load, not a failure', async () => {
+  const wc = new EventEmitter()
+  wc.loads = []
+  wc.isDestroyed = () => false
+  wc.loadURL = (u) => {
+    wc.loads.push(u)
+    setImmediate(() => wc.emit('did-fail-load', {}, -3, 'ERR_ABORTED', u, true))
+    return Promise.resolve()
+  }
+  const clock = makeClock()
+  loadWithRetry(wc, 'http://x/app/', { log: fakeLog(), setTimeout: clock.setT })
+  await clock.drain(3)
+  assert.equal(wc.loads.length, 1)
+  assert.equal(clock.pending(), 0)
+})
+
+test('cancel() stops a retry that is already scheduled', async () => {
+  const wc = flakyContents({ failures: 99 })
+  const clock = makeClock()
+  const cancel = loadWithRetry(wc, 'http://x/app/', { log: fakeLog(), setTimeout: clock.setT })
+  await new Promise((r) => setImmediate(r))
+  await new Promise((r) => setImmediate(r))
+  cancel()
+  await clock.drain(5)
+  assert.equal(wc.loads.length, 1, 'the one attempt that had already started')
 })

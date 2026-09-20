@@ -42,8 +42,16 @@ Either way it appears in the launcher as **Solomon's Judgment** with its icon. T
 back to the entry by `StartupWMClass=triplex-desktop`, which is Electron's own window class and is
 derived from the package name — see the note at the end.
 
-**Verified on Ubuntu 20.04 (glibc 2.31)**: AppImage and deb build and run, the packaged app starts
-its bundled backend (`[backend] spawned … via bundled`) and loads all three sites.
+**Verified on Ubuntu 20.04 (glibc 2.31)**: AppImage and deb build and install, the packaged app
+starts its bundled backend (`[backend] spawned … via bundled`), serves its renderer from
+`resources/app`, and comes up with the three panes signed in — checked on the window itself, not
+just in the logs.
+
+> The first packaged build opened as a **black window**. The renderer loads before the backend has
+> finished binding its port, and the retry that is supposed to cover that was dying on the first
+> refusal: a failed navigation also emits `did-finish-load` (for Chromium's error page), which the
+> loop took for success. Fixed in `desktop/main/views.js`, with tests that fail against the old
+> logic. If you ever see it again, the app's stdout says why — run the AppImage from a terminal.
 
 ## Arch
 
