@@ -652,3 +652,17 @@ test('S10: settleMs is the per-site settle window: the selectors carry it (chatg
     assert.equal(state.done, true)
   }
 })
+
+test('S10: a container that never holds any text says so, instead of "still in progress"', async () => {
+  // Measured 2026-09-20: a condense call ran its whole budget and came back `timeout … chars=0`
+  // while its answer was sitting in that chat. "Still in progress" described none of it; the two
+  // cases need different words because they need different fixes (a longer budget vs a selector).
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+  mount(doc, thread, textTurn(''))  // a container appears, and stays empty
+  await clock.advance(4000)
+  assert.equal(state.value, null)
+  assert.equal(state.error.code, 'reply_not_found')
+  assert.match(state.error.message, /never held any text/)
+})

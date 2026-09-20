@@ -2474,7 +2474,19 @@
           }
           const spent = result === null && now - t0 >= budget
           if (!full && (typeof result === 'string' || spent)) sessionGate() // a terminal answer never bypasses the session check
-          if (spent) throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+          if (spent) {
+            // Say WHICH of the two shapes this is. A capture that followed a container for the whole
+            // budget and never read a character of it is not "still in progress" in any useful sense
+            // — measured 2026-09-20, a condense call came back `timeout … chars=0` while the answer
+            // was sitting in that chat, and the generic message said nothing about which.
+            if (seenContainer && isBlank(text)) {
+              throw new AdapterError(
+                'reply_not_found',
+                `a reply container was there for ${budget} ms but never held any text (the site may still be thinking)`,
+              )
+            }
+            throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+          }
           return result
         })
 

@@ -11,7 +11,7 @@
 // checked by protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, ANALYST_PATIENCE } from '../../../main/orchestrator.js'
+import { createOrchestrator, ANALYST_PATIENCE, CAPTURE_CEILING_MARGIN_MS } from '../../../main/orchestrator.js'
 import { validate } from '../../../main/protocol.js'
 import { fakeLog, fakeTimers, tick } from './_fakes.js'
 
@@ -567,7 +567,7 @@ test('the analyst chat is recorded only for a URL that matches the site’s chat
 // therefore waits ANALYST_PATIENCE times as long for stillness, is told that its reply is a JSON
 // document, and is sent the first-token budget main never used to send at all.
 
-test('S10: the analyst view waits ANALYST_PATIENCE× as long for stillness and is told to expect JSON; the overall capture budget is unchanged (the bridge request timeout sits above it)', async () => {
+test('S10: the analyst view gets every capture window scaled — stillness, first token AND the whole run — and is told to expect JSON', async () => {
   const { orch, analystClient, emit } = setup()
   const done = orch.run(analystRequest('chatgpt'), emit)
   await settleAll()
@@ -578,12 +578,16 @@ test('S10: the analyst view waits ANALYST_PATIENCE× as long for stillness and i
   const obs = analystClient.last()
   assert.equal(obs.op, 'observe')
   assert.ok(ANALYST_PATIENCE >= 3, 'quiet and settle at least ×3')
+  // A reasoning mode inside ChatGPT can render nothing readable for minutes, so the analyst needs a
+  // longer RUN, not just longer lulls (measured 2026-09-20: a condense call timed out at chars=0
+  // inside a pane's 300 s while its answer arrived shortly after). Capped by the deadline the
+  // backend granted for this very request, so the adapter's timeout always reports first.
   assert.deepEqual(obs.payload, {
     baselineCount: 2,
     quietMs: 250 * ANALYST_PATIENCE,
     settleMs: 200 * ANALYST_PATIENCE,
-    timeoutMs: 4000,
-    firstTokenMs: 3000,
+    timeoutMs: 4000 * ANALYST_PATIENCE,
+    firstTokenMs: 3000 * ANALYST_PATIENCE,
     expect: 'json',
   })
   analystClient.settle('observe', { ok: true, op: 'observe', text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 7 })
@@ -606,4 +610,23 @@ test('S10: the analyst capture is logged like any other — length, signal and t
   assert.ok(line, `no capture line in ${JSON.stringify(log.lines)}`)
   assert.match(line, /analyst page \(chatgpt\): captured 18 chars by stop_gone in 78500 ms/)
   for (const [, m] of log.lines) assert.equal(m.includes('agreements'), false, m)
+})
+
+test('S10: the scaled analyst budget never outlives the deadline the backend granted for the request', async () => {
+  // Past `timeout_s` the bridge has already failed the request, so a capture still running then is
+  // reporting into a void: its partial, its doneBy and its reason are all thrown away.
+  const { orch, analystClient, emit } = setup()
+  const done = orch.run(analystRequest('chatgpt', { timeout_s: 20 }), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  const obs = analystClient.last()
+  assert.ok(obs.payload.timeoutMs < 20000, `${obs.payload.timeoutMs} ms must finish inside the granted 20 s`)
+  assert.ok(obs.payload.timeoutMs > 0, 'and still leave a usable window')
+  // With room to spare the margin is what it gives back, not half the grant.
+  assert.equal(CAPTURE_CEILING_MARGIN_MS, 30000)
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '{"agreements": []}', doneBy: 'quiet', ms: 7 })
+  await done
 })

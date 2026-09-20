@@ -107,6 +107,10 @@ export function observeBudgetMs({ firstTokenMs, captureTimeoutMs }) {
 /** The purposes whose reply is a JSON document, and so must be captured whole (S10). */
 export const STRUCTURED_PURPOSES = Object.freeze(['extraction', 'defense', 'convergence'])
 
+/** Headroom kept under the backend's request deadline so the ADAPTER's timeout is the one that
+ *  reports — with its partial and its reason — rather than the bridge failing the request blind. */
+export const CAPTURE_CEILING_MARGIN_MS = 30000
+
 export const ANALYST_PATIENCE = 3
 
 /** A promise-chain mutex: `lock()` resolves with the release function once the lock is yours. */
@@ -233,19 +237,39 @@ export function createOrchestrator({
   const active = new Map()
   let insertsQueued = 0
 
-  const budgets = (slot, view) => {
+  /**
+   * The capture can never usefully outlast the backend's own deadline for the request: past that
+   * the bridge has already failed it with `timeout` and nothing the adapter returns is read. The
+   * request frame carries `timeout_s`, so the ceiling comes from what was actually granted rather
+   * than from a copy of BRIDGE_TIMEOUT_S here that could drift out of step with it.
+   */
+  const captureCeilingMs = (timeoutS) => {
+    const granted = Number.isFinite(timeoutS) && timeoutS > 0 ? timeoutS * 1000 : 600000
+    // The margin, unless the grant is too short to give one — then half of it, so a small deadline
+    // still leaves the adapter a usable window AND still reports before the bridge does.
+    return Math.max(Math.floor(granted / 2), granted - CAPTURE_CEILING_MARGIN_MS)
+  }
+
+  const budgets = (slot, view, timeoutS) => {
     const t = (typeof timeoutsFor === 'function' && timeoutsFor(slot)) || {}
     const composer = Number.isFinite(t.composerWaitMs) ? t.composerWaitMs : 15000
     const send = Number.isFinite(t.sendWaitMs) ? t.sendWaitMs : 18000
     const verify = Number.isFinite(t.submitVerifyMs) ? t.submitVerifyMs : 5000
     const c = (typeof captureTimeoutsFor === 'function' && captureTimeoutsFor(slot)) || {}
-    // the two stillness windows are scaled for the analyst view (S10); a config that predates `settleMs`
-    // gets the contract default, never the per-site value of whichever site is the analyst
+    // Every capture window is scaled for the analyst view (S10): the two stillness windows, the
+    // first-token deadline and the overall budget. A config that predates `settleMs` gets the
+    // contract default, never the per-site value of whichever site happens to be the analyst.
     const patience = view === 'analyst' ? ANALYST_PATIENCE : 1
     const quietMs = (Number.isFinite(c.quietMs) ? c.quietMs : 2500) * patience
     const settleMs = (Number.isFinite(c.settleMs) ? c.settleMs : 400) * patience
-    const firstTokenMs = Number.isFinite(c.firstTokenMs) ? c.firstTokenMs : 90000
-    const captureTimeoutMs = Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000
+    const firstTokenMs = (Number.isFinite(c.firstTokenMs) ? c.firstTokenMs : 90000) * patience
+    // The analyst page needs a LONGER run, not just longer lulls. Measured 2026-09-20: a condense
+    // call with a reasoning mode switched on inside ChatGPT rendered no readable text for the whole
+    // 300 s a pane is given, so the capture timed out at `chars=0` while the answer — a correct
+    // 5,847-character claims object — landed in that chat shortly afterwards. A pane's budget is
+    // sized for someone watching a reply arrive; the analyst's is sized for a model thinking.
+    const wanted = (Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000) * patience
+    const captureTimeoutMs = Math.min(wanted, captureCeilingMs(timeoutS))
     return {
       readyMs: composer,
       submitMs: insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle }),
@@ -492,7 +516,7 @@ export function createOrchestrator({
     const elapsed = () => Math.max(0, Math.round(now() - started))
     const signal = entry.controller.signal
     const client = seam.client
-    const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs } = budgets(slot, entry.view)
+    const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs } = budgets(slot, entry.view, request && request.timeout_s)
     const emitPhase = (p, code) => {
       if (seam.phases) phase(slot, p, code)
     }
