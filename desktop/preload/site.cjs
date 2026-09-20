@@ -2475,14 +2475,27 @@
           const spent = result === null && now - t0 >= budget
           if (!full && (typeof result === 'string' || spent)) sessionGate() // a terminal answer never bypasses the session check
           if (spent) {
-            // Say WHICH of the two shapes this is. A capture that followed a container for the whole
+            // Say WHICH of the three shapes this is. A capture that followed a container for the whole
             // budget and never read a character of it is not "still in progress" in any useful sense
             // — measured 2026-09-20, a condense call came back `timeout … chars=0` while the answer
-            // was sitting in that chat, and the generic message said nothing about which.
+            // was sitting in that chat, and the generic message said nothing about which. And an empty
+            // container while the site's own STOP control is up is the site saying it is still working:
+            // measured the same day, chatgpt.com with a reasoning mode on held an empty reply container
+            // for 570 s and then produced a correct 5,614-character answer. That is a budget that ran
+            // out, not a reply that could not be found, and the message has to name the difference or
+            // the next reader starts from the same blank count this one did.
             if (seenContainer && isBlank(text)) {
+              if (stop || seenStop) {
+                throw new AdapterError(
+                  'timeout',
+                  `the reply container stayed empty for the whole ${budget} ms while the site was still working ` +
+                    `(stop control ${stop ? 'visible now' : 'seen earlier'}): the model is most likely still reasoning, ` +
+                    'so this needs a longer capture budget, not a different selector',
+                )
+              }
               throw new AdapterError(
                 'reply_not_found',
-                `a reply container was there for ${budget} ms but never held any text (the site may still be thinking)`,
+                `a reply container was there for ${budget} ms but never held any text, and the site never showed a stop control`,
               )
             }
             throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)

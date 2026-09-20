@@ -42,7 +42,9 @@ Backend → Electron
 Rules (readings taken at S6, binding from here): `BridgeHub.request` signals bridge-level failures by raising `BridgeError(code)` (`bridge_unavailable` / `bridge_no_ack` / `timeout` / `bridge_disconnected`), never by yielding a frame; the `timeout_s` deadline starts when the request frame is sent and the ack wait is `min(accept_timeout_s, timeout_s)`; `cancel` is sent on the no-ack timeout, the result timeout and `aclose`; a `result` without a preceding `accepted` is an implicit acceptance and a `rejected` after `accepted` is the terminal frame; a failed `result` carrying `partial` is emitted as one text delta before the error delta; a malformed or binary frame after the handshake closes 4001; the client re-sends the cached `health` of every slot right after each `hello_ack`, drops any `request` received before `hello_ack`, closes the socket itself with 4000 after 10 s without `hello_ack` or 2.5 × `ping_s` without a ping (never fatal), and treats 4001/4002/4003 as fatal (no reconnect) and everything else as reconnectable with backoff; `status().since` is ISO-8601 UTC, `health_ts` the backend's receive time in epoch ms, `sites` always lists all three slots, and `detach` resets every cache. From S6 `Health.reply`/`Health.stop` are booleans (`reply` = an assistant container exists via the v2 `assistant` cascade + the cross-site assistant selectors; `stop` = a visible stop button; `null` only when the stop cascade is empty). A second valid `hello` supersedes (old socket closed 4002 `superseded`, its pending
 requests fail `bridge_disconnected`); no `accepted`/`rejected` within
 `BRIDGE_ACCEPT_TIMEOUT_S` (15) → `bridge_no_ack`; no `result` within `timeout_s`
-(`BRIDGE_TIMEOUT_S`, 600) → `cancel` sent + `timeout`; frame bodies are never logged (one INFO
+(`BRIDGE_TIMEOUT_S`, 600 — a `view: analyst` request instead gets `BRIDGE_ANALYST_TIMEOUT_S`, 1800,
+floored at the pane value: added at S10 because the analyst grant has to cover the model THINKING,
+which at high or max effort inside the site is most of the wall clock) → `cancel` sent + `timeout`; frame bodies are never logged (one INFO
 line per request: `bridge req=<id> slot view purpose ok|code=<c> ms=<n> done_by=<signal> chars=<n>`, no text — `done_by` is the adapter's end signal (`-` when nothing was captured) and `chars` the captured length, added at S10 because a capture that ended mid-reply was indistinguishable in the log from a short answer).
 `Health = {"composer":bool,"send":bool,"reply":bool|null,"stop":bool|null,"session":"ok"|"logged_out"|"challenge"|"blocked"|"unknown","matched":{"composer":str|null,"send":str|null,"reply":str|null,"stop":str|null,"error":str|null},"url":str,"host":str,"title":str,"ts":int}`
 (`reply`/`stop` are `null` until selectors v2; `matched.error` names a selector-config problem such as a bad override file, else `null`; `ms`/`ts` are integers — the pydantic models are strict).
@@ -238,7 +240,8 @@ via `../.venv/bin/python -m backend.main`).
 ### 6. Backend keys, routing, modules, endpoints
 
 Private env reads (`config.py` untouched): `BRIDGE_TOKEN` (unset → accept any hello +
-WARNING), `BRIDGE_TIMEOUT_S`=600, `BRIDGE_ACCEPT_TIMEOUT_S`=15, `BRIDGE_PING_S`=20,
+WARNING), `BRIDGE_TIMEOUT_S`=600, `BRIDGE_ANALYST_TIMEOUT_S`=1800 (floored at
+`BRIDGE_TIMEOUT_S`), `BRIDGE_ACCEPT_TIMEOUT_S`=15, `BRIDGE_PING_S`=20,
 `TRIPLEX_DESKTOP`=0, `TRIPLEX_APP_DIR` (static renderer dir; unset → `/app/*` 404),
 `OLLAMA_BASE_URL`=`http://127.0.0.1:11434/v1`, `OLLAMA_MODELS`=`hermes3`. Electron spawn env:
 `PORT=8021 HOST=127.0.0.1 DATA_DIR=<userData>/data TRIPLEX_DESKTOP=1 BRIDGE_TOKEN=<random> MOCK_OPENROUTER=0 SLOT_CLAUDE_MODEL=web:claude SLOT_CHATGPT_MODEL=web:chatgpt SLOT_GROK_MODEL=web:grok SLOT_*_EFFORT=off ANALYST_MODEL=web:<settings.analyst>:analyst TRIPLEX_APP_DIR=<repo>/frontend/dist LOG_LEVEL`

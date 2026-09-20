@@ -11,7 +11,14 @@
 // checked by protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, ANALYST_PATIENCE, CAPTURE_CEILING_MARGIN_MS } from '../../../main/orchestrator.js'
+import {
+  createOrchestrator,
+  ANALYST_PATIENCE,
+  ANALYST_CAPTURE_PATIENCE,
+  CAPTURE_CEILING_MARGIN_MS,
+  insertAndSubmitBudgetMs,
+  INSERT_SETTLE_MS,
+} from '../../../main/orchestrator.js'
 import { validate } from '../../../main/protocol.js'
 import { fakeLog, fakeTimers, tick } from './_fakes.js'
 
@@ -578,15 +585,19 @@ test('S10: the analyst view gets every capture window scaled — stillness, firs
   const obs = analystClient.last()
   assert.equal(obs.op, 'observe')
   assert.ok(ANALYST_PATIENCE >= 3, 'quiet and settle at least ×3')
-  // A reasoning mode inside ChatGPT can render nothing readable for minutes, so the analyst needs a
-  // longer RUN, not just longer lulls (measured 2026-09-20: a condense call timed out at chars=0
-  // inside a pane's 300 s while its answer arrived shortly after). Capped by the deadline the
-  // backend granted for this very request, so the adapter's timeout always reports first.
+  // A reasoning mode inside ChatGPT can render nothing readable for MINUTES, so the analyst needs a
+  // longer RUN, and by more than its lulls are lengthened: a lull is a pause between rendered chunks,
+  // while the run has to cover the model thinking before the first chunk exists. Measured 2026-09-20,
+  // twice: a condense call showed an empty reply container for the whole budget (300 s, then 570 s)
+  // with the site's stop control up the entire time, and wrote a correct 5,614-character answer into
+  // it shortly after the capture gave up. Capped by the deadline the backend granted for this very
+  // request, so the adapter's timeout always reports first.
+  assert.ok(ANALYST_CAPTURE_PATIENCE > ANALYST_PATIENCE, 'thinking time is scaled by more than lull length')
   assert.deepEqual(obs.payload, {
     baselineCount: 2,
     quietMs: 250 * ANALYST_PATIENCE,
     settleMs: 200 * ANALYST_PATIENCE,
-    timeoutMs: 4000 * ANALYST_PATIENCE,
+    timeoutMs: 4000 * ANALYST_CAPTURE_PATIENCE,
     firstTokenMs: 3000 * ANALYST_PATIENCE,
     expect: 'json',
   })
@@ -610,6 +621,40 @@ test('S10: the analyst capture is logged like any other — length, signal and t
   assert.ok(line, `no capture line in ${JSON.stringify(log.lines)}`)
   assert.match(line, /analyst page \(chatgpt\): captured 18 chars by stop_gone in 78500 ms/)
   for (const [, m] of log.lines) assert.equal(m.includes('agreements'), false, m)
+})
+
+test('S10: the ceiling leaves room for the submit too, not just the bridge margin', async () => {
+  // The grant covers the WHOLE request, so the ceiling has to leave room for main's own pre-capture work
+  // on this turn — waiting for the composer, inserting, submitting — and not just for the bridge margin.
+  // With the real chatgpt timings that work is ~44 s of budget before a single character can arrive, so a
+  // capture sized against the grant alone outlives the grant by however long the submit took.
+  const { orch, analystClient, emit } = setup()
+  const done = orch.run(analystRequest('chatgpt', { timeout_s: 40 }), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  const obs = analystClient.last()
+  // setup()'s own timeoutsFor is what budgets() reads.
+  const readyMs = 1000
+  const submitMs = insertAndSubmitBudgetMs({
+    composerWaitMs: 1000,
+    sendWaitMs: 2000,
+    submitVerifyMs: 500,
+    insertSettleMs: INSERT_SETTLE_MS,
+  })
+  const ceiling = Math.max(Math.floor(40000 / 2), 40000 - CAPTURE_CEILING_MARGIN_MS)
+  const wanted = 4000 * ANALYST_CAPTURE_PATIENCE
+  assert.ok(wanted > ceiling - readyMs - submitMs, 'this grant is tight enough for the headroom to bind')
+  assert.equal(obs.payload.timeoutMs, ceiling - readyMs - submitMs)
+  assert.ok(obs.payload.timeoutMs < wanted, 'so the capture is trimmed, not left at what it wanted')
+  assert.ok(
+    obs.payload.timeoutMs + readyMs + submitMs <= 40000,
+    `capture ${obs.payload.timeoutMs} + ready ${readyMs} + submit ${submitMs} must fit in the granted 40 s`,
+  )
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '{"agreements": []}', doneBy: 'quiet', ms: 7 })
+  await done
 })
 
 test('S10: the scaled analyst budget never outlives the deadline the backend granted for the request', async () => {

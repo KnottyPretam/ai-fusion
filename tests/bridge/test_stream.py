@@ -162,7 +162,8 @@ async def test_request_frame_fields_and_conversation_scope(fake_desktop):
     assert analyst["view"] == "analyst" and analyst["fresh"] is True
     assert analyst["text"] == "You are the analyst.\n\nCompare R1, R2 and R3."
     assert analyst["role"] == "analyst" and analyst["purpose"] == "extraction"
-    assert analyst["conversation_id"] == "conv-123" and analyst["timeout_s"] == 600
+    # The analyst's own grant, not a pane's: it has to cover the model THINKING (see below).
+    assert analyst["conversation_id"] == "conv-123" and analyst["timeout_s"] == 1800
     assert pane["model"] == "web:claude" and pane["view"] == "pane" and pane["fresh"] is False
     assert pane["text"] == MSGS[-1]["content"] and pane["conversation_id"] is None
     assert pane["role"] == "claude" and pane["purpose"] == "defense"
@@ -170,6 +171,36 @@ async def test_request_frame_fields_and_conversation_scope(fake_desktop):
         assert bp.parse_server_frame(frame).type == "request"
         assert frame["req_id"] != analyst["req_id"] or frame is analyst
     assert analyst["req_id"] != pane["req_id"]
+
+
+async def test_analyst_requests_get_a_longer_grant_than_panes(fake_desktop, monkeypatch):
+    """Measured 2026-09-20 on chatgpt.com with a reasoning mode switched on inside the site: a single
+    condense call showed an EMPTY reply container for the whole 570 ms-scaled window a 600 s grant
+    allows, its stop control up the entire time, and wrote a correct 5,614-character claims object into
+    that container shortly after the capture gave up. A pane grant is sized for a chat answer someone is
+    watching; the analyst's has to cover the thinking, which at high or max effort is most of the wall
+    clock. The desktop scales its capture windows off the grant the frame carries, so this number is
+    what decides whether Analyze can finish at max effort at all."""
+    desk = await fake_desktop({"*": "ok"})
+    await collect(role="analyst", purpose="extraction", model="web:grok:analyst", messages=ANALYST_MSGS)
+    await collect(role="claude", purpose="defense", model="web:claude", max_tokens=None)
+    analyst, pane = desk.requests
+    assert analyst["timeout_s"] == 1800
+    assert pane["timeout_s"] == 600
+    assert analyst["timeout_s"] > pane["timeout_s"]
+
+
+def test_analyst_grant_is_configurable_and_never_shorter_than_a_pane(monkeypatch):
+    assert bridge.grant_s("analyst") == 1800.0
+    assert bridge.grant_s("pane") == 600.0
+    assert bridge.grant_s(None) == 600.0
+    monkeypatch.setenv("BRIDGE_ANALYST_TIMEOUT_S", "2400")
+    assert bridge.grant_s("analyst") == 2400.0
+    # A pane grant raised above the analyst's floors it: the analyst is never the impatient one.
+    monkeypatch.setenv("BRIDGE_ANALYST_TIMEOUT_S", "100")
+    monkeypatch.setenv("BRIDGE_TIMEOUT_S", "900")
+    assert bridge.grant_s("analyst") == 900.0
+    assert bridge.grant_s("pane") == 900.0
 
 
 async def test_info_line_per_request_carries_no_text(fake_desktop, caplog):

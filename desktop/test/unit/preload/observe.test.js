@@ -666,3 +666,36 @@ test('S10: a container that never holds any text says so, instead of "still in p
   assert.equal(state.error.code, 'reply_not_found')
   assert.match(state.error.message, /never held any text/)
 })
+
+test('S10: an empty container while the STOP control is up is a budget that ran out, not a missing reply', async () => {
+  // The failure measured on 2026-09-20, twice: chatgpt.com with a reasoning mode switched on inside the
+  // site held an empty reply container for the WHOLE capture budget (300 s, then 570 s) with its stop
+  // control visible the entire time, and then wrote a correct 5,614-character answer into that same
+  // container shortly after the capture gave up. `reply_not_found` sent the last reader hunting for a
+  // broken selector; the selector was right and the model was still reasoning. The two cases must not
+  // share a message, because a longer budget fixes one and only a new selector fixes the other.
+  const { doc, clock, adapter, thread } = setup() // the stop button stays: the site is working
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+  mount(doc, thread, textTurn('')) // a container appears, and stays empty while the stop control is up
+  await clock.advance(4000)
+  assert.equal(state.value, null)
+  assert.equal(state.error.code, 'timeout', 'the site was working, so this is a deadline, not a lost reply')
+  assert.match(state.error.message, /stayed empty for the whole 3000 ms while the site was still working/)
+  assert.match(state.error.message, /stop control visible now/)
+  assert.match(state.error.message, /longer capture budget, not a different selector/)
+})
+
+test('S10: a stop control that was seen and then vanished still reads as the site having worked', async () => {
+  // The same shape with the stop control gone by the time the budget runs out: the site DID work on this
+  // turn, so an empty container is still a deadline. Only a page that never showed one at all is a reply
+  // that could not be found.
+  const { doc, clock, adapter, thread, stop } = setup()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+  mount(doc, thread, textTurn(''))
+  await clock.advance(500)
+  stop.remove() // the site stopped saying it was working, but never wrote anything
+  await clock.advance(3500)
+  assert.equal(state.value, null)
+  assert.equal(state.error.code, 'timeout')
+  assert.match(state.error.message, /stop control seen earlier/)
+})

@@ -100,9 +100,14 @@ export function observeBudgetMs({ firstTokenMs, captureTimeoutMs }) {
  * chat answer someone is watching — while it holds the longest and most structured reply in the system:
  * three whole replies quoted into one prompt, answered as a JSON document. On 2026-09-20 that ended two
  * analyst captures mid-document (13 and 6 characters, both reported as `ok`) and Analyze degraded twice.
- * It multiplies the two STILLNESS windows only — how long a lull has to last before the reply counts as
- * finished. The overall capture budget is deliberately NOT multiplied: the backend's own bridge request
- * timeout sits above it, and a capture that outlived that would be reported by the wrong layer.
+ * `ANALYST_PATIENCE` multiplies the two STILLNESS windows and the first-token deadline — how long a lull
+ * has to last before the reply counts as finished, and how long the page may show nothing at all.
+ * `ANALYST_CAPTURE_PATIENCE` multiplies the OVERALL budget separately, and by more, because those are
+ * different quantities: a lull is a pause between rendered chunks, while the budget has to cover the
+ * model THINKING before the first chunk exists. Measured 2026-09-20: with a reasoning mode switched on
+ * inside chatgpt.com a condense call showed an empty reply container for 570 s straight (the whole grant
+ * a 600 s bridge deadline allows) and its answer landed in that chat shortly after the capture gave up.
+ * Both are still capped by `captureCeilingMs`, so the ADAPTER always reports before the bridge does.
  */
 /** The purposes whose reply is a JSON document, and so must be captured whole (S10). */
 export const STRUCTURED_PURPOSES = Object.freeze(['extraction', 'defense', 'convergence'])
@@ -112,6 +117,9 @@ export const STRUCTURED_PURPOSES = Object.freeze(['extraction', 'defense', 'conv
 export const CAPTURE_CEILING_MARGIN_MS = 30000
 
 export const ANALYST_PATIENCE = 3
+
+/** The analyst's multiplier for the OVERALL capture budget (thinking time, not lull length). */
+export const ANALYST_CAPTURE_PATIENCE = 4
 
 /** A promise-chain mutex: `lock()` resolves with the release function once the lock is yours. */
 export function createMutex() {
@@ -268,11 +276,18 @@ export function createOrchestrator({
     // 300 s a pane is given, so the capture timed out at `chars=0` while the answer — a correct
     // 5,847-character claims object — landed in that chat shortly afterwards. A pane's budget is
     // sized for someone watching a reply arrive; the analyst's is sized for a model thinking.
-    const wanted = (Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000) * patience
-    const captureTimeoutMs = Math.min(wanted, captureCeilingMs(timeoutS))
+    const capturePatience = view === 'analyst' ? ANALYST_CAPTURE_PATIENCE : 1
+    const wanted = (Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000) * capturePatience
+    const submitMs = insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle })
+    // The grant covers the WHOLE request, so the ceiling has to leave room for main's own pre-capture
+    // work on this turn too — waiting for the composer, inserting, submitting — and not just for the
+    // bridge margin. A capture sized against the grant alone outlives it by however long the submit
+    // took. The floor keeps a short grant usable: half of what the margin left.
+    const ceiling = captureCeilingMs(timeoutS)
+    const captureTimeoutMs = Math.min(wanted, Math.max(Math.floor(ceiling / 2), ceiling - composer - submitMs))
     return {
       readyMs: composer,
-      submitMs: insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle }),
+      submitMs,
       quietMs,
       settleMs,
       firstTokenMs,

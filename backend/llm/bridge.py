@@ -41,7 +41,8 @@ env keys) are normative; `bridge_protocol.py` (frozen) validates every frame at 
 
 Env (private reads, `config.py` untouched; read at CALL time, never cached): `BRIDGE_TOKEN`
 (unset -> the router accepts any hello with a WARNING), `BRIDGE_TIMEOUT_S`=600,
-`BRIDGE_ACCEPT_TIMEOUT_S`=15, `BRIDGE_PING_S`=20.
+`BRIDGE_ANALYST_TIMEOUT_S`=1800 (the grant for a `view: analyst` request, floored at
+`BRIDGE_TIMEOUT_S`), `BRIDGE_ACCEPT_TIMEOUT_S`=15, `BRIDGE_PING_S`=20.
 
 Where the contract is silent this module takes the simplest reading (listed for the integrator):
 `request()` signals failures by raising `BridgeError` (not by yielding a frame); the overall
@@ -95,6 +96,14 @@ CLOSE_PONG_TIMEOUT = 1011
 MISSED_PONGS_LIMIT = 2
 
 DEFAULT_TIMEOUT_S = 600.0
+# The ANALYST view gets its own, much larger grant. Measured 2026-09-20 on chatgpt.com with a
+# reasoning mode switched on inside the site: a single condense call showed an empty reply container
+# for the whole 570 s a 600 s grant allows, and the answer — a correct 5,614-character claims object
+# — landed in that chat shortly after the capture gave up. A pane grant is sized for a chat answer
+# someone is watching; the analyst's has to cover the model THINKING, which at high or max effort is
+# most of the wall clock. Nothing else in the pipeline shortens it: `REQUEST_TIMEOUT_S` bounds httpx
+# calls to OpenRouter, not the bridge.
+DEFAULT_ANALYST_TIMEOUT_S = 1800.0
 DEFAULT_ACCEPT_TIMEOUT_S = 15.0
 DEFAULT_PING_S = 20.0
 
@@ -120,6 +129,16 @@ def bridge_token() -> str | None:
 
 def timeout_s() -> float:
     return _env_float("BRIDGE_TIMEOUT_S", DEFAULT_TIMEOUT_S)
+
+
+def analyst_timeout_s() -> float:
+    """`BRIDGE_ANALYST_TIMEOUT_S`, never shorter than a pane's grant."""
+    return max(_env_float("BRIDGE_ANALYST_TIMEOUT_S", DEFAULT_ANALYST_TIMEOUT_S), timeout_s())
+
+
+def grant_s(view: str | None) -> float:
+    """How long this request may take: the analyst view's grant for `analyst`, else a pane's."""
+    return analyst_timeout_s() if view == "analyst" else timeout_s()
 
 
 def accept_timeout_s() -> float:
@@ -556,6 +575,7 @@ async def stream(
             outcome = BRIDGE_BAD_MODEL
             yield _error(BRIDGE_BAD_MODEL, str(e), ERROR_TYPE_TRIPLEX)
             return
+        grant = grant_s(view)
         if not hub.connected:
             outcome = BRIDGE_UNAVAILABLE
             yield _error(BRIDGE_UNAVAILABLE, "no desktop client is connected", ERROR_TYPE_TRIPLEX)
@@ -568,7 +588,7 @@ async def stream(
                 role=role,
                 purpose=purpose,
                 conversation_id=current_conversation(),
-                timeout_s=timeout_s(),
+                timeout_s=grant,
             )
         except ValueError as e:
             outcome = TRANSPORT_ERROR
@@ -578,7 +598,7 @@ async def stream(
             return
         try:
             async with contextlib.aclosing(
-                hub.request(frame, accept_timeout_s=accept_timeout_s(), timeout_s=timeout_s())
+                hub.request(frame, accept_timeout_s=accept_timeout_s(), timeout_s=grant)
             ) as replies:
                 async for reply in replies:
                     kind = reply["type"]
@@ -663,6 +683,8 @@ __all__ = [
     "BridgeError",
     "BridgeHub",
     "accept_timeout_s",
+    "analyst_timeout_s",
+    "grant_s",
     "bridge_token",
     "build_request",
     "conversation_scope",

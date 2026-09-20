@@ -187,6 +187,40 @@ async def test_a_failed_condensation_degrades_before_the_comparison_call(
     assert len(extraction_calls()) == 2  # R1 condensed, R2 failed, no comparison call
 
 
+async def test_condensations_that_do_not_shrink_degrade_instead_of_sending_the_prompt_anyway(
+    make_conversation, analyze, local_fixtures
+):
+    """Three sub-calls that answer with claims as long as the replies they were given leave the
+    comparison prompt exactly as big as the one the split existed to avoid. Sending it would spend a
+    fourth analyst call to fail the same way, so the turn degrades naming the largest block."""
+    local_fixtures("analyst_split_no_shrink")
+    conv = await persist(make_conversation(responses=responses_of(feature.SPLIT_MIN_CHARS + 3)))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    # All three condensations ran and were narrated; only the comparison is skipped.
+    assert _types(events) == [
+        "analyze_start",
+        "analyze_retry",
+        "analyze_retry",
+        "analyze_retry",
+        "analyze_degraded",
+    ]
+    assert len(extraction_calls()) == 3  # no comparison call
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded" and turn["extraction"] is None
+    assert f"over the {feature.SPLIT_MIN_CHARS:,}" in turn["error"]
+    assert "R1" in turn["error"]  # the largest block is named (all three are equal; R1 comes first)
+    assert "truncated" in turn["error"]  # and says plainly that nothing was cut to force it
+    assert len(turn["raw_attempts"]) == 3  # every condensation is still reported
+    assert turn["usage"]["totals"]["calls"] == 3  # and metered
+
+
+def test_condense_ineffective_names_the_total_the_label_and_its_size():
+    message = feature.condense_ineffective(15_002, "R2", 6_001)
+    assert "15,002" in message and "R2" in message and "6,001" in message
+    assert f"{feature.SPLIT_MIN_CHARS:,}" in message
+
+
 async def test_no_identity_leak_in_any_split_payload(
     make_conversation, analyze, local_fixtures, assert_no_identity_leak
 ):

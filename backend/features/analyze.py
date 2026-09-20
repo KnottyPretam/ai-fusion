@@ -63,6 +63,9 @@ into ONE chat message, 27,252 of it quoted replies, against a 32,768-character c
   than no comparison.
 - A condensation that fails degrades there and then (`condense_failure`), without the comparison
   call: falling back to the raw reply would rebuild exactly the oversized prompt this avoids.
+- The condensed set is RE-MEASURED (`condense_ineffective`). Three sub-calls that answered with
+  claims as long as the replies they were given leave the comparison prompt exactly as big as the
+  one the split existed to avoid, and sending it anyway spends a fourth call to fail the same way.
 
 The bound is transport-independent on purpose. The ceiling that produced the failure is the web
 transport's, but a 27 KB analyst prompt is a bad prompt everywhere -- it is the input against which
@@ -195,6 +198,20 @@ def split_notice(label: Label | str, chars: int, total: int) -> str:
 
 def condense_failure(label: Label | str, error: str) -> str:
     return f"could not condense {label}'s reply for the comparison: {error}"
+
+
+def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
+    """Three condense calls that did not actually shrink anything. The comparison prompt would be
+    as big as the one the split was there to avoid, so it is not sent: the whole point of the split
+    is to keep a single analyst message small enough to be answered, and a prompt that big is what
+    made Analyze time out in the first place. Loud, and naming the worst offender, because the
+    alternative -- quietly dropping half an answer -- is worse than no comparison (user decision,
+    2026-09-20)."""
+    return (
+        f"the condensed replies still come to {total:,} characters, over the {SPLIT_MIN_CHARS:,} "
+        f"one analyst message is sized for (the largest is {label}'s at {chars:,}). Condensing did "
+        f"not shorten them enough to compare, and nothing was truncated to force it."
+    )
 
 
 # --------------------------------------------------------------------------- producer
@@ -376,7 +393,18 @@ async def _produce(
                 queue=queue,
             )
             if reduced is not None:
-                responses = reduced
+                # Re-measure. A condense call that answered with claims as long as the reply it was
+                # given leaves the comparison prompt exactly as big as before, having spent three
+                # extra analyst calls to get there.
+                still = quoted_chars(reduced)
+                if still > SPLIT_MIN_CHARS:
+                    worst, worst_chars = max(
+                        ((label, len(text)) for label, text in reduced.items()),
+                        key=lambda pair: pair[1],
+                    )
+                    error = condense_ineffective(still, worst, worst_chars)
+                else:
+                    responses = reduced
 
         if error is None:
             messages = prompts.build_messages(
@@ -471,6 +499,7 @@ __all__ = [
     "SPLIT_MIN_CHARS",
     "cached_ok_turn",
     "condense_failure",
+    "condense_ineffective",
     "missing_responses",
     "needs_split",
     "oversize_message",
