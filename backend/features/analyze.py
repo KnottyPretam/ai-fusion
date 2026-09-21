@@ -166,6 +166,37 @@ def cached_ok_turn(conv: Conversation, of_turn: str) -> AnalyzeTurn | None:
     return None
 
 
+def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label, str]] | None:
+    """`(question, responses)` from the newest ok Refactor turn for `of_turn`, or None.
+
+    Refactor (S11) is the explicit pass that runs before Analyze: it maps the question, restates it
+    concisely and reduces each reply to a summary plus its claims. When one exists, Analyze compares
+    THAT instead of the raw replies — the user's own design, and the reason the split step below
+    almost never has to fire: the payload is already small, already visible and already exportable.
+    Nothing is invented here; a Refactor turn whose status is not ok is ignored, so a failed refactor
+    leaves Analyze exactly as it was.
+    """
+    from ..schemas import RefactorTurn  # local: the union is frozen, the import order is not
+
+    for turn in reversed(conv.turns):
+        if not isinstance(turn, RefactorTurn):
+            continue
+        if turn.of_turn != of_turn or turn.status != "ok" or turn.refactoring is None:
+            continue
+        by_label = {r.model: r for r in turn.refactoring.replies}
+        if any(label not in by_label for label in LABELS):
+            return None  # a partial artifact is not an input; fall back to the raw replies
+        responses: dict[Label, str] = {}
+        for label in LABELS:
+            reply = by_label[label]
+            lines = [f"- {c}" for c in reply.claims if c.strip()]
+            block = "\n".join(lines)
+            responses[label] = f"{reply.summary}\n\n{block}" if reply.summary else block
+        question = turn.refactoring.question.strip() or None
+        return (question or "", responses) if question else None
+    return None
+
+
 def responses_by_label(conv: Conversation, send_turn: SendTurn) -> dict[Label, str]:
     """R-labelled responses via the persisted anon_map (never re-derived from position)."""
     return {label: send_turn.responses[slot] or "" for label, slot in anon.labels(conv).items()}
@@ -456,6 +487,16 @@ async def _produce(
         error: str | None = None
         condensed = False
 
+        question = send_turn.prompt
+        # Refactor first (S11): when an ok Refactor turn exists for this send turn, its restated
+        # question and reduced replies ARE the comparison's input. The blocks are condensed claims, so
+        # the comparison is told so — an analyst that thinks it is reading full replies would read a
+        # dropped restatement as silence on the point.
+        refactored = refactored_input(conv, send_turn.id)
+        if refactored is not None:
+            question, responses = refactored
+            condensed = True
+
         # The size bound (module docstring), decided before anything is typed anywhere.
         over = oversize_reply(responses)
         if over is not None:
@@ -464,7 +505,7 @@ async def _produce(
             condensed = True
             reduced, error = await _condense_all(
                 model=model,
-                question=send_turn.prompt,
+                question=question,
                 responses=responses,
                 usage=usage,
                 raw_attempts=raw_attempts,
@@ -486,7 +527,7 @@ async def _produce(
 
         if error is None:
             messages = prompts.build_messages(
-                send_turn.prompt, responses, fenced=fenced, condensed=condensed
+                question, responses, fenced=fenced, condensed=condensed
             )
             extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
             usage.merge(attempt_usage)
@@ -579,6 +620,7 @@ __all__ = [
     "cached_ok_turn",
     "condense_failure",
     "condense_ineffective",
+    "refactored_input",
     "chunk_notice",
     "chunk_reply",
     "missing_responses",

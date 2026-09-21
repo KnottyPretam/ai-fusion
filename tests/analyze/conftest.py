@@ -138,6 +138,22 @@ def analyze(client: httpx.AsyncClient):
 
 
 @pytest.fixture
+def refactor(client: httpx.AsyncClient):
+    """POST /api/conversations/{id}/refactor -> (response, events). Shares this conftest because
+    Refactor is the pass that feeds Analyze and every fixture here (the analyst scenarios, the
+    conversation factory, `extraction_calls`) is exactly what its tests need."""
+
+    async def _post(
+        conv_id: str, body: dict[str, Any] | None = None
+    ) -> tuple[httpx.Response, list[dict[str, Any]]]:
+        r = await client.post(f"/api/conversations/{conv_id}/refactor", json=body or {})
+        events = parse_sse_text(r.text) if r.status_code == 200 else []
+        return r, events
+
+    return _post
+
+
+@pytest.fixture
 def get_conversation(client: httpx.AsyncClient):
     async def _get(conv_id: str) -> dict[str, Any]:
         r = await client.get(f"/api/conversations/{conv_id}")

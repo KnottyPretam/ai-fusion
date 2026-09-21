@@ -259,7 +259,58 @@ class FusionTurn(_TurnBase):
     exit_reason: ExitReason
 
 
-Turn = Annotated[SendTurn | ContinueTurn | AnalyzeTurn | FusionTurn, Field(discriminator="type")]
+# --------------------------------------------------------------------------- refactor (S11, append-only)
+class KnowledgeNode(BaseModel):
+    """One thing the question is about. `kind` is free-form on purpose (entity / constraint / goal /
+    tool / …): a fixed vocabulary would be a guess about questions nobody has asked yet."""
+
+    id: str
+    label: str
+    kind: str = ""
+
+
+class KnowledgeEdge(BaseModel):
+    source: str
+    target: str
+    relation: str
+
+
+class KnowledgeGraph(BaseModel):
+    nodes: list[KnowledgeNode] = Field(default_factory=list)
+    edges: list[KnowledgeEdge] = Field(default_factory=list)
+
+
+class RefactoredReply(BaseModel):
+    """One slot's reply, tightened. Labelled R1/R2/R3 like everything else the analyst sees."""
+
+    model: Label
+    summary: str
+    claims: list[str] = Field(default_factory=list)
+
+
+class Refactoring(BaseModel):
+    """Refactor's artifact: what the question is about, the question stated tightly, and each reply
+    reduced to its substance. Analyze prefers these replies over the raw ones when a Refactor turn
+    exists for the send turn it is comparing."""
+
+    graph: KnowledgeGraph
+    question: str
+    replies: list[RefactoredReply] = Field(default_factory=list)
+
+
+class RefactorTurn(_TurnBase):
+    type: Literal["refactor"] = "refactor"
+    of_turn: str
+    refactoring: Refactoring | None = None
+    status: Literal["ok", "degraded"] = "ok"
+    error: str | None = None
+    raw_attempts: list[str] = Field(default_factory=list)
+
+
+Turn = Annotated[
+    SendTurn | ContinueTurn | AnalyzeTurn | FusionTurn | RefactorTurn,
+    Field(discriminator="type"),
+]
 TurnAdapter: TypeAdapter[Turn] = TypeAdapter(Turn)
 
 
