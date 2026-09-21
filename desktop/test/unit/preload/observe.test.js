@@ -680,15 +680,18 @@ test('S10: an empty container while the STOP control is up is a budget that ran 
   await clock.advance(4000)
   assert.equal(state.value, null)
   assert.equal(state.error.code, 'timeout', 'the site was working, so this is a deadline, not a lost reply')
-  assert.match(state.error.message, /stayed empty for the whole 3000 ms while the site was still working/)
-  assert.match(state.error.message, /stop control visible now/)
+  assert.match(state.error.message, /stayed empty for the whole 3000 ms and the site's stop control is still up/)
+  assert.match(state.error.message, /still reasoning/)
   assert.match(state.error.message, /longer capture budget, not a different selector/)
 })
 
-test('S10: a stop control that was seen and then vanished still reads as the site having worked', async () => {
-  // The same shape with the stop control gone by the time the budget runs out: the site DID work on this
-  // turn, so an empty container is still a deadline. Only a page that never showed one at all is a reply
-  // that could not be found.
+test('S10: a stop control that was seen and then vanished names BOTH of the things it can mean', async () => {
+  // The same shape with the stop control gone by the time the budget runs out. This layer cannot tell
+  // which of two things happened — the site is still working and this sample missed a button
+  // mid-re-render (measured S9, the reason a pending end signal can be withdrawn), or the site finished
+  // and wrote its answer outside the container the capture followed. Saying only the first, which the
+  // first version of this message did, sends the next reader after a budget when the bug may be a
+  // container. Only a page that never showed a stop control at all is `reply_not_found`.
   const { doc, clock, adapter, thread, stop } = setup()
   const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
   mount(doc, thread, textTurn(''))
@@ -697,5 +700,7 @@ test('S10: a stop control that was seen and then vanished still reads as the sit
   await clock.advance(3500)
   assert.equal(state.value, null)
   assert.equal(state.error.code, 'timeout')
-  assert.match(state.error.message, /stop control seen earlier/)
+  assert.match(state.error.message, /showed a stop control earlier but not at the end/)
+  assert.match(state.error.message, /either it is still reasoning/)
+  assert.match(state.error.message, /or it finished and wrote the answer outside the container/)
 })

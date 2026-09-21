@@ -1,6 +1,6 @@
 """Turn export endpoint (owner: export-backend).
 
-    GET /api/conversations/{conv_id}/export/{turn_id}?format=md|html
+    GET /api/conversations/{conv_id}/export/{turn_id}?format=md|html&theme=light|dark|system
         -> 200 text/markdown | text/html, one self-contained document for that ONE turn
            (Send, solo Continue, Analyze or Fusion), plus a Content-Disposition filename
            suggestion for the save dialog
@@ -35,13 +35,18 @@ _EXPOSE = (
 
 
 @router.get("/{conv_id}/export/{turn_id}")
-async def export_turn(conv_id: str, turn_id: str, format: str = "md") -> Response:
+async def export_turn(
+    conv_id: str, turn_id: str, format: str = "md", theme: str | None = None
+) -> Response:
     fmt = export.normalise_format(format)  # 422 before any disk read
+    # The app's own theme, so a document looks like the window it came from (user request). Unknown or
+    # absent is `light`, which is exactly what this endpoint has always rendered.
+    doc_theme = export.normalise_theme(theme)
     conv = await store.load(conv_id)
     doc = export.build_document(conv, turn_id)  # 404 conversation / turn
     filename = export.filename_for(doc, fmt)
     return Response(
-        content=export.render_doc(doc, fmt),
+        content=export.render_doc(doc, fmt, doc_theme),
         media_type=export.MEDIA_TYPES[fmt],
         headers={
             "content-disposition": f'attachment; filename="{filename}"',

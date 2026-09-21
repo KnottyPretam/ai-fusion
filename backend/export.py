@@ -71,6 +71,7 @@ from .schemas import (
     FusionRound,
     FusionTurn,
     Label,
+    RefactorTurn,
     SendTurn,
     SlotId,
 )
@@ -95,12 +96,27 @@ _FORMAT_ALIASES: dict[str, Format] = {
     "htm": "html",
 }
 
-DocKind = Literal["send", "continue", "analyze", "fusion"]
+DocKind = Literal["send", "continue", "analyze", "fusion", "refactor"]
 KIND_TITLES: dict[str, str] = {
     "send": "Send",
     "continue": "Continue",
     "analyze": "Analyze",
     "fusion": "Fusion",
+    "refactor": "Refactor",
+}
+
+#: The app's own three theme states, so an exported document looks like the app it came from (user
+#: request, 2026-09-20). `light` is the palette this module has always rendered, byte for byte, so
+#: every existing document and every golden is unchanged unless a theme is asked for. Markdown has no
+#: styling at all, so a theme only ever affects the HTML — and the PDF, which is that HTML printed
+#: with `printBackground: true` (already the case in desktop/main/export.js, so a dark document really
+#: does print dark rather than light-on-white).
+Theme = Literal["light", "dark", "system"]
+_THEME_ALIASES: dict[str, Theme] = {
+    "light": "light",
+    "dark": "dark",
+    "system": "system",
+    "auto": "system",
 }
 
 #: The machine-readable marker in the HTML `<head>` (and, as a comment, at the top of the
@@ -344,6 +360,14 @@ def normalise_format(value: str | None) -> Format:
 
 
 # --------------------------------------------------------------------------- turn lookup
+def normalise_theme(value: str | None) -> Theme:
+    """`light` (the default and the historical rendering), `dark`, or `system`. An unknown value is
+    `light` rather than a 422: a document is worth having in the wrong palette."""
+    if value is None:
+        return "light"
+    return _THEME_ALIASES.get(str(value).strip().lower(), "light")
+
+
 def _turn_by_id(conv: Conversation, turn_id: str) -> Any | None:
     for turn in conv.turns:
         if turn.id == turn_id:
@@ -592,6 +616,95 @@ def _divergence_blocks(extraction: Extraction, materiality_min: str) -> list[Any
                 ),
             )
         )
+    return out
+
+
+REFACTOR_NOTE = (
+    "This is the refactored view of one Send: what the question is about, the question restated, "
+    "and each response reduced to its substance. Analyze compares this version, so it is the input "
+    "to everything that follows."
+)
+GRAPH_NOTE = (
+    "The question's own structure: the things it involves, and how they relate. Two answers can "
+    "only disagree once they are about the same thing."
+)
+
+
+def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
+    """The Refactor document: the graph, the restated question, and ALL THREE reduced responses in one
+    document (the user's request). R-labels only, exactly as in `_analyze_blocks` — never
+    `slot_config.slots` / `analyst_model` (module docstring, "ANONYMITY")."""
+    out: list[Any] = [
+        _header(
+            conv,
+            turn,
+            (("status", turn.status), ("refactored send turn", turn.of_turn)),
+        ),
+        Para(REFACTOR_NOTE),
+        Para(ANON_NOTE),
+    ]
+    of_turn = _turn_by_id(conv, turn.of_turn)
+    out.append(Heading("The question as asked", 2))
+    if isinstance(of_turn, SendTurn):
+        out.append(Meta((("send turn", of_turn.id), ("sent", of_turn.ts))))
+        out.append(body(of_turn.prompt))
+    else:
+        out.append(Para("That Send turn is no longer part of this conversation."))
+
+    ref = turn.refactoring
+    if ref is None:
+        out.append(Heading("Degraded", 2))
+        out.append(
+            Para(
+                "The analyst did not return a usable refactoring, so this turn carries none. "
+                "Analyze falls back to comparing the responses as they were sent."
+            )
+        )
+        if turn.error:
+            out.append(body(turn.error))
+        attempts = turn.raw_attempts
+        inner: list[Any] = []
+        for i, attempt in enumerate(attempts, start=1):
+            inner.append(Heading(f"attempt {i}", 4))
+            inner.append(body(attempt or "(no output)", code=True))
+        out.append(Details(f"raw analyst attempts ({len(attempts)})", tuple(inner)))
+        out.extend(_usage_blocks(turn))
+        return out
+
+    out.append(Heading("The question, restated", 2))
+    out.append(body(ref.question))
+
+    out.append(Heading("What the question is about", 2))
+    out.append(Para(GRAPH_NOTE))
+    if ref.graph.nodes:
+        out.append(
+            Table(
+                ("id", "thing", "kind"),
+                tuple((n.id, n.label, n.kind or NONE_GIVEN) for n in ref.graph.nodes),
+            )
+        )
+    if ref.graph.edges:
+        labels = {n.id: n.label for n in ref.graph.nodes}
+        out.append(
+            Table(
+                ("from", "relation", "to"),
+                tuple(
+                    (labels.get(e.source, e.source), e.relation, labels.get(e.target, e.target))
+                    for e in ref.graph.edges
+                ),
+            )
+        )
+    if not ref.graph.nodes and not ref.graph.edges:
+        out.append(Para("The analyst returned no graph for this question."))
+
+    out.append(Heading("The three responses, reduced", 2))
+    for reply in ref.replies:
+        out.append(Heading(reply.model, 3))
+        if reply.summary:
+            out.append(body(reply.summary))
+        if reply.claims:
+            out.append(Bullets(tuple(Bullet(text=c) for c in reply.claims)))
+    out.extend(_usage_blocks(turn))
     return out
 
 
@@ -865,6 +978,8 @@ def build_document(conv: Conversation | None, turn_id: str) -> Document:
         blocks = _analyze_blocks(conv, turn)
     elif isinstance(turn, FusionTurn):
         blocks = _fusion_blocks(conv, turn)
+    elif isinstance(turn, RefactorTurn):
+        blocks = _refactor_blocks(conv, turn)
     else:  # unreachable: the Turn union is closed
         raise api_errors.not_found("turn")
     return Document(
@@ -883,16 +998,18 @@ def filename_for(doc: Document, fmt: Format) -> str:
     return f"{doc.stem}.{EXTENSIONS[fmt]}"
 
 
-def render_doc(doc: Document, fmt: Format) -> str:
-    return render_html_doc(doc) if fmt == "html" else render_markdown_doc(doc)
+def render_doc(doc: Document, fmt: Format, theme: Theme = "light") -> str:
+    """`theme` reaches the HTML only — Markdown carries no styling, so it is the same bytes in every
+    theme, which is also why a themed export never changes a Markdown golden."""
+    return render_html_doc(doc, theme) if fmt == "html" else render_markdown_doc(doc)
 
 
 def render_markdown(conv: Conversation | None, turn_id: str) -> str:
     return render_markdown_doc(build_document(conv, turn_id))
 
 
-def render_html(conv: Conversation | None, turn_id: str) -> str:
-    return render_html_doc(build_document(conv, turn_id))
+def render_html(conv: Conversation | None, turn_id: str, theme: Theme = "light") -> str:
+    return render_html_doc(build_document(conv, turn_id), theme)
 
 
 # --------------------------------------------------------------------------- markdown renderer
@@ -988,6 +1105,7 @@ CSS = """
 :root {
   --ink: #1b1f24; --muted: #5b6672; --line: #d8dfe6; --rule: #eef2f6;
   --bg: #ffffff; --panel: #f7f9fb; --accent: #4a90e2; --link: #1f6fb2;
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -1044,6 +1162,31 @@ summary { cursor: pointer; font-weight: 600; font-size: 13px; }
   .brand { display: none; }
 }
 """
+
+#: The DARK token values, taken from the app's own palette in `frontend/src/index.css` rather than
+#: invented, so a document looks like the window it was exported from. Only the eight tokens the
+#: document uses are redefined; every rule in `CSS` reads them, so nothing else has to change.
+DARK_TOKENS = """
+  --ink: #e6edf3; --muted: #9198a1; --line: #30363d; --rule: #21262d;
+  --bg: #0d1117; --panel: #161b22; --accent: #58a6ff; --link: #58a6ff;
+  color-scheme: dark;
+"""
+
+
+def theme_css(theme: Theme) -> str:
+    """`CSS` for `light` (byte for byte what this module has always emitted), plus a dark override for
+    `dark` (always) or `system` (only under `prefers-color-scheme: dark`, so the reader's own setting
+    decides — the same rule the app itself applies)."""
+    if theme == "light":
+        return CSS
+    if theme == "dark":
+        return CSS + ":root {" + DARK_TOKENS + "}\n"
+    return (
+        CSS
+        + "@media (prefers-color-scheme: dark) {\n  :root {"
+        + DARK_TOKENS
+        + "  }\n}\n"
+    )
 
 
 def _html_block(block: Any) -> str:
@@ -1105,7 +1248,7 @@ def _html_block(block: Any) -> str:
     raise TypeError(f"unknown block {type(block).__name__}")  # pragma: no cover
 
 
-def render_html_doc(doc: Document) -> str:
+def render_html_doc(doc: Document, theme: Theme = "light") -> str:
     """ONE self-contained document: embedded CSS, no external reference of any kind, every quoted
     value escaped. The only absolute URLs are the citation anchors in the body."""
     markers = "\n".join(
@@ -1118,7 +1261,7 @@ def render_html_doc(doc: Document) -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"{markers}\n"
         f"<title>{_esc(doc.title)}</title>\n"
-        f"<style>{CSS}</style>\n"
+        f"<style>{theme_css(theme)}</style>\n"
         "</head>\n<body>\n"
         f'<main class="doc">\n{_html_brand()}<h1>{_esc(doc.title)}</h1>\n{blocks}\n</main>\n'
         "</body>\n</html>\n"

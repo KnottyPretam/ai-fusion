@@ -60,6 +60,9 @@ export const PDF_CLOSE_TIMEOUT_MS = 3000
 export const PDF_PAGE_SIZE = 'A4'
 export const PDF_MARGINS = Object.freeze({ top: 0.85, bottom: 0.6, left: 0.6, right: 0.6 })
 
+/** The app's three theme states, the only values the export URL will carry. */
+export const THEMES = Object.freeze(['light', 'dark', 'system'])
+
 /**
  * The running page header: the mark and the product name, in the top margin of EVERY sheet.
  *
@@ -219,11 +222,19 @@ export function requireExportRequest(payload) {
 // The backend document
 // ---------------------------------------------------------------------------------------------
 
-/** `GET <backend>/api/conversations/<id>/export/<turnId>?format=<md|html>` — no slot, ever. */
-export function exportUrl(backendUrl, conversationId, turnId, format) {
+/**
+ * `GET <backend>/api/conversations/<id>/export/<turnId>?format=<md|html>[&theme=<t>]` — no slot, ever.
+ *
+ * `theme` is the app's own light/dark/system state, so a document looks like the window it came from
+ * (user request, 2026-09-20). It is omitted entirely when it is absent or `light`, which is what the
+ * endpoint has always rendered — so a light export is the same request, byte for byte, as before.
+ */
+export function exportUrl(backendUrl, conversationId, turnId, format, theme) {
   const base = String(backendUrl || '').replace(/\/+$/, '')
   if (base === '') throw codedError('export_unavailable', 'no backend URL')
-  return `${base}/api/conversations/${encodeURIComponent(conversationId)}/export/${encodeURIComponent(turnId)}?format=${encodeURIComponent(format)}`
+  const url = `${base}/api/conversations/${encodeURIComponent(conversationId)}/export/${encodeURIComponent(turnId)}?format=${encodeURIComponent(format)}`
+  const wanted = THEMES.includes(theme) ? theme : ''
+  return wanted === '' || wanted === 'light' ? url : `${url}&theme=${encodeURIComponent(wanted)}`
 }
 
 /** The text of a JSON envelope, whichever field the endpoint uses; '' when there is none. */
@@ -236,12 +247,12 @@ function textFromJson(obj) {
 }
 
 /**
- * fetchDocument({backendUrl, conversationId, turnId, format, fetchImpl, timeoutMs}) → string
+ * fetchDocument({backendUrl, conversationId, turnId, format, theme, fetchImpl, timeoutMs}) → string
  * A non-2xx answer, a transport failure, a timeout or an empty document is `export_fetch_failed`.
  */
-export async function fetchDocument({ backendUrl, conversationId, turnId, format, fetchImpl = globalThis.fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+export async function fetchDocument({ backendUrl, conversationId, turnId, format, theme, fetchImpl = globalThis.fetch, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
   if (typeof fetchImpl !== 'function') throw codedError('export_unavailable', 'no fetch')
-  const url = exportUrl(backendUrl, conversationId, turnId, format)
+  const url = exportUrl(backendUrl, conversationId, turnId, format, theme)
   const controller = typeof AbortController === 'function' ? new AbortController() : null
   const timer = controller && Number.isFinite(timeoutMs) && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null
   let res
@@ -510,6 +521,7 @@ export async function exportTurn({
   pdfTimeoutMs = PDF_TIMEOUT_MS,
   pdfCloseTimeoutMs = PDF_CLOSE_TIMEOUT_MS,
   tmpdir = os.tmpdir,
+  theme = 'light',
   log = console,
 } = {}) {
   const req = requireExportRequest({ conversationId, turnId, formats, title, turnType })
@@ -522,8 +534,8 @@ export async function exportTurn({
   const wantMd = req.formats.includes('md')
   const wantHtml = req.formats.includes('html') || req.formats.includes('pdf')
   const docs = {}
-  if (wantMd) docs.md = await fetchDocument({ backendUrl, conversationId: req.conversationId, turnId: req.turnId, format: 'md', fetchImpl, timeoutMs: fetchTimeoutMs })
-  if (wantHtml) docs.html = await fetchDocument({ backendUrl, conversationId: req.conversationId, turnId: req.turnId, format: 'html', fetchImpl, timeoutMs: fetchTimeoutMs })
+  if (wantMd) docs.md = await fetchDocument({ backendUrl, conversationId: req.conversationId, turnId: req.turnId, format: 'md', theme, fetchImpl, timeoutMs: fetchTimeoutMs })
+  if (wantHtml) docs.html = await fetchDocument({ backendUrl, conversationId: req.conversationId, turnId: req.turnId, format: 'html', theme, fetchImpl, timeoutMs: fetchTimeoutMs })
 
   let pdf = null
   if (req.formats.includes('pdf')) {

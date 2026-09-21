@@ -544,6 +544,9 @@ function start() {
         BrowserWindow,
         parentWindow: windowAlive() ? win : null,
         defaultDir: exportDir(),
+        // The app's own theme, so an exported document looks like the window it came from (user
+        // request). settings.json is authoritative for it, exactly as it is for the site views.
+        theme: settings && typeof settings.getTheme === 'function' ? settings.getTheme() : 'light',
         log: console,
       }),
     sites,

@@ -28,7 +28,13 @@ from backend.schemas import (
     Extraction,
     FusionRound,
     FusionTurn,
+    KnowledgeEdge,
+    KnowledgeGraph,
+    KnowledgeNode,
     Position,
+    RefactoredReply,
+    Refactoring,
+    RefactorTurn,
     RoundStatus,
     SendTurn,
     ThreadMessage,
@@ -171,6 +177,58 @@ def add_analyze():
                 extraction=Extraction(
                     agreements=[a.model_copy(deep=True) for a in AGREEMENTS],
                     divergences=[d.model_copy(deep=True) for d in DIVERGENCES],
+                ),
+            )
+        conv.turns.append(turn)
+        return turn
+
+    return _add
+
+
+@pytest.fixture
+def add_refactor():
+    """Append a RefactorTurn for the newest send turn (ok, or degraded with raw attempts)."""
+
+    def _add(conv: Conversation, *, status: str = "ok", of_turn: str | None = None) -> RefactorTurn:
+        send_id = of_turn or next(t.id for t in reversed(conv.turns) if t.type == "send")
+        if status == "degraded":
+            turn = RefactorTurn(
+                of_turn=send_id,
+                slot_config=conv.slot_config.model_copy(deep=True),
+                status="degraded",
+                error="parse_error: no JSON object found in the response",
+                raw_attempts=["Sure! Here you go:", ""],
+            )
+        else:
+            turn = RefactorTurn(
+                of_turn=send_id,
+                slot_config=conv.slot_config.model_copy(deep=True),
+                refactoring=Refactoring(
+                    graph=KnowledgeGraph(
+                        nodes=[
+                            KnowledgeNode(id="n1", label="inertial sensor", kind="subject"),
+                            KnowledgeNode(id="n2", label="gyroscope range", kind="quantity"),
+                        ],
+                        edges=[KnowledgeEdge(source="n1", target="n2", relation="has property")],
+                    ),
+                    question="What is the selectable gyroscope full-scale range?",
+                    replies=[
+                        RefactoredReply(
+                            model="R1",
+                            summary="Reads the range from the datasheet table.",
+                            claims=["The upper range is 2000 dps", "Cites table 3"],
+                        ),
+                        RefactoredReply(
+                            model="R2",
+                            summary="States a lower maximum.",
+                            claims=["The gyroscope tops out at 1000 dps"],
+                        ),
+                        RefactoredReply(
+                            model="R3",
+                            summary="Gives the whole span.",
+                            claims=["Ranges run from 125 dps to 2000 dps"],
+                        ),
+                    ],
                 ),
             )
         conv.turns.append(turn)

@@ -311,6 +311,31 @@ test('exportUrl: /api/conversations/<id>/export/<turnId>?format=…, encoded, no
   assert.throws(() => exportUrl('', CONV, TURN, 'md'), /export_unavailable/)
 })
 
+test('exportUrl: the app theme rides along, and a light export is the request it always was', () => {
+  // User request (2026-09-20): an exported document should look like the window it came from. `light`
+  // and anything unrecognised add NOTHING to the URL, so the historical request — and therefore every
+  // existing document — is unchanged; only a real choice is sent.
+  const plain = `${BACKEND}/api/conversations/${CONV}/export/${TURN}?format=html`
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html'), plain)
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html', 'light'), plain)
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html', undefined), plain)
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html', 'nonsense'), plain)
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html', 'dark'), `${plain}&theme=dark`)
+  assert.equal(exportUrl(BACKEND, CONV, TURN, 'html', 'system'), `${plain}&theme=system`)
+})
+
+test('fetchDocument: the theme reaches the backend request', async () => {
+  const seen = []
+  const fetchImpl = async (url) => {
+    seen.push(url)
+    return { ok: true, status: 200, headers: { get: () => 'text/markdown' }, text: async () => '# doc\n' }
+  }
+  await fetchDocument({ backendUrl: BACKEND, conversationId: CONV, turnId: TURN, format: 'html', theme: 'dark', fetchImpl })
+  assert.match(seen[0], /&theme=dark$/)
+  await fetchDocument({ backendUrl: BACKEND, conversationId: CONV, turnId: TURN, format: 'html', fetchImpl })
+  assert.equal(seen[1].includes('theme='), false)
+})
+
 test('fetchDocument: text verbatim, a JSON envelope unwrapped, every failure coded', async () => {
   const doc = await fetchDocument({ backendUrl: BACKEND, conversationId: CONV, turnId: TURN, format: 'md', fetchImpl: makeFetch({ md: '# R1 vs R2\n' }) })
   assert.equal(doc, '# R1 vs R2\n')
