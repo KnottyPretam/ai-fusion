@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.llm import catalog
-from backend.llm.reasoning import build
+from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE, build, token_budget
 from backend.schemas import ModelMeta
 
 OPTIONAL = ModelMeta(id="v/optional", efforts=["off", "low", "medium", "high"])
@@ -90,3 +90,53 @@ def test_fixture_models_end_to_end():
     assert build("off", grok43) == ({"enabled": False}, "off", False)
     assert build("off", plain) == (None, "off", False)
     assert build("high", plain) == (None, "off", True)
+
+
+# --------------------------------------------------------------------------- token budgets
+# Reasoning tokens are billed AND counted as completion tokens, so they come out of `max_tokens`.
+# Measured 2026-09-20: a reasoning analyst spent 4,615 of a 4,000-token extraction budget on thinking
+# and the JSON was cut off, reported to the user as `parse_error: no JSON object found in the
+# response` -- the same message a mid-reply capture gives, from an unrelated cause.
+def _reasoning_meta(**over) -> ModelMeta:
+    base = {
+        "id": "vendor/reasoner",
+        "efforts": ["off", "low", "medium", "high"],
+        "structured_outputs": True,
+    }
+    return ModelMeta(**{**base, **over})
+
+
+def test_a_non_reasoning_model_gets_the_base_budget_unchanged():
+    plain = ModelMeta(id="vendor/plain", efforts=["off"])
+    assert token_budget(4000, plain, "medium") == 4000
+    assert token_budget(4000, plain, "off") == 4000
+    assert token_budget(4000, plain, None) == 4000
+
+
+def test_asking_a_reasoning_model_for_off_still_gets_the_base_budget():
+    assert token_budget(4000, _reasoning_meta(), "off") == 4000
+
+
+def test_a_reasoning_model_gets_room_for_its_thinking():
+    assert token_budget(4000, _reasoning_meta(), "medium") == 4000 + REASONING_TOKEN_ALLOWANCE
+    assert REASONING_TOKEN_ALLOWANCE > 4650, "over the largest reasoning spend measured live"
+
+
+def test_an_unknown_model_is_trusted_as_configured():
+    # build() sends an unknown model exactly as configured, so a non-off effort reasons.
+    assert token_budget(4000, None, "medium") == 4000 + REASONING_TOKEN_ALLOWANCE
+    assert token_budget(4000, None, "off") == 4000
+
+
+def test_the_budget_is_clamped_to_the_provider_ceiling_but_never_below_the_base():
+    capped = _reasoning_meta(raw={"top_provider": {"max_completion_tokens": 5000}})
+    assert token_budget(4000, capped, "medium") == 5000  # not 12000: the provider would refuse it
+    tiny = _reasoning_meta(raw={"top_provider": {"max_completion_tokens": 100}})
+    assert token_budget(4000, tiny, "medium") == 4000  # a raised budget never shrinks the base
+    unknown = _reasoning_meta(raw={"top_provider": {}})
+    assert token_budget(4000, unknown, "medium") == 4000 + REASONING_TOKEN_ALLOWANCE
+
+
+def test_token_budget_never_raises_on_garbage():
+    for bad in (None, "nonsense", 0, {}):
+        assert token_budget(4000, _reasoning_meta(raw={"top_provider": bad}), "medium") > 0

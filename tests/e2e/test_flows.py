@@ -18,6 +18,7 @@ import pytest
 
 from backend.config import MAX_TOKENS_STAGE
 from backend.llm import mock
+from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE
 from backend.prompts import QUOTED_DATA_NOTICE
 from backend.prompts import analyze as analyze_prompts
 from backend.prompts import fusion as fusion_prompts
@@ -113,7 +114,13 @@ def assert_fusion_threads(
         # Each challenge in the thread is exactly what that slot's defense call carried.
         for i, c in enumerate(calls("defense", slot)):
             assert fusion_msgs[2 * i]["content"] == challenge_of(c)
-            assert c["max_tokens"] == MAX_TOKENS_STAGE["defense"] and c["plugins"] is None
+            # The stage budget plus room for reasoning tokens (these fixture slots reason).
+            # Reasoning tokens are counted as completion tokens and come out of `max_tokens`, so a
+            # budget sized for the answer alone is spent on the thinking; measured 2026-09-20 at
+            # 4,615 reasoning tokens against an analyst budget of 4,000. MAX_TOKENS_STAGE itself is
+            # frozen and untouched -- the allowance is added at the call site.
+            assert c["max_tokens"] == MAX_TOKENS_STAGE["defense"] + REASONING_TOKEN_ALLOWANCE
+            assert c["plugins"] is None
 
 
 def final_of(exp: dict) -> list[dict[str, str]]:

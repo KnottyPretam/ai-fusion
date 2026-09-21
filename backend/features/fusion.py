@@ -82,6 +82,7 @@ from ..schemas import (
     Conversation,
     DefenseReply,
     Divergence,
+    Effort,
     Exchange,
     Extraction,
     FeatureUsage,
@@ -179,6 +180,23 @@ def _error_message(e: BaseException) -> str:
             return detail["error"]
         return str(detail)
     return f"{type(e).__name__}: {e}"
+
+
+
+def _stage_max_tokens(purpose: str, model: str, effort: Effort | None) -> int:
+    """The stage budget, plus room for reasoning tokens when this model will reason at this effort.
+
+    Same defect and same fix as `analyze._analyst_max_tokens`: reasoning tokens are counted as
+    completion tokens, so they come out of `max_tokens`, and a budget sized for the answer alone is
+    spent on the thinking. It bites Fusion harder than Analyze -- `defense` is 2,000 and
+    `convergence` 1,000, against the 4,615 reasoning tokens measured on one analyst call. A
+    non-reasoning model gets the frozen `MAX_TOKENS_STAGE` value unchanged, and every `web:` model
+    gets it too because that transport drops `max_tokens` outright. `catalog` is imported here, not
+    at module scope, so tests can monkeypatch `get_meta`.
+    """
+    from ..llm import catalog, reasoning
+
+    return reasoning.token_budget(MAX_TOKENS_STAGE[purpose], catalog.get_meta(model), effort)
 
 
 async def wait_for_background() -> None:
@@ -363,7 +381,7 @@ class _FusionRun:
             messages=messages,
             schema_model=DefenseReply,
             effort=spec.effort,
-            max_tokens=MAX_TOKENS_STAGE[DEFENSE_PURPOSE],
+            max_tokens=_stage_max_tokens(DEFENSE_PURPOSE, spec.model, spec.effort),
             retries=1,
         )
         self.usage.merge(usage)
@@ -458,7 +476,7 @@ class _FusionRun:
             messages=messages,
             schema_model=ConvergenceCheck,
             effort=ANALYST_EFFORT,
-            max_tokens=MAX_TOKENS_STAGE[CONVERGENCE_PURPOSE],
+            max_tokens=_stage_max_tokens(CONVERGENCE_PURPOSE, analyst_model, ANALYST_EFFORT),
             retries=1,
         )
         self.usage.merge(usage)

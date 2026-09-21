@@ -215,6 +215,21 @@ def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
 
 
 # --------------------------------------------------------------------------- producer
+def _analyst_max_tokens(model: str) -> int:
+    """The stage budget, plus room for reasoning tokens when the analyst model will reason.
+
+    Reasoning tokens are counted as completion tokens, so they come out of `max_tokens`: measured
+    2026-09-20, a reasoning analyst spent 4,615 of a 4,000-token extraction budget on thinking and
+    the JSON was cut off, reaching the user as `parse_error: no JSON object found in the response` --
+    the same message a mid-reply capture produces, from a completely different cause. A non-reasoning
+    model (and every `web:` model, whose transport drops `max_tokens` outright) gets the frozen
+    `MAX_TOKENS_STAGE` value unchanged. `catalog` is imported here, not at module scope, so tests can
+    monkeypatch `get_meta` (the same reason `slot_config.py` does it)."""
+    from ..llm import catalog, reasoning
+
+    return reasoning.token_budget(MAX_TOKENS_STAGE[PURPOSE], catalog.get_meta(model), ANALYST_EFFORT)
+
+
 async def _attempt(
     *, model: str, messages: list[dict[str, Any]]
 ) -> tuple[Extraction | None, str, FeatureUsage, str | None]:
@@ -225,7 +240,7 @@ async def _attempt(
         messages=messages,
         schema_model=Extraction,
         effort=ANALYST_EFFORT,
-        max_tokens=MAX_TOKENS_STAGE[PURPOSE],
+        max_tokens=_analyst_max_tokens(model),
         retries=0,
     )
     extraction = parsed if isinstance(parsed, Extraction) else None
@@ -255,7 +270,7 @@ async def _condense(
             question, label, response, fenced=client.transport_kind(model) == "web"
         ),
         effort=ANALYST_EFFORT,
-        max_tokens=MAX_TOKENS_STAGE[PURPOSE],
+        max_tokens=_analyst_max_tokens(model),
     ):
         if d.kind == "text":
             parts.append(d.text)

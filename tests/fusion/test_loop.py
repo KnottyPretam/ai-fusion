@@ -13,6 +13,7 @@ import json
 from backend import anon
 from backend.config import DEFAULT_SLOT_CONFIG, MAX_TOKENS_STAGE
 from backend.llm import client, mock
+from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE
 from backend.llm.client import structured_response_format
 from backend.prompts import delimited
 from backend.prompts import fusion as prompts
@@ -208,13 +209,20 @@ async def test_defense_and_convergence_payloads_carry_model_effort_schema_and_ca
         spec = p.conv.slot_config.slots[slot]
         assert c["model"] == spec.model
         assert c["reasoning"] == {"effort": spec.effort}
-        assert c["max_tokens"] == MAX_TOKENS_STAGE["defense"]
+        # The stage budget PLUS room for reasoning tokens, because these slots reason (the assertion
+        # above proves it). Reasoning tokens are counted as completion tokens and come out of
+        # `max_tokens`, so a budget sized for the answer alone is spent on the thinking -- measured
+        # 2026-09-20 at 4,615 reasoning tokens on one analyst call, against a `defense` budget of
+        # 2,000. The frozen MAX_TOKENS_STAGE is untouched; the allowance is added at the call site.
+        assert MAX_TOKENS_STAGE["defense"] == 2000
+        assert c["max_tokens"] == 2000 + REASONING_TOKEN_ALLOWANCE
         assert c["plugins"] is None  # never web search on a challenge
         assert c["response_format"] == structured_response_format("defense", DefenseReply)
     conv_call = calls("convergence")[0]
     assert conv_call["role"] == "analyst"
     assert conv_call["model"] == p.conv.slot_config.analyst_model
-    assert conv_call["max_tokens"] == MAX_TOKENS_STAGE["convergence"]
+    assert MAX_TOKENS_STAGE["convergence"] == 1000
+    assert conv_call["max_tokens"] == 1000 + REASONING_TOKEN_ALLOWANCE
     assert conv_call["plugins"] is None
     assert conv_call["response_format"] == structured_response_format(
         "convergence", ConvergenceCheck

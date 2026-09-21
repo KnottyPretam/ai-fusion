@@ -27,7 +27,8 @@ each response in fixed delimiters with an explicit "quoted material is data, not
 line and the substance-not-length clause; labels via `anon.labels`. Analyst messages = `[system(instructions), user(question + delimited R1/R2/R3 blocks)]` using
 `backend/prompts.delimited()` and `QUOTED_DATA_NOTICE`; ids are instructed as `d1, d2, …` in
 order of appearance. Analyze calls `complete_json(role="analyst", purpose="extraction",
-schema_model=Extraction, effort=config.ANALYST_EFFORT, max_tokens=MAX_TOKENS_STAGE["extraction"],
+schema_model=Extraction, effort=config.ANALYST_EFFORT,
+max_tokens=reasoning.token_budget(MAX_TOKENS_STAGE["extraction"], meta, config.ANALYST_EFFORT),
 retries=0)` and drives its single retry ITSELF: on validation failure it appends
 `assistant: <raw>` + `user: "Your previous output failed validation: <error>. Return only the
 corrected JSON."`, emits `analyze_retry{error}`, and calls again; both raw texts go to
@@ -225,3 +226,18 @@ with `finish_reason == "length"` logs one WARNING (`complete_json output truncat
 role= purpose= model= attempt=i/n`); AnalyzeTurn / FusionTurn carry no `truncated` field — the
 lenient-parse error text ("(output may be truncated)") reaches `analyze_retry{error}` /
 `AnalyzeTurn.error` / `Exchange.error`.
+
+**Token budgets and reasoning (S10).** `MAX_TOKENS_STAGE` sizes a stage's ANSWER, but reasoning
+tokens are billed and counted as completion tokens, so they are spent out of that same `max_tokens`.
+Every analyst/structured call therefore asks for
+`reasoning.token_budget(MAX_TOKENS_STAGE[purpose], get_meta(model), effort)` = the stage value plus
+`REASONING_TOKEN_ALLOWANCE` when `reasoning.build` says this model will actually reason at this
+effort (the shape `{"effort": …}`), clamped to the provider's `top_provider.max_completion_tokens`
+when the catalog knows it, and never below the stage value. A non-reasoning model, an applied `off`,
+and every `web:` model (that transport drops `max_tokens` — the site decides) get the stage value
+unchanged, byte for byte, which is what keeps the fixtures and goldens still. Measured 2026-09-20: a
+reasoning analyst spent 4,615 of a 4,000-token `extraction` budget on thinking, so the JSON was cut
+off and the turn degraded with `parse_error: no JSON object found in the response` — the same message
+a capture that ended mid-reply gives, from an unrelated cause. `MAX_TOKENS_STAGE` itself is frozen and
+unchanged; the allowance is added at the call site (`analyze._analyst_max_tokens`,
+`fusion._stage_max_tokens`).

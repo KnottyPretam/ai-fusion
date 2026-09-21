@@ -91,3 +91,52 @@ def build(
         if real is not None:
             applied = real
     return _param_for(applied, meta), applied, True  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- token budgets
+# Room for reasoning tokens on top of a stage's output budget. Reasoning tokens are BILLED AND
+# COUNTED as completion tokens, so they come out of `max_tokens`: a budget sized for the answer alone
+# is spent on the thinking and the answer is cut off mid-document. Measured 2026-09-20 against a
+# reasoning analyst on a 4,000-token extraction budget: 4,615 / 4,650 / 4,555 reasoning tokens, every
+# one a `finish_reason=length` reported to the user as `parse_error: no JSON object found in the
+# response`. The allowance is comfortably over the largest of those, because the failure mode is a
+# degraded turn and the cost of over-asking is nothing — `max_tokens` is a ceiling, not a purchase.
+REASONING_TOKEN_ALLOWANCE = 8000
+
+
+def _reasons(param: dict[str, Any] | None) -> bool:
+    """True when this request will actually spend reasoning tokens. `build` says so by shape:
+    `{"effort": name}` asks for reasoning, `{"enabled": False}` refuses it, None omits it (the
+    provider default runs, which for a mandatory-reasoning model DOES reason)."""
+    if param is None:
+        return False
+    return "effort" in param
+
+
+def _completion_cap(meta: ModelMeta | None) -> int | None:
+    """The provider's own completion ceiling from the catalog's raw entry, when it gave one."""
+    if meta is None:
+        return None
+    try:
+        value = (meta.raw or {}).get("top_provider", {}).get("max_completion_tokens")
+    except AttributeError:
+        return None
+    return value if isinstance(value, int) and value > 0 else None
+
+
+def token_budget(base: int, meta: ModelMeta | None, effort: Effort | None) -> int:
+    """`base`, plus `REASONING_TOKEN_ALLOWANCE` when this model will reason at this effort.
+
+    A non-reasoning model — or one asked for `off` — gets `base` unchanged, byte for byte, so the
+    mock path and every golden are untouched. Clamped to the provider's completion ceiling when the
+    catalog knows it, so a raised budget is never itself the thing the provider rejects, and never
+    below `base`. The one case that gets `base` despite reasoning is a mandatory-reasoning model
+    coerced all the way to `off`, where the parameter is omitted and nothing here can tell how much
+    the provider default will spend.
+    """
+    param, _applied, _coerced = build(effort, meta)
+    if not _reasons(param):
+        return base
+    cap = _completion_cap(meta)
+    wanted = base + REASONING_TOKEN_ALLOWANCE
+    return max(base, min(wanted, cap)) if cap else wanted

@@ -211,7 +211,15 @@ async def test_analyst_payload_shape(persisted_conversation, analyze):
         == reasoning_mod.build(ANALYST_EFFORT, meta)[0]
         == {"effort": ANALYST_EFFORT}
     )
-    assert call["max_tokens"] == MAX_TOKENS_STAGE["extraction"] == 4000
+    # The stage budget PLUS room for reasoning tokens, because this analyst reasons (the assertion
+    # just above proves it: `{"effort": ANALYST_EFFORT}`). Reasoning tokens are counted as completion
+    # tokens and so come out of `max_tokens`; measured 2026-09-20, a reasoning analyst spent 4,615 of
+    # the bare 4,000 on thinking and the JSON was truncated, reaching the user as
+    # `parse_error: no JSON object found in the response`. The frozen MAX_TOKENS_STAGE is untouched --
+    # the allowance is added at the call site, and a NON-reasoning model still gets 4,000 exactly
+    # (pinned by test_a_non_reasoning_analyst_gets_the_bare_stage_budget below).
+    assert MAX_TOKENS_STAGE["extraction"] == 4000
+    assert call["max_tokens"] == 4000 + reasoning_mod.REASONING_TOKEN_ALLOWANCE == 12000
     assert call["plugins"] is None
 
     system, user = call["messages"]
@@ -222,6 +230,26 @@ async def test_analyst_payload_shape(persisted_conversation, analyze):
     assert blocks_of(user["content"]) == expected
     assert user["content"] == prompts.build_user(DEFAULT_PROMPT, expected)
 
+
+
+async def test_a_non_reasoning_analyst_gets_the_bare_stage_budget(
+    persisted_conversation, analyze, monkeypatch
+):
+    """The reasoning allowance is added only when the model will actually spend reasoning tokens.
+    A non-reasoning analyst must request `MAX_TOKENS_STAGE["extraction"]` exactly -- that is what
+    keeps the mock path, every fixture and every golden byte-identical."""
+    conv = persisted_conversation
+    model = conv.slot_config.analyst_model
+    real = catalog.get_meta(model)
+    assert real is not None
+    bare = real.model_copy(update={"efforts": ["off"], "mandatory_reasoning": False, "raw": {}})
+    monkeypatch.setattr(catalog, "get_meta", lambda m: bare if m == model else None)
+
+    r, _events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    call = extraction_calls()[0]
+    assert call["max_tokens"] == MAX_TOKENS_STAGE["extraction"] == 4000
+    assert call["reasoning"] is None or call["reasoning"] == {"enabled": False}
 
 async def test_grounded_conversations_never_send_plugins_to_the_analyst(make_conversation, analyze):
     from tests.analyze.conftest import persist
