@@ -100,7 +100,7 @@ export async function open(page, opts = {}) {
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls']
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -112,8 +112,9 @@ export const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, s
 /**
  * The fake site's Stage 2 reply state, plus the S7-review lifecycle readings: the placeholder turn's
  * text and the three moments of ?remountMs (`placeholderAt`, `placeholderGoneAt`, `remountedAt`), every
- * stop-button transition (`stopEvents`: [{on:true},{on:false}] = up continuously across the gap) and
- * every history push/replace (`urls`).
+ * stop-button transition (`stopEvents`: [{on:true},{on:false}] = up continuously across the gap),
+ * the empty-container think of ?thinkMs (`thinkingAt` / `thinkingEndedAt`) and every history
+ * push/replace (`urls`).
  */
 export const replyState = (page) =>
   page.evaluate(() => ({
@@ -129,6 +130,8 @@ export const replyState = (page) =>
     placeholderAt: window.__fake.placeholderAt,
     placeholderGoneAt: window.__fake.placeholderGoneAt,
     remountedAt: window.__fake.remountedAt,
+    thinkingAt: window.__fake.thinkingAt,
+    thinkingEndedAt: window.__fake.thinkingEndedAt,
     stopEvents: window.__fake.stopEvents,
     lullAt: window.__fake.lullAt,
     lullEndAt: window.__fake.lullEndAt,

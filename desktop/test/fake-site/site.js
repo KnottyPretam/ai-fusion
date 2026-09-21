@@ -97,6 +97,12 @@
  *   * at ~13 s the real reply container is mounted with a `.markdown` child carrying the answer;
  *   * at ~14 s the stop button disappears and a second copy-turn-action-button appears.
  * The two options below replay that lifecycle on a test timescale:
+ *   ?thinkMs=N       the measured chatgpt REASONING shape (2026-09-20): the assistant container mounts
+ *                    at once and holds NO TEXT for N ms, the stop control visible the whole time, and
+ *                    the answer then streams into that SAME node. This is the lifecycle a capture used
+ *                    to read as a missing reply — over 570 s of it, measured, while the answer was on
+ *                    its way. Does not compose with ?remountMs (checked first).
+ *                    window.__fake.thinkingAt / .thinkingEndedAt record both moments.
  *   ?remountMs=N     mount a short placeholder turn (?placeholderMs later it is REMOVED from the DOM
  *                    entirely — zero assistant containers), then mount the REAL reply N ms after that
  *                    removal and stream it as usual. The stop button is raised before the placeholder and
@@ -154,6 +160,7 @@
  *
  * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
  *                  reply: {enabled, ms, kind, chars, lulls, nostop, nodone, blockAfterMs, doneLagMs,
+ *                  thinkMs,
  *                  twoTurns, remountMs, placeholderMs, webUrlMs}, replying,
  *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
  *                  placeholderText, placeholderAt, placeholderGoneAt, remountedAt, stopEvents, urls,
@@ -162,7 +169,8 @@
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
  * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
  * ms of the end signal and the last text render, null before; `rendersAfterSignal` the renders that
- * landed after the end signal; `lulls` every stream pause as {at, endAt} (S10); `placeholderText` the
+ * landed after the end signal; `lulls` every stream pause as {at, endAt} (S10); `thinkingAt` /
+ * `thinkingEndedAt` the empty-container think of ?thinkMs (both null when it is off); `placeholderText` the
  * placeholder turn's text (null when ?remountMs is off), `placeholderAt` / `placeholderGoneAt` /
  * `remountedAt` epoch ms of its mount, its removal and the
  * real container's mount; `stopEvents` every stop-button transition as {on, ts} — [{on:true},{on:false}]
@@ -325,6 +333,9 @@
     thinking: params.get('thinking') === '1' && site === 'claude',
     // the measured chatgpt lifecycle (see the header): a placeholder turn, then a gap with NO
     // assistant container at all, then the real reply
+    // S10: the measured REASONING shape — the container mounts at once and stays EMPTY while the
+    // model thinks, the stop control up the whole time, then the answer streams into that SAME node.
+    thinkMs: params.has('thinkMs') ? Math.max(0, Number(params.get('thinkMs')) || 0) : null,
     remountMs: params.has('remountMs') ? Math.max(0, Number(params.get('remountMs')) || 0) : null,
     placeholderMs: params.has('placeholderMs') ? Math.max(0, Number(params.get('placeholderMs')) || 0) : PLACEHOLDER_MS,
   }
@@ -375,6 +386,9 @@
     placeholderAt: null,
     placeholderGoneAt: null,
     remountedAt: null,
+    // ?thinkMs: when the empty container went up, and when text finally started going into it
+    thinkingAt: null,
+    thinkingEndedAt: null,
     /** Every stop-button transition, {on, ts}: [{on:true},{on:false}] = up continuously across the gap. */
     stopEvents: [],
     /** Every history push/replace, {how, href, ts} — which of them a chatUrlPattern would record. */
@@ -995,6 +1009,24 @@
    * real reply exactly as without this option.
    */
   function startReply(text) {
+    // ?thinkMs — the measured chatgpt REASONING shape (2026-09-20), and the one the capture used to
+    // read as a missing reply: the assistant container mounts immediately and holds NO text for as
+    // long as the model thinks, with the site's own stop control visible the entire time, and the
+    // answer is then written into that same node. Distinct from ?remountMs, where the container is
+    // removed from the DOM; these two do not compose (this one is checked first).
+    if (replyOpts.thinkMs !== null) {
+      const built = buildAssistant()
+      appendAssistant(built) // empty: `replyText` reads '' from it for the whole think
+      fake.replying = true
+      fake.done = false
+      fake.thinkingAt = Date.now()
+      if (!replyOpts.nostop) actions.streaming(true)
+      setTimeout(() => {
+        fake.thinkingEndedAt = Date.now()
+        streamReply(text, built)
+      }, replyOpts.thinkMs)
+      return
+    }
     if (replyOpts.remountMs === null) {
       beginReply(text)
       return
@@ -1033,10 +1065,12 @@
     streamReply(text)
   }
 
-  function streamReply(text) {
-    const built = buildAssistant()
+  function streamReply(text, prebuilt) {
+    // `prebuilt` (?thinkMs) is already on the page and already empty: the answer goes INTO it, so the
+    // adapter follows one container from mount to done, exactly as the real site does while reasoning.
+    const built = prebuilt || buildAssistant()
     reply = { ...built, full: replyFor(text), timer: null, ended: false }
-    appendAssistant(built)
+    if (!prebuilt) appendAssistant(built)
     fake.replying = true
     fake.done = false
     if (!replyOpts.nostop) actions.streaming(true)

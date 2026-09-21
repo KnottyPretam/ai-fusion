@@ -978,3 +978,88 @@ test.describe('S10: a long, slow, repeatedly stalling fenced JSON reply', () => 
     expect(JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)).agreements).toHaveLength(1)
   })
 })
+
+/*
+ * S10 — the REASONING lifecycle, measured on chatgpt.com 2026-09-20 and the reason two live Analyze runs
+ * came back `chars=0`. With a reasoning mode switched on inside the site the assistant container mounts
+ * at once and holds NO TEXT for as long as the model thinks — over 570 s, measured, the site's own stop
+ * control visible the entire time — and the answer is then written into that SAME node. Read-only probes
+ * of both chats showed correct answers of 5,847 and 5,614 characters, so the capture was following the
+ * right container and simply gave up before the model spoke.
+ *
+ * Two things have to hold, and the unit tests can only prove them over a fake DOM:
+ *   1. an empty container with the stop control up must NOT end the capture, however long it lasts —
+ *      the whole answer still comes back once it arrives;
+ *   2. when the budget really does run out on an empty container, the failure must say the site was
+ *      still WORKING, because that is a budget to raise and not a selector to fix. `reply_not_found`
+ *      sent the last reader hunting for a broken selector; the selector was right.
+ */
+test.describe('S10: a container that mounts empty and stays empty while the model thinks', () => {
+  // `?reply=json` picks its body from what the prompt QUOTES, so the analyst shape has to be asked for
+  // by name — a bare question gets the plain echo instead.
+  const ANALYST_PROMPT =
+    'Compare the three responses.\n\n<<<R1>>>\nThe BMI088 gyroscope range is selectable up to 2000 deg/s.\n<<<END R1>>>\n<<<R2>>>\n1000 deg/s.\n<<<END R2>>>'
+
+  test('chatgpt: 8 s of an empty container with the stop control up, then the answer — captured WHOLE', async ({ page }) => {
+    test.setTimeout(90000)
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 1200,
+      thinkMs: 8000, // twenty times quietMs: an unguarded capture ends inside it, on nothing
+      selectors: withOverride('chatgpt', { quietMs: 400, settleMs: 400 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    expect(sent.ok).toBe(true)
+
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, expect: 'json' })
+    await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 60000 })
+    const r = await replyState(page)
+
+    // the fixture really was the reasoning shape: ONE container, empty for 8 s, stop control up
+    expect(r.containers).toBe(1)
+    expect(r.thinkingEndedAt - r.thinkingAt).toBeGreaterThanOrEqual(7500)
+    // up once before the think, down once at the end: visible for the whole empty stretch
+    expect(r.stopEvents.map((e) => e.on)).toEqual([true, false])
+    expect(r.stopEvents[0].ts).toBeLessThanOrEqual(r.thinkingAt)
+    expect(r.stopEvents[1].ts).toBeGreaterThan(r.thinkingEndedAt)
+    expect(r.placeholderGoneAt).toBeNull() // not the ?remountMs dance: the node never left the DOM
+
+    expect(res.ok).toBe(true)
+    expect(res.text.length).toBe(r.replySource.length)
+    // chatgpt's copy-turn marker lands on this short reply before any lull could, so the signal is the
+    // marker — the point is that it was only ever read AFTER text existed (the S10 non-blank gate).
+    expectObserved(res, r.replySource, 'done_selector')
+    expect(res.ms).toBeGreaterThan(8000) // it waited the think out rather than ending on the blank
+    JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)) // and it is a whole document
+  })
+
+  test('chatgpt: a budget that expires while the container is still empty says the site was WORKING, not that the reply was missing', async ({ page }) => {
+    test.setTimeout(60000)
+    await open(page, {
+      site: 'chatgpt',
+      reply: 'json',
+      replyMs: 500,
+      thinkMs: 30000, // longer than the budget below: the capture must give up mid-think
+      selectors: withOverride('chatgpt', { quietMs: 400, settleMs: 400 }),
+    })
+    const sent = await request(page, { op: 'insertAndSubmit', text: ANALYST_PROMPT })
+    expect(sent.ok).toBe(true)
+
+    const res = await request(page, {
+      op: 'observe',
+      baselineCount: sent.assistantCount,
+      expect: 'json',
+      timeoutMs: 6000,
+      firstTokenMs: 3000,
+    })
+    expect(res.ok).toBe(false)
+    // a deadline, NOT a lost reply: the stop control was up, so the site was still working
+    expect(res.code).toBe('timeout')
+    expect(res.message).toContain('stayed empty for the whole 6000 ms while the site was still working')
+    expect(res.message).toContain('stop control visible now')
+    expect(res.message).toContain('longer capture budget, not a different selector')
+    const r = await replyState(page)
+    expect(r.containers).toBe(1) // it was following this turn's own container the whole time
+  })
+})
