@@ -1,0 +1,32 @@
+/* Refactor pane (S11). Every colour is a palette token from index.css, so the pane follows the app's
+   light / dark / system theme with no rules of its own — the same way the other feature modules do. */
+.pane { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.title { font-weight: 600; }
+.btn { padding: 3px 10px; border: 1px solid var(--primary); border-radius: 4px; background: var(--primary); color: var(--on-accent); }
+.btnSecondary { background: var(--bg); color: var(--primary); }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-muted); color: var(--fg-muted); }
+.hint { font-size: 12px; color: var(--fg-muted); }
+
+.status { font-size: 12px; color: var(--fg-muted); }
+.error { padding: 6px 8px; border: 1px solid var(--err); background: var(--err-soft); border-radius: 4px; font-size: 12px; color: var(--err); }
+.degraded { padding: 6px 8px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 4px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.degradedWhy { margin: 0; }
+.fallback { margin: 0; color: var(--fg-muted); }
+.raw { font-size: 12px; }
+.pre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px; margin: 4px 0 0; max-height: 200px; overflow: auto; }
+
+.report { display: flex; flex-direction: column; gap: 10px; }
+.h3 { margin: 0; font-size: 13px; }
+.h4 { margin: 0 0 2px; font-size: 12px; font-family: var(--mono); color: var(--primary); }
+.muted { color: var(--fg-muted); font-size: 12px; margin: 0; }
+.question { margin: 0; font-size: 13px; padding: 6px 8px; border-left: 3px solid var(--primary); background: var(--bg-muted); border-radius: 0 4px 4px 0; }
+
+.table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.table th, .table td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top; }
+.table th { background: var(--bg-muted); font-weight: 600; }
+
+.replies { display: flex; flex-direction: column; gap: 8px; }
+.reply { min-width: 0; border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; background: var(--bg); }
+.summary { margin: 0 0 4px; font-size: 12px; }
+.claims { margin: 0; padding-left: 1.2em; font-size: 12px; }

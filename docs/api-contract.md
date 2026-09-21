@@ -59,8 +59,15 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   `slot_delta{slot, text}`, `slot_reasoning{slot, text}`, `slot_citations{slot, items}`,
   `slot_done{slot, usage, finish_reason, truncated}`, `slot_error{slot, code, error_type, message,
   partial}`, `turn_done{turn_id, usage}`, `error{message}`.
+- `POST …/refactor {of_turn?, force?}` → `refactor_start{turn_id, of_turn}`,
+  `refactor_retry{error}`, `refactor_done{turn, cached}` | `refactor_degraded{turn}`. Added at S11.
+  Same pre-checks, same cache-per-send-turn and the same busy guard as Analyze. `refactor_retry` is
+  PROGRESS, not a failed attempt: one per analyst call (the map call, then one per label, plus one
+  when a reply has to be quoted in pieces), which is why the pane shows it as a status line.
 - `POST …/analyze {of_turn?, force?}` → `analyze_start{turn_id, of_turn}`,
-  `analyze_retry{error}`, `analyze_done{turn, cached}` | `analyze_degraded{turn}`.
+  `analyze_retry{error}`, `analyze_done{turn, cached}` | `analyze_degraded{turn}`. When an ok
+  Refactor turn exists for the send turn, Analyze compares ITS restated question and reduced
+  replies instead of the raw ones (`analyze.refactored_input`); a degraded Refactor is ignored.
   `analyze_retry` carries two kinds of `error`: a failed attempt being sent back, and — from
   S10, on a conversation over the size bound — one per label as its reply is condensed before
   the comparison (`error` then begins `splitting the analyst prompt`). No new event type was

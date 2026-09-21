@@ -102,7 +102,8 @@ describe('Drawer: pure helpers', () => {
     expect(analystHint('')).toBe(CHOOSE_ANALYST_HINT)
     expect(analystHint(undefined)).toBe(CHOOSE_ANALYST_HINT)
     expect(analystHint('openai/gpt-5.6-luna')).toBe(CHOOSE_ANALYST_HINT)
-    expect(DRAWER_TABS.map((t) => t.key)).toEqual(['analyze', 'fusion', 'captured', 'settings'])
+    // Refactor comes FIRST: it runs before Analyze and its output is what Analyze compares (S11).
+    expect(DRAWER_TABS.map((t) => t.key)).toEqual(['refactor', 'analyze', 'fusion', 'captured', 'settings'])
   })
 
   test('analystPageText reports the login main says its hidden page is on, and names the drift when the conversation asks for another', () => {
@@ -122,7 +123,7 @@ describe('Drawer: tabs and panes', () => {
     mount(fake, { conversation: convWith([sendTurn('t1', 'q')]), slotConfig: CFG })
     expect(drawer()).toHaveAttribute('data-open', 'false')
     expect(screen.getByTestId('drawer-toggle')).toHaveAttribute('aria-expanded', 'false')
-    for (const key of ['analyze', 'fusion', 'captured', 'settings']) expect(tab(key)).toHaveAttribute('aria-selected', 'false')
+    for (const key of ['refactor', 'analyze', 'fusion', 'captured', 'settings']) expect(tab(key)).toHaveAttribute('aria-selected', 'false')
     expect(screen.queryByTestId('drawer-body')).toBeNull()
     expect(screen.queryByTestId('analyze')).toBeNull()
 
