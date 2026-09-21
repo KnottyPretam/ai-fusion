@@ -5,6 +5,7 @@ import { isSplitNotice } from './AnalyzePane.jsx'
 import { applyEvents, renderWithStore } from '../../state/testing.jsx'
 import { analyzeTurn, conversation, degradedTurn, events, sendTurn } from './fixtures.js'
 import { NOT_CAPTURED_MESSAGE_PREFIX } from './slice.js'
+import { events as refactorEvents, refactorTurn } from './refactorFixtures.js'
 // Imported ONLY to pin the mirror: product code in features/analyze never imports features/desktop
 // (the constant is duplicated with a pointer, like SLOT_VENDORS), so this assertion is the guard
 // that the two copies still say the same thing.
@@ -435,5 +436,62 @@ describe('the retry line narrates a split as a split', () => {
     expect(isSplitNotice('parse_error: no JSON object found')).toBe(false)
     expect(isSplitNotice(null)).toBe(false)
     expect(isSplitNotice(undefined)).toBe(false)
+  })
+})
+
+// --- Refactor: an OPTION ON ANALYZE, its button beside the Analyze button (user, 2026-09-20) -----
+describe('AnalyzePane: the Refactor option', () => {
+  test('the Refactor button sits immediately before Analyze, and posts to /refactor', async () => {
+    const conv = conversation([sendTurn()])
+    const fetchMock = vi.fn(async (url, init) => {
+      if (init && init.method === 'POST') return sseResponse([refactorEvents.start(), refactorEvents.done(refactorTurn(), false)])
+      return jsonResponse(conv)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPane(stateWith([], { conv }))
+
+    // order in the DOM: Refactor, then Analyze
+    const toolbar = screen.getByTestId('refactor-run').parentElement
+    const buttons = [...toolbar.querySelectorAll('[data-testid]')].map((el) => el.getAttribute('data-testid'))
+    expect(buttons.indexOf('refactor-run')).toBeLessThan(buttons.indexOf('analyze-run'))
+
+    fireEvent.click(screen.getByTestId('refactor-run'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/conversations/c1/refactor')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({})
+  })
+
+  test('once a refactor exists the same button re-runs it with force, and a chip says Analyze will use it', () => {
+    renderPane(stateWith([refactorEvents.done(refactorTurn())]))
+    expect(screen.getByTestId('refactor-run')).toHaveTextContent('Re-refactor')
+    expect(screen.getByTestId('refactor-ready')).toBeInTheDocument()
+  })
+
+  test('the refactored view is folded into this pane — open before there is a report, collapsed after', () => {
+    renderPane(stateWith([refactorEvents.done(refactorTurn())]))
+    expect(screen.getByTestId('refactor-details')).toHaveAttribute('open')
+    expect(screen.getByTestId('refactor-question')).toBeInTheDocument()
+
+    renderPane(stateWith([refactorEvents.done(refactorTurn()), events.done(analyzeTurn())]))
+    const details = screen.getAllByTestId('refactor-details').at(-1)
+    expect(details).not.toHaveAttribute('open')
+  })
+
+  test('a narration is progress, not a failure', () => {
+    renderPane(stateWith([refactorEvents.start(), refactorEvents.notice("refactoring R2's reply")]))
+    expect(screen.getByTestId('refactor-status')).toHaveTextContent("refactoring R2's reply")
+    expect(screen.queryByTestId('refactor-error')).toBeNull()
+  })
+
+  test('there is an export control for the refactored view as well as the report', () => {
+    renderPane(stateWith([refactorEvents.done(refactorTurn()), events.done(analyzeTurn())]))
+    expect(screen.getByTestId('export-refactor')).toBeInTheDocument()
+    expect(screen.getByTestId('export-analyze')).toBeInTheDocument()
+  })
+
+  test('with no send turn the Refactor button is disabled, exactly like Analyze', () => {
+    renderPane(stateWith([], { conv: conversation([]) }))
+    expect(screen.getByTestId('refactor-run')).toBeDisabled()
+    expect(screen.getByTestId('analyze-run')).toBeDisabled()
   })
 })

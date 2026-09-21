@@ -24,6 +24,8 @@ import { loadConversation } from '../../api/http.js'
 import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { LABELS, NOT_CAPTURED_MESSAGE_PREFIX, RANK, initial, isSendTurnComplete, latestSendTurn } from './slice.js'
+import RefactorView from './RefactorView.jsx'
+import { initial as refactorInitial } from './refactorSlice.js'
 import css from './analyze.module.css'
 import { APP_NAME } from '../../branding.js'
 
@@ -46,25 +48,31 @@ export default function AnalyzePane() {
   const slotConfig = useSlice('slotConfig')
   const streams = useSlice('streams') || {}
   const analyze = useSlice('analyze') || initial()
+  // Refactor is an OPTION ON ANALYZE (user, 2026-09-20): its button sits beside the Analyze button and
+  // Analyze compares its artifact — the restated question, the knowledge graph and the reduced replies —
+  // instead of the whole answers. Read by slice KEY, so nothing imports across features.
+  const refactor = useSlice('refactor') || refactorInitial()
 
   const send = latestSendTurn(conversation)
   const complete = isSendTurnComplete(send)
   const streaming = Object.values(streams).some((st) => st && st.status === 'streaming')
   const canRun = !!conversation && complete && !streaming
 
-  const start = useCallback(
-    async (body) => {
+  const startFeature = useCallback(
+    async (feature, body) => {
       if (!conversation) return
       const id = conversation.id
       try {
-        await run('analyze', `/api/conversations/${id}/analyze`, body)
+        await run(feature, `/api/conversations/${id}/${feature}`, body)
         if (convIdRef.current === id) await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
       } catch {
-        // Surfaced through the streams / analyze slices (sse/end{ok:false} -> error box).
+        // Surfaced through the streams / analyze / refactor slices (sse/end{ok:false} -> error box).
       }
     },
     [conversation, run, dispatch],
   )
+  const start = useCallback((body) => startFeature('analyze', body), [startFeature])
+  const startRefactor = useCallback((body) => startFeature('refactor', body), [startFeature])
 
   if (!conversation) return null
 
@@ -72,6 +80,7 @@ export default function AnalyzePane() {
   const minRank = RANK[materialityMin] ?? RANK.medium
   const turn = analyze.turn
   const extraction = turn && turn.extraction
+  const refactorTurn = refactor.turn
 
   // An incomplete send turn has three very different causes, and telling the user "waiting for all
   // three responses" when the replies are finished (or failed) sends them back to the models
@@ -109,7 +118,23 @@ export default function AnalyzePane() {
     <div className={css.pane} data-testid="analyze" data-status={analyze.status} data-of-turn={analyze.ofTurn || ''}>
       <div className={css.toolbar}>
         <span className={css.title}>Analyze</span>
-        <button type="button" className={css.btn} data-testid="analyze-run" disabled={!canRun} onClick={() => start({})} title="Compare the latest send turn (cached when already analyzed)">
+        {/* Refactor sits immediately before Analyze because it runs first and Analyze reads its output:
+            the question restated, the knowledge graph, and each answer reduced to its claims. */}
+        <button
+          type="button"
+          className={`${css.btn} ${css.btnSecondary}`}
+          data-testid="refactor-run"
+          disabled={!canRun}
+          onClick={() => startRefactor(refactorTurn ? { force: true } : {})}
+          title={
+            refactorTurn
+              ? 'Refactor again: map the question and reduce all three answers afresh. Analyze will compare the new version.'
+              : 'Map the question into a knowledge graph, restate it concisely, and reduce all three answers to their claims. Analyze then compares that instead of the whole answers.'
+          }
+        >
+          {refactorTurn ? 'Re-refactor' : 'Refactor'}
+        </button>
+        <button type="button" className={css.btn} data-testid="analyze-run" disabled={!canRun} onClick={() => start({})} title={refactorTurn ? 'Compare the refactored version of the latest send turn (cached when already analyzed)' : 'Compare the latest send turn (cached when already analyzed)'}>
           Analyze
         </button>
         {turn && (
@@ -129,12 +154,44 @@ export default function AnalyzePane() {
           title={conversation.title}
           busy={streaming || analyze.status === 'running' || analyze.status === 'retrying'}
         />
+        <ExportControl
+          feature="refactor"
+          conversationId={conversation.id}
+          turnId={refactorTurn && refactorTurn.id ? refactorTurn.id : null}
+          title={conversation.title}
+          turnType="refactor"
+          busy={streaming || refactor.status === 'running' || refactor.status === 'working'}
+        />
+        {refactor.status === 'done' && refactorTurn && (
+          <span className={css.chip} data-testid="refactor-ready" title="Analyze compares this refactored version instead of the whole answers">
+            refactored
+          </span>
+        )}
         {hint && (
           <span className={css.hint} data-testid="analyze-hint">
             {hint}
           </span>
         )}
       </div>
+
+      {(refactor.status === 'running' || refactor.status === 'working') && (
+        <div className={css.status} data-testid="refactor-status">
+          {refactor.notice || 'mapping the question and reducing the three responses…'}
+        </div>
+      )}
+      {refactor.status === 'error' && (
+        <div className={css.error} data-testid="refactor-error">
+          {refactor.error || 'error'}
+        </div>
+      )}
+      {(refactor.status === 'done' || refactor.status === 'degraded') && (
+        <details className={css.refactorDetails} data-testid="refactor-details" open={!extraction}>
+          <summary className={css.refactorSummary}>
+            {refactor.status === 'degraded' ? 'refactor failed' : 'the refactored version Analyze compares'}
+          </summary>
+          <RefactorView refactor={refactor} />
+        </details>
+      )}
 
       {analyze.status === 'running' && (
         <div className={css.status} data-testid="analyze-status">

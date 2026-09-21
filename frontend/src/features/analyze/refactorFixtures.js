@@ -1,6 +1,6 @@
 // Test fixtures for the refactor feature (vitest only). No slot or vendor names anywhere, so the
 // "labels only" test can scan the rendered text.
-import { SLOT_CONFIG, sendTurn } from '../analyze/fixtures.js'
+import { SLOT_CONFIG, sendTurn } from './fixtures.js'
 
 export { SLOT_CONFIG, sendTurn }
 

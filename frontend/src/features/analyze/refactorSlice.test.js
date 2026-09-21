@@ -1,7 +1,7 @@
 // The refactor slice (S11). Mirrors the analyze slice's tests, plus the one thing that differs: a
 // `refactor_retry` is PROGRESS (the map call, then one per label), not a failed attempt.
 import { describe, expect, test } from 'vitest'
-import { edgeRows, initial, latestSendTurn, newestOkRefactorTurn, reducer } from './slice.js'
+import { edgeRows, initial, latestSendTurn, newestOkRefactorTurn, reducer } from './refactorSlice.js'
 
 const sse = (event, feature = 'refactor') => ({ type: 'sse', feature, event })
 const okTurn = (ofTurn = 't1') => ({

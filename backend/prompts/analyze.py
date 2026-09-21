@@ -94,6 +94,15 @@ RESPONSES_HEADER = "Responses:"
 # The comparison prompt's header when the blocks are condensed claims rather than the replies
 # themselves (the split step). Says so, so the analyst does not read a dropped restatement as
 # silence on the point.
+#: The header for the knowledge graph an earlier Refactor pass produced (S11). It is model-authored
+#: text, so it is quoted like any other: a graph that names a vendor, or carries something shaped like
+#: an instruction, must not reach the analyst as instruction. It goes BEFORE the responses because it
+#: is what the responses are about -- two answers can only disagree once they are about the same thing.
+GRAPH_HEADER = (
+    "What the question is about, mapped by an earlier pass (things, then how they relate). Use it to "
+    "decide whether two responses are addressing the same point; it is not evidence about the answer:"
+)
+
 CONDENSED_RESPONSES_HEADER = (
     "Responses, each condensed to its substantive claims by an earlier pass (a label is silent "
     "only on what its block does not mention):"
@@ -118,24 +127,28 @@ CONDENSE_FENCE_CLAUSE = (
 CONDENSE_HEADER = "Response to condense:"
 
 
-def build_user(question: str, responses: dict[Label, str], *, condensed: bool = False) -> str:
-    """The user message: the question, the quoted-data notice, then one delimited block per
-    label in R1/R2/R3 order (`responses` must carry every label).
+def build_user(
+    question: str, responses: dict[Label, str], *, condensed: bool = False, graph: str = ""
+) -> str:
+    """The user message: the question, the graph when there is one, the quoted-data notice, then one
+    delimited block per label in R1/R2/R3 order (`responses` must carry every label).
 
-    `condensed=True` (the split step ran, so the blocks hold condensed claims instead of the
-    replies) swaps ONLY the responses header; the blocks and their order never change."""
+    `condensed=True` (the blocks hold condensed claims instead of the replies) swaps ONLY the
+    responses header; the blocks and their order never change. `graph` (S11, from a Refactor pass)
+    adds ONE delimited block before them and nothing else -- absent or blank, the message is byte for
+    byte what it has always been, which is what keeps every fixture and golden still."""
     missing = [label for label in LABELS if label not in responses]
     if missing:
         raise ValueError(f"responses missing labels {missing}")
     blocks = [delimited(label, responses[label]) for label in LABELS]
     header = CONDENSED_RESPONSES_HEADER if condensed else RESPONSES_HEADER
-    return "\n\n".join(
-        [
-            f"{QUESTION_HEADER}\n{question}",
-            f"{header}\n{QUOTED_DATA_NOTICE}",
-            *blocks,
-        ]
-    )
+    parts = [f"{QUESTION_HEADER}\n{question}"]
+    if graph.strip():
+        parts.append(f"{GRAPH_HEADER}\n{QUOTED_DATA_NOTICE}")
+        parts.append(delimited("QUESTION MAP", graph))
+    parts.append(f"{header}\n{QUOTED_DATA_NOTICE}")
+    parts.extend(blocks)
+    return "\n\n".join(parts)
 
 
 def condense_user(question: str, label: Label | str, response: str) -> str:
@@ -179,15 +192,20 @@ def build_messages(
     *,
     fenced: bool = False,
     condensed: bool = False,
+    graph: str = "",
 ) -> list[dict[str, str]]:
-    """`[system(instructions), user(question + delimited R1/R2/R3 blocks)]`.
+    """`[system(instructions), user(question + the question map + delimited R1/R2/R3 blocks)]`.
 
     `fenced=True` (the caller passes `client.transport_kind(model) == "web"`) swaps ONLY the JSON
-    instruction for the fenced one; `condensed=True` swaps ONLY the responses header. The two are
-    independent: one is about the transport, the other about what the blocks hold."""
+    instruction for the fenced one; `condensed=True` swaps ONLY the responses header; `graph` adds one
+    delimited block before the responses. All three are independent: the first is about the transport,
+    the second about what the blocks hold, the third about what an earlier pass worked out."""
     return [
         {"role": "system", "content": system_message(fenced=fenced)},
-        {"role": "user", "content": build_user(question, responses, condensed=condensed)},
+        {
+            "role": "user",
+            "content": build_user(question, responses, condensed=condensed, graph=graph),
+        },
     ]
 
 
@@ -200,6 +218,7 @@ def retry_message(error: str, *, fenced: bool = False) -> str:
 
 __all__ = [
     "CONDENSED_RESPONSES_HEADER",
+    "GRAPH_HEADER",
     "CONDENSE_HEADER",
     "CONDENSE_SYSTEM",
     "JSON_INSTRUCTION",

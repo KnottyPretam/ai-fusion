@@ -5,7 +5,7 @@
 //
 //   desk-drawer                        the container (data-open, data-tab)
 //   drawer-toggle                      open / close (`panes/drawer`; persisted as triplex.panes.drawerOpen)
-//   drawer-tab-refactor|analyze|fusion|captured|settings   the tabs; clicking one opens the drawer on it
+//   drawer-tab-analyze|fusion|captured|settings   the tabs; clicking one opens the drawer on it
 //   drawer-capture-hint                "capture is off for <slots>" when the latest send turn of the
 //                                      open conversation has not_captured errors (its persisted
 //                                      `errors[slot]` messages, slice.notCapturedSlots) and / or
@@ -51,7 +51,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import AnalyzePane from '../analyze/index.jsx'
-import RefactorPane from '../refactor/index.jsx'
 import { latestSendTurn } from '../analyze/slice.js'
 import SlotConfigBar from '../config/index.jsx'
 import FusionPane from '../fusion/index.jsx'
@@ -64,7 +63,6 @@ import css from './desktop.module.css'
 import { APP_NAME } from '../../branding.js'
 
 export const DRAWER_TABS = [
-  { key: 'refactor', label: 'Refactor', tip: 'Map what the question is about, restate it concisely, and reduce all three answers to their substance. Analyze then compares this version.' },
   { key: 'analyze', label: 'Analyze', tip: 'What the three answers agree on and where they differ, labelled R1/R2/R3. Needs captured replies.' },
   { key: 'fusion', label: 'Fusion', tip: 'Put each difference back to the models that hold it, round by round, and report what converged and what still stands.' },
   { key: 'captured', label: 'Captured', tip: 'The reply text read out of each site, as stored: this is exactly what Analyze and Fusion see.' },
@@ -74,8 +72,6 @@ export const TAB_KEYS = DRAWER_TABS.map((t) => t.key)
 export const CHOOSE_ANALYST_HINT = 'choose an analyst'
 /** Shown instead of the Analyze pane while no analyst can answer (Decision 4: Analyze disabled). */
 export const ANALYZE_BLOCKED_HINT = 'Analyze needs an analyst: choose a web session or local Ollama in Settings.'
-/** The same rule for Refactor, which is analyst work too. */
-export const REFACTOR_BLOCKED_HINT = 'Refactor needs an analyst: choose a web session or local Ollama in Settings.'
 /** Every pane returns null without a selected conversation, which left the drawer a blank slab. */
 export const NO_CONVERSATION_HINT = 'No conversation selected. Send a prompt, or pick one in the sidebar, and its Analyze, Fusion and captured replies appear here.'
 
@@ -181,21 +177,6 @@ export default function Drawer({ api = desktopApi() }) {
       </div>
       {open ? (
         <div className={css.drawerBody} data-testid="drawer-body">
-          <div className={css.drawerPanel} data-testid="drawer-panel-refactor" data-blocked={analystReady ? 'false' : 'true'} hidden={tab !== 'refactor'}>
-            {!conversation ? (
-              <p className={css.blockedHint} data-testid="drawer-no-conversation-refactor" role="status">
-                {NO_CONVERSATION_HINT}
-              </p>
-            ) : analystReady ? (
-              <RefactorPane />
-            ) : (
-              // Refactor is analyst work too, so the same Decision 4 rule applies: with no analyst
-              // that can answer, the pane is not rendered at all rather than shown disabled.
-              <p className={css.blockedHint} data-testid="drawer-refactor-blocked" role="status">
-                {REFACTOR_BLOCKED_HINT}
-              </p>
-            )}
-          </div>
           <div className={css.drawerPanel} data-testid="drawer-panel-analyze" data-blocked={analystReady ? 'false' : 'true'} hidden={tab !== 'analyze'}>
             {!conversation ? (
               <p className={css.blockedHint} data-testid="drawer-no-conversation" role="status">

@@ -166,8 +166,24 @@ def cached_ok_turn(conv: Conversation, of_turn: str) -> AnalyzeTurn | None:
     return None
 
 
-def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label, str]] | None:
-    """`(question, responses)` from the newest ok Refactor turn for `of_turn`, or None.
+def render_graph(graph: Any) -> str:
+    """The knowledge graph as lines the analyst can read: the things, then the relations with node ids
+    resolved to their labels. Quoted into the prompt like any other model-authored text."""
+    nodes = list(getattr(graph, "nodes", None) or [])
+    edges = list(getattr(graph, "edges", None) or [])
+    labels = {n.id: n.label for n in nodes}
+    lines: list[str] = []
+    for node in nodes:
+        lines.append(f"- {node.label}" + (f" ({node.kind})" if node.kind else ""))
+    for edge in edges:
+        source = labels.get(edge.source, edge.source)
+        target = labels.get(edge.target, edge.target)
+        lines.append(f"- {source} --[{edge.relation}]--> {target}")
+    return "\n".join(lines)
+
+
+def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label, str], str] | None:
+    """`(question, responses, graph)` from the newest ok Refactor turn for `of_turn`, or None.
 
     Refactor (S11) is the explicit pass that runs before Analyze: it maps the question, restates it
     concisely and reduces each reply to a summary plus its claims. When one exists, Analyze compares
@@ -193,7 +209,9 @@ def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label,
             block = "\n".join(lines)
             responses[label] = f"{reply.summary}\n\n{block}" if reply.summary else block
         question = turn.refactoring.question.strip() or None
-        return (question or "", responses) if question else None
+        if not question:
+            return None
+        return question, responses, render_graph(turn.refactoring.graph)
     return None
 
 
@@ -492,9 +510,10 @@ async def _produce(
         # question and reduced replies ARE the comparison's input. The blocks are condensed claims, so
         # the comparison is told so — an analyst that thinks it is reading full replies would read a
         # dropped restatement as silence on the point.
+        graph = ""
         refactored = refactored_input(conv, send_turn.id)
         if refactored is not None:
-            question, responses = refactored
+            question, responses, graph = refactored
             condensed = True
 
         # The size bound (module docstring), decided before anything is typed anywhere.
@@ -527,7 +546,7 @@ async def _produce(
 
         if error is None:
             messages = prompts.build_messages(
-                question, responses, fenced=fenced, condensed=condensed
+                question, responses, fenced=fenced, condensed=condensed, graph=graph
             )
             extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
             usage.merge(attempt_usage)
@@ -621,6 +640,7 @@ __all__ = [
     "condense_failure",
     "condense_ineffective",
     "refactored_input",
+    "render_graph",
     "chunk_notice",
     "chunk_reply",
     "missing_responses",

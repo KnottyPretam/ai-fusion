@@ -40,3 +40,8 @@
 .m_low { color: var(--fg-muted); border-color: var(--border); background: var(--bg-muted); }
 .notFused td { color: var(--fg-muted); background: var(--bg-muted); }
 .notFusedTag { margin-left: 5px; font-size: 11px; font-style: italic; color: var(--fg-muted); white-space: nowrap; }
+
+/* The refactored view, folded into the Analyze pane (S11): open when there is no report to read yet,
+   collapsed once there is, because then it is the INPUT rather than the thing being looked at. */
+.refactorDetails { border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; }
+.refactorSummary { cursor: pointer; font-size: 12px; color: var(--fg-muted); }

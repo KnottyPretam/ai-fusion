@@ -252,3 +252,13 @@ times: a single condense call quoting 13.6 KB and then 15.5 KB of one reply neve
 text inside any budget it was given (300 s, 570 s, 1,200 s), while a 6.3 KB reply condensed in about
 15 s in the same shape — so the size of one analyst message, not the length of the wait, is what
 decides whether it can be answered at all.
+
+**Refactor feeds Analyze the map as well as the claims (S11).** When an ok Refactor turn exists for the
+send turn Analyze is comparing, `analyze.refactored_input` hands the comparison THREE things from it:
+the restated question, the reduced replies, and the knowledge graph rendered as lines
+(`analyze.render_graph`: the things, then the relations with node ids resolved to their labels). The
+graph enters as ONE delimited block headed by `prompts.analyze.GRAPH_HEADER`, before the responses,
+because it is what the responses are about — two answers can only disagree once they are about the same
+thing — and it is model-authored, so it is quoted like any other untrusted text and can no more close
+its own block than a reply can. With no graph the comparison message is byte for byte what it always
+was, which is what keeps every fixture and golden still.
