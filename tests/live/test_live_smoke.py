@@ -152,27 +152,46 @@ async def test_each_slot_answers_with_its_configured_model_and_effort(live_budge
 
 
 async def test_reasoning_is_evidenced_at_effort_high(live_budget):
-    """Per slot: `usage.reasoning_tokens > 0` OR at least one `reasoning` delta. Whether every
-    provider populates `completion_tokens_details.reasoning_tokens` through OpenRouter is not a
-    verified fact, so the evidence is collected for all slots and the test fails ONCE with the
-    full picture instead of on the first provider that reports 0."""
-    missing: list[str] = []
+    """What Triplex controls is ASSERTED; what the provider chooses is REPORTED.
+
+    Triplex's half: for every slot the catalog says supports `high`, `reasoning.build` must send
+    `{"effort": "high"}` uncoerced. That is deterministic and a regression in it is a real defect.
+
+    The provider's half: whether the model then spends reasoning tokens is its own decision per
+    request. MEASURED 2026-09-21 with a funded key: `anthropic/claude-opus-5` and `x-ai/grok-4.6`
+    evidence reasoning every time, while `openai/gpt-5.6-sol` returned `reasoning_tokens=0` on six
+    of seven calls at effort high -- on unique prompts, with `cached_tokens=0`, so neither prompt
+    familiarity nor caching explains it. Our parser is NOT the cause: replaying that model's own
+    reasoning chunk through `SSEParser` offline emits a `reasoning` delta and reads
+    `reasoning_tokens=39`, and a raw streaming call that did reason carried 79 reasoning chunks.
+
+    So the failing condition is NO slot evidencing reasoning, which would mean the parse or usage
+    path is broken. One quiet provider among three is recorded, not failed."""
+    evidence: dict[str, tuple[int, int]] = {}
     for slot, spec in _slots().items():
         high = SlotSpec(model=spec.model, effort="high")
         meta = catalog.get_meta(spec.model)
         assert meta is not None and "high" in meta.efforts, f"{slot}: {spec.model} lacks high"
+        # Triplex's half, asserted: the parameter actually sent for this model at this effort.
+        param, applied, coerced = reasoning_mod.build("high", meta)
+        assert param == {"effort": "high"}, f"{slot}: sent {param!r}, not high"
+        assert applied == "high" and not coerced, f"{slot}: coerced to {applied}"
+
         _text, deltas, done = await _chat(slot, high, THINK_PROMPT, max_tokens=1500)
         assert done.kind == "done", f"{slot}: {done.code} {done.message}"
         assert done.usage is not None
         reasoning_deltas = sum(1 for d in deltas if d.kind == "reasoning")
+        evidence[slot] = (done.usage.reasoning_tokens, reasoning_deltas)
         print(
             f"{slot}: {spec.model} reasoning_tokens={done.usage.reasoning_tokens} "
             f"reasoning_deltas={reasoning_deltas}"
         )
-        if not (done.usage.reasoning_tokens > 0 or reasoning_deltas):
-            missing.append(slot)
-    assert not missing, (
-        f"no reasoning evidence at effort high for {missing} (see the per-slot counts printed)"
+    quiet = [s for s, (tokens, deltas) in evidence.items() if not (tokens > 0 or deltas)]
+    if quiet:
+        print(f"note: no reasoning surfaced by {quiet} on this call (provider's choice, see docstring)")
+    assert len(quiet) < len(evidence), (
+        f"NO slot evidenced reasoning at effort high ({evidence}) — the reasoning parse or the "
+        "usage path is broken, since this cannot be every provider declining at once"
     )
     _within_budget(live_budget)
 
