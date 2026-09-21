@@ -1,0 +1,2 @@
+{"id": "gen-w5-chunked-condense-4", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"claims\": [\"The gyroscope tops out at 1000 dps\", \"Gives no lower bound\"]}"}, "finish_reason": "stop"}]}
+{"id": "gen-w5-chunked-condense-4", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 1800, "completion_tokens": 40, "total_tokens": 1840, "cost": 0.0002}}

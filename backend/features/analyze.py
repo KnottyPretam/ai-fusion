@@ -57,9 +57,16 @@ into ONE chat message, 27,252 of it quoted replies, against a 32,768-character c
   Each sub-call is narrated with the EXISTING alphabet -- `analyze_retry{error}` before the call,
   the raw bullets appended to `raw_attempts` -- because a new event type would mean editing the
   frozen docs/api-contract.md.
-- A reply over `REPLY_BUDGET_CHARS` on its own cannot be condensed either (its own condense
-  message would not fit), so the turn degrades naming the label and both numbers, with NO analyst
-  call at all. Never a silent truncation: a comparison that quietly drops half an answer is worse
+- No single condense message quotes more than `CONDENSE_CHUNK_CHARS`. A reply over that is
+  condensed in PIECES (`chunk_reply`, on paragraph boundaries where it can) and their claim lines
+  concatenated, so the comparison still sees exactly one block per label. Measured 2026-09-20,
+  three times: a single condense call quoting 13.6 KB, then 15.5 KB, of one reply never produced
+  readable text inside any budget it was given (300 s, 570 s, 1,200 s), while a 6.3 KB reply
+  condensed in about 15 s in the same shape. The size of one analyst MESSAGE is the thing that
+  decides whether it is answerable at all, so that is what the code bounds.
+- A reply over `REPLY_BUDGET_CHARS` on its own cannot be condensed either (even in pieces the run
+  would be too long to be useful), so the turn degrades naming the label and both numbers, with NO
+  analyst call at all. Never a silent truncation: a comparison that quietly drops half an answer is worse
   than no comparison.
 - A condensation that fails degrades there and then (`condense_failure`), without the comparison
   call: falling back to the raw reply would rebuild exactly the oversized prompt this avoids.
@@ -117,6 +124,13 @@ SPLIT_MIN_CHARS = 12_000
 # anything over 32,768 characters (`desktop/main/ipc.js` MAX_PROMPT_CHARS), so 30,000 leaves 2,768
 # for the question and the condense instruction that ride along with it.
 REPLY_BUDGET_CHARS = 30_000
+# The most any ONE condense message quotes. Measured 2026-09-20, three times: a single condense call
+# quoting 13.6 KB, then 15.5 KB, of one reply never produced readable text inside any budget we gave it
+# (300 s, 570 s, then 1,200 s), while a 6.3 KB reply condensed in about 15 s in the same shape. So a
+# reply over this is condensed in PIECES and their claims concatenated, rather than asked for in one
+# message that the analyst cannot answer. Paragraph boundaries are preferred, so a chunk is whole
+# thoughts rather than a cut sentence.
+CONDENSE_CHUNK_CHARS = 6_000
 
 _END = None  # queue sentinel
 # Strong references to running producer tasks (asyncio keeps only weak ones): a task must survive
@@ -247,6 +261,41 @@ async def _attempt(
     return extraction, raw, usage, error
 
 
+def chunk_reply(response: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
+    """`response` split into pieces of at most `limit` characters, on paragraph boundaries where it
+    can and mid-paragraph only when one paragraph is longer than the whole limit. Returns `[response]`
+    unchanged when it already fits, so nothing about the under-limit path moves."""
+    if len(response) <= limit:
+        return [response]
+    chunks: list[str] = []
+    current = ""
+    for para in response.split("\n\n"):
+        block = para if not current else f"{current}\n\n{para}"
+        if len(block) <= limit:
+            current = block
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        # A single paragraph over the limit is cut into limit-sized pieces: better a hard cut inside
+        # one paragraph than a message the analyst will not answer.
+        while len(para) > limit:
+            chunks.append(para[:limit])
+            para = para[limit:]
+        current = para
+    if current:
+        chunks.append(current)
+    return [c for c in chunks if c.strip()]
+
+
+def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
+    """What `analyze_retry` carries when one reply needs more than one condense message."""
+    return (
+        f"{label}'s reply is {chars:,} characters, over the {CONDENSE_CHUNK_CHARS:,} one condense "
+        f"message can be answered for, so it is being condensed in {pieces} pieces"
+    )
+
+
 async def _condense(
     *, model: str, question: str, label: Label, response: str
 ) -> tuple[str, FeatureUsage, str | None]:
@@ -324,14 +373,28 @@ async def _condense_all(
         queue.put_nowait(
             {"type": "analyze_retry", "error": split_notice(label, len(response), total)}
         )
-        text, call_usage, error = await _condense(
-            model=model, question=question, label=label, response=response
-        )
-        usage.merge(call_usage)
-        raw_attempts.append(text)
-        if error is not None:
-            return None, condense_failure(label, error)
-        condensed[label] = text
+        # One condense message can only quote CONDENSE_CHUNK_CHARS. A bigger reply is condensed in
+        # pieces and their claim lines concatenated: the comparison quotes the same kind of block
+        # either way, and no single analyst message is ever the size that never came back.
+        pieces = chunk_reply(response)
+        if len(pieces) > 1:
+            queue.put_nowait(
+                {
+                    "type": "analyze_retry",
+                    "error": chunk_notice(label, len(response), len(pieces)),
+                }
+            )
+        blocks: list[str] = []
+        for piece in pieces:
+            text, call_usage, error = await _condense(
+                model=model, question=question, label=label, response=piece
+            )
+            usage.merge(call_usage)
+            raw_attempts.append(text)
+            if error is not None:
+                return None, condense_failure(label, error)
+            blocks.append(text)
+        condensed[label] = "\n".join(blocks)
     return condensed, None
 
 
@@ -509,12 +572,15 @@ async def run_analyze(
 __all__ = [
     "ATTEMPTS",
     "PURPOSE",
+    "CONDENSE_CHUNK_CHARS",
     "REPLY_BUDGET_CHARS",
     "ROLE",
     "SPLIT_MIN_CHARS",
     "cached_ok_turn",
     "condense_failure",
     "condense_ineffective",
+    "chunk_notice",
+    "chunk_reply",
     "missing_responses",
     "needs_split",
     "oversize_message",

@@ -2485,12 +2485,29 @@
             // out, not a reply that could not be found, and the message has to name the difference or
             // the next reader starts from the same blank count this one did.
             if (seenContainer && isBlank(text)) {
-              if (stop || seenStop) {
+              if (stop) {
+                // The site says it is working RIGHT NOW and the container is still empty: the model is
+                // reasoning and the budget ran out under it.
                 throw new AdapterError(
                   'timeout',
-                  `the reply container stayed empty for the whole ${budget} ms while the site was still working ` +
-                    `(stop control ${stop ? 'visible now' : 'seen earlier'}): the model is most likely still reasoning, ` +
-                    'so this needs a longer capture budget, not a different selector',
+                  `the reply container stayed empty for the whole ${budget} ms and the site's stop control is ` +
+                    'still up, so the model is still reasoning: this needs a longer capture budget, not a ' +
+                    'different selector',
+                )
+              }
+              if (seenStop) {
+                // A stop control that was there and is NOT there at the last sample says one of two
+                // things, and this layer cannot tell which: the site is still working and the final
+                // sample missed a button that re-renders (measured S9 — that is exactly why a pending
+                // end signal can be withdrawn), or the site FINISHED and put its answer somewhere other
+                // than the container this capture followed. Naming both is the honest report; claiming
+                // the first one is what the previous wording did, and it is only half the story.
+                throw new AdapterError(
+                  'timeout',
+                  `the reply container stayed empty for the whole ${budget} ms; the site showed a stop control ` +
+                    'earlier but not at the end, so either it is still reasoning (the last sample can miss a ' +
+                    'button mid-re-render) or it finished and wrote the answer outside the container this ' +
+                    'capture followed',
                 )
               }
               throw new AdapterError(

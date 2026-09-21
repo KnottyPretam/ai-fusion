@@ -241,3 +241,14 @@ off and the turn degraded with `parse_error: no JSON object found in the respons
 a capture that ended mid-reply gives, from an unrelated cause. `MAX_TOKENS_STAGE` itself is frozen and
 unchanged; the allowance is added at the call site (`analyze._analyst_max_tokens`,
 `fusion._stage_max_tokens`).
+
+**One condense message's size (S10).** The split step's bound is per MESSAGE, not per run: no condense
+call quotes more than `CONDENSE_CHUNK_CHARS` of one reply. A reply over it is split by `chunk_reply`
+(paragraph boundaries where it can, a hard cut only inside a paragraph longer than the whole limit),
+each piece condensed on its own, and their claim lines concatenated so the comparison prompt still
+quotes exactly one block per label. Announced with the existing alphabet — one extra
+`analyze_retry{error}` naming the label, its size and the piece count. Measured 2026-09-20, three
+times: a single condense call quoting 13.6 KB and then 15.5 KB of one reply never produced readable
+text inside any budget it was given (300 s, 570 s, 1,200 s), while a 6.3 KB reply condensed in about
+15 s in the same shape — so the size of one analyst message, not the length of the wait, is what
+decides whether it can be answered at all.

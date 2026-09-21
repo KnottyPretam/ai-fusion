@@ -187,6 +187,50 @@ async def test_a_failed_condensation_degrades_before_the_comparison_call(
     assert len(extraction_calls()) == 2  # R1 condensed, R2 failed, no comparison call
 
 
+def test_chunk_reply_leaves_a_reply_that_already_fits_exactly_as_it_was():
+    short = "One paragraph.\n\nAnother."
+    assert feature.chunk_reply(short) == [short]
+    at_limit = "x" * feature.CONDENSE_CHUNK_CHARS
+    assert feature.chunk_reply(at_limit) == [at_limit]
+
+
+def test_chunk_reply_splits_on_paragraph_boundaries_and_keeps_every_character():
+    paras = [f"Paragraph {i}. " + ("filler sentence about storage. " * 30) for i in range(12)]
+    reply = "\n\n".join(paras)
+    assert len(reply) > feature.CONDENSE_CHUNK_CHARS
+    pieces = feature.chunk_reply(reply)
+    assert len(pieces) > 1
+    assert all(len(p) <= feature.CONDENSE_CHUNK_CHARS for p in pieces)
+    # every paragraph survives somewhere, whole: a chunk boundary is never a cut sentence here
+    joined = "\n\n".join(pieces)
+    for para in paras:
+        assert para in joined
+    assert all("\n\n".join(pieces).count(p) == 1 for p in paras)  # and never duplicated
+
+
+def test_chunk_reply_cuts_inside_one_oversized_paragraph_rather_than_giving_up():
+    """A single paragraph longer than the whole limit has no boundary to split on. A hard cut inside
+    it beats a message the analyst will not answer, which is the failure this exists to avoid."""
+    one = "y" * (feature.CONDENSE_CHUNK_CHARS * 2 + 500)
+    pieces = feature.chunk_reply(one)
+    assert len(pieces) == 3
+    assert all(len(p) <= feature.CONDENSE_CHUNK_CHARS for p in pieces)
+    assert "".join(pieces) == one  # nothing dropped, nothing duplicated
+
+
+def test_the_chunk_size_is_under_what_was_measured_to_fail():
+    # Measured 2026-09-20: single condense calls quoting 13.6 KB and 15.5 KB never produced readable
+    # text inside 300 s, 570 s or 1,200 s; a 6.3 KB reply condensed in about 15 s.
+    assert feature.CONDENSE_CHUNK_CHARS < 13_000
+    assert feature.CONDENSE_CHUNK_CHARS < feature.SPLIT_MIN_CHARS
+
+
+def test_chunk_notice_names_the_label_the_size_and_the_piece_count():
+    message = feature.chunk_notice("R1", 15_460, 3)
+    assert "R1" in message and "15,460" in message and "3 pieces" in message
+    assert f"{feature.CONDENSE_CHUNK_CHARS:,}" in message
+
+
 async def test_condensations_that_do_not_shrink_degrade_instead_of_sending_the_prompt_anyway(
     make_conversation, analyze, local_fixtures
 ):
@@ -219,6 +263,50 @@ def test_condense_ineffective_names_the_total_the_label_and_its_size():
     message = feature.condense_ineffective(15_002, "R2", 6_001)
     assert "15,002" in message and "R2" in message and "6,001" in message
     assert f"{feature.SPLIT_MIN_CHARS:,}" in message
+
+
+async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the_comparison_as_one_block(
+    make_conversation, analyze, local_fixtures
+):
+    """The failure measured on 2026-09-20: R1's reply was 15,460 characters and its single condense
+    call never produced readable text inside 300 s, 570 s or 1,200 s. No condense message may quote
+    more than `CONDENSE_CHUNK_CHARS`, so a reply over it is condensed in pieces whose claims are
+    concatenated -- the comparison still sees exactly one block per label."""
+    local_fixtures("analyst_split_chunked")
+    big = reply(feature.CONDENSE_CHUNK_CHARS * 2 + 1500, "R1-BIG")
+    small = reply(4_000, "other")
+    responses = {"claude": big, "chatgpt": small, "grok": small}
+    assert len(big) > feature.CONDENSE_CHUNK_CHARS
+    conv = await persist(make_conversation(responses=responses))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+
+    # R1 (claude in mock mode) is announced once as a split and once as a chunked reply.
+    narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
+    assert any("3 pieces" in n and "R1" in n for n in narrations), narrations
+    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 3
+
+    calls = extraction_calls()
+    assert len(calls) == 6  # three pieces for R1, one each for R2 and R3, then the comparison
+    for call in calls[:5]:
+        system, user = call["messages"]
+        assert system["content"] == prompts.CONDENSE_SYSTEM
+        quoted = blocks_of(user["content"])
+        assert len(quoted) == 1  # one label per condense message, always
+        assert len(next(iter(quoted.values()))) <= feature.CONDENSE_CHUNK_CHARS
+
+    # …and the comparison quotes ONE block per label, R1's being the three pieces joined.
+    system, user = calls[5]["messages"]
+    assert system["content"] == prompts.SYSTEM
+    condensed = blocks_of(user["content"])
+    assert list(condensed) == list(LABELS)
+    assert "piece 1" in condensed["R1"] and "piece 2" in condensed["R1"] and "piece 3" in condensed["R1"]
+    assert big not in user["content"]  # the raw reply never reaches the comparison
+
+    turn = events[-1]["turn"]
+    assert turn["status"] == "ok" and turn["extraction"] is not None
+    assert len(turn["raw_attempts"]) == 6  # every piece is reported
+    assert turn["usage"]["totals"]["calls"] == 6  # and metered
 
 
 async def test_no_identity_leak_in_any_split_payload(
