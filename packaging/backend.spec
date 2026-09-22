@@ -17,18 +17,30 @@ from PyInstaller.utils.hooks import collect_submodules
 # rather than from the working directory means the build is the same wherever it is started.
 ROOT = Path(SPECPATH).resolve().parent
 
-ROUTERS = [
+# DERIVED from the filesystem, not hand-maintained. A hand-written list is a trap: adding a router is
+# a one-line change in `backend/routers/` that works perfectly from source (pkgutil finds it) and
+# silently 404s in the packaged app (pkgutil sees nothing in a frozen archive, so only this list gets
+# it imported). That is exactly what happened on 2026-09-21 — `refactor` shipped without its route and
+# the button answered 404 — and the class of bug is invisible to every offline test, because they all
+# run from source.
+_ROUTER_DIR = ROOT / "backend" / "routers"
+ROUTERS = sorted(
+    f"backend.routers.{path.stem}"
+    for path in _ROUTER_DIR.glob("*.py")
+    if path.stem != "__init__"
+)
+# A glob that silently returns nothing would build a backend that answers 404 for everything, which is
+# far worse than a build error. These four have existed since Stage 0; if they are missing, the layout
+# moved and the spec has to be looked at rather than quietly shipped.
+_REQUIRED = {
     "backend.routers.analyze",
-    "backend.routers.bridge",
-    "backend.routers.config",
     "backend.routers.conversations",
-    "backend.routers.desktop_app",
-    "backend.routers.export",
     "backend.routers.fusion",
-    "backend.routers.models",
     "backend.routers.send",
-    "backend.routers.session",
-]
+}
+_missing = _REQUIRED - set(ROUTERS)
+if _missing:
+    raise SystemExit(f"backend.spec: no routers found at {_ROUTER_DIR} (missing {sorted(_missing)})")
 
 HIDDEN = [
     *ROUTERS,
