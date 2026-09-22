@@ -309,6 +309,25 @@ async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the
     assert turn["usage"]["totals"]["calls"] == 6  # and metered
 
 
+async def test_the_condense_partial_is_returned_even_on_failure(monkeypatch):
+    """Directly: `_condense` hands back whatever text arrived as its fourth value, on every path."""
+    from backend.llm import client as llm_client
+    from backend.schemas import Delta, Usage
+
+    async def fake_stream(**_kw):
+        yield Delta(kind="text", text='```json\n{"claims": [')   # a fragment: opens and stops
+        yield Delta(kind="error", code="timeout", message="the reply never became a complete json document")
+
+    monkeypatch.setattr(llm_client, "stream_completion", fake_stream)
+    text, _usage, error, raw = await feature._condense(
+        model="web:chatgpt:analyst", question="q", label="R1", response="a reply"
+    )
+    assert error is not None and "complete json" in error
+    assert text == ""                       # nothing usable for the comparison
+    assert raw == '```json\n{"claims": ['   # …but the fragment is preserved for the report
+    del Usage
+
+
 async def test_no_identity_leak_in_any_split_payload(
     make_conversation, analyze, local_fixtures, assert_no_identity_leak
 ):

@@ -347,7 +347,7 @@ def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
 
 async def _condense(
     *, model: str, question: str, label: Label, response: str
-) -> tuple[str, FeatureUsage, str | None]:
+) -> tuple[str, FeatureUsage, str | None, str]:
     """One condense sub-call: that label's reply in, its claims out as bullet lines.
 
     Streamed for its TEXT rather than through `complete_json`, because the claims are quoted data
@@ -383,22 +383,28 @@ async def _condense(
             else:
                 error = d.message or (str(d.code) if d.code is not None else TRANSPORT_ERROR)
     text = "".join(parts)
+    # WHATEVER arrived is returned as the fourth value, whether this call succeeded or not, so a
+    # failure can be read rather than guessed at. Measured 2026-09-21: a condense call came back
+    # `timeout … chars=44` -- the capture had 44 characters and the shape gate correctly refused them
+    # -- and `raw_attempts` recorded `''`, because this function dropped the partial on the error path.
+    # Forty-four characters is the difference between "the site refused" and "the fence opened and
+    # nothing followed", and the whole point of the S10 work is that a failure names itself.
     if error is None and not text.strip():
         error = "the condense pass returned no text"
     if error is not None:
-        return "", usage, error
+        return "", usage, error, text
     # The claims arrive as JSON so a half-written answer cannot pass for a whole one; they are
     # rendered back to bullet lines here, because what the comparison prompt quotes is prose.
     value, perr = client.extract_json(text, repair=client.transport_kind(model) == "web")
     if value is None:
-        return "", usage, f"the condense pass returned no usable claims: {perr}"
+        return "", usage, f"the condense pass returned no usable claims: {perr}", text
     claims = value.get("claims")
     if not isinstance(claims, list) or not claims:
-        return "", usage, "the condense pass returned no claims"
+        return "", usage, "the condense pass returned no claims", text
     lines = [f"- {str(c).strip()}" for c in claims if str(c).strip()]
     if not lines:
-        return "", usage, "the condense pass returned no claims"
-    return "\n".join(lines), usage, None
+        return "", usage, "the condense pass returned no claims", text
+    return "\n".join(lines), usage, None, text
 
 
 async def _condense_all(
@@ -435,11 +441,13 @@ async def _condense_all(
             )
         blocks: list[str] = []
         for piece in pieces:
-            text, call_usage, error = await _condense(
+            text, call_usage, error, raw = await _condense(
                 model=model, question=question, label=label, response=piece
             )
             usage.merge(call_usage)
-            raw_attempts.append(text)
+            # The RAW reply, not the rendered claims: on a failure `text` is empty and `raw` is the
+            # only record of what the analyst actually said.
+            raw_attempts.append(raw if error is not None else text)
             if error is not None:
                 return None, condense_failure(label, error)
             blocks.append(text)
