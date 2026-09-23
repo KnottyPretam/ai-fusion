@@ -56,7 +56,8 @@ into ONE chat message, 27,252 of it quoted replies, against a 32,768-character c
   blocks then go through the normal comparison prompt, which still returns a real `Extraction`.
   Each sub-call is narrated with the EXISTING alphabet -- `analyze_retry{error}` before the call,
   the raw bullets appended to `raw_attempts` -- because a new event type would mean editing the
-  frozen docs/api-contract.md.
+  frozen docs/api-contract.md. Every such narration begins with `SPLIT_NOTICE_PREFIX`: it is the
+  one thing that tells the pane a retry event is progress and not a failed attempt.
 - No single condense message quotes more than `CONDENSE_CHUNK_CHARS`. A reply over that is
   condensed in PIECES (`chunk_reply`, on paragraph boundaries where it can) and their claim lines
   concatenated, so the comparison still sees exactly one block per label. Measured 2026-09-20,
@@ -131,6 +132,14 @@ REPLY_BUDGET_CHARS = 30_000
 # message that the analyst cannot answer. Paragraph boundaries are preferred, so a chunk is whole
 # thoughts rather than a cut sentence.
 CONDENSE_CHUNK_CHARS = 6_000
+# What every PROGRESS narration on `analyze_retry` begins with. The event alphabet is frozen, so the
+# split step (`split_notice`) and the chunk step (`chunk_notice`) can only announce themselves on the
+# retry event, and the pane tells a narration apart from a failed attempt by this prefix ALONE
+# (`frontend/src/features/analyze/AnalyzePane.jsx` NOTICE_PREFIX, its mirror; docs/api-contract.md
+# promises it). A narration built without it reaches the user as "the analyst output failed
+# validation" -- which is how the chunk notice shipped in 1fc9339 (found 2026-09-22), so both
+# strings are built on this one name rather than each spelling the prefix out.
+SPLIT_NOTICE_PREFIX = "splitting the analyst prompt"
 
 _END = None  # queue sentinel
 # Strong references to running producer tasks (asyncio keeps only weak ones): a task must survive
@@ -253,7 +262,7 @@ def split_notice(label: Label | str, chars: int, total: int) -> str:
     """What `analyze_retry` carries for one condense sub-call. The event alphabet is frozen, so
     this string is the only place the split can announce itself (module docstring)."""
     return (
-        f"splitting the analyst prompt: {total:,} characters of replies is over "
+        f"{SPLIT_NOTICE_PREFIX}: {total:,} characters of replies is over "
         f"{SPLIT_MIN_CHARS:,}, so {label}'s reply ({chars:,} characters) is being condensed to "
         f"its substantive claims first"
     )
@@ -338,10 +347,12 @@ def chunk_reply(response: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
 
 
 def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
-    """What `analyze_retry` carries when one reply needs more than one condense message."""
+    """What `analyze_retry` carries when one reply needs more than one condense message. Progress,
+    like `split_notice`, so it begins with the same prefix -- that is the only way the pane knows."""
     return (
-        f"{label}'s reply is {chars:,} characters, over the {CONDENSE_CHUNK_CHARS:,} one condense "
-        f"message can be answered for, so it is being condensed in {pieces} pieces"
+        f"{SPLIT_NOTICE_PREFIX}: {label}'s reply is {chars:,} characters, over the "
+        f"{CONDENSE_CHUNK_CHARS:,} one condense message can be answered for, so it is being "
+        f"condensed in {pieces} pieces"
     )
 
 
@@ -644,6 +655,7 @@ __all__ = [
     "REPLY_BUDGET_CHARS",
     "ROLE",
     "SPLIT_MIN_CHARS",
+    "SPLIT_NOTICE_PREFIX",
     "cached_ok_turn",
     "condense_failure",
     "condense_ineffective",

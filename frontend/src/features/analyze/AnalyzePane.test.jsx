@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import AnalyzePane from './index.jsx'
-import { isSplitNotice } from './AnalyzePane.jsx'
+import { isProgressNotice, isSplitNotice } from './AnalyzePane.jsx'
 import { applyEvents, renderWithStore } from '../../state/testing.jsx'
 import { analyzeTurn, conversation, degradedTurn, events, sendTurn } from './fixtures.js'
 import { NOT_CAPTURED_MESSAGE_PREFIX } from './slice.js'
@@ -91,6 +91,7 @@ describe('AnalyzePane: report rendering', () => {
     expect(screen.getByTestId('analyze')).toHaveAttribute('data-status', 'degraded')
     const box = screen.getByTestId('analyze-degraded')
     expect(box).toHaveTextContent('Analysis degraded.')
+    expect(box).toHaveTextContent('after one retry') // two raw attempts: the comparison was sent back
     expect(screen.getByTestId('analyze-fusion-disabled')).toHaveTextContent('Fusion disabled for this turn.')
     expect(box).toHaveTextContent('Field required')
     const details = screen.getByTestId('analyze-raw-attempts')
@@ -102,6 +103,24 @@ describe('AnalyzePane: report rendering', () => {
     expect(screen.queryByTestId('analyze-retry')).toBeNull()
     // a degraded turn can still be re-run
     expect(screen.getByTestId('analyze-rerun')).toBeEnabled()
+  })
+
+  test('a size-bound degrade, where no comparison ever ran, does not claim a retry', () => {
+    // Byte-for-byte what `features/analyze.py oversize_message()` writes for R1 at 31,000
+    // characters: the turn holds no analyst call at all, so "after one retry" would be a lie.
+    const OVERSIZE =
+      "R1's reply is 31,000 characters, over the 30,000 the analyst can take in one message. Ask that " +
+      'slot again for a shorter answer, or analyze a Send whose replies fit — Triplex will not compare ' +
+      'a truncated one.'
+    const turn = degradedTurn({ error: OVERSIZE, raw_attempts: [] })
+    renderPane(stateWith([events.start('a2'), events.degraded(turn)]))
+    const box = screen.getByTestId('analyze-degraded')
+    expect(box).toHaveTextContent('Analysis degraded.')
+    expect(box).toHaveTextContent('could not produce a report')
+    expect(box).not.toHaveTextContent('after one retry')
+    expect(box).toHaveTextContent('over the 30,000') // the backend's own reason, quoted
+    expect(screen.getByTestId('analyze-fusion-disabled')).toBeInTheDocument()
+    expect(screen.getByTestId('analyze-raw-attempts')).toHaveTextContent('raw analyst attempts (0)')
   })
 
   test("events under feature 'fusion' (auto-run) drive the same pane", () => {
@@ -415,11 +434,25 @@ describe('the retry line narrates a split as a split', () => {
   const NOTICE =
     "splitting the analyst prompt: 27,252 characters of replies is over 12,000, so R2's reply " +
     '(13,677 characters) is being condensed to its substantive claims first'
+  // The other progress narration, byte-for-byte what `features/analyze.py chunk_notice()` writes
+  // for R1 at 6,187 characters in 2 pieces. It shipped WITHOUT the prefix (1fc9339) and every
+  // chunked reply rendered here as "the analyst output failed validation" (found 2026-09-22).
+  const CHUNK_NOTICE =
+    "splitting the analyst prompt: R1's reply is 6,187 characters, over the 6,000 one condense " +
+    'message can be answered for, so it is being condensed in 2 pieces'
 
   test('a condense notice is shown as itself, not as a validation failure', () => {
     renderPane(stateWith([{ type: 'sse/start', feature: 'analyze' }, events.start(), events.retry(NOTICE)]))
     const line = screen.getByTestId('analyze-retry')
     expect(line).toHaveTextContent('is being condensed')
+    expect(line).not.toHaveTextContent('failed validation')
+    expect(line.querySelector('details')).toBeNull()
+  })
+
+  test('a chunk notice is progress too: shown as itself, with no validation error to unfold', () => {
+    renderPane(stateWith([{ type: 'sse/start', feature: 'analyze' }, events.start(), events.retry(CHUNK_NOTICE)]))
+    const line = screen.getByTestId('analyze-retry')
+    expect(line).toHaveTextContent('condensed in 2 pieces')
     expect(line).not.toHaveTextContent('failed validation')
     expect(line.querySelector('details')).toBeNull()
   })
@@ -431,11 +464,13 @@ describe('the retry line narrates a split as a split', () => {
     expect(line.querySelector('details')).not.toBeNull()
   })
 
-  test('isSplitNotice keys on the prefix the backend actually writes', () => {
-    expect(isSplitNotice(NOTICE)).toBe(true)
-    expect(isSplitNotice('parse_error: no JSON object found')).toBe(false)
-    expect(isSplitNotice(null)).toBe(false)
-    expect(isSplitNotice(undefined)).toBe(false)
+  test('isProgressNotice keys on the prefix the backend actually writes, for both narrations', () => {
+    expect(isProgressNotice(NOTICE)).toBe(true)
+    expect(isProgressNotice(CHUNK_NOTICE)).toBe(true)
+    expect(isProgressNotice('parse_error: no JSON object found')).toBe(false)
+    expect(isProgressNotice(null)).toBe(false)
+    expect(isProgressNotice(undefined)).toBe(false)
+    expect(isSplitNotice).toBe(isProgressNotice) // the S10 name still resolves
   })
 })
 
