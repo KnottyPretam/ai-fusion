@@ -274,35 +274,96 @@ def test_the_pane_mirrors_the_prefix_verbatim():
 async def test_condensations_that_do_not_shrink_degrade_instead_of_sending_the_prompt_anyway(
     make_conversation, analyze, local_fixtures
 ):
-    """Three sub-calls that answer with claims as long as the replies they were given leave the
-    comparison prompt exactly as big as the one the split existed to avoid. Sending it would spend a
-    fourth analyst call to fail the same way, so the turn degrades naming the largest block."""
+    """Two passes that still leave the set over CONDENSED_MAX_CHARS. The comparison prompt would be
+    bigger than one analyst message can carry, so it is never sent: the turn degrades naming the
+    largest block, and nothing is truncated to force it."""
     local_fixtures("analyst_split_no_shrink")
     conv = await persist(make_conversation(responses=responses_of(feature.SPLIT_MIN_CHARS + 3)))
     r, events = await analyze(conv.id)
     assert r.status_code == 200, r.text
-    # All three condensations ran and were narrated; only the comparison is skipped.
-    assert _types(events) == [
-        "analyze_start",
-        "analyze_retry",
-        "analyze_retry",
-        "analyze_retry",
-        "analyze_degraded",
-    ]
-    assert len(extraction_calls()) == 3  # no comparison call
+    types = _types(events)
+    assert types[0] == "analyze_start" and types[-1] == "analyze_degraded"
+    # Pass 1: three labels, one call each (the replies are under CONDENSE_CHUNK_CHARS). Pass 2: each
+    # ~7,800-character block is chunked into two pieces, so six more calls. Never a comparison.
+    assert len(extraction_calls()) == 3 + 6
+    narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
+    assert all(n.startswith(feature.SPLIT_NOTICE_PREFIX) for n in narrations), narrations
+    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 6  # 3 + 3
     turn = events[-1]["turn"]
     assert turn["status"] == "degraded" and turn["extraction"] is None
-    assert f"over the {feature.SPLIT_MIN_CHARS:,}" in turn["error"]
-    assert "R1" in turn["error"]  # the largest block is named (all three are equal; R1 comes first)
+    assert f"after {feature.CONDENSE_PASSES} condense passes" in turn["error"]
+    assert f"over the {feature.CONDENSED_MAX_CHARS:,}" in turn["error"]
     assert "truncated" in turn["error"]  # and says plainly that nothing was cut to force it
-    assert len(turn["raw_attempts"]) == 3  # every condensation is still reported
-    assert turn["usage"]["totals"]["calls"] == 3  # and metered
+    assert len(turn["raw_attempts"]) == 9  # every condensation of both passes is still reported
+    assert turn["usage"]["totals"]["calls"] == 9
 
 
-def test_condense_ineffective_names_the_total_the_label_and_its_size():
-    message = feature.condense_ineffective(15_002, "R2", 6_001)
-    assert "15,002" in message and "R2" in message and "6,001" in message
-    assert f"{feature.SPLIT_MIN_CHARS:,}" in message
+def test_condense_ineffective_names_the_total_the_label_the_passes_and_the_bound():
+    message = feature.condense_ineffective(25_002, "R2", 9_001)
+    assert "25,002" in message and "R2" in message and "9,001" in message
+    assert f"{feature.CONDENSED_MAX_CHARS:,}" in message
+    assert f"after {feature.CONDENSE_PASSES} condense passes" in message
+    # the split trigger is NOT the bound the comparison is measured against (measured 2026-09-22)
+    assert feature.CONDENSED_MAX_CHARS > feature.SPLIT_MIN_CHARS
+
+
+def test_the_condensed_bound_is_sized_for_what_one_pass_actually_achieves():
+    """Measured 2026-09-22: one pass took 20,511 characters of replies to 14,950 -- ~30% off. The bound
+    has to admit that, or every over-threshold conversation is refused after the work is done."""
+    assert 14_950 <= feature.CONDENSED_MAX_CHARS
+    assert feature.CONDENSE_PASSES == 2
+
+
+def test_chunk_reply_splits_a_bullet_block_on_line_boundaries_before_cutting():
+    """A condensed block is bullet lines joined by single newlines with no paragraph break anywhere,
+    and a second pass reads it back through chunk_reply: it must split between bullets, never inside
+    one, and only a single line longer than the whole limit is hard-cut."""
+    bullets = "\n".join(f"- claim {i} about the constellation and its band" for i in range(400))
+    assert "\n\n" not in bullets and len(bullets) > feature.CONDENSE_CHUNK_CHARS
+    pieces = feature.chunk_reply(bullets)
+    assert len(pieces) > 1
+    assert all(len(p) <= feature.CONDENSE_CHUNK_CHARS for p in pieces)
+    assert all(p.startswith("- claim") and p.endswith("band") for p in pieces)  # whole lines only
+    assert "\n".join(pieces) == bullets  # nothing dropped, nothing duplicated
+    one_line = "y" * (feature.CONDENSE_CHUNK_CHARS * 2 + 100)
+    assert [len(p) for p in feature.chunk_reply(one_line)] == [6000, 6000, 100]
+
+
+async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then_the_comparison(
+    make_conversation, analyze, local_fixtures
+):
+    """The other step the user asked for on 2026-09-20: three 9,000-character replies, split into two
+    pieces each; the first pass's claims still total ~24,600, over CONDENSED_MAX_CHARS, so a second
+    pass runs over the condensed blocks (~6,600 after it) and THEN the comparison."""
+    local_fixtures("analyst_split_two_pass")
+    responses = {"claude": reply(9_000, "R1"), "chatgpt": reply(9_000, "R2"), "grok": reply(9_000, "R3")}
+    conv = await persist(make_conversation(responses=responses))
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events)[-1] == "analyze_done", events[-1].get("turn", {}).get("error")
+    calls = extraction_calls()
+    assert len(calls) == 6 + 6 + 1  # two pieces per label per pass, then the comparison
+    for call in calls[:12]:
+        system, user = call["messages"]
+        assert system["content"] == prompts.CONDENSE_SYSTEM
+        assert len(next(iter(blocks_of(user["content"]).values()))) <= feature.CONDENSE_CHUNK_CHARS
+    # the second pass condensed the FIRST pass's bullets, not the raw replies
+    _system, user7 = calls[6]["messages"]
+    seventh = next(iter(blocks_of(user7["content"]).values()))
+    assert "pass-1 piece" in seventh and "R1 raw" not in seventh
+    system, user = calls[12]["messages"]
+    assert system["content"] == prompts.SYSTEM
+    condensed = blocks_of(user["content"])
+    assert list(condensed) == list(LABELS)
+    assert all("pass-2 piece" in condensed[label] for label in LABELS)
+    assert sum(len(v) for v in condensed.values()) <= feature.CONDENSED_MAX_CHARS
+    turn = events[-1]["turn"]
+    assert turn["status"] == "ok" and turn["extraction"] is not None
+    assert len(turn["raw_attempts"]) == 13
+    assert turn["usage"]["totals"]["calls"] == 13
+    narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
+    assert all(n.startswith(feature.SPLIT_NOTICE_PREFIX) for n in narrations)
+    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 6  # 3 per pass
 
 
 async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the_comparison_as_one_block(

@@ -75,9 +75,11 @@ into ONE chat message, 27,252 of it quoted replies, against a 32,768-character c
   than no comparison.
 - A condensation that fails degrades there and then (`condense_failure`), without the comparison
   call: falling back to the raw reply would rebuild exactly the oversized prompt this avoids.
-- The condensed set is RE-MEASURED (`condense_ineffective`). Three sub-calls that answered with
-  claims as long as the replies they were given leave the comparison prompt exactly as big as the
-  one the split existed to avoid, and sending it anyway spends a fourth call to fail the same way.
+- The condensed set is RE-MEASURED against `CONDENSED_MAX_CHARS` -- a bound on the comparison
+  prompt, distinct from `SPLIT_MIN_CHARS`, which only decides whether to split. One pass reduces a
+  reply by about 30% (measured 2026-09-22: 20,511 -> 14,950), so a set still over the bound gets a
+  SECOND pass over the condensed blocks (`CONDENSE_PASSES`), and only a set that does not fit after
+  that is refused (`condense_ineffective`), never truncated.
 
 The bound is transport-independent on purpose. The ceiling that produced the failure is the web
 transport's, but a 27 KB analyst prompt is a bad prompt everywhere -- it is the input against which
@@ -136,6 +138,18 @@ REPLY_BUDGET_CHARS = 30_000
 # message that the analyst cannot answer. Paragraph boundaries are preferred, so a chunk is whole
 # thoughts rather than a cut sentence.
 CONDENSE_CHUNK_CHARS = 6_000
+# The bound on the CONDENSED set before the comparison runs. This is a different number from
+# SPLIT_MIN_CHARS, which only decides whether to split at all, and reusing that one here was a
+# mistake that cost a real run: measured 2026-09-22, ChatGPT's condensation of three replies took
+# 20,511 characters to 14,950 — a ~30% reduction, not the 70-80% the check assumed — and the
+# comparison, which the analyst answers easily at that size (5 KB condense messages came back in
+# 21-335 s all afternoon), was refused after ten minutes of successful work. What the comparison
+# needs is one analyst message it can answer; the scaffold adds ~1.5 KB on top of this.
+CONDENSED_MAX_CHARS = 20_000
+# How many condense passes may run before the set is refused. One pass reduces ~30%; a second pass
+# over the condensed blocks is "the other step" the user asked for on 2026-09-20 when one is not
+# enough. A set that does not fit after two is refused loudly, never truncated (same decision).
+CONDENSE_PASSES = 2
 # What every PROGRESS narration on `analyze_retry` begins with. The event alphabet is frozen, so the
 # split step (`split_notice`) and the chunk step (`chunk_notice`) can only announce themselves on the
 # retry event, and the pane tells a narration apart from a failed attempt by this prefix ALONE
@@ -277,16 +291,15 @@ def condense_failure(label: Label | str, error: str) -> str:
 
 
 def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
-    """Three condense calls that did not actually shrink anything. The comparison prompt would be
-    as big as the one the split was there to avoid, so it is not sent: the whole point of the split
-    is to keep a single analyst message small enough to be answered, and a prompt that big is what
-    made Analyze time out in the first place. Loud, and naming the worst offender, because the
-    alternative -- quietly dropping half an answer -- is worse than no comparison (user decision,
-    2026-09-20)."""
+    """CONDENSE_PASSES passes that still leave the set over CONDENSED_MAX_CHARS. The comparison prompt
+    would be bigger than one analyst message can carry, so it is not sent. Loud, and naming the worst
+    offender, because the alternative -- quietly dropping half an answer -- is worse than no
+    comparison (user decision, 2026-09-20)."""
     return (
-        f"the condensed replies still come to {total:,} characters, over the {SPLIT_MIN_CHARS:,} "
-        f"one analyst message is sized for (the largest is {label}'s at {chars:,}). Condensing did "
-        f"not shorten them enough to compare, and nothing was truncated to force it."
+        f"the condensed replies still come to {total:,} characters after {CONDENSE_PASSES} condense "
+        f"passes, over the {CONDENSED_MAX_CHARS:,} one analyst message is sized for (the largest is "
+        f"{label}'s at {chars:,}). Condensing did not shorten them enough to compare, and nothing was "
+        f"truncated to force it."
     )
 
 
@@ -349,15 +362,49 @@ def chunk_reply(response: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
         if current:
             chunks.append(current)
             current = ""
-        # A single paragraph over the limit is cut into limit-sized pieces: better a hard cut inside
-        # one paragraph than a message the analyst will not answer.
-        while len(para) > limit:
-            chunks.append(para[:limit])
-            para = para[limit:]
-        current = para
+        # A single paragraph over the limit is split on LINE boundaries next -- a condensed block is
+        # bullet lines joined by single newlines with no paragraph break anywhere, and a second
+        # condense pass reads it back through here (S11) -- and only a single line over the limit is
+        # hard-cut: better a cut inside one line than a message the analyst will not answer.
+        for piece in _split_lines(para, limit):
+            if len(piece) > limit:
+                while len(piece) > limit:
+                    chunks.append(piece[:limit])
+                    piece = piece[limit:]
+                current = piece
+            elif not current:
+                current = piece
+            elif len(current) + 1 + len(piece) <= limit:
+                current = f"{current}\n{piece}"
+            else:
+                chunks.append(current)
+                current = piece
     if current:
         chunks.append(current)
     return [c for c in chunks if c.strip()]
+
+
+def _split_lines(paragraph: str, limit: int) -> list[str]:
+    """`paragraph` as line-bounded pieces of at most `limit` characters where its lines allow; a line
+    longer than `limit` comes back on its own for the caller to cut."""
+    out: list[str] = []
+    current = ""
+    for line in paragraph.split("\n"):
+        if len(line) > limit:
+            if current:
+                out.append(current)
+                current = ""
+            out.append(line)
+            continue
+        joined = line if not current else f"{current}\n{line}"
+        if len(joined) <= limit:
+            current = joined
+        else:
+            out.append(current)
+            current = line
+    if current:
+        out.append(current)
+    return out
 
 
 def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
@@ -563,12 +610,25 @@ async def _produce(
                 raw_attempts=raw_attempts,
                 queue=queue,
             )
+            # Re-measure, and condense AGAIN when one pass was not enough (S11). Measured 2026-09-22:
+            # one pass took 20,511 characters to 14,950, and the old check refused that against
+            # SPLIT_MIN_CHARS -- the split trigger, never a bound on the comparison. The bound is
+            # CONDENSED_MAX_CHARS; a set still over it gets one more pass over the condensed blocks,
+            # and a set that does not fit after CONDENSE_PASSES is refused, never truncated.
+            passes = 1
+            while reduced is not None and quoted_chars(reduced) > CONDENSED_MAX_CHARS and passes < CONDENSE_PASSES:
+                passes += 1
+                reduced, error = await _condense_all(
+                    model=model,
+                    question=question,
+                    responses=reduced,
+                    usage=usage,
+                    raw_attempts=raw_attempts,
+                    queue=queue,
+                )
             if reduced is not None:
-                # Re-measure. A condense call that answered with claims as long as the reply it was
-                # given leaves the comparison prompt exactly as big as before, having spent three
-                # extra analyst calls to get there.
                 still = quoted_chars(reduced)
-                if still > SPLIT_MIN_CHARS:
+                if still > CONDENSED_MAX_CHARS:
                     worst, worst_chars = max(
                         ((label, len(text)) for label, text in reduced.items()),
                         key=lambda pair: pair[1],
@@ -669,7 +729,9 @@ async def run_analyze(
 __all__ = [
     "ATTEMPTS",
     "PURPOSE",
+    "CONDENSED_MAX_CHARS",
     "CONDENSE_CHUNK_CHARS",
+    "CONDENSE_PASSES",
     "REPLY_BUDGET_CHARS",
     "ROLE",
     "SPLIT_MIN_CHARS",

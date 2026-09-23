@@ -268,3 +268,13 @@ because it is what the responses are about — two answers can only disagree onc
 thing — and it is model-authored, so it is quoted like any other untrusted text and can no more close
 its own block than a reply can. With no graph the comparison message is byte for byte what it always
 was, which is what keeps every fixture and golden still.
+
+**The condensed set has its own bound, and a second pass (S11).** `SPLIT_MIN_CHARS` decides only
+whether to split. The condensed set is measured against `CONDENSED_MAX_CHARS` (20,000), which is what
+one comparison message can carry with its scaffold. Measured 2026-09-22: one condense pass takes a
+reply down by about 30% (20,511 → 14,950), not 70-80%, so a set still over the bound after one pass
+gets ONE more pass over the condensed blocks (`CONDENSE_PASSES` = 2; `chunk_reply` splits a bullet
+block on line boundaries for it), narrated with the same `analyze_retry` prefix. Only a set that does
+not fit after two passes is refused (`condense_ineffective`, naming the total, the passes, the bound
+and the largest block) — never truncated. Re-using the split trigger as the bound refused a real
+comparison after ten minutes of successful condense calls; that is the defect this replaces.
