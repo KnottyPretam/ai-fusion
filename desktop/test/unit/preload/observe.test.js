@@ -704,3 +704,119 @@ test('S10: a stop control that was seen and then vanished names BOTH of the thin
   assert.match(state.error.message, /either it is still reasoning/)
   assert.match(state.error.message, /or it finished and wrote the answer outside the container/)
 })
+
+// ---- S11: a failing capture diagnoses itself, and the shape grace is the caller's to scale ----------
+//
+// Three failures in a row (2026-09-20/21/22) could only be read as `chars=0`, and each was re-measured
+// by hand to learn whether the READER, the CONTAINER or the DOM was empty. Every failing throw now ends
+// in one bracketed line of counts and booleans — never reply text — whose inequalities point at the
+// hypothesis (`inner ≫ reply` → the reader; `maxContainer ≫ inner` → the container choice; all small →
+// the DOM). It rides on the message only: the code and the partial are exactly what they were.
+
+const DIAG_TAIL = String.raw`connected=true stopNow=(true|false) stopSeen=(true|false) end=(quiet|-) md=1 pre=0 code=0 reply=\d+ inner=\d+ textContent=\d+ maxContainer=\d+ rect=- viewport=-\]$`
+
+test('S11: the json-incomplete throw carries the diag line, and neither its code nor its partial changes', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  mount(doc, thread, textTurn('I cannot answer that.'))
+  await clock.advance(30000)
+  assert.equal(state.error.code, 'timeout')
+  assert.equal(state.error.partial, 'I cannot answer that.')
+  // the reader returned the whole container (reply == inner == textContent): the answer is prose, not a lost reply
+  assert.match(
+    state.error.message,
+    /^the reply never became a complete json document \(21 characters after \d+ ms\) \[containers=1 followed=0 connected=true stopNow=false stopSeen=false end=quiet md=1 pre=0 code=0 reply=21 inner=21 textContent=21 maxContainer=21 rect=- viewport=-\]$/,
+  )
+  assert.equal(state.error.message.includes('cannot answer'), false, 'the diag never quotes the reply: the prose travels in the partial only')
+})
+
+test('S11: the three empty-container throws carry the diag line — what the site signalled tells them apart, and the code is untouched', async () => {
+  // never showed a stop control → reply_not_found
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    stop.remove()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+    mount(doc, thread, textTurn(''))
+    await clock.advance(4000)
+    assert.equal(state.error.code, 'reply_not_found')
+    assert.equal(state.error.partial, undefined)
+    assert.match(state.error.message, /never held any text, and the site never showed a stop control \[containers=1 followed=0 connected=true stopNow=false stopSeen=false end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+  }
+  // the stop control is still up → timeout, still reasoning
+  {
+    const { doc, clock, adapter, thread } = setup()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+    mount(doc, thread, textTurn(''))
+    await clock.advance(4000)
+    assert.equal(state.error.code, 'timeout')
+    assert.match(state.error.message, /longer capture budget, not a different selector \[containers=1 followed=0 connected=true stopNow=true stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+  }
+  // the stop control was seen and then vanished → timeout, either
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+    mount(doc, thread, textTurn(''))
+    await clock.advance(500)
+    stop.remove()
+    await clock.advance(3500)
+    assert.equal(state.error.code, 'timeout')
+    assert.match(state.error.message, /outside the container this capture followed \[containers=1 followed=0 connected=true stopNow=false stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+  }
+  // and the two container-less throws, for completeness: the diag has no container to describe
+  {
+    const { clock, adapter, stop } = setup()
+    stop.remove()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+    await clock.advance(1500)
+    assert.equal(state.error.code, 'reply_not_found')
+    assert.match(state.error.message, /\(tried: .*\) \[containers=0 followed=-1 connected=false stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+  }
+})
+
+test('S11: a container whose `.markdown` is empty while its own text is long reports inner ≫ reply — the READER, not the DOM, is what missed it', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+  // the body cascade matches an EMPTY block while the answer sits elsewhere in the same container
+  mount(doc, thread, `<article data-message-author-role="assistant"><div class="markdown"></div><p>${'x'.repeat(400)}</p></article>`)
+  await clock.advance(4000)
+  assert.equal(state.error.code, 'reply_not_found')
+  assert.equal(state.error.partial, undefined, 'the reader read nothing, so there is nothing to carry')
+  assert.match(state.error.message, /reply=0 inner=400 textContent=400 maxContainer=400/)
+  assert.match(state.error.message, new RegExp(DIAG_TAIL))
+})
+
+test('S11: incompleteGraceMs from the observe message overrides the 20 s default', async () => {
+  // the default: an unmet shape gives up ~20 s after the text last moved
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    stop.remove()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+    mount(doc, thread, textTurn('still prose'))
+    await clock.advance(30000)
+    assert.equal(state.error.code, 'timeout')
+  }
+  // the message's value: main sends the analyst view a longer one (its lulls are longer)
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    stop.remove()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json', incompleteGraceMs: 50000 }))
+    mount(doc, thread, textTurn('still prose'))
+    await clock.advance(40000)
+    assert.equal(state.done, false, '50 s of grace: not given up at 40 s')
+    await clock.advance(20000)
+    assert.equal(state.done, true)
+    assert.equal(state.error.code, 'timeout')
+    assert.equal(state.error.partial, 'still prose')
+  }
+  // and a bad value falls back to the default rather than to "never"
+  {
+    const { doc, clock, adapter, thread, stop } = setup()
+    stop.remove()
+    const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json', incompleteGraceMs: 'soon' }))
+    mount(doc, thread, textTurn('still prose'))
+    await clock.advance(30000)
+    assert.equal(state.error.code, 'timeout')
+  }
+})

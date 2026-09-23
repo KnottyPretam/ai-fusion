@@ -1056,9 +1056,12 @@ test.describe('S10: a container that mounts empty and stays empty while the mode
     expect(res.ok).toBe(false)
     // a deadline, NOT a lost reply: the stop control was up, so the site was still working
     expect(res.code).toBe('timeout')
-    expect(res.message).toContain('stayed empty for the whole 6000 ms while the site was still working')
-    expect(res.message).toContain('stop control visible now')
+    expect(res.message).toContain("stayed empty for the whole 6000 ms and the site's stop control is still up")
+    expect(res.message).toContain('still reasoning')
     expect(res.message).toContain('longer capture budget, not a different selector')
+    // S11: the diag line, with the geometry only a real browser has — one container, followed, empty
+    // by every measure, the stop control up now and seen before, no end signal
+    expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
     const r = await replyState(page)
     expect(r.containers).toBe(1) // it was following this turn's own container the whole time
   })

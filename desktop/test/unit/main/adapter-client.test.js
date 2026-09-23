@@ -1,7 +1,7 @@
 // adapter-client.js — reqId match, foreign sender ignored, timeout → timeout, navigation → adapter_gone.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createAdapterClient, AdapterRequestError, isMainFrameOf, RESULT_CHANNEL } from '../../../main/adapter-client.js'
+import { createAdapterClient, AdapterRequestError, isMainFrameOf, RESULT_CHANNEL, CANCEL_GRACE_MS } from '../../../main/adapter-client.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeTimers, fakeLog } from './_fakes.js'
 
 function setup() {
@@ -130,4 +130,47 @@ test('isMainFrameOf: same sender + main frame only', () => {
   const throwing = { sender: wc }
   Object.defineProperty(throwing, 'senderFrame', { get() { throw new Error('disposed') } })
   assert.equal(isMainFrameOf(throwing, wc), false)
+})
+
+test('S11: the timeout’s cancel is tracked — e.cancelResult resolves with the adapter’s answer, or null after CANCEL_GRACE_MS or when the page is gone, and never counts as pending', async () => {
+  const { ipcMain, wc, client, timers } = setup()
+  const p = client.request('observe', {}, { timeoutMs: 1000 })
+  timers.advance(1000)
+  const e = await rejection(p)
+  assert.equal(e.code, 'timeout')
+  assert.equal(client.pending(), 0, 'the cancel is not a request the caller waits on')
+  assert.ok(e.cancelResult && typeof e.cancelResult.then === 'function', 'the answer is awaitable')
+  assert.deepEqual(wc.adapterMessages()[1], { reqId: 'req-2', op: 'cancel', target: 'req-1' })
+  // the preload answers the cancel once it has aborted the op: from here the view takes a new op
+  ipcMain.emit(RESULT_CHANNEL, eventFrom(wc), { reqId: 'req-2', ok: true, op: 'cancel', cancelled: true })
+  assert.deepEqual(await e.cancelResult, { cancelled: true })
+  assert.equal(timers.pending(), 0, 'its grace timer is cleared')
+
+  // no answer within the grace → null (a fact about the page, never a rejection)
+  const q = client.request('observe', {}, { timeoutMs: 1000 })
+  timers.advance(1000)
+  const e2 = await rejection(q)
+  timers.advance(CANCEL_GRACE_MS)
+  assert.equal(await e2.cancelResult, null)
+
+  // an answer from another view is ignored, as every result is
+  const r = client.request('observe', {}, { timeoutMs: 1000 })
+  timers.advance(1000)
+  const e3 = await rejection(r)
+  const foreign = fakeWebContents({ id: 99 })
+  ipcMain.emit(RESULT_CHANNEL, eventFrom(foreign), { reqId: wc.adapterMessages().at(-1).reqId, ok: true, op: 'cancel', cancelled: true })
+  // …and a page that navigates has no op in flight any more: every tracked cancel is answered null
+  wc.emit('did-navigate', {}, 'https://chatgpt.com/c/abc')
+  assert.equal(await e3.cancelResult, null)
+
+  // a bridge abort (the signal path) is unchanged: the op's own `cancelled` answer settles the request
+  const controller = new AbortController()
+  const s = client.request('observe', {}, { timeoutMs: 1000, signal: controller.signal })
+  controller.abort()
+  const e4 = await (async () => {
+    ipcMain.emit(RESULT_CHANNEL, eventFrom(wc), { reqId: wc.adapterMessages().at(-2).reqId, ok: false, op: 'observe', code: 'cancelled', message: 'cancelled by main' })
+    return rejection(s)
+  })()
+  assert.equal(e4.code, 'cancelled')
+  assert.equal(e4.cancelResult, undefined)
 })

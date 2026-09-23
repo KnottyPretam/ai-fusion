@@ -16,9 +16,13 @@ import {
   ANALYST_PATIENCE,
   ANALYST_CAPTURE_PATIENCE,
   CAPTURE_CEILING_MARGIN_MS,
+  INCOMPLETE_GRACE_MS,
+  SETTLED_REREAD_MS,
+  TIMEOUT_GRACE_MS,
   insertAndSubmitBudgetMs,
   INSERT_SETTLE_MS,
 } from '../../../main/orchestrator.js'
+import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
 import { fakeLog, fakeTimers, tick } from './_fakes.js'
 
@@ -58,6 +62,14 @@ function scriptedClient(name, trace) {
       call.resolve(value)
       return call
     },
+    /** Fail the pending `op` the way adapter-client.js would: with an AdapterRequestError. */
+    fail(op, error) {
+      const call = [...this.calls].reverse().find((c) => c.op === op && !c.done)
+      if (!call) throw new Error(`no pending ${op} on ${name} (saw ${this.ops().join(', ')})`)
+      call.done = true
+      call.reject(error)
+      return call
+    },
   }
 }
 
@@ -68,9 +80,12 @@ function okHealth(extra = {}) {
 /**
  * setup(opts): `analystSlot` (null = no analyst chosen), `analystHealth`, `capture`, `links`.
  * The analyst seam is a fake analyst-views.js: one client, its own URL, navigation and health.
+ * `failureSnapshot` (S11): 'ok' records `[view, slot]` and resolves a path, 'reject' rejects, null
+ * leaves the dep unwired; `chatUrlPattern` is the site's chatUrlPattern source (PATTERN by default).
  */
-function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, links = {}, paneHealth = {}, analystNewChatUrl = null, analystChatMemory = {} } = {}) {
+function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, links = {}, paneHealth = {}, analystNewChatUrl = null, analystChatMemory = {}, failureSnapshot = 'ok', chatUrlPattern = PATTERN } = {}) {
   const trace = []
+  const snapshots = []
   const panes = { claude: scriptedClient('pane:claude', trace), chatgpt: scriptedClient('pane:chatgpt', trace), grok: scriptedClient('pane:grok', trace) }
   const analystClient = scriptedClient('analyst', trace)
   const timers = fakeTimers()
@@ -124,7 +139,7 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
     restoreRendererFocus: () => trace.push('renderer:focus'),
     timeoutsFor: () => ({ composerWaitMs: 1000, sendWaitMs: 2000, submitVerifyMs: 500 }),
     captureTimeoutsFor: () => ({ quietMs: 250, settleMs: 200, firstTokenMs: 3000, captureTimeoutMs: 4000 }),
-    chatUrlPatternFor: () => PATTERN,
+    chatUrlPatternFor: () => chatUrlPattern,
     getHealth: (slot) => paneHealth[slot] || null,
     getCapture: () => ({ claude: false, chatgpt: false, grok: false, ...capture }),
     chats: {
@@ -136,6 +151,16 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
     onNavigate: () => () => {},
     newChatUrl: (slot) => `https://x.test/new-${slot}`,
     onTurn: (slot, phase, code) => phases.push(code === undefined ? `${slot}:${phase}` : `${slot}:${phase}:${code}`),
+    ...(failureSnapshot === null
+      ? {}
+      : {
+          saveFailureSnapshot: async (view, slot) => {
+            trace.push(`${view}:snapshot`)
+            snapshots.push([view, slot])
+            if (failureSnapshot === 'reject') throw new Error('op observe (r1) in flight')
+            return `/tmp/snapshots/${view === 'analyst' ? 'analyst' : slot}-${snapshots.length}.html`
+          },
+        }),
     now: () => {
       clock += 100.3
       return clock
@@ -146,7 +171,7 @@ function setup({ analystSlot = 'chatgpt', analystHealth = null, capture = {}, li
   })
   const emitted = []
   const emit = (frame) => emitted.push(frame)
-  return { orch, panes, analystClient, analyst, analystChats, trace, timers, phases, chatsSet, emitted, emit, log }
+  return { orch, panes, analystClient, analyst, analystChats, trace, timers, phases, chatsSet, emitted, emit, log, snapshots }
 }
 
 const analystRequest = (slot = 'chatgpt', extra = {}) => ({
@@ -600,6 +625,8 @@ test('S10: the analyst view gets every capture window scaled — stillness, firs
     timeoutMs: 4000 * ANALYST_CAPTURE_PATIENCE,
     firstTokenMs: 3000 * ANALYST_PATIENCE,
     expect: 'json',
+    // S11: the "never takes the shape" grace is a lull too, and scaled like one — for the analyst only
+    incompleteGraceMs: INCOMPLETE_GRACE_MS * ANALYST_PATIENCE,
   })
   analystClient.settle('observe', { ok: true, op: 'observe', text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 7 })
   const result = await done
@@ -674,4 +701,275 @@ test('S10: the scaled analyst budget never outlives the deadline the backend gra
   assert.equal(CAPTURE_CEILING_MARGIN_MS, 30000)
   analystClient.settle('observe', { ok: true, op: 'observe', text: '{"agreements": []}', doneBy: 'quiet', ms: 7 })
   await done
+})
+
+// --- S11: recover a lost analyst capture from the SETTLED page, and make the failure diagnose itself ---
+//
+// Three read-only probes (2026-09-20/21/22) found the complete answer sitting in the analyst chat after
+// every failed capture: the reply was there, the capture that followed the live render had missed it.
+// A reloaded page renders the finished turn once, and the same reader picks it from the pre-submit
+// baseline. So the failure funnel now saves the failing DOM, reloads the chat and reads it again —
+// for the analyst view, on a structured purpose, after `timeout` / `reply_not_found` only — and any
+// failure inside that recovery reports the ORIGINAL frame. When main's own timer was what fired, the
+// cancel it sent has to be answered first: the preload holds one op in flight per view.
+
+const CHAT = 'https://x.test/c/zz'
+const FENCED = '```json\n{"agreements": []}\n```'
+
+/** Drive an analyst turn up to the observe request: ready → insertAndSubmit (baseline 2, in CHAT). */
+async function toObserve(t, { extra = {}, submit = {} } = {}) {
+  const done = t.orch.run(analystRequest('chatgpt', extra), t.emit)
+  await settleAll()
+  t.analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  t.analyst.url = CHAT
+  t.analystClient.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 2, url: CHAT, confirmedBy: 'stop_button', sendSelector: "button[data-testid='send-button']", ms: 4, ...submit })
+  await settleAll()
+  assert.equal(t.analystClient.last().op, 'observe')
+  return { done }
+}
+
+const warnLines = (log) => log.lines.filter(([level]) => level === 'warn').map(([, m]) => m)
+const infoLines = (log) => log.lines.filter(([level]) => level === 'log').map(([, m]) => m)
+
+test('S11: an analyst capture that times out on a structured purpose is read again from the settled page — cancel answered, DOM saved, chat reloaded, same reader from the pre-submit baseline', async () => {
+  const t = setup()
+  const { analystClient, analyst, snapshots, emitted, log } = t
+  const { done } = await toObserve(t)
+  // main's own timer fired: adapter-client sent a cancel and hands the turn its (still pending) answer
+  let answerCancel
+  const cancelResult = new Promise((resolve) => {
+    answerCancel = resolve
+  })
+  analystClient.fail('observe', new AdapterRequestError('timeout', 'chatgpt: observe timed out after 19000 ms', { op: 'observe', cancelResult }))
+  await settleAll()
+  assert.deepEqual(snapshots, [], 'nothing is asked of the page until the adapter has answered the cancel (it would say busy)')
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'], 'no reload either')
+  answerCancel({ cancelled: true })
+  await settleAll()
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the failing DOM is saved exactly once, BEFORE the reload')
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt', CHAT], 'the chat the view is in is reloaded')
+  assert.equal(analystClient.last().op, 'ready', 'the reloaded page is asked for its composer first')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  const obs = analystClient.last()
+  assert.equal(obs.op, 'observe')
+  assert.deepEqual(obs.payload, {
+    baselineCount: 2, // the PRE-SUBMIT count: on a reloaded page every container is "known", and only the count rule finds the answer
+    expect: 'json',
+    quietMs: 250 * ANALYST_PATIENCE,
+    settleMs: 200 * ANALYST_PATIENCE,
+    firstTokenMs: 3000 * ANALYST_PATIENCE,
+    timeoutMs: SETTLED_REREAD_MS,
+  })
+  assert.equal(obs.opts.timeoutMs, SETTLED_REREAD_MS + TIMEOUT_GRACE_MS)
+  analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'done_selector', ms: 900, url: CHAT })
+  const result = await done
+  assert.deepEqual(result, { type: 'result', req_id: 'req-analyst-chatgpt', ok: true, captured: true, text: FENCED, url: CHAT, ms: result.ms, done_by: 'done_selector' })
+  assert.equal(emitted.filter((f) => f.type === 'result').length, 1, 'one result frame: the recovery IS the turn')
+  assertValid(emitted)
+  const lines = infoLines(log)
+  assert.ok(lines.some((m) => m === `[orchestrator] analyst page (chatgpt): recovered by settled re-read, ${FENCED.length} chars`), JSON.stringify(lines))
+  // 3e: the submit is logged too — which confirmation, which send button
+  assert.ok(lines.some((m) => m === "[orchestrator] analyst page (chatgpt): submitted by stop_button (send: button[data-testid='send-button'])"), JSON.stringify(lines))
+  for (const [, m] of log.lines) assert.equal(m.includes('agreements'), false, m)
+  assert.equal(t.analystChats.get(CONV), CHAT, 'the recovered chat is remembered like any other')
+})
+
+test('S11: reply_not_found is recovered the same way (no cancel to wait for: the adapter answered itself)', async () => {
+  const t = setup()
+  const { analystClient, analyst, snapshots, emitted, log } = t
+  const { done } = await toObserve(t, { submit: { confirmedBy: 'composer_cleared', sendSelector: null } })
+  analystClient.fail('observe', new AdapterRequestError('reply_not_found', 'a reply container was there for 16000 ms but never held any text [containers=3 followed=2]', { op: 'observe' }))
+  await settleAll()
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']])
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt', CHAT])
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  assert.equal(analystClient.last().payload.baselineCount, 2)
+  assert.equal(analystClient.last().payload.timeoutMs, SETTLED_REREAD_MS)
+  analystClient.settle('observe', { ok: true, op: 'observe', text: '{"agreements": []}', doneBy: 'quiet', ms: 700, url: CHAT })
+  const result = await done
+  assert.equal(result.ok, true)
+  assert.equal(result.captured, true)
+  assert.equal(result.text, '{"agreements": []}')
+  assert.equal(result.done_by, 'quiet')
+  assertValid(emitted)
+  assert.ok(infoLines(log).some((m) => m === '[orchestrator] analyst page (chatgpt): submitted by composer_cleared (send: enter-fallback)'))
+})
+
+test('S11: a re-read that fails reports the ORIGINAL failure — code, message and partial intact — whether the observe, the ready or the reload fails', async () => {
+  // the re-read observe fails
+  {
+    const t = setup()
+    const { analystClient, emitted, log } = t
+    const { done } = await toObserve(t)
+    analystClient.fail('observe', new AdapterRequestError('timeout', 'the reply never became a complete json document (6 characters after 16000 ms) [containers=1]', { op: 'observe', partial: '{"agre' }))
+    await settleAll()
+    analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+    await settleAll()
+    analystClient.fail('observe', new AdapterRequestError('reply_not_found', 'no assistant container beyond 2 within 9000 ms', { op: 'observe' }))
+    const result = await done
+    assert.deepEqual(result, {
+      type: 'result',
+      req_id: 'req-analyst-chatgpt',
+      ok: false,
+      code: 'timeout',
+      message: 'the reply never became a complete json document (6 characters after 16000 ms) [containers=1]',
+      partial: '{"agre',
+    })
+    assertValid(emitted)
+    assert.ok(warnLines(log).some((m) => /settled re-read failed \(reply_not_found: no assistant container beyond 2 within 9000 ms\); reporting the original failure/.test(m)), JSON.stringify(warnLines(log)))
+  }
+  // the reloaded page never becomes ready
+  {
+    const t = setup()
+    const { analystClient } = t
+    const { done } = await toObserve(t)
+    analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe', partial: 'half' }))
+    await settleAll()
+    analystClient.fail('ready', new AdapterRequestError('logged_out', 'the site shows its login wall', { op: 'ready' }))
+    const result = await done
+    assert.equal(result.code, 'timeout')
+    assert.equal(result.message, 'still in progress')
+    assert.equal(result.partial, 'half')
+  }
+  // the reload itself fails
+  {
+    const t = setup()
+    const { analystClient, analyst, snapshots } = t
+    const { done } = await toObserve(t)
+    analyst.url = 'https://x.test/c/fail1' // matches the pattern; the fake loader refuses it
+    analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe' }))
+    const result = await done
+    assert.equal(result.ok, false)
+    assert.equal(result.code, 'timeout')
+    assert.equal(result.partial, null)
+    assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the snapshot was still taken')
+    assert.deepEqual(analystClient.ops().filter((op) => op === 'ready').length, 1, 'nothing more was asked of a page that did not load')
+  }
+})
+
+test('S11: a view whose URL is not a chat — the site root, or chatgpt’s /c/WEB:<uuid> placeholder that 404s — skips the reload but still saves the DOM', async () => {
+  for (const [url, pattern] of [
+    ['https://x.test/', PATTERN],
+    ['https://x.test/c/WEB:1a2b3c', '^https://x\\.test/c/[A-Za-z0-9-]+(?:[?#]|$)'], // the chatgpt segment-end rule
+  ]) {
+    const t = setup({ chatUrlPattern: pattern })
+    const { analystClient, analyst, snapshots, log } = t
+    const { done } = await toObserve(t)
+    analyst.url = url
+    const before = analyst.loads.length
+    analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe', partial: 'x' }))
+    const result = await done
+    assert.deepEqual(snapshots, [['analyst', 'chatgpt']], `${url}: the DOM is saved`)
+    assert.equal(analyst.loads.length, before, `${url}: nothing is reloaded`)
+    assert.equal(analystClient.ops().filter((op) => op === 'ready').length, 1, `${url}: nothing more is asked of the page`)
+    assert.equal(result.ok, false)
+    assert.equal(result.code, 'timeout')
+    assert.equal(result.partial, 'x')
+    assert.ok(warnLines(log).some((m) => m.includes(`no settled re-read — the view's URL is not a chat (${url})`)), JSON.stringify(warnLines(log)))
+  }
+})
+
+test('S11: a pane turn, a `chat` purpose on the analyst view, and a code that is not timeout / reply_not_found never recover', async () => {
+  // a pane with capture on: its prose is the user's own chat, and its reply is on screen
+  {
+    const t = setup({ capture: { chatgpt: true } })
+    const { orch, panes, snapshots, emit } = t
+    const done = orch.run(paneRequest('chatgpt'), emit)
+    await settleAll()
+    panes.chatgpt.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+    await settleAll()
+    panes.chatgpt.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1, url: 'https://x.test/c/p1', confirmedBy: 'stop_button', sendSelector: 'b' })
+    await settleAll()
+    assert.equal(panes.chatgpt.last().op, 'observe')
+    assert.equal('incompleteGraceMs' in panes.chatgpt.last().payload, false, 'a pane payload is byte-identical to what it was')
+    panes.chatgpt.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe', partial: 'p' }))
+    const result = await done
+    assert.equal(result.code, 'timeout')
+    assert.equal(result.partial, 'p')
+    assert.deepEqual(snapshots, [])
+    assert.deepEqual(panes.chatgpt.ops(), ['ready', 'insertAndSubmit', 'observe'])
+  }
+  // the analyst view asked for prose
+  {
+    const t = setup()
+    const { analystClient, analyst, snapshots } = t
+    const { done } = await toObserve(t, { extra: { purpose: 'chat' } })
+    assert.equal('expect' in analystClient.last().payload, false)
+    analystClient.fail('observe', new AdapterRequestError('reply_not_found', 'nothing', { op: 'observe' }))
+    const result = await done
+    assert.equal(result.code, 'reply_not_found')
+    assert.deepEqual(snapshots, [])
+    assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'])
+  }
+  // a refusal by the site is not a capture that missed
+  {
+    const t = setup()
+    const { analystClient, snapshots } = t
+    const { done } = await toObserve(t)
+    analystClient.fail('observe', new AdapterRequestError('logged_out', 'the site shows its login wall', { op: 'observe' }))
+    const result = await done
+    assert.equal(result.code, 'site_error', 'a session state is not a §1 result code: it travels as site_error, as it always has')
+    assert.equal(result.message, 'logged_out: the site shows its login wall')
+    assert.deepEqual(snapshots, [])
+    assert.deepEqual(analystClient.ops(), ['ready', 'insertAndSubmit', 'observe'])
+  }
+})
+
+test('S11: a snapshot that rejects is logged and swallowed — the re-read still runs', async () => {
+  const t = setup({ failureSnapshot: 'reject' })
+  const { analystClient, analyst, snapshots, log } = t
+  const { done } = await toObserve(t)
+  analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe' }))
+  await settleAll()
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']])
+  assert.ok(warnLines(log).some((m) => m === '[orchestrator] analyst page (chatgpt): DOM snapshot of the failed capture failed: op observe (r1) in flight'), JSON.stringify(warnLines(log)))
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt', CHAT], 'the reload went ahead')
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'quiet', ms: 5, url: CHAT })
+  assert.equal((await done).ok, true)
+  // and with no snapshot dep wired at all (a Stage 2 orchestrator) the re-read still runs
+  const bare = setup({ failureSnapshot: null })
+  const { done: run } = await toObserve(bare)
+  bare.analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe' }))
+  await settleAll()
+  assert.deepEqual(bare.analyst.loads, ['https://x.test/new-chatgpt', CHAT])
+  bare.analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  bare.analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'quiet', ms: 5, url: CHAT })
+  assert.equal((await run).ok, true)
+})
+
+test('S11: the re-read is skipped when the grant cannot hold it — the view must be free before the backend’s correction attempt arrives', async () => {
+  const t = setup()
+  const { analystClient, analyst, snapshots, log } = t
+  const { done } = await toObserve(t, { extra: { timeout_s: 20 } }) // 20 s granted; the re-read alone needs readyMs + SETTLED_REREAD_MS
+  analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe' }))
+  const result = await done
+  assert.equal(result.code, 'timeout')
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the DOM is still saved for the next reader')
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'])
+  assert.ok(warnLines(log).some((m) => /no settled re-read — \d+ ms of the grant left, the re-read needs 61000 ms/.test(m)), JSON.stringify(warnLines(log)))
+})
+
+test('S11: incompleteGraceMs rides the analyst observe ×ANALYST_PATIENCE and is absent from a pane’s', async () => {
+  const t = setup()
+  const { done } = await toObserve(t)
+  assert.equal(t.analystClient.last().payload.incompleteGraceMs, INCOMPLETE_GRACE_MS * ANALYST_PATIENCE)
+  assert.equal(INCOMPLETE_GRACE_MS, 20000, 'the adapter default (site.cjs), mirrored')
+  t.analystClient.settle('observe', { ok: true, op: 'observe', text: '{}', doneBy: 'quiet', ms: 1, url: CHAT })
+  await done
+  const p = setup({ capture: { claude: true } })
+  const run = p.orch.run(paneRequest('claude'), p.emit)
+  await settleAll()
+  p.panes.claude.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  p.panes.claude.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, confirmedBy: 'stop_button', sendSelector: 'b' })
+  await settleAll()
+  assert.deepEqual(p.panes.claude.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, baselineCount: 0 })
+  p.panes.claude.settle('observe', { ok: true, op: 'observe', text: 'hi', doneBy: 'quiet', ms: 1 })
+  await run
 })

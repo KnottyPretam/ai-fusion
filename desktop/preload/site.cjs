@@ -47,7 +47,12 @@
 //   * observe: `timeoutMs` overrides `captureTimeoutMs`, `quietMs` overrides `quietMs`, an optional
 //     `firstTokenMs` overrides `firstTokenMs` (the first-token wait is capped by the budget) and an
 //     optional `settleMs` overrides `settleMs` (S10); a missing `baselineCount` means the current
-//     `countAssistant()`. `expect: 'json'` (S10) says what KIND of answer this turn is waiting for.
+//     `countAssistant()`. `expect: 'json'` (S10) says what KIND of answer this turn is waiting for, and
+//     an optional `incompleteGraceMs` (S11) how long an answer that never takes that shape is waited on
+//     after the site says it is done (main scales it for the analyst view, whose lulls are longer).
+//   * every failing observe message ends in ONE bracketed line of counts and booleans (`diag()`, S11:
+//     which container was read, what the site signalled, how much text the reader, the container and
+//     the page held) — never reply text — so a `chars=0` can be read instead of re-measured.
 //   * "the done selector on the last container" = a VISIBLE, clickable `done` match (not `opacity:0`
 //     or `pointer-events:none` — a hover-revealed action bar is not a marker) that is the last
 //     container, inside it, or after it in document order (an older turn's copy button never
@@ -2261,10 +2266,10 @@
      *   text          the last container's `assistantText` matches (first entry that matches, every
      *                 block joined by a blank line), else the container itself, as rendered text;
      *                 CRLF → LF and NBSP → space, never trimmed
-     * `quietMs` / `timeoutMs` / `firstTokenMs` in the message override the selectors; a missing
-     * `baselineCount` means the current count.
+     * `quietMs` / `timeoutMs` / `firstTokenMs` / `settleMs` / `incompleteGraceMs` in the message
+     * override the selectors; a missing `baselineCount` means the current count.
      */
-    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, signal } = {}) {
+    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, signal } = {}) {
       const t0 = clock()
       const given = nonNegativeInt(baselineCount, null)
       let known = null // the containers of EARLIER turns, by node identity; filled by the FIRST sample (same tick as this call, so it shares its one shadow-root walk)
@@ -2285,7 +2290,10 @@
       // (five minutes) whenever a model answers a JSON request in prose — a refusal, an apology, a
       // question back — so the loud failure would arrive ten minutes late. Once the site has signalled
       // the end and the text has not moved for this long, the answer is as complete as it will get.
-      const incompleteGrace = nonNegativeInt(sel.incompleteGraceMs, 20000)
+      // The message overrides the site (S11): main sends it scaled for the analyst view, where a lull
+      // between two renders of a long fenced document is measured in seconds and 20 s of stillness on
+      // a page that has not signalled the end is not yet "will never take the shape".
+      const incompleteGrace = nonNegativeInt(incompleteGraceMs, nonNegativeInt(sel.incompleteGraceMs, 20000))
       // What KIND of answer this turn is waiting for (S10): `json` refuses to resolve an end signal on a
       // document whose braces do not balance. Main sends it for the analyst page, whose reply is always a
       // JSON document; a pane send sends nothing and nothing changes for it.
@@ -2301,6 +2309,58 @@
       let endSeenAt = 0
       let rereadTaken = false // the one final re-sample an incomplete expected answer takes at its budget
       const partial = () => (isBlank(text) ? undefined : text)
+      /**
+       * ONE line of counts and booleans for every failing throw below — never a character of the reply
+       * (the partial carries that, and only as far as the degraded report). It exists because three
+       * failures in a row (2026-09-20/21/22) could only be read as `chars=0`: nothing on the way out
+       * said whether the READER, the CONTAINER or the DOM was the empty thing, and each was re-measured
+       * by hand. The inequalities point at the hypothesis:
+       *   inner ≫ reply         the container holds text the reader did not return → the `assistantText`
+       *                         cascade matched a block that is not the body (a selector);
+       *   maxContainer ≫ inner  another container on the page holds the answer → the container CHOICE
+       *                         (the baseline, or identity across a remount);
+       *   textContent ≫ inner   the text is in the DOM but not laid out (innerText of an unrendered node);
+       *   all small             the DOM really holds nothing yet — the budget, the site, or a wall.
+       * `containers` / `followed` / `connected` say which node was read, `stopNow` / `stopSeen` / `end`
+       * what the site was signalling, `md` / `pre` / `code` the body's shape, `rect` / `viewport` the
+       * geometry of a view that may be hidden (0×0 is the measured normal for the analyst, and reads
+       * fine). A field the DOM cannot answer prints `-`; a diag that throws prints nothing at all — it
+       * must never turn a failure into a different failure.
+       */
+      const diag = () => {
+        try {
+          const containers = assistantContainers()
+          const len = (v) => (typeof v === 'string' ? v.length : 0)
+          const count = (root, selector) => {
+            try {
+              return root ? deepQuerySelectorAll(root, selector).length : 0
+            } catch (_e) {
+              return '-'
+            }
+          }
+          let maxContainer = 0
+          for (const c of containers) maxContainer = Math.max(maxContainer, len(readText(c)))
+          let rect = '-'
+          try {
+            const r = container && typeof container.getBoundingClientRect === 'function' ? container.getBoundingClientRect() : null
+            if (r && Number.isFinite(r.width) && Number.isFinite(r.height)) rect = `${Math.round(r.width)}×${Math.round(r.height)}`
+          } catch (_e) {
+            rect = '-'
+          }
+          let viewport = '-'
+          const root = document && document.documentElement
+          if (root && Number.isFinite(root.clientWidth) && Number.isFinite(root.clientHeight)) viewport = `${root.clientWidth}×${root.clientHeight}`
+          return (
+            `containers=${containers.length} followed=${container ? containers.indexOf(container) : -1} ` +
+            `connected=${!!container && container.isConnected !== false} stopNow=${!!findStop()} stopSeen=${seenStop} ` +
+            `end=${endSeen || '-'} md=${count(container, '.markdown')} pre=${count(container, 'pre')} code=${count(container, 'code')} ` +
+            `reply=${len(text)} inner=${container ? len(readText(container)) : 0} textContent=${container ? len(String(container.textContent || '')) : 0} ` +
+            `maxContainer=${maxContainer} rect=${rect} viewport=${viewport}`
+          )
+        } catch (_e) {
+          return ''
+        }
+      }
       /** The LAST container (document order) that was not already on the page when this observe started; null when every one of them was. */
       const lastFresh = (containers) => {
         for (let i = containers.length - 1; i >= 0; i -= 1) if (!known.has(containers[i])) return containers[i]
@@ -2395,7 +2455,7 @@
             if (!seenContainer && now - t0 >= firstToken) {
               throw new AdapterError(
                 'reply_not_found',
-                `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))})`,
+                `no assistant container beyond ${baseline} within ${firstToken} ms (tried: ${cascadeText(assistantCascade().concat(ASSISTANT_SELECTORS))}) [${diag()}]`,
               )
             }
             // The gap IS bounded by the overall budget: a site that unmounts its reply and never
@@ -2403,7 +2463,7 @@
             // reply that never finishes does — it must never sit here until main's own deadline.
             if (now - t0 >= budget) {
               if (!full) sessionGate() // a terminal answer never bypasses the session check
-              throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+              throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms [${diag()}]`, text)
             }
             return null
           }
@@ -2468,7 +2528,7 @@
                 // 13-character fragment came back `ok` and Analyze compared it), so this FAILS, and
                 // the partial travels with it for the degraded report to quote.
                 if (!full) sessionGate()
-                throw new AdapterError('timeout', `the reply never became a complete ${expectKind} document (${text.length} characters after ${Math.round(now - t0)} ms)`, text)
+                throw new AdapterError('timeout', `the reply never became a complete ${expectKind} document (${text.length} characters after ${Math.round(now - t0)} ms) [${diag()}]`, text)
               }
             } else result = SETTLE
           }
@@ -2492,7 +2552,7 @@
                   'timeout',
                   `the reply container stayed empty for the whole ${budget} ms and the site's stop control is ` +
                     'still up, so the model is still reasoning: this needs a longer capture budget, not a ' +
-                    'different selector',
+                    `different selector [${diag()}]`,
                 )
               }
               if (seenStop) {
@@ -2507,15 +2567,15 @@
                   `the reply container stayed empty for the whole ${budget} ms; the site showed a stop control ` +
                     'earlier but not at the end, so either it is still reasoning (the last sample can miss a ' +
                     'button mid-re-render) or it finished and wrote the answer outside the container this ' +
-                    'capture followed',
+                    `capture followed [${diag()}]`,
                 )
               }
               throw new AdapterError(
                 'reply_not_found',
-                `a reply container was there for ${budget} ms but never held any text, and the site never showed a stop control`,
+                `a reply container was there for ${budget} ms but never held any text, and the site never showed a stop control [${diag()}]`,
               )
             }
-            throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms`, text)
+            throw new AdapterError('timeout', `the reply was still in progress after ${budget} ms [${diag()}]`, text)
           }
           return result
         })
