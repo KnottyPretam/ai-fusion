@@ -185,7 +185,11 @@ export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs,
  * removed. Never throws: a directory that cannot be listed, or a file already gone, is pruned enough.
  */
 export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep) {
-  requireSnapshotName(name)
+  requireSnapshotName(name) // throws bad_request for a name outside SNAPSHOT_NAMES; never throws on fs errors
+  // Only the failure-path prefix is ever pruned. A pane snapshot is the user's own act from the Site
+  // menu and is never touched — the invariant lives here, with the code that could break it, not at
+  // a call site (review 2026-09-22).
+  if (name !== 'analyst') return []
   let names = []
   try {
     names = fs.readdirSync(snapshotsDir)

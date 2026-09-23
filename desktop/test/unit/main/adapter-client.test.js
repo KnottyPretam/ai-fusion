@@ -161,6 +161,8 @@ test('S11: the timeout’s cancel is tracked — e.cancelResult resolves with th
   ipcMain.emit(RESULT_CHANNEL, eventFrom(foreign), { reqId: wc.adapterMessages().at(-1).reqId, ok: true, op: 'cancel', cancelled: true })
   // …and a page that navigates has no op in flight any more: every tracked cancel is answered null
   wc.emit('did-navigate', {}, 'https://chatgpt.com/c/abc')
+  // asserted BEFORE the await: if failAll stopped settling tracked cancels this would hang, not fail
+  assert.equal(timers.pending(), 0, 'the navigate cleared the tracked cancel and its grace timer')
   assert.equal(await e3.cancelResult, null)
 
   // a bridge abort (the signal path) is unchanged: the op's own `cancelled` answer settles the request

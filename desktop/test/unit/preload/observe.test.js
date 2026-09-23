@@ -763,14 +763,14 @@ test('S11: the three empty-container throws carry the diag line — what the sit
     assert.equal(state.error.code, 'timeout')
     assert.match(state.error.message, /outside the container this capture followed \[containers=1 followed=0 connected=true stopNow=false stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
-  // and the two container-less throws, for completeness: the diag has no container to describe
+  // and the container-less throw, for completeness: no container was ever picked, so `followed=-` (not -1, which means detached)
   {
     const { clock, adapter, stop } = setup()
     stop.remove()
     const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
     await clock.advance(1500)
     assert.equal(state.error.code, 'reply_not_found')
-    assert.match(state.error.message, /\(tried: .*\) \[containers=0 followed=-1 connected=false stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+    assert.match(state.error.message, /\(tried: .*\) \[containers=0 followed=- connected=false stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
 })
 
@@ -819,4 +819,41 @@ test('S11: incompleteGraceMs from the observe message overrides the 20 s default
     await clock.advance(30000)
     assert.equal(state.error.code, 'timeout')
   }
+})
+
+test('S11 review: a session refusal mid-capture carries NO diag line — only the timeout / reply_not_found family does', async () => {
+  // The contract says which failures describe the capture; a wall that appears mid-reply is not one
+  // of them, and its message stays the bare phrase the session rules promise.
+  const { doc, clock, adapter, thread } = setup()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 5000, quietMs: 600, settleMs: 200 }))
+  mount(doc, thread, streaming('half an answer'))
+  await clock.advance(1000)
+  // the wall: a visible logged-out marker outside the thread (the same shape adapter.test.js uses)
+  mount(doc, doc.querySelector('#app'), '<a href="/auth/login" data-testid="login-button">Log in</a>')
+  await clock.advance(3000)
+  assert.equal(state.value, null)
+  assert.equal(state.error.code, 'logged_out')
+  assert.equal(/\[containers=/.test(state.error.message), false, 'a session refusal is not a capture report')
+})
+
+test('S11 review: `followed=-` means no container was ever picked; -1 means the followed node is gone', async () => {
+  const { clock, adapter, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
+  await clock.advance(1500)
+  assert.equal(state.error.code, 'reply_not_found')
+  assert.match(state.error.message, /followed=- /, 'no container: a dash, not a number that also means "detached"')
+})
+
+test('S11 review: the incompleteGrace DEFAULT is 20 s, not merely "something under 30 s"', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  stop.remove()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 1000, quietMs: 600, settleMs: 400, expect: 'json' }))
+  mount(doc, thread, textTurn('I cannot answer that.'))
+  await clock.advance(1000 + 600 + 400) // end signal (quiet) + settle: the grace clock starts here
+  await clock.advance(15000)
+  assert.equal(state.done, false, 'a 20 s default has not given up at 15 s')
+  await clock.advance(10000)
+  assert.equal(state.done, true, '…and has by 25 s')
+  assert.equal(state.error.code, 'timeout')
 })

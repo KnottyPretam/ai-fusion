@@ -694,3 +694,16 @@ test('S11: saveDomSnapshot is view-agnostic — an analyst client writes analyst
   await assert.rejects(saveDomSnapshot({ client, name: 'analyst', snapshotsDir: null }), /snapshots_unavailable/)
   await assert.rejects(saveDomSnapshot({ client, name: 'sidebar', snapshotsDir: dir }), /bad_request/)
 })
+
+test('S11 review: pruneSnapshots never touches a pane snapshot, whatever it is asked', () => {
+  // The invariant lives in the function, not at a call site: a pane snapshot is the user's own act.
+  const dir = '/snap'
+  const files = ['chatgpt-1.html', 'chatgpt-2.html', 'chatgpt-3.html', 'analyst-1.html', 'analyst-2.html', 'analyst-3.html']
+  const removed = []
+  const fs = { readdirSync: () => files, unlinkSync: (p) => removed.push(p) }
+  assert.deepEqual(pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 1), [], 'a pane name is a no-op')
+  assert.deepEqual(removed, [])
+  const pruned = pruneSnapshots({ fs, snapshotsDir: dir }, 'analyst', 2)
+  assert.equal(pruned.length, 1, 'the oldest analyst snapshot beyond the cap goes')
+  assert.ok(removed.every((p) => p.includes('analyst-')), 'and only analyst files are ever removed')
+})

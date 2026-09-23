@@ -273,9 +273,16 @@ test('cancel{target}: aborts the in-flight op (it answers cancelled and frees th
   assert.deepEqual(ipc.result('c0'), { reqId: 'c0', ok: true, op: 'cancel', cancelled: false })
   assert.equal(ipc.result('op'), null)
   ipc.emit('triplex:adapter', { reqId: 'c1', op: 'cancel', target: 'op' })
-  assert.deepEqual(ipc.result('c1'), { reqId: 'c1', ok: true, op: 'cancel', cancelled: true })
-  const op = await until(() => ipc.result('op'))
+  // S11 review: the ack is deferred until the aborted op has answered and freed the slot, so main's
+  // next op after an awaited cancel can never meet `busy`. Synchronously there is no ack yet…
+  assert.equal(ipc.result('c1'), null)
+  const c1 = await until(() => ipc.result('c1'))
+  assert.deepEqual(c1, { reqId: 'c1', ok: true, op: 'cancel', cancelled: true })
+  const op = ipc.result('op')
   assert.deepEqual(op, { reqId: 'op', ok: false, op: 'insertAndSubmit', code: 'cancelled', message: 'cancelled by main' })
+  // …and when it lands, the op's own reply is already on the wire ahead of it
+  const order = ipc.results().map((r) => r.reqId)
+  assert.ok(order.indexOf('op') < order.indexOf('c1'), `ack before the op's reply: ${order.join(' ')}`)
   ipc.emit('triplex:adapter', { reqId: 'c2', op: 'cancel', target: 'op' })
   assert.equal(ipc.result('c2').cancelled, false) // already settled
   fake.behaviours.ready = async () => ({ el: {}, selector: '#c' })

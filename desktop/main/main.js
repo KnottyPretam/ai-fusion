@@ -455,9 +455,11 @@ function start() {
     onTurn: (slot, phase, code) => sendToRenderer('panes:turn', code === undefined ? { slot, phase } : { slot, phase, code }),
     // S11: the failing DOM, scrubbed, before a settled re-read reloads it — the hidden analyst's client
     // for an analyst turn, the pane's otherwise, under `analyst-<ts>.html` / `<slot>-<ts>.html`.
-    saveFailureSnapshot: async (view, slot) => {
-      const client = view === 'analyst' ? analystViews.adapterFor(slot) : views.adapterFor(slot)
-      const { path: file } = await saveDomSnapshot({ client, name: view === 'analyst' ? 'analyst' : slot, snapshotsDir })
+    // Only the hidden analyst view is ever snapshotted on a failure (the orchestrator gates it on
+    // `view === 'analyst'`); a pane branch here was dead code that would have written un-pruned files
+    // into the user's own snapshot namespace (review 2026-09-22).
+    saveFailureSnapshot: async (_view, slot) => {
+      const { path: file } = await saveDomSnapshot({ client: analystViews.adapterFor(slot), name: 'analyst', snapshotsDir })
       return file
     },
   })

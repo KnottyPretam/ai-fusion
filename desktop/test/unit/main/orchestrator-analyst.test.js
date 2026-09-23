@@ -19,6 +19,7 @@ import {
   INCOMPLETE_GRACE_MS,
   SETTLED_REREAD_MS,
   TIMEOUT_GRACE_MS,
+  rereadReserveMs,
   insertAndSubmitBudgetMs,
   INSERT_SETTLE_MS,
 } from '../../../main/orchestrator.js'
@@ -673,8 +674,12 @@ test('S10: the ceiling leaves room for the submit too, not just the bridge margi
   })
   const ceiling = Math.max(Math.floor(40000 / 2), 40000 - CAPTURE_CEILING_MARGIN_MS)
   const wanted = 4000 * ANALYST_CAPTURE_PATIENCE
-  assert.ok(wanted > ceiling - readyMs - submitMs, 'this grant is tight enough for the headroom to bind')
-  assert.equal(obs.payload.timeoutMs, ceiling - readyMs - submitMs)
+  // S11 review: an analyst turn also RESERVES the settled re-read's window under the ceiling, so the
+  // capture can never eat the time the recovery needs. With a 40 s grant that reserve (navigate +
+  // ready + re-read + two graces) exceeds the ceiling, so the floor — half of it — is what remains.
+  const reserved = Math.max(Math.floor(ceiling / 2), ceiling - rereadReserveMs(readyMs))
+  assert.ok(wanted > reserved - readyMs - submitMs, 'this grant is tight enough for the headroom to bind')
+  assert.equal(obs.payload.timeoutMs, Math.max(Math.floor(reserved / 2), reserved - readyMs - submitMs))
   assert.ok(obs.payload.timeoutMs < wanted, 'so the capture is trimmed, not left at what it wanted')
   assert.ok(
     obs.payload.timeoutMs + readyMs + submitMs <= 40000,
@@ -761,6 +766,8 @@ test('S11: an analyst capture that times out on a structured purpose is read aga
     settleMs: 200 * ANALYST_PATIENCE,
     firstTokenMs: 3000 * ANALYST_PATIENCE,
     timeoutMs: SETTLED_REREAD_MS,
+    // sized to the re-read's own budget, not the analyst's 60 s (review 2026-09-22)
+    incompleteGraceMs: Math.min(INCOMPLETE_GRACE_MS * ANALYST_PATIENCE, Math.floor(SETTLED_REREAD_MS / 2)),
   })
   assert.equal(obs.opts.timeoutMs, SETTLED_REREAD_MS + TIMEOUT_GRACE_MS)
   analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'done_selector', ms: 900, url: CHAT })
@@ -931,6 +938,7 @@ test('S11: a snapshot that rejects is logged and swallowed — the re-read still
   await settleAll()
   analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'quiet', ms: 5, url: CHAT })
   assert.equal((await done).ok, true)
+  assertValid(t.emitted) // review 2026-09-22: ok alone does not exercise protocol.validate
   // and with no snapshot dep wired at all (a Stage 2 orchestrator) the re-read still runs
   const bare = setup({ failureSnapshot: null })
   const { done: run } = await toObserve(bare)
@@ -941,18 +949,20 @@ test('S11: a snapshot that rejects is logged and swallowed — the re-read still
   await settleAll()
   bare.analystClient.settle('observe', { ok: true, op: 'observe', text: FENCED, doneBy: 'quiet', ms: 5, url: CHAT })
   assert.equal((await run).ok, true)
+  assertValid(bare.emitted)
 })
 
 test('S11: the re-read is skipped when the grant cannot hold it — the view must be free before the backend’s correction attempt arrives', async () => {
   const t = setup()
   const { analystClient, analyst, snapshots, log } = t
-  const { done } = await toObserve(t, { extra: { timeout_s: 20 } }) // 20 s granted; the re-read alone needs readyMs + SETTLED_REREAD_MS
+  const { done } = await toObserve(t, { extra: { timeout_s: 20 } }) // 20 s granted; the re-read needs rereadReserveMs(readyMs) — navigate + ready + re-read + two graces
   analystClient.fail('observe', new AdapterRequestError('timeout', 'still in progress', { op: 'observe' }))
   const result = await done
   assert.equal(result.code, 'timeout')
   assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the DOM is still saved for the next reader')
   assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'])
-  assert.ok(warnLines(log).some((m) => /no settled re-read — \d+ ms of the grant left, the re-read needs 61000 ms/.test(m)), JSON.stringify(warnLines(log)))
+  const needs = rereadReserveMs(1000) // readyMs is 1000 in this fixture's selectors
+  assert.ok(warnLines(log).some((m) => new RegExp(`no settled re-read — \\d+ ms of the grant left, the re-read needs ${needs} ms`).test(m)), JSON.stringify(warnLines(log)))
 })
 
 test('S11: incompleteGraceMs rides the analyst observe ×ANALYST_PATIENCE and is absent from a pane’s', async () => {
@@ -972,4 +982,54 @@ test('S11: incompleteGraceMs rides the analyst observe ×ANALYST_PATIENCE and is
   assert.deepEqual(p.panes.claude.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, baselineCount: 0 })
   p.panes.claude.settle('observe', { ok: true, op: 'observe', text: 'hi', doneBy: 'quiet', ms: 1 })
   await run
+})
+
+test('S11 review: a timeout whose diag says the stop control was still UP is not re-read — the model is still writing and a reload would abandon it', async () => {
+  const t = setup()
+  const { analystClient, analyst, snapshots, emitted, log } = t
+  const { done } = await toObserve(t)
+  const still = 'the reply container stayed empty for the whole 16000 ms and the site\'s stop control is still up, so the model is still reasoning [containers=1 followed=0 connected=true stopNow=true stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-]'
+  analystClient.fail('observe', new AdapterRequestError('timeout', still, { op: 'observe' }))
+  await settleAll()
+  const res = await done
+  assert.equal(res.ok, false)
+  assert.equal(res.code, 'timeout')
+  assert.equal(res.message, still, 'the original failure, untouched')
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the failing DOM is still worth saving')
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'], 'but the chat is NOT reloaded away from a reply in progress')
+  assert.ok(warnLines(log).some((m) => m.includes('still working at the last sample')), warnLines(log).join('\n'))
+  assertValid(emitted)
+})
+
+test('S11 review: a PANE turn on a structured purpose never recovers — the VIEW is what refuses, not the purpose', async () => {
+  const t = setup({ capture: { chatgpt: true } })
+  const { panes, snapshots, emit } = t
+  const done = t.orch.run(paneRequest('chatgpt', { purpose: 'defense' }), emit)
+  await settleAll()
+  panes.chatgpt.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  panes.chatgpt.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1, confirmedBy: 'stop_button', ms: 3 })
+  await settleAll()
+  const obs = panes.chatgpt.last()
+  assert.equal(obs.op, 'observe')
+  assert.equal(obs.payload.expect, 'json', 'the purpose gate is demonstrably OPEN for this turn')
+  panes.chatgpt.fail('observe', new AdapterRequestError('timeout', 'the reply never became a complete json document (44 characters after 30000 ms)', { op: 'observe' }))
+  await settleAll()
+  const res = await done
+  assert.equal(res.ok, false)
+  assert.deepEqual(snapshots, [], 'no snapshot for a pane')
+  assert.deepEqual(panes.chatgpt.ops(), ['ready', 'insertAndSubmit', 'observe'], 'no reload, no ready, no second observe')
+})
+
+test('S11 review: a submit that carried no baseline still snapshots, but skips the re-read and says why', async () => {
+  const t = setup()
+  const { analystClient, analyst, snapshots, log } = t
+  const { done } = await toObserve(t, { submit: { assistantCount: undefined } })
+  analystClient.fail('observe', new AdapterRequestError('timeout', 'the reply never became a complete json document (42 characters after 30260 ms) [containers=1 followed=0 connected=true stopNow=false stopSeen=true end=quiet md=1 pre=1 code=1 reply=42 inner=42 textContent=42 maxContainer=42 rect=- viewport=-]', { op: 'observe' }))
+  await settleAll()
+  const res = await done
+  assert.equal(res.ok, false)
+  assert.deepEqual(snapshots, [['analyst', 'chatgpt']], 'the DOM is still saved')
+  assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'], 'no reload without a baseline')
+  assert.ok(warnLines(log).some((m) => m.includes('carried no baseline')), warnLines(log).join('\n'))
 })

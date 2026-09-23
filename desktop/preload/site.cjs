@@ -50,7 +50,9 @@
 //     `countAssistant()`. `expect: 'json'` (S10) says what KIND of answer this turn is waiting for, and
 //     an optional `incompleteGraceMs` (S11) how long an answer that never takes that shape is waited on
 //     after the site says it is done (main scales it for the analyst view, whose lulls are longer).
-//   * every failing observe message ends in ONE bracketed line of counts and booleans (`diag()`, S11:
+//   * every observe failure that reports what the capture SAW (the `timeout` / `reply_not_found`
+//     family) ends in ONE bracketed line of counts and booleans; a session refusal or a cancel carries
+//     none (`diag()`, S11:
 //     which container was read, what the site signalled, how much text the reader, the container and
 //     the page held) — never reply text — so a `chars=0` can be read instead of re-measured.
 //   * "the done selector on the last container" = a VISIBLE, clickable `done` match (not `opacity:0`
@@ -2290,9 +2292,11 @@
       // (five minutes) whenever a model answers a JSON request in prose — a refusal, an apology, a
       // question back — so the loud failure would arrive ten minutes late. Once the site has signalled
       // the end and the text has not moved for this long, the answer is as complete as it will get.
-      // The message overrides the site (S11): main sends it scaled for the analyst view, where a lull
-      // between two renders of a long fenced document is measured in seconds and 20 s of stillness on
-      // a page that has not signalled the end is not yet "will never take the shape".
+      // The message overrides the site (S11): main sends it scaled for the analyst view. Note WHEN this
+      // window runs — only after the site has signalled the end AND a settle window has passed (`still`
+      // below); it never measures a pre-end lull. A long fenced analyst document can still take seconds
+      // per render after the end signal, so 20 s of stillness is not yet proof the shape will never
+      // arrive (review 2026-09-22 corrected an earlier version of this note that described the wrong state).
       const incompleteGrace = nonNegativeInt(incompleteGraceMs, nonNegativeInt(sel.incompleteGraceMs, 20000))
       // What KIND of answer this turn is waiting for (S10): `json` refuses to resolve an end signal on a
       // document whose braces do not balance. Main sends it for the analyst page, whose reply is always a
@@ -2351,7 +2355,7 @@
           const root = document && document.documentElement
           if (root && Number.isFinite(root.clientWidth) && Number.isFinite(root.clientHeight)) viewport = `${root.clientWidth}×${root.clientHeight}`
           return (
-            `containers=${containers.length} followed=${container ? containers.indexOf(container) : -1} ` +
+            `containers=${containers.length} followed=${container ? containers.indexOf(container) : '-'} ` +
             `connected=${!!container && container.isConnected !== false} stopNow=${!!findStop()} stopSeen=${seenStop} ` +
             `end=${endSeen || '-'} md=${count(container, '.markdown')} pre=${count(container, 'pre')} code=${count(container, 'code')} ` +
             `reply=${len(text)} inner=${container ? len(readText(container)) : 0} textContent=${container ? len(String(container.textContent || '')) : 0} ` +
@@ -2742,7 +2746,7 @@
     let adapter = null
     let booting = true // adapter:config not answered yet: messages are parked in `backlog`
     const backlog = []
-    let inFlight = null // {reqId, op, controller}
+    let inFlight = null // {reqId, op, controller, settled} — `settled` resolves once the op has answered and the slot is free
     let lastHealthKey = null
     let lastHealthAt = 0
     let timer = null
@@ -2825,8 +2829,18 @@
       }
       if (op === 'cancel') {
         const cancelled = inFlight !== null && inFlight.reqId === msg.target
-        if (cancelled) inFlight.controller.abort() // the op answers `cancelled` itself and frees the slot
-        reply({ reqId, ok: true, op: 'cancel', cancelled })
+        if (cancelled) {
+          // The ack is sent only once the aborted op has answered and freed the slot (review
+          // 2026-09-22): an op that only notices the abort at its next poll (`ready`, `submit`) would
+          // otherwise still be in flight when main, trusting the ack, sends its next request — and get
+          // `busy`. `observe` rejects synchronously on abort, so for it this is the same instant.
+          const target = inFlight
+          target.controller.abort()
+          const ack = () => reply({ reqId, ok: true, op: 'cancel', cancelled: true })
+          target.settled.then(ack, ack)
+          return
+        }
+        reply({ reqId, ok: true, op: 'cancel', cancelled: false })
         return
       }
       if (op === 'ready' || op === 'insertAndSubmit' || op === 'observe' || op === 'snapshot') {
@@ -2835,8 +2849,11 @@
           return
         }
         const controller = makeController()
-        inFlight = { reqId, op, controller }
-        Promise.resolve()
+        // `settled` resolves only after the op has ANSWERED and the slot is free: it is what a cancel's
+        // ack is chained on (S11 review), so "the ack arrived" and "the view is free" are one event.
+        const entry = { reqId, op, controller, settled: null }
+        inFlight = entry
+        entry.settled = Promise.resolve()
           .then(() => runOp(op, msg, controller.signal))
           .then(
             (res) => reply({ reqId, ok: true, op, ...res }),

@@ -149,6 +149,20 @@ export const SETTLED_REREAD_MS = 60000
 /** The failure codes a settled re-read may follow: the two that say "the capture did not read it", never one that says the site refused. */
 export const REREAD_CODES = Object.freeze(['timeout', 'reply_not_found'])
 
+/**
+ * What the settled re-read needs of the grant, worst case: the reload wait, `ready`, the re-read
+ * observe, and main's own grace on each request. `budgets()` RESERVES this much of the ceiling for an
+ * analyst turn (review 2026-09-22: a capture sized to eat the ceiling left exactly the 30 s margin,
+ * and the recovery the release is about never ran on a full-budget timeout under a 900 s grant), and
+ * `settledReread` checks the same sum, so the two can never disagree.
+ */
+export function rereadReserveMs(readyMs) {
+  return NAVIGATION_WAIT_MS + readyMs + TIMEOUT_GRACE_MS + SETTLED_REREAD_MS + TIMEOUT_GRACE_MS
+}
+
+/** A diag line saying the site's stop control was up at the last sample: the model is still working. */
+export const STILL_WORKING_RE = /\bstopNow=true\b/
+
 /** The analyst's multiplier for the OVERALL capture budget (thinking time, not lull length). */
 export const ANALYST_CAPTURE_PATIENCE = 4
 
@@ -318,7 +332,10 @@ export function createOrchestrator({
     // work on this turn too — waiting for the composer, inserting, submitting — and not just for the
     // bridge margin. A capture sized against the grant alone outlives it by however long the submit
     // took. The floor keeps a short grant usable: half of what the margin left.
-    const ceiling = captureCeilingMs(timeoutS)
+    // An analyst turn keeps room under the ceiling for the settled re-read (S11) — the recovery is
+    // worthless if the capture it recovers from has already eaten the time it needs.
+    const reserve = view === 'analyst' ? rereadReserveMs(composer) : 0
+    const ceiling = Math.max(Math.floor(captureCeilingMs(timeoutS) / 2), captureCeilingMs(timeoutS) - reserve)
     const captureTimeoutMs = Math.min(wanted, Math.max(Math.floor(ceiling / 2), ceiling - composer - submitMs))
     return {
       readyMs: composer,
@@ -682,6 +699,17 @@ export function createOrchestrator({
    * re-read was not attempted or failed — the caller then reports the original failure. Never rejects.
    */
   async function settledReread(request, entry, error, submitted, b, elapsed) {
+    // Structural, not incidental (review 2026-09-22): this runs inside turn()'s single catch, so a throw
+    // anywhere in it would replace the ORIGINAL failure with a generic site_error and lose the partial.
+    try {
+      return await settledRereadUnguarded(request, entry, error, submitted, b, elapsed)
+    } catch (e) {
+      warn(`${entry.label}: settled re-read threw (${(e && e.message) || e}); reporting the original failure`)
+      return null
+    }
+  }
+
+  async function settledRereadUnguarded(request, entry, error, submitted, b, elapsed) {
     const { slot } = request
     const { seam, label } = entry
     const reqId = request.req_id
@@ -709,6 +737,14 @@ export function createOrchestrator({
         warn(`${label}: DOM snapshot of the failed capture failed: ${(e && e.message) || e}`)
       }
     }
+    // (2b) a capture that ended with the site's stop control UP is the S10 reasoning shape: the model is
+    // still writing and the answer is provably not on the page yet (measured 570 s of it). Reloading
+    // now would destroy the in-progress turn. The diag line says so; the snapshot above is still worth
+    // having. (Review 2026-09-22.)
+    if (error && STILL_WORKING_RE.test(String(error.message || ''))) {
+      warn(`${label}: no settled re-read — the site was still working at the last sample (stopNow=true); a reload would abandon the reply in progress`)
+      return null
+    }
     // (3) only a chat can be reloaded and read: the site root holds nothing, and chatgpt's `/c/WEB:<uuid>`
     // placeholder 404s (the segment-end chatUrlPattern rejects it, as it does for chats.json).
     const here = seam.url()
@@ -729,7 +765,7 @@ export function createOrchestrator({
     // The re-read has to finish inside the grant too, or the bridge fails the request while the view
     // is still reserved and the backend's correction attempt lands on a `view_busy`.
     const left = grantMs(request && request.timeout_s) - elapsed()
-    const needed = b.readyMs + SETTLED_REREAD_MS
+    const needed = rereadReserveMs(b.readyMs) // the same sum budgets() reserved, so this is normally true
     if (left < needed) {
       warn(`${label}: no settled re-read — ${left} ms of the grant left, the re-read needs ${needed} ms`)
       return null
@@ -737,11 +773,16 @@ export function createOrchestrator({
     try {
       if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
       info(`${label}: settled re-read — reloading the chat and reading it again from baseline ${baseline}`)
-      await seam.loadUrl(here)
+      // A loader that resolves on load is bounded like every other wait here; the navigation wait
+      // below is what actually confirms the page.
+      await Promise.race([Promise.resolve(seam.loadUrl(here)), new Promise((r) => setT(r, NAVIGATION_WAIT_MS))])
       await awaitPendingNavigation(seam, label, signal)
       if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
       await client.request('ready', { timeoutMs: b.readyMs }, { timeoutMs: b.readyMs + TIMEOUT_GRACE_MS, signal })
-      const payload = { baselineCount: baseline, expect: 'json', quietMs: b.quietMs, settleMs: b.settleMs, firstTokenMs: b.firstTokenMs, timeoutMs: SETTLED_REREAD_MS }
+      // The re-read gets a grace sized to ITS budget, not the analyst's 60 s (which would not fit in a
+      // 60 s observe): a settled page has nothing left to render, so half the budget is generous.
+      const rereadGrace = Math.min(Number.isFinite(b.incompleteGraceMs) ? b.incompleteGraceMs : INCOMPLETE_GRACE_MS, Math.floor(SETTLED_REREAD_MS / 2))
+      const payload = { baselineCount: baseline, expect: 'json', quietMs: b.quietMs, settleMs: b.settleMs, firstTokenMs: b.firstTokenMs, timeoutMs: SETTLED_REREAD_MS, incompleteGraceMs: rereadGrace }
       const observed = await client.request('observe', payload, { timeoutMs: SETTLED_REREAD_MS + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
