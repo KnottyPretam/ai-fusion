@@ -224,3 +224,27 @@ def prompts_analyze_system() -> str:
     from backend.prompts import analyze as analyze_prompts
 
     return analyze_prompts.SYSTEM
+
+
+async def test_a_partial_before_a_transport_error_is_recorded_once_and_never_echoed(
+    make_conversation, refactor, local_fixtures
+):
+    """Review 2026-09-22: `_call` resets its partial recorder between attempts, and nothing pinned
+    that. First call: text then a transport error (partial "half a map"); second call (the correction,
+    on a non-web transport): error with no text. The partial must appear exactly once in
+    raw_attempts, and the correction must not carry it back as an assistant turn -- a transport error
+    is never "output" to correct (docs/semantics.md, "Analyze on a transport error")."""
+    local_fixtures("analyst_partial_then_error")
+    conv = await persist(make_conversation())
+    r, events = await refactor(conv.id)
+    assert r.status_code == 200, r.text
+    assert _types(events)[-1] == "refactor_degraded"
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded"
+    calls = extraction_calls()
+    assert len(calls) == 2  # the map call and its one correction attempt
+    assert turn["raw_attempts"] == ["half a map"]  # once, not "half a map\n\nhalf a map"
+    # the correction is a user message only: no assistant echo of a transport partial
+    second = calls[1]["messages"]
+    assert [m["role"] for m in second] == [m["role"] for m in calls[0]["messages"]] + ["user"]
+    assert "half a map" not in second[-1]["content"]

@@ -146,6 +146,11 @@ CONDENSE_CHUNK_CHARS = 6_000
 # 21-335 s all afternoon), was refused after ten minutes of successful work. What the comparison
 # needs is one analyst message it can answer; the scaffold adds ~1.5 KB on top of this.
 CONDENSED_MAX_CHARS = 20_000
+# …and it is measured on what the comparison message actually carries -- the condensed replies PLUS
+# the question and the Refactor graph, which ride in the same single analyst message (review
+# 2026-09-22: a 7,000-character question on top of 18,900 of condensed replies would have rebuilt the
+# 27 KB message this whole path exists to avoid). `SPLIT_MIN_CHARS` stays a measure of the replies
+# alone: it decides whether to split, not whether the message fits.
 # How many condense passes may run before the set is refused. One pass reduces ~30%; a second pass
 # over the condensed blocks is "the other step" the user asked for on 2026-09-20 when one is not
 # enough. A set that does not fit after two is refused loudly, never truncated (same decision).
@@ -276,18 +281,41 @@ def oversize_message(label: Label | str, chars: int) -> str:
     )
 
 
-def split_notice(label: Label | str, chars: int, total: int) -> str:
+def split_notice(
+    label: Label | str,
+    chars: int,
+    total: int,
+    *,
+    bound: int = SPLIT_MIN_CHARS,
+    pass_no: int = 1,
+) -> str:
     """What `analyze_retry` carries for one condense sub-call. The event alphabet is frozen, so
-    this string is the only place the split can announce itself (module docstring)."""
+    this string is the only place the split can announce itself (module docstring), and the pane
+    keys its progress branch on `SPLIT_NOTICE_PREFIX`, so that comes first on every pass.
+
+    Pass 1 names the split trigger and the reply; pass 2 (review 2026-09-22) names the bound that
+    actually forced it and says the block is already condensed -- before that, both passes read as
+    the same sentence citing a threshold the second one never used."""
+    if pass_no <= 1:
+        return (
+            f"{SPLIT_NOTICE_PREFIX}: {total:,} characters of replies is over {bound:,}, so "
+            f"{label}'s reply ({chars:,} characters) is being condensed to its substantive claims first"
+        )
     return (
-        f"{SPLIT_NOTICE_PREFIX}: {total:,} characters of replies is over "
-        f"{SPLIT_MIN_CHARS:,}, so {label}'s reply ({chars:,} characters) is being condensed to "
-        f"its substantive claims first"
+        f"{SPLIT_NOTICE_PREFIX}: the condensed set still comes to {total:,} characters after "
+        f"{pass_no - 1} pass{'es' if pass_no > 2 else ''}, over the {bound:,} one comparison message "
+        f"can carry, so {label}'s condensed block ({chars:,} characters) is being condensed again"
     )
 
 
 def condense_failure(label: Label | str, error: str) -> str:
     return f"could not condense {label}'s reply for the comparison: {error}"
+
+
+def comparison_chars(question: str, responses: dict[Label, str], graph: str = "") -> int:
+    """What the comparison message would quote: the blocks, the question and the graph. The scaffold
+    (headers, notice, delimiters) adds ~1.5 KB on top; CONDENSED_MAX_CHARS leaves room for it."""
+    return quoted_chars(responses) + len(question) + len(graph)
 
 
 def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
@@ -296,10 +324,10 @@ def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
     offender, because the alternative -- quietly dropping half an answer -- is worse than no
     comparison (user decision, 2026-09-20)."""
     return (
-        f"the condensed replies still come to {total:,} characters after {CONDENSE_PASSES} condense "
-        f"passes, over the {CONDENSED_MAX_CHARS:,} one analyst message is sized for (the largest is "
-        f"{label}'s at {chars:,}). Condensing did not shorten them enough to compare, and nothing was "
-        f"truncated to force it."
+        f"the comparison message would still be {total:,} characters (the condensed replies plus the "
+        f"question) after {CONDENSE_PASSES} condense passes, over the {CONDENSED_MAX_CHARS:,} one "
+        f"analyst message is sized for (the largest block is {label}'s at {chars:,}). Condensing did "
+        f"not shorten them enough to compare, and nothing was truncated to force it."
     )
 
 
@@ -368,6 +396,13 @@ def chunk_reply(response: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
         # hard-cut: better a cut inside one line than a message the analyst will not answer.
         for piece in _split_lines(para, limit):
             if len(piece) > limit:
+                # FLUSH first. Review 2026-09-22 caught the first version overwriting `current` here,
+                # which silently dropped every line accumulated before an over-limit one -- up to
+                # 5,290 characters on a bullet block ending in a long bullet. A silent truncation is
+                # the one outcome this whole path exists to prevent.
+                if current:
+                    chunks.append(current)
+                    current = ""
                 while len(piece) > limit:
                     chunks.append(piece[:limit])
                     piece = piece[limit:]
@@ -487,6 +522,8 @@ async def _condense_all(
     usage: FeatureUsage,
     raw_attempts: list[str],
     queue: asyncio.Queue[dict[str, Any] | None],
+    bound: int = SPLIT_MIN_CHARS,
+    pass_no: int = 1,
 ) -> tuple[dict[Label, str] | None, str | None]:
     """The three condense sub-calls, in R1/R2/R3 order. Returns `(condensed, None)` or
     `(None, error)` on the first failure -- the comparison call never runs on a partial set.
@@ -498,7 +535,10 @@ async def _condense_all(
     for label in LABELS:
         response = responses[label]
         queue.put_nowait(
-            {"type": "analyze_retry", "error": split_notice(label, len(response), total)}
+            {
+                "type": "analyze_retry",
+                "error": split_notice(label, len(response), total, bound=bound, pass_no=pass_no),
+            }
         )
         # One condense message can only quote CONDENSE_CHUNK_CHARS. A bigger reply is condensed in
         # pieces and their claim lines concatenated: the comparison quotes the same kind of block
@@ -616,7 +656,11 @@ async def _produce(
             # CONDENSED_MAX_CHARS; a set still over it gets one more pass over the condensed blocks,
             # and a set that does not fit after CONDENSE_PASSES is refused, never truncated.
             passes = 1
-            while reduced is not None and quoted_chars(reduced) > CONDENSED_MAX_CHARS and passes < CONDENSE_PASSES:
+            while (
+                reduced is not None
+                and comparison_chars(question, reduced, graph) > CONDENSED_MAX_CHARS
+                and passes < CONDENSE_PASSES
+            ):
                 passes += 1
                 reduced, error = await _condense_all(
                     model=model,
@@ -625,9 +669,11 @@ async def _produce(
                     usage=usage,
                     raw_attempts=raw_attempts,
                     queue=queue,
+                    bound=CONDENSED_MAX_CHARS,
+                    pass_no=passes,
                 )
             if reduced is not None:
-                still = quoted_chars(reduced)
+                still = comparison_chars(question, reduced, graph)
                 if still > CONDENSED_MAX_CHARS:
                     worst, worst_chars = max(
                         ((label, len(text)) for label, text in reduced.items()),
@@ -738,6 +784,7 @@ __all__ = [
     "SPLIT_NOTICE_PREFIX",
     "cached_ok_turn",
     "condense_failure",
+    "comparison_chars",
     "condense_ineffective",
     "refactored_input",
     "render_graph",

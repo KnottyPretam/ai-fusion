@@ -38,6 +38,13 @@ import { APP_NAME } from '../../branding.js'
  * reply being condensed in pieces both announce themselves on the retry event, and this prefix is
  * the only thing that tells either apart from a failed attempt being sent back.
  */
+/**
+ * A degraded turn whose error carries one of these never ran the comparison: `oversize_message`,
+ * `condense_failure` and `condense_ineffective` in backend/features/analyze.py. Copies with a pointer,
+ * not a second definition (features never import the backend's strings): keep them in step.
+ */
+export const NO_COMPARISON_MARKERS = ['can take in one message', 'could not condense', 'condense passes']
+
 export const NOTICE_PREFIX = 'splitting the analyst prompt'
 
 /** True when an `analyze_retry` is narrating progress (a condensation) rather than a failed attempt. */
@@ -247,12 +254,14 @@ export default function AnalyzePane() {
 function Degraded({ turn }) {
   const attempts = Array.isArray(turn.raw_attempts) ? turn.raw_attempts : []
   // "after one retry" is true only when the comparison ran and its failed output was sent back once.
-  // A size-bound degrade — a reply over the budget, a condensation that failed or did not shrink —
-  // never got that far, and the frozen turn has no field for which it was; the raw-attempt count is
-  // the one signal it carries: a retried comparison always leaves more than one, an oversize reply
-  // leaves none. (A condensation that failed after the first succeeded also leaves two and reads as
-  // the former; the quoted error below names the real cause either way.)
-  const retried = attempts.length > 1
+  // A size-bound degrade — a reply over the budget, a condensation that failed, or a set that did not
+  // shrink enough — never got that far, and the frozen turn has no field for which it was. The
+  // raw-attempt count cannot tell them apart (review 2026-09-22: a refused set after two passes
+  // leaves nine attempts and no comparison), so the branch keys on the error text, mirroring the
+  // three strings backend/features/analyze.py writes for those cases the way NOTICE_PREFIX mirrors
+  // SPLIT_NOTICE_PREFIX.
+  const noComparison = NO_COMPARISON_MARKERS.some((m) => String(turn.error || '').includes(m))
+  const retried = !noComparison && attempts.length > 1
   return (
     <div className={css.degraded} data-testid="analyze-degraded">
       <div>

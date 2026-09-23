@@ -530,3 +530,34 @@ describe('AnalyzePane: the Refactor option', () => {
     expect(screen.getByTestId('analyze-run')).toBeDisabled()
   })
 })
+
+describe('AnalyzePane: a refused condensed set is not a retried comparison', () => {
+  test('nine raw attempts and a condense_ineffective error read as "could not produce a report", never "after one retry"', () => {
+    // Review 2026-09-22: the attempt COUNT cannot distinguish a refused set (two passes, nine
+    // condensations, no comparison) from a retried comparison; only the error text can.
+    const turn = degradedTurn({
+      error: 'the comparison message would still be 26,079 characters (the condensed replies plus the question) after 2 condense passes, over the 20,000 one analyst message is sized for (the largest block is R3\'s at 9,000). Condensing did not shorten them enough to compare, and nothing was truncated to force it.',
+      raw_attempts: Array(9).fill('- a claim'),
+    })
+    renderPane(stateWith([events.start(), events.degraded(turn)]))
+    const box = screen.getByTestId('analyze-degraded')
+    expect(box).toHaveTextContent('could not produce a report')
+    expect(box).not.toHaveTextContent('after one retry')
+    expect(box).toHaveTextContent('condense passes')
+  })
+
+  test('a condensation that failed after earlier ones succeeded reads the same way', () => {
+    const turn = degradedTurn({
+      error: "could not condense R2's reply for the comparison: Provider disconnected",
+      raw_attempts: ['- r1 claim', ''],
+    })
+    renderPane(stateWith([events.degraded(turn)]))
+    expect(screen.getByTestId('analyze-degraded')).not.toHaveTextContent('after one retry')
+  })
+
+  test('a genuine comparison retry still says so', () => {
+    const turn = degradedTurn({ error: 'validation_error: agreements.0.models', raw_attempts: ['{"agreements": []}', '{}'] })
+    renderPane(stateWith([events.degraded(turn)]))
+    expect(screen.getByTestId('analyze-degraded')).toHaveTextContent('after one retry')
+  })
+})

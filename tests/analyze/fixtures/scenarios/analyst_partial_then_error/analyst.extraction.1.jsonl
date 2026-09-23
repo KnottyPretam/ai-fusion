@@ -1,0 +1,2 @@
+{"id": "gen-partial-1", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "half a map"}, "finish_reason": null}]}
+{"id": "gen-partial-1", "error": {"code": 502, "message": "Provider disconnected", "metadata": {"error_type": "provider_unavailable"}}, "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}]}

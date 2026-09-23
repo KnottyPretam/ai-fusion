@@ -241,6 +241,14 @@ def test_chunk_notice_names_the_label_the_size_and_the_piece_count():
 # frozen. The pane keys its progress branch on `SPLIT_NOTICE_PREFIX` alone and docs/api-contract.md
 # promises it; the chunk notice shipped without it in 1fc9339 and every chunked reply reached the
 # user as "the analyst output failed validation" (found 2026-09-22). These pin the invariant.
+def test_the_chunk_notice_shares_whatever_prefix_the_split_notice_has():
+    """Behavioural, constant-free: derive the prefix from split_notice, which carried it before
+    1fc9339, and require chunk_notice to start with the same thing. Fails on the pre-fix code for the
+    right reason (the narration differs), not on a missing name."""
+    prefix = feature.split_notice("R2", 1, 2).split(":")[0]
+    assert feature.chunk_notice("R1", 1, 2).startswith(prefix + ":")
+
+
 def test_every_progress_narration_begins_with_the_prefix_the_pane_keys_on():
     prefix = feature.SPLIT_NOTICE_PREFIX
     split = feature.split_notice("R2", 13_677, 27_252)
@@ -288,7 +296,9 @@ async def test_condensations_that_do_not_shrink_degrade_instead_of_sending_the_p
     assert len(extraction_calls()) == 3 + 6
     narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
     assert all(n.startswith(feature.SPLIT_NOTICE_PREFIX) for n in narrations), narrations
-    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 6  # 3 + 3
+    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 3  # pass 1
+    assert sum(1 for n in narrations if "is being condensed again" in n) == 3  # pass 2, worded as such
+    assert all(f"over the {feature.CONDENSED_MAX_CHARS:,}" in n for n in narrations if "again" in n)
     turn = events[-1]["turn"]
     assert turn["status"] == "degraded" and turn["extraction"] is None
     assert f"after {feature.CONDENSE_PASSES} condense passes" in turn["error"]
@@ -329,12 +339,37 @@ def test_chunk_reply_splits_a_bullet_block_on_line_boundaries_before_cutting():
     assert [len(p) for p in feature.chunk_reply(one_line)] == [6000, 6000, 100]
 
 
+@pytest.mark.parametrize(
+    "block",
+    [
+        "- bullet one is short\n- " + "z" * 6500,
+        "x" * 6500 + "\n" + "y" * 6500,
+        "\n".join([f"- short claim {i}" for i in range(300)] + ["- " + "z" * 7000]),
+        "## Findings\n" + "x" * 6100 + "\n\ntail",
+    ],
+    ids=["short-then-long", "two-long-lines", "300-short-then-huge", "heading-long-para-tail"],
+)
+def test_chunk_reply_never_loses_a_character_around_an_over_limit_line(block):
+    """Review 2026-09-22: the first line-splitting version overwrote the accumulated lines whenever
+    the NEXT line was over the limit, dropping 22 to 5,290 characters silently. Every character must
+    survive; the only thing chunking may remove is the newline it split on."""
+    pieces = feature.chunk_reply(block)
+    assert all(0 < len(p) <= feature.CONDENSE_CHUNK_CHARS for p in pieces)
+    kept = sum(len(p) for p in pieces)
+    separators = block.count("\n")  # the most the split can legitimately consume
+    assert kept >= len(block) - separators, (kept, len(block))
+    for line in block.split("\n"):
+        if line:
+            assert any(line[:40] in p for p in pieces), line[:40]  # every line's start is somewhere
+
+
 async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then_the_comparison(
     make_conversation, analyze, local_fixtures
 ):
     """The other step the user asked for on 2026-09-20: three 9,000-character replies, split into two
-    pieces each; the first pass's claims still total ~24,600, over CONDENSED_MAX_CHARS, so a second
-    pass runs over the condensed blocks (~6,600 after it) and THEN the comparison."""
+    pieces each; the first pass's claims still total 26,079, over CONDENSED_MAX_CHARS, so a second
+    pass runs over the condensed blocks (6,741 after it) and THEN the comparison. Both totals are
+    asserted below from what the run recorded, not taken from this docstring."""
     local_fixtures("analyst_split_two_pass")
     responses = {"claude": reply(9_000, "R1"), "chatgpt": reply(9_000, "R2"), "grok": reply(9_000, "R3")}
     conv = await persist(make_conversation(responses=responses))
@@ -350,7 +385,7 @@ async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then
     # the second pass condensed the FIRST pass's bullets, not the raw replies
     _system, user7 = calls[6]["messages"]
     seventh = next(iter(blocks_of(user7["content"]).values()))
-    assert "pass-1 piece" in seventh and "R1 raw" not in seventh
+    assert "pass-1 piece" in seventh and "gyroscope" not in seventh  # the raw replies say gyroscope
     system, user = calls[12]["messages"]
     assert system["content"] == prompts.SYSTEM
     condensed = blocks_of(user["content"])
@@ -361,9 +396,16 @@ async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then
     assert turn["status"] == "ok" and turn["extraction"] is not None
     assert len(turn["raw_attempts"]) == 13
     assert turn["usage"]["totals"]["calls"] == 13
+    # The premise, machine-checked: raw_attempts holds each successful condensation's rendered
+    # claims, so the first six ARE the pass-1 set and the next six the pass-2 set.
+    rendered = [len(r) for r in turn["raw_attempts"]]
+    assert sum(rendered[:6]) > feature.CONDENSED_MAX_CHARS, sum(rendered[:6])
+    assert sum(rendered[6:12]) <= feature.CONDENSED_MAX_CHARS, sum(rendered[6:12])
     narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
     assert all(n.startswith(feature.SPLIT_NOTICE_PREFIX) for n in narrations)
-    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 6  # 3 per pass
+    assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 3  # pass 1
+    assert sum(1 for n in narrations if "condensed block" in n and "condensed again" in n) == 3  # pass 2
+    assert not any(f"over {feature.SPLIT_MIN_CHARS:,}" in n for n in narrations if "again" in n)  # not the trigger
 
 
 async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the_comparison_as_one_block(
@@ -542,3 +584,25 @@ def test_retry_follow_up_passes_the_transport_flag_through(fenced):
     follow_up = feature.retry_follow_up("{not json", "parse_error: x", fenced=fenced)
     assert follow_up[-1]["content"] == prompts.retry_message("parse_error: x", fenced=fenced)
     assert ("```json" in follow_up[-1]["content"]) is fenced
+
+
+def test_the_bound_counts_the_question_and_the_graph_not_just_the_replies():
+    """Review 2026-09-22: the question and the Refactor graph ride in the same single analyst message
+    as the condensed replies, so the bound has to count them or a long question rebuilds the very
+    message size the split exists to avoid."""
+    replies = {"R1": "a" * 6_000, "R2": "b" * 6_000, "R3": "c" * 6_000}  # 18,000: under the bound alone
+    assert feature.comparison_chars("q", replies) == 18_001
+    assert feature.comparison_chars("q", replies) <= feature.CONDENSED_MAX_CHARS
+    long_question = "why? " * 1_000  # 5,000 characters
+    assert feature.comparison_chars(long_question, replies) > feature.CONDENSED_MAX_CHARS
+    graph = "- a --[relates to]--> b\n" * 100
+    assert feature.comparison_chars("q", replies, graph) == 18_001 + len(graph)
+
+
+def test_split_notice_names_the_trigger_on_pass_one_and_the_bound_on_pass_two():
+    one = feature.split_notice("R1", 6_187, 20_511)
+    two = feature.split_notice("R1", 8_200, 24_600, bound=feature.CONDENSED_MAX_CHARS, pass_no=2)
+    assert one.startswith(feature.SPLIT_NOTICE_PREFIX) and two.startswith(feature.SPLIT_NOTICE_PREFIX)
+    assert f"over {feature.SPLIT_MIN_CHARS:,}" in one and "reply" in one
+    assert f"over the {feature.CONDENSED_MAX_CHARS:,}" in two and "condensed block" in two and "again" in two
+    assert f"{feature.SPLIT_MIN_CHARS:,}" not in two  # the trigger is not what forced pass two
