@@ -16,7 +16,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, annotateHealth, snapshotFileName, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, SNAPSHOT_NAMES, ANALYST_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { SLOTS } from '../../../main/sites.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
@@ -647,4 +648,49 @@ test('panes:export without a runner is export_unavailable (validation still runs
   const { ipcMain, fromRenderer } = setup({ withExport: false })
   await assert.rejects(ipcMain.invoke('panes:export', fromRenderer, { conversationId: CONV, turnId: 't1', formats: ['md'] }), /export_unavailable/)
   await rejects(ipcMain.invoke('panes:export', fromRenderer, { conversationId: CONV, turnId: 't1', formats: ['docx'] }), /bad_request/)
+})
+
+test('S11: saveDomSnapshot is view-agnostic — an analyst client writes analyst-<ts>.html, the IPC boundary still names panes only, and analyst snapshots are pruned to the newest 20', async () => {
+  assert.deepEqual([...SNAPSHOT_NAMES], [...SLOTS, 'analyst'])
+  assert.equal(snapshotFileName('analyst', 1710000000000.4), 'analyst-1710000000000.html')
+  assert.throws(() => snapshotFileName('bing', 1), /bad_request/)
+  // the renderer can never name the analyst file (or anything else): requireSlot stays at the boundary
+  const { ipcMain, fromRenderer, adapters } = setup()
+  await rejects(ipcMain.invoke('panes:snapshot', fromRenderer, 'analyst'))
+  assert.deepEqual(adapters.chatgpt.requests, [])
+
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-ipc-')), 'snapshots')
+  const requests = []
+  const client = {
+    request: async (op, payload, opts) => {
+      requests.push([op, payload, opts])
+      return { ok: true, op, html: '<html><body><main>…</main></body></html>' }
+    },
+  }
+  let t = 1000
+  const { path: first } = await saveDomSnapshot({ client, name: 'analyst', snapshotsDir: dir, now: () => t })
+  assert.equal(first, path.join(dir, 'analyst-1000.html'))
+  assert.equal(fs.readFileSync(first, 'utf8'), '<html><body><main>…</main></body></html>')
+  assert.deepEqual(requests, [['snapshot', {}, { timeoutMs: 15000 }]])
+  // a pane snapshot beside them is the user's own and is never pruned
+  fs.writeFileSync(path.join(dir, 'claude-1.html'), 'x')
+  for (let i = 1; i <= ANALYST_SNAPSHOTS_KEPT + 4; i++) {
+    t = 1000 + i
+    await saveDomSnapshot({ client, name: 'analyst', snapshotsDir: dir, now: () => t })
+  }
+  const names = fs.readdirSync(dir).sort()
+  const analystFiles = names.filter((n) => n.startsWith('analyst-'))
+  assert.equal(ANALYST_SNAPSHOTS_KEPT, 20)
+  assert.equal(analystFiles.length, ANALYST_SNAPSHOTS_KEPT)
+  assert.equal(names.includes('claude-1.html'), true)
+  for (let i = 0; i <= 4; i++) assert.equal(analystFiles.includes(`analyst-${1000 + i}.html`), false, `the oldest went first (analyst-${1000 + i})`)
+  assert.equal(analystFiles.includes(`analyst-${1000 + ANALYST_SNAPSHOTS_KEPT + 4}.html`), true, 'the newest is kept')
+  // pruneSnapshots on its own: by the stamp in the name, never by mtime; a missing dir is nothing to prune
+  assert.deepEqual(pruneSnapshots({ snapshotsDir: dir }, 'analyst', 2).sort(), analystFiles.slice(0, -2).sort())
+  assert.deepEqual(pruneSnapshots({ snapshotsDir: path.join(dir, 'nope') }, 'analyst', 2), [])
+  assert.throws(() => pruneSnapshots({ snapshotsDir: dir }, '..', 2), /bad_request/)
+  // the failure modes a caller sees are what they were
+  await assert.rejects(saveDomSnapshot({ client: null, name: 'analyst', snapshotsDir: dir }), /view_crashed/)
+  await assert.rejects(saveDomSnapshot({ client, name: 'analyst', snapshotsDir: null }), /snapshots_unavailable/)
+  await assert.rejects(saveDomSnapshot({ client, name: 'sidebar', snapshotsDir: dir }), /bad_request/)
 })

@@ -5,7 +5,10 @@
 //
 // One client per site view. `request(op, payload, {timeoutMs})` resolves with the ok:true result
 // object and rejects with an `AdapterRequestError {code, message, partial?}` for an ok:false
-// result, a timeout (`timeout`, a `cancel` is sent for the request), a main-frame navigation
+// result, a timeout (`timeout`, a `cancel` is sent for the request and its answer is awaitable as
+// `error.cancelResult` — the preload holds ONE op in flight per view and only frees it once it has
+// answered that cancel, so a caller that wants to ask anything else of the page must wait for it or
+// be told `busy`; S11), a main-frame navigation
 // (`did-navigate` → every pending request fails `adapter_gone`; the preload re-boots), a crashed
 // or destroyed renderer (`view_crashed`) or a disposed client. Results are matched by `reqId` and
 // accepted only from this view's own webContents (sender id + main frame): a result from another
@@ -31,6 +34,9 @@ export class AdapterRequestError extends Error {
     this.code = code
     if (extra && extra.partial !== undefined) this.partial = extra.partial
     if (extra && extra.op !== undefined) this.op = extra.op
+    // `timeout` only: a promise for the adapter's answer to the cancel main sent — `{cancelled}`, or
+    // null when none came within CANCEL_GRACE_MS (or the view was gone). Never rejects.
+    if (extra && extra.cancelResult !== undefined) this.cancelResult = extra.cancelResult
   }
 }
 
@@ -67,6 +73,7 @@ export function createAdapterClient(
   if (!ipcMain || typeof ipcMain.on !== 'function') throw new Error('createAdapterClient: ipcMain is required')
 
   const pending = new Map() // reqId -> {op, resolve, reject, timer}
+  const cancels = new Map() // cancel reqId -> {resolve, timer}: the tracked cancels of timed-out requests (never counted as pending)
   let disposed = false
 
   const destroyed = () => {
@@ -89,6 +96,38 @@ export function createAdapterClient(
       settle(reqId, entry)
       entry.reject(new AdapterRequestError(code, message, { op: entry.op }))
     }
+    // a page that navigated or died has no op in flight any more: every tracked cancel is answered
+    for (const [cancelId, c] of Array.from(cancels.entries())) settleCancel(cancelId, c, null)
+  }
+
+  function settleCancel(cancelId, c, value) {
+    cancels.delete(cancelId)
+    if (c.timer !== null) clearT(c.timer)
+    c.resolve(value)
+  }
+
+  /**
+   * Send `cancel{target}` for a request main gave up on and resolve with the adapter's answer
+   * (`{cancelled}`), or null when none came within CANCEL_GRACE_MS or the view is gone. Never
+   * rejects: the cancel is a courtesy to the page, and a missing answer is a fact about the page,
+   * not a failure of the request that sent it. Tracked apart from `pending` — it is not a request
+   * the caller is waiting on, so `pending()` and `failAll` treat it as what it is.
+   */
+  function sendCancel(target) {
+    return new Promise((resolve) => {
+      const cancelId = String(makeId())
+      const c = { resolve, timer: null }
+      c.timer = setT(() => {
+        if (cancels.get(cancelId) === c) settleCancel(cancelId, c, null)
+      }, CANCEL_GRACE_MS)
+      if (c.timer && typeof c.timer.unref === 'function') c.timer.unref()
+      cancels.set(cancelId, c)
+      try {
+        send({ reqId: cancelId, op: 'cancel', target })
+      } catch (_e) {
+        settleCancel(cancelId, c, null) // the view is gone; nothing to cancel
+      }
+    })
   }
 
   function send(msg) {
@@ -99,8 +138,13 @@ export function createAdapterClient(
   const onResult = (event, res) => {
     if (disposed || !isMainFrameOf(event, webContents)) return
     if (!res || typeof res !== 'object' || typeof res.reqId !== 'string') return
+    const c = cancels.get(res.reqId)
+    if (c) {
+      settleCancel(res.reqId, c, { cancelled: res.ok === true && res.cancelled === true })
+      return
+    }
     const entry = pending.get(res.reqId)
-    if (!entry) return // a cancel ack, a late reply after timeout, or a reply we never asked for
+    if (!entry) return // an abort's cancel ack, a late reply after timeout, or a reply we never asked for
     settle(res.reqId, entry)
     if (res.ok === true) {
       entry.resolve(res)
@@ -167,12 +211,11 @@ export function createAdapterClient(
       entry.timer = setT(() => {
         if (!pending.has(reqId)) return
         settle(reqId, entry)
-        try {
-          send({ reqId: String(makeId()), op: 'cancel', target: reqId })
-        } catch (_e) {
-          /* the view is gone; nothing to cancel */
-        }
-        reject(new AdapterRequestError('timeout', `${slot}: ${op} timed out after ${budget} ms`, { op }))
+        // The cancel is TRACKED (S11): its answer is the moment the adapter has freed its one
+        // in-flight slot, and the settled re-read that may follow a timed-out analyst capture must
+        // not ask anything of the page before then. Fire-and-forget left that moment unknowable.
+        const cancelResult = sendCancel(reqId)
+        reject(new AdapterRequestError('timeout', `${slot}: ${op} timed out after ${budget} ms`, { op, cancelResult }))
       }, budget)
       if (entry.timer && typeof entry.timer.unref === 'function') entry.timer.unref()
       pending.set(reqId, entry)

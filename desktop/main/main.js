@@ -420,6 +420,7 @@ function start() {
     backgroundColor: currentBackground,
   })
 
+  const snapshotsDir = path.join(userData, 'snapshots')
   orchestrator = createOrchestrator({
     adapterFor: (slot) => views.adapterFor(slot),
     analystAdapterFor: (slot) => analystViews.adapterFor(slot),
@@ -452,6 +453,13 @@ function start() {
     onNavigate: (slot, cb) => views.onNavigate(slot, cb),
     newChatUrl: (slot) => sites[slot].newChatUrl,
     onTurn: (slot, phase, code) => sendToRenderer('panes:turn', code === undefined ? { slot, phase } : { slot, phase, code }),
+    // S11: the failing DOM, scrubbed, before a settled re-read reloads it — the hidden analyst's client
+    // for an analyst turn, the pane's otherwise, under `analyst-<ts>.html` / `<slot>-<ts>.html`.
+    saveFailureSnapshot: async (view, slot) => {
+      const client = view === 'analyst' ? analystViews.adapterFor(slot) : views.adapterFor(slot)
+      const { path: file } = await saveDomSnapshot({ client, name: view === 'analyst' ? 'analyst' : slot, snapshotsDir })
+      return file
+    },
   })
 
   const reloadSelectors = () => {
@@ -477,7 +485,6 @@ function start() {
   analystViews.onCreated((_slot, wc) => shortcuts.attach(wc)) // it holds the keyboard focus during an insert
   views.createAll()
 
-  const snapshotsDir = path.join(userData, 'snapshots')
   try {
     // The hidden menu is the accelerator fallback; before-input-event is the primary path, so a
     // menu problem must never take the app down.
@@ -487,7 +494,7 @@ function start() {
       getActive: activeSlot,
       actions: {
         reloadSelectors,
-        saveSnapshot: (slot) => saveDomSnapshot({ views, snapshotsDir }, slot),
+        saveSnapshot: (slot) => saveDomSnapshot({ client: views.adapterFor(slot), name: slot, snapshotsDir }),
         showAnalyst: () => analystViews.setVisible(true),
         signOut: (slot) => views.signOut(slot),
       },

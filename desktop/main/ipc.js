@@ -16,7 +16,10 @@
 // OPEN_CHATS_LOAD_TIMEOUT_MS); `null` = the open conversation was cleared: every pane is 'kept'
 // and nothing is navigated (§2). The three panes are opened in parallel. `panes:signOut(slot)`
 // (clearStorageData on that partition only, then newChatUrl), `panes:snapshot(slot)` (adapter
-// `snapshot` → scrubbed HTML under `<userData>/snapshots/<slot>-<ts>.html` → {path}).
+// `snapshot` → scrubbed HTML under `<userData>/snapshots/<slot>-<ts>.html` → {path}; the writer,
+// `saveDomSnapshot`, is view-agnostic since S11 and also writes `analyst-<ts>.html` for the
+// orchestrator's failure snapshot — the IPC boundary keeps `requireSlot`, so the renderer can only
+// ever name a pane).
 // `prompt:send` is gone (§2: removed in Stage 2) — no handler, nothing answers on that channel.
 //
 // Stage 3: `panes:setAnalyst(slot|null)` (persists settings.analyst; a partition change destroys
@@ -136,27 +139,76 @@ export function publicBridgeState(b) {
   return out
 }
 
-/** The file name a DOM snapshot is written under: `<slot>-<ts>.html` (ts = integer ms). */
-export function snapshotFileName(slot, ts) {
-  return `${requireSlot(slot)}-${Math.round(Number(ts) || 0)}.html`
+/** The names a DOM snapshot may be written under: the three panes and the hidden analyst page (S11). */
+export const SNAPSHOT_NAMES = Object.freeze([...SLOTS, 'analyst'])
+/**
+ * How many `analyst-*.html` snapshots are kept (the newest). They are written by a failure path, not
+ * by a person, so they would pile up; a pane snapshot is the user's own act and is never pruned.
+ */
+export const ANALYST_SNAPSHOTS_KEPT = 20
+
+export function requireSnapshotName(name) {
+  if (typeof name !== 'string' || !SNAPSHOT_NAMES.includes(name)) throw badRequest()
+  return name
+}
+
+/** The file name a DOM snapshot is written under: `<name>-<ts>.html` (name ∈ SNAPSHOT_NAMES, ts = integer ms). */
+export function snapshotFileName(name, ts) {
+  return `${requireSnapshotName(name)}-${Math.round(Number(ts) || 0)}.html`
 }
 
 /**
- * saveDomSnapshot({views, snapshotsDir, fs, now}, slot) → {path}: the adapter's `snapshot` op
- * (scrubbed HTML) written under `<snapshotsDir>/<slot>-<ts>.html`. Shared by `panes:snapshot`
- * and the Site menu.
+ * saveDomSnapshot({client, name, snapshotsDir, fs, now}) → {path}: the adapter's `snapshot` op
+ * (scrubbed HTML) written under `<snapshotsDir>/<name>-<ts>.html`. View-agnostic since S11: `client`
+ * is whichever view's adapter client the caller resolved — a pane's (`views.adapterFor(slot)`) or the
+ * hidden analyst's (`analystViews.adapterFor(slot)`) — and `name` labels the file; the renderer never
+ * reaches this with a name of its own choosing (`panes:snapshot` keeps `requireSlot` at the boundary).
+ * Shared by `panes:snapshot`, the Site menu and the orchestrator's failure snapshot. After an
+ * `analyst` write the `analyst-*.html` files are pruned to the newest ANALYST_SNAPSHOTS_KEPT.
  */
-export async function saveDomSnapshot({ views, snapshotsDir, fs = nodeFs, now = Date.now }, slot) {
-  requireSlot(slot)
-  const client = views && typeof views.adapterFor === 'function' ? views.adapterFor(slot) : null
+export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs, now = Date.now }) {
+  requireSnapshotName(name)
   if (!client) throw new Error('view_crashed')
   if (!snapshotsDir) throw new Error('snapshots_unavailable')
   const res = await client.request('snapshot', {}, { timeoutMs: SNAPSHOT_TIMEOUT_MS })
   if (!res || typeof res.html !== 'string') throw new Error('site_error')
   fs.mkdirSync(snapshotsDir, { recursive: true })
-  const file = path.join(snapshotsDir, snapshotFileName(slot, now()))
+  const file = path.join(snapshotsDir, snapshotFileName(name, now()))
   fs.writeFileSync(file, res.html, 'utf8')
+  if (name === 'analyst') pruneSnapshots({ fs, snapshotsDir }, name, ANALYST_SNAPSHOTS_KEPT)
   return { path: file }
+}
+
+/**
+ * Delete every `<name>-<ts>.html` in `snapshotsDir` beyond the newest `keep` (newest = the largest
+ * `ts` in the name, which is what the writer stamps; mtime would move with a copy). Returns the names
+ * removed. Never throws: a directory that cannot be listed, or a file already gone, is pruned enough.
+ */
+export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep) {
+  requireSnapshotName(name)
+  let names = []
+  try {
+    names = fs.readdirSync(snapshotsDir)
+  } catch (_e) {
+    return []
+  }
+  const re = new RegExp(`^${name}-(\\d+)\\.html$`)
+  const stamped = []
+  for (const n of names) {
+    const m = re.exec(n)
+    if (m) stamped.push({ n, ts: Number(m[1]) })
+  }
+  stamped.sort((a, b) => b.ts - a.ts || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0))
+  const removed = []
+  for (const { n } of stamped.slice(Math.max(0, Number(keep) || 0))) {
+    try {
+      fs.unlinkSync(path.join(snapshotsDir, n))
+      removed.push(n)
+    } catch (_e) {
+      /* already gone */
+    }
+  }
+  return removed
 }
 
 /**
@@ -434,8 +486,9 @@ export function registerIpc({
 
   handle('panes:snapshot', async (event, slot) => {
     requireRenderer(event)
-    requireSlot(slot)
-    return saveDomSnapshot({ views, snapshotsDir, fs, now }, slot)
+    requireSlot(slot) // the boundary: a pane only, never `analyst` or a name of the renderer's choosing
+    const client = typeof views.adapterFor === 'function' ? views.adapterFor(slot) : null
+    return saveDomSnapshot({ client, name: slot, snapshotsDir, fs, now })
   })
 
   // --- Stage 3 ---------------------------------------------------------------------------------

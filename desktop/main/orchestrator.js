@@ -29,7 +29,8 @@
 //      CHAT_URL_WAIT_MS → chats.set(conversation_id, slot, url). Only matching URLs are ever
 //      recorded, so a matching link is never overwritten by a non-matching URL.
 //   7. capture[slot] on → `observe{baselineCount: assistantCount, quietMs, settleMs, timeoutMs,
-//      firstTokenMs}` (plus `expect:'json'` on the analyst view, S10) →
+//      firstTokenMs}` (plus `expect:'json'` for a structured purpose, S10, and `incompleteGraceMs`
+//      on the analyst view, S11) →
 //      `result ok:true captured:true {text, url, ms, done_by}`; off → `captured:false {url, ms}`.
 //      A submit result without a usable assistantCount omits baselineCount: the adapter then
 //      samples the count itself (at least "now", never "nothing" — baseline 0 on a thread with
@@ -58,6 +59,25 @@
 // belongs to a different conversation (`analystView.chatOwner`) — a correction is never typed into
 // another conversation's chat. Each finished analyst turn records its chat (`analystView.noteChat`,
 // only URLs matching the site's chatUrlPattern), which is main's memory, not chats.json.
+//
+// Settled re-read (S11; `settledReread`, entered from `turn`'s one failure funnel): when an ANALYST
+// capture on a STRUCTURED purpose fails with `timeout` or `reply_not_found`, the chat is reloaded and
+// read again with the same reader — the pre-submit baseline, `expect:'json'`, SETTLED_REREAD_MS — and
+// a re-read that succeeds is returned exactly as a normal capture. The plan's C1 ("re-read on a parse
+// failure") landed at S10 as an in-adapter re-sample of the same live DOM; three read-only probes
+// then (2026-09-20, -21 and -22) showed the complete answer sitting in the chat after EVERY failure,
+// so the reply was there each time and only the capture that followed the live render had missed it.
+// A reloaded page renders the finished turn once — no placeholder, no remount, no reasoning gap — and
+// the selectors that pick it on a live page pick it there (on a reloaded page every container is in
+// the adapter's `known` set, so the count rule from the pre-submit baseline is what finds it). Before
+// the reload the failing DOM is saved, scrubbed (`saveFailureSnapshot`, never fatal), so the NEXT
+// failure can be read rather than re-measured; and when main's own timer was what fired, the cancel it
+// sent is acknowledged first (`error.cancelResult`) — the preload holds one op in flight per view and
+// would answer `busy`. Never for a pane, never for `chat`, never when the view's URL is not a chat
+// (chatgpt's `/c/WEB:<uuid>` placeholder 404s), never without a pre-submit baseline (a re-read would
+// count the settled answer as an earlier turn), and never past what is left of the backend's grant.
+// ANY failure inside the recovery reports the ORIGINAL failure, code, message and partial intact. The
+// view stays reserved throughout: it is the same turn.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
@@ -117,6 +137,17 @@ export const STRUCTURED_PURPOSES = Object.freeze(['extraction', 'defense', 'conv
 export const CAPTURE_CEILING_MARGIN_MS = 30000
 
 export const ANALYST_PATIENCE = 3
+
+/**
+ * The adapter's own default for `incompleteGraceMs` (site.cjs: how long an answer that never takes the
+ * expected shape is waited on after the site says it is done). Sent scaled by ANALYST_PATIENCE for the
+ * analyst view ONLY, so a pane's observe payload is byte-identical to what it was (S11).
+ */
+export const INCOMPLETE_GRACE_MS = 20000
+/** The budget of a settled re-read (S11): the answer is already on the reloaded page, so this covers one page render and one settle window, not a model thinking. */
+export const SETTLED_REREAD_MS = 60000
+/** The failure codes a settled re-read may follow: the two that say "the capture did not read it", never one that says the site refused. */
+export const REREAD_CODES = Object.freeze(['timeout', 'reply_not_found'])
 
 /** The analyst's multiplier for the OVERALL capture budget (thinking time, not lull length). */
 export const ANALYST_CAPTURE_PATIENCE = 4
@@ -208,6 +239,9 @@ function adapterFailure(e) {
  *   onNavigate?(slot, cb)          cb(url) on did-navigate / did-navigate-in-page; returns unsubscribe
  *   newChatUrl?(slot)              the site's newChatUrl (for `fresh:true`)
  *   onTurn?(slot, phase, code?)    `panes:turn` for the renderer
+ *   saveFailureSnapshot?(view, slot) → Promise<string|null>   S11: write that view's scrubbed DOM under
+ *                                  snapshots/ (ipc.js saveDomSnapshot) and resolve with the path; called
+ *                                  BEFORE a settled re-read reloads the page; a rejection is logged, never fatal
  *   mutex, now, log, insertSettleMs, setTimeout, clearTimeout
  */
 export function createOrchestrator({
@@ -229,6 +263,7 @@ export function createOrchestrator({
   onNavigate = null,
   newChatUrl = null,
   onTurn = null,
+  saveFailureSnapshot = null,
   mutex = createMutex(),
   now = Date.now,
   log = console,
@@ -293,8 +328,18 @@ export function createOrchestrator({
       firstTokenMs,
       captureTimeoutMs,
       observeMs: observeBudgetMs({ firstTokenMs, captureTimeoutMs }),
+      // Only the analyst is sent one (S11): the adapter's default stands for a pane, and its payload
+      // stays byte-identical. Scaled with the lull windows, not the thinking budget — it is a lull.
+      incompleteGraceMs: view === 'analyst' ? INCOMPLETE_GRACE_MS * patience : null,
     }
   }
+
+  /** Whether a failed capture may be followed by a settled re-read (S11): the analyst view, a structured purpose, one of the two "did not read it" codes. */
+  const rereadable = (request, entry, code) =>
+    entry.view === 'analyst' && STRUCTURED_PURPOSES.includes(request && request.purpose) && REREAD_CODES.includes(code)
+
+  /** What the backend granted for the whole request, in ms (the same reading captureCeilingMs takes). */
+  const grantMs = (timeoutS) => (Number.isFinite(timeoutS) && timeoutS > 0 ? timeoutS * 1000 : 600000)
 
   const phase = (slot, p, code) => {
     if (typeof onTurn !== 'function') return
@@ -531,11 +576,14 @@ export function createOrchestrator({
     const elapsed = () => Math.max(0, Math.round(now() - started))
     const signal = entry.controller.signal
     const client = seam.client
-    const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs } = budgets(slot, entry.view, request && request.timeout_s)
+    const b = budgets(slot, entry.view, request && request.timeout_s)
+    const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs, incompleteGraceMs } = b
     const emitPhase = (p, code) => {
       if (seam.phases) phase(slot, p, code)
     }
     let chatWatch = null
+    let submitted = null // the insertAndSubmit result once there is one: the settled re-read needs its baseline
+    let observing = false // the capture was asked for: only a failure from there on may be followed by a re-read
     const cancelled = () => {
       if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
     }
@@ -566,13 +614,17 @@ export function createOrchestrator({
       await client.request('ready', { timeoutMs: readyMs }, { timeoutMs: readyMs + TIMEOUT_GRACE_MS, signal })
       cancelled()
       // 5. insert under the mutex (a hidden analyst view takes focus too — the Stage 0 spike)
-      const submitted = await underMutex(async () => {
+      submitted = await underMutex(async () => {
         cancelled()
         emitPhase('typing')
         if (typeof seam.focus === 'function') await seam.focus()
         return client.request('insertAndSubmit', { text: request.text }, { timeoutMs: submitMs + TIMEOUT_GRACE_MS, signal })
       })
       emitPhase('submitted')
+      // ONE line per submit (S11): which confirmation the adapter saw and which send button it pressed
+      // (or the Enter fallback), so a capture that then reads nothing can be told apart from a prompt
+      // that was never really sent — without reading the page again.
+      info(`${label}: submitted by ${submitted.confirmedBy} (send: ${submitted.sendSelector || 'enter-fallback'})`)
       // 6. chat-URL wait, in the background (never delays the result)
       chatWatch = seam.recordsChat ? watchChatUrl(slot, convId) : { url: () => null, stop: () => {} }
       const resultUrl = () => chatWatch.url() || (typeof submitted.url === 'string' && submitted.url) || seam.url()
@@ -594,8 +646,10 @@ export function createOrchestrator({
       // which runs on the PANES, not the analyst page) are all JSON and were all exposed to the same
       // mid-document truncation. Anything unrecognised is left ungated.
       if (STRUCTURED_PURPOSES.includes(request && request.purpose)) observePayload.expect = 'json'
+      if (Number.isFinite(incompleteGraceMs)) observePayload.incompleteGraceMs = incompleteGraceMs
       if (Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0) observePayload.baselineCount = submitted.assistantCount
       else warn(`${label}: the submit result carried no usable assistantCount; the adapter samples the baseline itself`)
+      observing = true
       const observed = await client.request('observe', observePayload, { timeoutMs: observeMs + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
@@ -612,7 +666,93 @@ export function createOrchestrator({
       const code = RESULT_CODE_SET.has(f.code) ? f.code : 'site_error'
       const message = code === f.code ? f.message : `${f.code}: ${f.message}`
       warn(`${label}: ${code} — ${message}`)
-      return { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
+      const failure = { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
+      if (!observing || !rereadable(request, entry, code)) return failure
+      // S11: the answer is usually in the chat by now (see the header). Never throws; null = the
+      // original failure stands.
+      const recovered = await settledReread(request, entry, e, submitted, b, elapsed)
+      return recovered || failure
+    }
+  }
+
+  /**
+   * Read the answer back from the SETTLED page (S11, header): acknowledge main's own cancel if one
+   * was sent, save the failing DOM, then reload the chat the view is in and observe it from the
+   * pre-submit baseline under SETTLED_REREAD_MS. Resolves with the OK result frame, or null when the
+   * re-read was not attempted or failed — the caller then reports the original failure. Never rejects.
+   */
+  async function settledReread(request, entry, error, submitted, b, elapsed) {
+    const { slot } = request
+    const { seam, label } = entry
+    const reqId = request.req_id
+    const client = seam.client
+    const signal = entry.controller.signal
+    const convId = typeof request.conversation_id === 'string' ? request.conversation_id : ''
+    // (1) main's timer fired and sent a cancel: the preload frees its one in-flight slot only once it
+    // has answered that cancel, and would answer `busy` to a snapshot or a ready before then.
+    const ack = error && error.cancelResult
+    if (ack && typeof ack.then === 'function') {
+      info(`${label}: waiting for the adapter to answer the cancel before reading the page again`)
+      try {
+        await ack
+      } catch (_e) {
+        /* never rejects by contract; nothing to do if it did */
+      }
+    }
+    // (2) the DOM exactly as the failure left it, BEFORE the reload replaces it; a snapshot that fails
+    // is a line in the log, never a reason to skip the re-read.
+    if (typeof saveFailureSnapshot === 'function') {
+      try {
+        const file = await saveFailureSnapshot(entry.view, slot)
+        if (file) info(`${label}: DOM snapshot of the failed capture saved to ${file}`)
+      } catch (e) {
+        warn(`${label}: DOM snapshot of the failed capture failed: ${(e && e.message) || e}`)
+      }
+    }
+    // (3) only a chat can be reloaded and read: the site root holds nothing, and chatgpt's `/c/WEB:<uuid>`
+    // placeholder 404s (the segment-end chatUrlPattern rejects it, as it does for chats.json).
+    const here = seam.url()
+    const pattern = compileChatUrlPattern(typeof chatUrlPatternFor === 'function' ? chatUrlPatternFor(slot) : '')
+    if (!pattern || !pattern.test(here)) {
+      warn(`${label}: no settled re-read — the view's URL is not a chat (${here || 'unknown'})`)
+      return null
+    }
+    const baseline = submitted && Number.isInteger(submitted.assistantCount) && submitted.assistantCount >= 0 ? submitted.assistantCount : null
+    if (baseline === null) {
+      warn(`${label}: no settled re-read — the submit carried no baseline, so a reloaded page could not tell this turn's reply from the earlier ones`)
+      return null
+    }
+    if (typeof seam.loadUrl !== 'function') {
+      warn(`${label}: no settled re-read — the view cannot be reloaded (no loader)`)
+      return null
+    }
+    // The re-read has to finish inside the grant too, or the bridge fails the request while the view
+    // is still reserved and the backend's correction attempt lands on a `view_busy`.
+    const left = grantMs(request && request.timeout_s) - elapsed()
+    const needed = b.readyMs + SETTLED_REREAD_MS
+    if (left < needed) {
+      warn(`${label}: no settled re-read — ${left} ms of the grant left, the re-read needs ${needed} ms`)
+      return null
+    }
+    try {
+      if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
+      info(`${label}: settled re-read — reloading the chat and reading it again from baseline ${baseline}`)
+      await seam.loadUrl(here)
+      await awaitPendingNavigation(seam, label, signal)
+      if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
+      await client.request('ready', { timeoutMs: b.readyMs }, { timeoutMs: b.readyMs + TIMEOUT_GRACE_MS, signal })
+      const payload = { baselineCount: baseline, expect: 'json', quietMs: b.quietMs, settleMs: b.settleMs, firstTokenMs: b.firstTokenMs, timeoutMs: SETTLED_REREAD_MS }
+      const observed = await client.request('observe', payload, { timeoutMs: SETTLED_REREAD_MS + TIMEOUT_GRACE_MS, signal })
+      const text = typeof observed.text === 'string' ? observed.text : ''
+      const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
+      info(`${label}: recovered by settled re-read, ${text.length} chars`)
+      const finalUrl = (typeof observed.url === 'string' && observed.url) || seam.url()
+      noteAnalystChat(seam, slot, convId, finalUrl)
+      return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: finalUrl, ms: elapsed(), done_by: doneBy }
+    } catch (e) {
+      const g = adapterFailure(e)
+      warn(`${label}: settled re-read failed (${g.code}: ${g.message}); reporting the original failure`)
+      return null
     }
   }
 
