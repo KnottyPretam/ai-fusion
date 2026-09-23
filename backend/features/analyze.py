@@ -29,13 +29,17 @@ review's deferred finding "Analyze's correction retry against a site after a sit
 analyst model's `client.transport_kind` is "web" and the first attempt produced NO output -- `raw`
 empty with an error, i.e. a transport/site error delta (`site_error`, `challenge`, `bridge_no_ack`,
 ...) -- the second attempt is skipped and the turn degrades immediately with that error
-(`raw_attempts == [""]`, no `analyze_retry` event): re-sending the identical request would type the
-whole prompt into a fresh hidden chat on a site that just failed. A parse/validation failure WITH
-output keeps the correction attempt exactly as before (the correction message continues in the
-same analyst chat, `fresh:false`). Reading where the contract is silent: a captured reply with no
-text at all (`parse_error: empty response`, `raw == ""` -- the bridge maps whitespace-only text to
-no text delta) is "no output" too and is not retried on a web session. Mock and OpenRouter
-analysts are untouched (goldens byte-identical). The transport half of the rule is
+(no `analyze_retry` event): re-sending the identical request would type the whole prompt into a
+fresh hidden chat on a site that just failed. `raw_attempts` records what the site HAD produced
+before it failed when there is anything (`complete_json(on_partial=)`), `""` otherwise; `raw`
+itself stays empty on that path, so the rule above and `retry_follow_up` never see the partial --
+recording it and correcting it are different things, and only the first is safe after a site
+error. A parse/validation failure WITH output keeps the correction attempt exactly as before (the
+correction message continues in the same analyst chat, `fresh:false`). Reading where the contract
+is silent: a captured reply with no text at all (`parse_error: empty response`, `raw == ""` -- the
+bridge maps whitespace-only text to no text delta) is "no output" too and is not retried on a web
+session. Mock and OpenRouter analysts are untouched (goldens byte-identical). The transport half of
+the rule is
 `client.web_retry_suppressed`, which the client applies to its own internal retry as well (S7
 review, "Fusion's convergence retry re-types the whole payload into a NEW hidden analyst chat"):
 one rule, two enforcement points -- Analyze drives its second attempt itself (`retries=0`), Fusion
@@ -304,7 +308,16 @@ def _analyst_max_tokens(model: str) -> int:
 
 async def _attempt(
     *, model: str, messages: list[dict[str, Any]]
-) -> tuple[Extraction | None, str, FeatureUsage, str | None]:
+) -> tuple[Extraction | None, str, FeatureUsage, str | None, str]:
+    """One analyst call: `(extraction, raw, usage, error, partial)`. `partial` is the text that had
+    arrived before a transport/site error (`""` otherwise) and is for the record ONLY -- it is never
+    folded into `raw`, which the web no-retry rule and `retry_follow_up` read."""
+    partial = ""
+
+    def keep(text: str) -> None:
+        nonlocal partial
+        partial = text
+
     parsed, raw, usage, error = await client.complete_json(
         role=ROLE,
         purpose=PURPOSE,
@@ -314,9 +327,10 @@ async def _attempt(
         effort=ANALYST_EFFORT,
         max_tokens=_analyst_max_tokens(model),
         retries=0,
+        on_partial=keep,
     )
     extraction = parsed if isinstance(parsed, Extraction) else None
-    return extraction, raw, usage, error
+    return extraction, raw, usage, error, partial
 
 
 def chunk_reply(response: str, limit: int = CONDENSE_CHUNK_CHARS) -> list[str]:
@@ -567,19 +581,23 @@ async def _produce(
             messages = prompts.build_messages(
                 question, responses, fenced=fenced, condensed=condensed, graph=graph
             )
-            extraction, raw, attempt_usage, error = await _attempt(model=model, messages=messages)
+            extraction, raw, attempt_usage, error, partial = await _attempt(
+                model=model, messages=messages
+            )
             usage.merge(attempt_usage)
-            raw_attempts.append(raw)
+            # The record keeps the partial of a failed capture; the retry decision below and the
+            # correction message keep reading `raw`, which is empty after a transport error.
+            raw_attempts.append(raw or partial)
             for _ in range(ATTEMPTS - 1):
                 if extraction is not None or web_retry_suppressed(model, raw, error):
                     break
                 queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
                 messages = [*messages, *retry_follow_up(raw, error, fenced=fenced)]
-                extraction, raw, attempt_usage, error = await _attempt(
+                extraction, raw, attempt_usage, error, partial = await _attempt(
                     model=model, messages=messages
                 )
                 usage.merge(attempt_usage)
-                raw_attempts.append(raw)
+                raw_attempts.append(raw or partial)
 
         usage.set_wall_clock(max(1, int((time.monotonic() - started) * 1000)))
         turn = AnalyzeTurn(

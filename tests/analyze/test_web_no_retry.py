@@ -3,8 +3,9 @@ over the real HTTP API with `web_env` and a `fake_desktop` from tests/bridge/con
 web-session analyst whose first attempt fails with a transport/site error (no output) is NOT asked
 again -- exactly one analyst request frame, `analyze_degraded` with the site message -- while a
 parse/validation failure WITH output still gets the correction attempt in the same chat
-(`fresh:false`). Mock-mode Analyze (the `analyst_retry` scenario, the transport-error local
-fixture) is unchanged."""
+(`fresh:false`). A site error that arrives with a `partial` is recorded in `raw_attempts` (Analyze
+and its Refactor twin) and is STILL not retried -- the rule reads `raw`, which stays empty.
+Mock-mode Analyze (the `analyst_retry` scenario, the transport-error local fixture) is unchanged."""
 
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import httpx
 import pytest
 
 from backend.features import analyze as feature
+from backend.features import refactor as refactor_feature
 from backend.llm import bridge, mock
 from backend.prompts import analyze as prompts
 from tests.analyze.conftest import extraction_calls, extraction_text, persist
@@ -76,7 +78,7 @@ async def _last_turn(client: httpx.AsyncClient, cid: str) -> dict[str, Any]:
             {"error": "site_error", "message": "the page showed an error banner"},
             "the page showed an error banner",
         ),
-        ({"error": "timeout", "partial": "half a reply"}, "timeout on chatgpt"),
+        ({"error": "timeout"}, "timeout on chatgpt"),
         ({"reject": "challenge"}, "challenge on chatgpt"),
         ({"reject": "logged_out"}, "logged_out on chatgpt"),
     ],
@@ -97,6 +99,60 @@ async def test_site_error_on_the_first_attempt_degrades_without_a_second_request
     persisted = await _last_turn(client, cid)
     assert persisted["type"] == "analyze" and persisted["status"] == "degraded"
     assert persisted["error"] == message and persisted["raw_attempts"] == [""]
+
+
+# A whitespace-only partial is the hazard case: `bridge.stream` yields any NON-EMPTY partial as a
+# text delta, and had it reached `raw` the follow-up would be user-only (nothing to echo), which
+# `text_for` reads as a fresh analyst chat and types the WHOLE prompt into again.
+@pytest.mark.parametrize("partial", ["half a reply", "  \n\t"])
+async def test_site_error_with_a_partial_records_it_and_still_asks_only_once(
+    client, web_env, fake_desktop, partial
+):
+    """What the site had produced before it failed is RECORDED (`raw_attempts`) -- before the fix
+    `complete_json` dropped it on the transport-error path and the report showed "(no output)" --
+    while the no-retry rule holds exactly as before: one request frame, `fresh: true`, no
+    correction typed into a site that just failed."""
+    desk = await fake_desktop(planted_script({ANALYST: {"error": "timeout", "partial": partial}}))
+    cid = await _conversation_with_send(client)
+    events = await _analyze(client, cid)
+    assert _types(events) == ["analyze_start", "analyze_degraded"]
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded" and turn["error"] == "timeout on chatgpt"
+    assert turn["raw_attempts"] == [partial] and turn["extraction"] is None
+    (req,) = desk.of(*ANALYST)  # exactly one analyst request frame
+    assert req["fresh"] is True
+    assert desk.errors == [] and mock.calls == []
+    persisted = await _last_turn(client, cid)
+    assert persisted["type"] == "analyze" and persisted["status"] == "degraded"
+    assert persisted["error"] == "timeout on chatgpt" and persisted["raw_attempts"] == [partial]
+
+
+async def _refactor(client: httpx.AsyncClient, cid: str) -> list[dict[str, Any]]:
+    r = await client.post(f"/api/conversations/{cid}/refactor", json={})
+    assert r.status_code == 200, r.text
+    return parse_sse_text(r.text)
+
+
+@pytest.mark.parametrize("partial", ["half a map", "  \n\t"])
+async def test_refactor_site_error_with_a_partial_records_it_and_still_asks_only_once(
+    client, web_env, fake_desktop, partial
+):
+    """The Refactor twin: its map call is the first analyst request, and a capture that fails with a
+    partial degrades the turn with that partial on record and exactly one frame typed."""
+    desk = await fake_desktop(planted_script({ANALYST: {"error": "timeout", "partial": partial}}))
+    cid = await _conversation_with_send(client)
+    events = await _refactor(client, cid)
+    assert _types(events) == ["refactor_start", "refactor_retry", "refactor_degraded"]
+    assert events[1]["error"] == refactor_feature.MAP_NOTICE
+    turn = events[-1]["turn"]
+    assert turn["status"] == "degraded" and turn["error"] == "timeout on chatgpt"
+    assert turn["raw_attempts"] == [partial] and turn["refactoring"] is None
+    (req,) = desk.of(*ANALYST)  # the map call, and nothing after it
+    assert req["fresh"] is True
+    assert desk.errors == [] and mock.calls == []
+    persisted = await _last_turn(client, cid)
+    assert persisted["type"] == "refactor" and persisted["status"] == "degraded"
+    assert persisted["error"] == "timeout on chatgpt" and persisted["raw_attempts"] == [partial]
 
 
 async def test_no_ack_on_the_first_attempt_degrades_without_a_second_request(

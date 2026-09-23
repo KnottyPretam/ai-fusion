@@ -436,23 +436,109 @@ DEFENSE = dict(
 )
 
 
-async def test_transport_error_after_partial_text_returns_immediately(live_transport, respx_router):
-    """Partial JSON then a mid-stream 429: `(None, "", usage, message)`, no retry."""
-    route = respx_router.post(CHAT_URL).mock(
+PARTIAL = '{"stance": "def'
+
+
+def _partial_then_429(respx_router):
+    return respx_router.post(CHAT_URL).mock(
         return_value=httpx.Response(
             200,
             content=sse_body(
-                chunk(content='{"stance": "def'),
+                chunk(content=PARTIAL),
                 error_chunk(429, "Rate limit exceeded", "rate_limit_exceeded"),
             ),
         )
     )
+
+
+def _client_records(caplog, level: str):
+    return [r for r in caplog.records if r.name == "triplex.llm.client" and r.levelname == level]
+
+
+async def test_transport_error_after_partial_text_returns_immediately(
+    live_transport, respx_router, caplog
+):
+    """Partial JSON then a mid-stream 429: `(None, "", usage, message)`, no retry. `raw` stays ""
+    -- it feeds the web no-retry rule -- and the partial reaches `on_partial` exactly once; the
+    WARNING line carries its length, never the text."""
+    caplog.set_level("WARNING", logger="triplex.llm.client")
+    route = _partial_then_429(respx_router)
+    seen: list[str] = []
     parsed, raw, usage, error = await complete_json(
-        messages=MSGS, schema_model=DefenseReply, retries=1, **DEFENSE
+        messages=MSGS, schema_model=DefenseReply, retries=1, on_partial=seen.append, **DEFENSE
     )
     assert parsed is None and raw == "" and error == "Rate limit exceeded"
     assert usage.totals.calls == 0 and usage.calls == []
     assert route.call_count == 1
+    assert seen == [PARTIAL]
+    (line,) = [
+        r.getMessage()
+        for r in _client_records(caplog, "WARNING")
+        if r.getMessage().startswith("complete_json transport error")
+    ]
+    assert f"partial_chars={len(PARTIAL)}" in line and "attempt=1/2" in line
+    assert "role=claude purpose=defense model=anthropic/claude-opus-5" in line
+    assert PARTIAL not in line
+
+
+async def test_on_partial_is_not_called_when_the_error_arrived_with_no_text(
+    live_transport, respx_router, caplog
+):
+    caplog.set_level("WARNING", logger="triplex.llm.client")
+    respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, content=sse_body(error_chunk(429, "Rate limit exceeded", "rate_limit_exceeded"))
+        )
+    )
+    seen: list[str] = []
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, on_partial=seen.append, **DEFENSE
+    )
+    assert parsed is None and raw == "" and error == "Rate limit exceeded"
+    assert seen == []
+    (line,) = [
+        r.getMessage()
+        for r in _client_records(caplog, "WARNING")
+        if r.getMessage().startswith("complete_json transport error")
+    ]
+    assert "partial_chars=0" in line
+
+
+async def test_on_partial_is_not_called_on_success(live_transport, respx_router):
+    good = json.dumps({"stance": "defend", "justification": "datasheet table 3", "confidence": 0.9})
+    respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, content=sse_body(chunk(content=good, finish="stop"), chunk(usage=usage_obj()))
+        )
+    )
+    seen: list[str] = []
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, on_partial=seen.append, **DEFENSE
+    )
+    assert isinstance(parsed, DefenseReply) and raw == good and error is None
+    assert seen == []
+
+
+async def test_a_raising_on_partial_is_logged_and_never_changes_the_result(
+    live_transport, respx_router, caplog
+):
+    """A broken recorder must not turn a degrade into a terminal `error` event: the error tuple
+    comes back exactly as without the callback, and the exception is logged (with its traceback,
+    without the partial)."""
+    caplog.set_level("WARNING", logger="triplex.llm.client")
+    route = _partial_then_429(respx_router)
+
+    def boom(text: str) -> None:
+        raise RuntimeError("recorder broke")
+
+    parsed, raw, usage, error = await complete_json(
+        messages=MSGS, schema_model=DefenseReply, retries=1, on_partial=boom, **DEFENSE
+    )
+    assert parsed is None and raw == "" and error == "Rate limit exceeded"
+    assert usage.totals.calls == 0 and route.call_count == 1
+    (record,) = _client_records(caplog, "ERROR")
+    assert record.exc_info is not None and record.exc_info[0] is RuntimeError
+    assert "on_partial" in record.getMessage() and PARTIAL not in record.getMessage()
 
 
 async def test_transport_failure_keeps_its_reason(live_transport, respx_router):

@@ -19,6 +19,10 @@ guard LAST → ONE producer task owning every call and the single write, releasi
 `finally`. Each call is `complete_json(retries=0)` with Analyze's own retry rule driven here, the web
 no-retry rule included; a failure degrades the turn (`status="degraded"`) rather than failing the
 request, because a refactor that could not be produced must not block the Analyze it precedes.
+`raw_attempts` records what each call actually produced: on a transport/site error the partial the
+site had typed before it failed (`complete_json(on_partial=)`), `""` when there was none. The retry
+decision keeps reading the client's `raw`, which stays empty on that path -- recording a partial and
+correcting it are different things, and only the first is safe after a site error.
 
 `purpose` is `"extraction"` on every call: `schemas.Purpose` is a frozen Literal with no room for a
 new name, and the meter reads these as analyst work, which is what they are. No reply is ever quoted
@@ -126,8 +130,18 @@ async def _call(
 ) -> tuple[BaseModel | None, str, FeatureUsage, str | None]:
     """One validated call plus Analyze's own retry rule, driven here: `retries=0` on the client and
     at most `ATTEMPTS` tries, the second one carrying the correction message — and not at all when
-    the web no-retry rule applies (nothing was typed back, so there is nothing to correct)."""
+    the web no-retry rule applies (nothing was typed back, so there is nothing to correct).
+
+    The partial of a failed capture is recorded in the attempts (`on_partial`) and NEVER folded
+    into `raw`: the gate below and the correction message read `raw`, and after a site error the
+    only safe thing to do with what the site half-typed is to keep it."""
     usage = FeatureUsage()
+    partial = ""
+
+    def keep(text: str) -> None:
+        nonlocal partial
+        partial = text
+
     parsed, raw, call_usage, error = await client.complete_json(
         role=ROLE,
         purpose=PURPOSE,
@@ -137,9 +151,10 @@ async def _call(
         effort=ANALYST_EFFORT,
         max_tokens=_max_tokens(model),
         retries=0,
+        on_partial=keep,
     )
     usage.merge(call_usage)
-    attempts = [raw]
+    attempts = [raw or partial]
     for _ in range(ATTEMPTS - 1):
         if isinstance(parsed, schema_model):
             break
@@ -151,6 +166,7 @@ async def _call(
         follow_up.append(
             {"role": "user", "content": prompts.retry_message(error or "unknown error", fenced=fenced)}
         )
+        partial = ""  # per attempt: a second call that fails clean must not inherit the first's
         parsed, raw, call_usage, error = await client.complete_json(
             role=ROLE,
             purpose=PURPOSE,
@@ -160,9 +176,10 @@ async def _call(
             effort=ANALYST_EFFORT,
             max_tokens=_max_tokens(model),
             retries=0,
+            on_partial=keep,
         )
         usage.merge(call_usage)
-        attempts.append(raw)
+        attempts.append(raw or partial)
     value = parsed if isinstance(parsed, schema_model) else None
     return value, "\n\n".join(a for a in attempts if a), usage, error
 
