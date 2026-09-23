@@ -53,7 +53,14 @@ a second time into a brand-new chat in the user's own account (and a pane view w
 into the site's own thread for nothing). Output that fails parsing or validation still gets the
 correction attempt in the SAME chat (`fresh: false`), and non-web transports are untouched
 (goldens byte-identical). `features/analyze.py` applies the same rule to the second attempt it
-drives itself (it calls `complete_json` with `retries=0`).
+drives itself (it calls `complete_json` with `retries=0`). The same rule is why a transport error
+that arrives AFTER some text (a failed bridge result's `partial`, a provider error mid-stream)
+still returns `raw_text == ""`: `raw_text` is what the rule and every correction message key on,
+so a partial there would re-type a correction into a site that just failed -- and a
+whitespace-only partial (`bridge.stream` yields any non-empty one) would pass as "no output",
+make the follow-up user-only and re-type the WHOLE prompt into a fresh chat. The text is handed to
+the optional `on_partial` callback instead, a side channel for callers that RECORD attempts
+(Analyze / Refactor `raw_attempts`), so the failure can be read rather than guessed at.
 
 Fenced JSON over the web transport (S7 review, MEASURED live on 2026-09-17 -- a real Analyze
 degraded with `parse_error: no JSON object found in the response` on both attempts). A web reply is
@@ -76,7 +83,7 @@ import os
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -942,8 +949,19 @@ async def complete_json(
     effort: Effort | None,
     max_tokens: int | None,
     retries: int = 1,
+    on_partial: Callable[[str], None] | None = None,
 ) -> tuple[BaseModel | None, str, FeatureUsage, str | None]:
-    """Returns (parsed, raw_text, usage, error). Streams internally (docs/semantics.md)."""
+    """Returns (parsed, raw_text, usage, error). Streams internally (docs/semantics.md).
+
+    `on_partial(text)` is called on the transport-error path only, at most once per call, with the
+    text that had streamed before the error delta -- and only when there is some. The tuple still
+    returns `raw_text == ""` on that path ON PURPOSE (module docstring, web no-retry rule):
+    `raw_text` is what `web_retry_suppressed` and every caller's correction message read, so the
+    partial must never travel there; the callback is the side channel for a caller that records
+    attempts (`raw_attempts`), the same fix the condense pass got on 2026-09-21 when a capture
+    failed `timeout … chars=44` and the 44 characters that would have explained it were thrown
+    away. The callback never affects the result: one that raises is logged and the error tuple is
+    returned as it is (a broken recorder must not turn a degrade into a terminal `error`)."""
     meta = catalog.get_meta(model)
     response_format = (
         structured_response_format(purpose, schema_model)
@@ -1001,6 +1019,32 @@ async def complete_json(
                 # Every other failure keeps its reason (docs/api-contract.md: "transport
                 # message"): a bare code such as `transport_error` would drop the cause.
                 msg = te.message or (str(te.code) if te.code is not None else TRANSPORT_ERROR)
+            # The text that arrived before the error is NOT the raw_text of the tuple (docstring:
+            # it would feed the retry rule); it goes to the recorder, and the log line carries
+            # its length only -- a count, never the text (the desktop pipes stdout into
+            # backend.log, and a captured fragment is site content).
+            dropped = "".join(parts)
+            log.warning(
+                "complete_json transport error role=%s purpose=%s model=%s attempt=%d/%d "
+                "code=%s partial_chars=%d",
+                role,
+                purpose,
+                model,
+                attempt + 1,
+                attempts,
+                te.code,
+                len(dropped),
+            )
+            if on_partial is not None and dropped:
+                try:
+                    on_partial(dropped)
+                except Exception:
+                    log.exception(
+                        "complete_json on_partial recorder failed role=%s purpose=%s model=%s",
+                        role,
+                        purpose,
+                        model,
+                    )
             return None, "", usage, msg
 
         raw_text = "".join(parts)

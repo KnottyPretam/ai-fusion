@@ -212,9 +212,15 @@ model-authored text into a prompt (e.g. a divergence `topic`) must go through `d
 **Analyze on a transport error.** A transport error on the first analyst attempt (error delta,
 raw text empty) also triggers Analyze's single retry: the retry re-sends the IDENTICAL messages (no
 `assistant: <raw>` + `user: failed validation` pair, since there is no output to correct),
-`analyze_retry.error` carries the transport message, and `raw_attempts` records `""` for that
-attempt. (`complete_json`'s own internal retry never fires on a transport delta; this rule is
-Analyze's.) The full retry rule: the retry carries NOTHING (identical request) when the first
+`analyze_retry.error` carries the transport message, and `raw_attempts` records the partial the
+transport produced before the error when there is one (a failed bridge result's `partial`, a
+provider's mid-stream error after text — handed over through `complete_json(on_partial=)`), `""`
+otherwise; the same goes for every Refactor call. The `raw` the retry decision reads stays empty on
+that path, so the rule below and the web no-retry rule are unchanged: a partial is recorded, never
+corrected, because after a site error a correction would be typed into the site that just failed —
+and a whitespace-only partial, taken as `raw`, would read as "no output" and re-type the whole prompt
+into a fresh chat. (`complete_json`'s own internal retry never fires on a transport delta; this rule
+is Analyze's.) The full retry rule: the retry carries NOTHING (identical request) when the first
 attempt produced no output at all (a transport error delta or a stream with no text); the
 correction user message `Your previous output failed validation: <error>. Return only the
 corrected JSON.` for any output that failed lenient parsing/validation; and that output echoed as
