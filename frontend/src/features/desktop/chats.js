@@ -20,7 +20,13 @@
 //     PromptBar's first-Send create. The id last handed to main is
 //     remembered so the `conversation/loaded` the create dispatches does not open the same chats a
 //     second time (a double `loadURL` would reload the panes mid-navigation).
-// It is refused while any feature stream runs (the sidebar disables New the same way: a switch
+//   * Pre-parse (2026-09-23): a first Pre-parse with no conversation selected needs an id — the
+//     route is per conversation (`conversation_scope` and the busy guard) — but the user has not
+//     sent anything, so the panes must keep the chats they show, exactly as a first Send adopts them
+//     (Decision 12). `createAdopted()` is `newChatEverywhere` minus the navigation: the same create,
+//     the same last-opened mark (so the `loaded` the create dispatches is not a switch), and no
+//     `openChats`; the first Send then adopts the panes' current chats.
+// Both are refused while any feature stream runs (the sidebar disables New the same way: a switch
 // mid-stream would book the in-flight turn into the wrong conversation) and while a create is in
 // flight. Every `window.triplex` call is optional-chained: the hook works under a partial stub
 // and returns quietly when `openChats` is absent.
@@ -33,7 +39,7 @@ import { createConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { desktopSlotConfig } from './analyst.js'
 
-export const STREAM_KEYS = ['send', 'analyze', 'fusion']
+export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse'] // preparse: the panes must not navigate while the composer waits on the analyst
 
 /** Swallow the rejection of an IPC promise (bad_request, a closed window); the UI stays up. */
 function settle(p) {
@@ -93,26 +99,38 @@ export function useOpenChats(api, { enabled = true } = {}) {
     if (!sending) sendSeen.current = false
   }, [sending])
 
-  const newChatEverywhere = useCallback(async () => {
-    if (busyRef.current || streamingRef.current) return null
-    busyRef.current = true
-    setBusy(true)
-    setError(null)
-    try {
-      const conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
-      lastOpened.current = conv.id
-      settle(api?.openChats?.(conv.id))
-      return conv
-    } catch (e) {
-      if (alive.current) setError((e && e.message) || 'could not create conversation')
-      return null
-    } finally {
-      busyRef.current = false
-      if (alive.current) setBusy(false)
-    }
-  }, [api, dispatch])
+  // One create for both callers. The id is marked as the one last handed to main BEFORE the
+  // `conversation/loaded` the create dispatched can reach the id effect above (that render is
+  // scheduled, not synchronous), so the effect sees no switch; only "New chat everywhere" then
+  // asks main to open the new conversation's chats.
+  const create = useCallback(
+    async (navigate) => {
+      if (busyRef.current || streamingRef.current) return null
+      busyRef.current = true
+      setBusy(true)
+      setError(null)
+      try {
+        const conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
+        lastOpened.current = conv.id
+        if (navigate) settle(api?.openChats?.(conv.id))
+        return conv
+      } catch (e) {
+        if (alive.current) setError((e && e.message) || 'could not create conversation')
+        return null
+      } finally {
+        busyRef.current = false
+        if (alive.current) setBusy(false)
+      }
+    },
+    [api, dispatch],
+  )
+
+  const newChatEverywhere = useCallback(() => create(true), [create])
+
+  /** Pre-parse's create: the conversation exists, the panes keep the chats they show (header). */
+  const createAdopted = useCallback(() => create(false), [create])
 
   const clearError = useCallback(() => setError(null), [])
 
-  return { newChatEverywhere, busy, error, clearError }
+  return { newChatEverywhere, createAdopted, busy, error, clearError }
 }

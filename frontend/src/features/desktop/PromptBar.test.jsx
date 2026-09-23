@@ -5,12 +5,12 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import './index.jsx' // registers the `panes` slice (and, through useSendTurn, `slots`)
-import PromptBar, { BRIDGE_BANNER_TEXT, formatResult, resultTitle } from './PromptBar.jsx'
+import PromptBar, { BRIDGE_BANNER_TEXT, CANCELLED_NOTICE_MS, PREPARSE_TITLES, formatResult, preparseBanner, preparseFailureText, resultTitle } from './PromptBar.jsx'
 import { ANALYST_KEY, desktopSlotConfig } from './analyst.js'
 import { NOT_CAPTURED, initialPanes } from './slice.js'
 import { renderWithStore, sample } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { CFG, conv, controlledStream, fakeTriplex, jsonResponse, seqOf, sseResponse, stubFetch } from './fakes.js'
+import { CFG, PREPARSE_NOTICE, conv, controlledStream, fakeTriplex, jsonResponse, preparse as pp, seqOf, sseResponse, stubFetch } from './fakes.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -569,5 +569,472 @@ describe('PromptBar: Stage 3 (bridge error text, the desktop create body)', () =
     enter()
     await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1']))
     await waitFor(() => expect(screen.getByTestId('prompt-bar')).toHaveAttribute('data-sending', 'false'))
+  })
+})
+
+// Pre-parse (2026-09-23): a preview step on the composer text — `POST /api/conversations/{id}/preparse`
+// through the same runStream as every feature, the result applied to the composer, Send unchanged.
+describe('PromptBar: Pre-parse', () => {
+  const PREPARSE_URL = '/api/conversations/c1/preparse'
+  const preparseBtn = () => screen.getByTestId('prompt-preparse')
+  const status = () => screen.getByTestId('prompt-preparse-status')
+  const bar = () => screen.getByTestId('prompt-bar')
+  const withConv = { conversation: conv(), slotConfig: CFG }
+  const preparseRoute = (respond, url = PREPARSE_URL) => ({ method: 'POST', url, respond })
+  const RESTATED = { question: 'What is the capital of Australia?', original: 'draft' }
+  const DONE_PROMPT = pp.done(RESTATED).prompt
+
+  /** The preparse slice and the preparse stream, read from outside the bar. */
+  function PreparseProbe() {
+    const p = useSlice('preparse')
+    const st = useSlice('streams') || {}
+    return <div data-testid="preparse-probe">{`${p.status}:${p.seq}:${st.preparse ? st.preparse.status : 'none'}`}</div>
+  }
+  function mountPre(fake, over = {}, preloaded = {}) {
+    return renderWithStore(
+      <>
+        <PromptBar api={fake} />
+        <Probe />
+        <PreparseProbe />
+      </>,
+      { preloaded: { panes: { ...initialPanes(), ...over }, ...preloaded } },
+    )
+  }
+  const settled = () => waitFor(() => expect(bar()).not.toHaveAttribute('data-preparsing'))
+
+  test('pure helpers: plain words for the failure codes, the rest verbatim; the banner sentence', () => {
+    expect(preparseFailureText('empty_prompt')).toBe('the prompt is empty')
+    expect(preparseFailureText('prompt_too_long', { error: 'prompt_too_long', chars: 6001, max: 6000 })).toBe('the prompt is 6001 characters long and the analyst takes at most 6000 in one message')
+    expect(preparseFailureText('prompt_too_long')).toBe('the prompt is too long for one analyst message')
+    expect(preparseFailureText('analyst_not_chosen')).toBe('no analyst is chosen (Settings)')
+    expect(preparseFailureText('busy')).toBe('this conversation is busy with another call')
+    expect(preparseFailureText('cost_cap_exceeded')).toBe('cost_cap_exceeded')
+    expect(preparseFailureText(undefined)).toBe('error')
+    expect(preparseBanner('busy')).toBe('Pre-parse failed: this conversation is busy with another call. Your text is unchanged; you can Send it as it is.')
+  })
+
+  test('the button sits between the composer and Send; disabled while empty, enabled with text, each with its title; nothing else shown at rest', () => {
+    stubFetch([])
+    mountPre(fakeTriplex(), {}, withConv)
+    const row = composer().parentElement
+    expect([...row.children].map((c) => c.getAttribute('data-testid'))).toEqual(['prompt-composer', 'prompt-preparse', 'prompt-send'])
+    expect(preparseBtn()).toHaveTextContent('Pre-parse')
+    expect(preparseBtn()).toBeDisabled()
+    expect(preparseBtn().title).toBe('type a prompt first')
+    type('   ')
+    expect(preparseBtn()).toBeDisabled()
+    type('draft')
+    expect(preparseBtn()).toBeEnabled()
+    expect(preparseBtn().title).toBe('Ask the analyst to restate the question clearly and add a short answer format; review it here, then Send')
+    expect(preparseBtn().title).toBe(PREPARSE_TITLES.ready)
+    expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+    expect(screen.queryByTestId('prompt-preparse-cancel')).toBeNull()
+    expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+    expect(bar()).not.toHaveAttribute('data-preparsing')
+    expect(bar()).not.toHaveAttribute('data-preparsed')
+    expect(composer()).toHaveAttribute('rows', '2')
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  test('click → exactly POST …/preparse {prompt}, no /send, no refetch; done → the composer holds ev.prompt with the caret at 0, six rows, Undo shown, focus back, unlocked, Pre-parse disabled until edited', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([preparseRoute(() => sseResponse(pp.stream(RESTATED)))])
+    mountPre(fake, {}, withConv)
+    type('draft')
+    act(() => composer().focus())
+    fireEvent.click(preparseBtn())
+    expect(bar()).toHaveAttribute('data-sending', 'false') // a pre-parse is not a send: panes/sendStart is never dispatched
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    expect(seqOf(calls)).toEqual([`POST ${PREPARSE_URL}`])
+    expect(calls[0].body).toEqual({ prompt: 'draft' })
+    expect(bar()).toHaveAttribute('data-preparsed', 'true')
+    expect(bar()).toHaveAttribute('data-locked', 'false')
+    expect(bar()).toHaveAttribute('data-sending', 'false')
+    expect(composer()).not.toHaveAttribute('readonly')
+    expect(composer()).toHaveAttribute('rows', '6')
+    expect(composer().selectionStart).toBe(0)
+    expect(composer().selectionEnd).toBe(0)
+    expect(document.activeElement).toBe(composer())
+    expect(screen.getByTestId('prompt-preparse-undo')).toBeEnabled()
+    expect(screen.getByTestId('prompt-preparse-undo').title).toBe('Put back the text you typed')
+    expect(screen.queryByTestId('prompt-preparse-cancel')).toBeNull()
+    expect(status()).toHaveAttribute('data-state', 'done')
+    expect(status()).toHaveTextContent(`Pre-parsed · ${DONE_PROMPT.length} chars`)
+    expect(screen.getByTestId('preparse-probe')).toHaveTextContent('done:1:done')
+    expect(preparseBtn()).toBeDisabled()
+    expect(preparseBtn().title).toBe('already pre-parsed — edit the text, or undo, to pre-parse again')
+    expect(sendBtn()).toBeEnabled()
+    expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:c1')
+    expect(fake.openChats).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('prompt-banner')).toBeNull()
+  })
+
+  test('while it runs: data-preparsing, composer read-only and blurred with its text kept, Send / New chat disabled with their titles, Enter posts nothing, the status line then the notice, the elapsed counter ticks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const stream = controlledStream()
+      const calls = stubFetch([preparseRoute(() => stream.response)])
+      mountPre(fakeTriplex(), {}, withConv)
+      type('draft')
+      act(() => composer().focus())
+      fireEvent.click(preparseBtn())
+      await waitFor(() => expect(seqOf(calls)).toEqual([`POST ${PREPARSE_URL}`]))
+      expect(bar()).toHaveAttribute('data-preparsing', 'true')
+      expect(bar()).toHaveAttribute('data-locked', 'true')
+      expect(bar()).toHaveAttribute('data-sending', 'false')
+      expect(bar()).not.toHaveAttribute('data-preparsed')
+      expect(composer()).toHaveAttribute('readonly')
+      expect(composer()).toHaveAttribute('aria-busy', 'true')
+      expect(document.activeElement).not.toBe(composer())
+      expect(composer()).toHaveValue('draft')
+      expect(preparseBtn()).toBeDisabled()
+      expect(preparseBtn()).toHaveTextContent('Pre-parsing…')
+      expect(preparseBtn().title).toBe('restating the question via the analyst…')
+      expect(sendBtn()).toBeDisabled()
+      expect(sendBtn().title).toBe('pre-parse in progress')
+      expect(screen.getByTestId('prompt-newchat')).toBeDisabled()
+      expect(screen.getByTestId('prompt-newchat').title).toBe('pre-parse in progress')
+      expect(screen.getByTestId('prompt-preparse-cancel').title).toBe('Stop waiting and unlock the composer; the analyst page is told to stop')
+      expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+      expect(status()).toHaveAttribute('data-state', 'running')
+      expect(status()).toHaveAttribute('role', 'status')
+      expect(status()).toHaveAttribute('aria-live', 'polite')
+      expect(status().textContent).toMatch(/^restating the question via the analyst… \d+ s$/)
+      expect(status().parentElement.firstElementChild).toBe(status()) // first in .promptMeta
+      // Enter during a pre-parse is ignored; so is a second click
+      enter()
+      fireEvent.click(preparseBtn())
+      expect(seqOf(calls)).toEqual([`POST ${PREPARSE_URL}`])
+      // the counter is wall-clock seconds since the click
+      act(() => {
+        vi.advanceTimersByTime(2000)
+      })
+      expect(Number(/(\d+) s$/.exec(status().textContent)[1])).toBeGreaterThanOrEqual(2)
+      stream.push([pp.start(), pp.retry()])
+      await waitFor(() => expect(status().textContent).toMatch(new RegExp(`^${PREPARSE_NOTICE} \\d+ s$`)))
+      expect(screen.getByTestId('preparse-probe')).toHaveTextContent('working:0:streaming')
+      expect(composer()).toHaveValue('draft')
+      stream.push([pp.done(RESTATED)])
+      stream.end()
+      await settled()
+      expect(composer()).toHaveValue(DONE_PROMPT)
+      expect(composer()).not.toHaveAttribute('readonly')
+      expect(document.activeElement).toBe(composer())
+      expect(status()).toHaveAttribute('data-state', 'done')
+      expect(sendBtn()).toBeEnabled()
+      expect(screen.getByTestId('prompt-newchat')).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('Undo puts the typed text back and goes away; an edit hides Undo and re-enables Pre-parse; a Send clears it and posts the composer text verbatim', async () => {
+    const calls = stubFetch([
+      preparseRoute(() => sseResponse(pp.stream(RESTATED))),
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(afterSend(DONE_PROMPT)) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    mountPre(fakeTriplex(), {}, withConv)
+    type('draft')
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    // Undo
+    fireEvent.click(screen.getByTestId('prompt-preparse-undo'))
+    expect(composer()).toHaveValue('draft')
+    expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+    expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+    expect(bar()).not.toHaveAttribute('data-preparsed')
+    expect(composer()).toHaveAttribute('rows', '2')
+    expect(preparseBtn()).toBeEnabled()
+    expect(preparseBtn().title).toBe(PREPARSE_TITLES.ready)
+    // again, then an edit
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    expect(preparseBtn()).toBeDisabled()
+    type(`${DONE_PROMPT} plus my edit`)
+    expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+    expect(bar()).not.toHaveAttribute('data-preparsed')
+    expect(preparseBtn()).toBeEnabled()
+    expect(preparseBtn().title).toBe(PREPARSE_TITLES.ready)
+    // a third time (the edited text is what is posted), then Send: the body is the composer text, byte for byte
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    const preparses = calls.filter((c) => c.url === PREPARSE_URL)
+    expect(preparses).toHaveLength(3)
+    expect(preparses.map((c) => c.body)).toEqual([{ prompt: 'draft' }, { prompt: 'draft' }, { prompt: `${DONE_PROMPT} plus my edit` }])
+    enter()
+    expect(composer()).toHaveValue('')
+    expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+    expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+    expect(bar()).not.toHaveAttribute('data-preparsed')
+    await waitFor(() => expect(seqOf(calls).slice(-3)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    expect(calls.find((c) => c.url === '/api/conversations/c1/send').body).toEqual({ prompt: DONE_PROMPT })
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(screen.getByTestId('preparse-probe')).toHaveTextContent('idle:3:done') // cleared at submit, seq kept
+    expect(screen.queryByTestId('prompt-banner')).toBeNull()
+  })
+
+  test('with no conversation the bar creates one that adopts the panes: POST /api/conversations with desktopSlotConfig(), openChats never called, sending never true; the Send that follows posts into it without a second create', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([
+      { method: 'POST', url: '/api/conversations', respond: jsonResponse(conv(), 201) },
+      preparseRoute(() => sseResponse(pp.stream(RESTATED))),
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(afterSend(DONE_PROMPT)) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    mountPre(fake)
+    type('draft')
+    fireEvent.click(preparseBtn())
+    expect(bar()).toHaveAttribute('data-preparsing', 'true') // locked for the create round-trip too
+    expect(bar()).toHaveAttribute('data-sending', 'false')
+    expect(composer()).toHaveAttribute('readonly')
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    expect(seqOf(calls)).toEqual(['POST /api/conversations', `POST ${PREPARSE_URL}`])
+    expect(calls[0].body).toEqual({ slot_config: desktopSlotConfig() })
+    expect(calls[1].body).toEqual({ prompt: 'draft' })
+    expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:c1')
+    await tick()
+    expect(fake.openChats).not.toHaveBeenCalled() // the panes keep their chats; the first Send adopts them
+    enter()
+    expect(bar()).toHaveAttribute('data-sending', 'true')
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', `POST ${PREPARSE_URL}`, 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    expect(calls[2].body).toEqual({ prompt: DONE_PROMPT })
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    await tick()
+    expect(fake.openChats).not.toHaveBeenCalled()
+    for (const slot of ['claude', 'chatgpt', 'grok']) expect(result(slot)).toHaveTextContent('sent ✓ captured')
+  })
+
+  test("with the shell's chats instance the create goes through its createAdopted", async () => {
+    const calls = stubFetch([preparseRoute(() => sseResponse(pp.stream(RESTATED)), '/api/conversations/c5/preparse')])
+    const chats = { newChatEverywhere: vi.fn(), createAdopted: vi.fn(async () => conv({ id: 'c5' })), busy: false, error: null, clearError: vi.fn() }
+    renderWithStore(<PromptBar api={fakeTriplex()} chats={chats} />, { preloaded: { panes: initialPanes() } })
+    type('draft')
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations/c5/preparse']))
+    expect(chats.createAdopted).toHaveBeenCalledTimes(1)
+    expect(chats.newChatEverywhere).not.toHaveBeenCalled()
+    expect(chats.clearError).toHaveBeenCalled()
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+  })
+
+  test('a failed create shows the banner and keeps the text; nothing else is posted', async () => {
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse({ detail: { error: 'disk_full' } }, 500) }])
+    mountPre(fakeTriplex())
+    type('draft')
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('disk_full'))
+    await settled()
+    expect(composer()).toHaveValue('draft')
+    expect(composer()).not.toHaveAttribute('readonly')
+    expect(bar()).toHaveAttribute('data-locked', 'false')
+    expect(bar()).not.toHaveAttribute('data-preparsed')
+    expect(seqOf(calls)).toEqual(['POST /api/conversations'])
+    expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+    expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+    expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:none')
+    expect(preparseBtn()).toBeEnabled()
+  })
+
+  test('a degrade, a terminal error and a pre-stream 409 / 422 each show the banner in plain words and leave the text alone: no Undo, no result, a retry allowed', async () => {
+    const tail = 'Your text is unchanged; you can Send it as it is.'
+    const cases = [
+      {
+        name: 'degraded',
+        respond: () => sseResponse([pp.start(), pp.retry(), pp.degraded({ error: 'the analyst returned an empty restatement', original: 'draft', raw_attempts: ['{"question": "  "}'] })]),
+        text: `Pre-parse failed: the analyst returned an empty restatement. ${tail}`,
+        probe: 'degraded:0:done',
+      },
+      { name: 'error event', respond: () => sseResponse([pp.start(), { type: 'error', message: 'boom' }]), text: `Pre-parse failed: boom. ${tail}`, probe: 'error:0:error' },
+      { name: '409 busy', respond: jsonResponse({ detail: { error: 'busy' } }, 409), text: `Pre-parse failed: this conversation is busy with another call. ${tail}`, probe: 'error:0:error' },
+      {
+        name: '422 prompt_too_long',
+        respond: jsonResponse({ detail: { error: 'prompt_too_long', chars: 6001, max: 6000 } }, 422),
+        text: `Pre-parse failed: the prompt is 6001 characters long and the analyst takes at most 6000 in one message. ${tail}`,
+        probe: 'error:0:error',
+      },
+      { name: '422 empty_prompt', respond: jsonResponse({ detail: { error: 'empty_prompt' } }, 422), text: `Pre-parse failed: the prompt is empty. ${tail}`, probe: 'error:0:error' },
+      { name: '404', respond: jsonResponse({ detail: { error: 'not_found', what: 'conversation' } }, 404), text: `Pre-parse failed: not_found. ${tail}`, probe: 'error:0:error' },
+      {
+        name: 'analyst_not_chosen (degraded)',
+        respond: () => sseResponse([pp.start(), pp.retry(), pp.degraded({ error: 'analyst_not_chosen', original: 'draft', raw_attempts: [''] })]),
+        text: `Pre-parse failed: no analyst is chosen (Settings). ${tail}`,
+        probe: 'degraded:0:done',
+      },
+      { name: 'malformed done', respond: () => sseResponse([pp.start(), { type: 'preparse_done', prompt: '', original: 'draft', question: '' }]), text: `Pre-parse failed: malformed preparse_done. ${tail}`, probe: 'error:0:done' },
+    ]
+    for (const c of cases) {
+      stubFetch([preparseRoute(c.respond)])
+      const { unmount } = mountPre(fakeTriplex(), {}, withConv)
+      type('draft')
+      fireEvent.click(preparseBtn())
+      await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('Pre-parse failed'))
+      await settled()
+      expect(screen.getByTestId('prompt-banner').textContent, c.name).toBe(c.text)
+      expect(composer(), c.name).toHaveValue('draft')
+      expect(composer()).not.toHaveAttribute('readonly')
+      expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+      expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+      expect(bar()).not.toHaveAttribute('data-preparsed')
+      expect(sendBtn()).toBeEnabled()
+      expect(preparseBtn()).toBeEnabled()
+      expect(screen.getByTestId('preparse-probe'), c.name).toHaveTextContent(c.probe)
+      unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('the failure banner clears on the next Pre-parse click and on a Send', async () => {
+    const calls = stubFetch([
+      preparseRoute(({ body }) => (body.prompt === 'draft' ? jsonResponse({ detail: { error: 'busy' } }, 409) : sseResponse(pp.stream(RESTATED)))),
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(afterSend('x')) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    mountPre(fakeTriplex(), {}, withConv)
+    type('draft')
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('busy'))
+    await settled()
+    type('draft two')
+    fireEvent.click(preparseBtn())
+    expect(screen.queryByTestId('prompt-banner')).toBeNull()
+    await waitFor(() => expect(composer()).toHaveValue(DONE_PROMPT))
+    await settled()
+    // a failure, then a Send
+    expect(calls.filter((c) => c.url === PREPARSE_URL)).toHaveLength(2)
+    vi.unstubAllGlobals()
+    stubFetch([
+      preparseRoute(jsonResponse({ detail: { error: 'busy' } }, 409)),
+      { method: 'POST', url: '/api/conversations/c1/send', respond: () => sseResponse(fullStream('t1')) },
+      { method: 'GET', url: '/api/conversations/c1', respond: jsonResponse(afterSend('x')) },
+      { method: 'GET', url: '/api/conversations', respond: jsonResponse([]) },
+    ])
+    type('draft three')
+    fireEvent.click(preparseBtn())
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('busy'))
+    await settled()
+    enter()
+    expect(screen.queryByTestId('prompt-banner')).toBeNull()
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(screen.queryByTestId('prompt-banner')).toBeNull()
+  })
+
+  test('Cancel aborts the stream (sse/abort): idle, text unchanged, unlocked, "pre-parse cancelled" on the status line for a moment', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const stream = controlledStream()
+      const calls = stubFetch([
+        preparseRoute(({ signal }) => {
+          stream.bind(signal)
+          return stream.response
+        }),
+      ])
+      mountPre(fakeTriplex(), {}, withConv)
+      type('draft')
+      fireEvent.click(preparseBtn())
+      await waitFor(() => expect(seqOf(calls)).toEqual([`POST ${PREPARSE_URL}`]))
+      stream.push([pp.start(), pp.retry()])
+      await waitFor(() => expect(screen.getByTestId('preparse-probe')).toHaveTextContent('working:0:streaming'))
+      fireEvent.click(screen.getByTestId('prompt-preparse-cancel'))
+      await settled()
+      expect(screen.getByTestId('preparse-probe')).toHaveTextContent('idle:0:aborted')
+      expect(composer()).toHaveValue('draft')
+      expect(composer()).not.toHaveAttribute('readonly')
+      expect(bar()).toHaveAttribute('data-locked', 'false')
+      expect(bar()).not.toHaveAttribute('data-preparsed')
+      expect(status()).toHaveAttribute('data-state', 'cancelled')
+      expect(status()).toHaveTextContent('pre-parse cancelled')
+      expect(screen.queryByTestId('prompt-preparse-cancel')).toBeNull()
+      expect(screen.queryByTestId('prompt-preparse-undo')).toBeNull()
+      expect(screen.queryByTestId('prompt-banner')).toBeNull()
+      expect(preparseBtn()).toBeEnabled()
+      expect(sendBtn()).toBeEnabled()
+      act(() => {
+        vi.advanceTimersByTime(CANCELLED_NOTICE_MS + 50)
+      })
+      expect(screen.queryByTestId('prompt-preparse-status')).toBeNull()
+      expect(seqOf(calls)).toEqual([`POST ${PREPARSE_URL}`]) // nothing else was asked
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('Cancel during the create round-trip: the conversation is created but no pre-parse is asked; the text stays', async () => {
+    let release
+    const created = new Promise((r) => {
+      release = r
+    })
+    const calls = stubFetch([
+      {
+        method: 'POST',
+        url: '/api/conversations',
+        respond: async () => {
+          await created
+          return jsonResponse(conv(), 201)
+        },
+      },
+      preparseRoute(() => sseResponse(pp.stream(RESTATED))),
+    ])
+    mountPre(fakeTriplex())
+    type('draft')
+    fireEvent.click(preparseBtn())
+    expect(bar()).toHaveAttribute('data-preparsing', 'true')
+    fireEvent.click(screen.getByTestId('prompt-preparse-cancel'))
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await settled()
+    expect(seqOf(calls)).toEqual(['POST /api/conversations'])
+    expect(composer()).toHaveValue('draft')
+    expect(status()).toHaveAttribute('data-state', 'cancelled')
+    expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt:false:c1')
+  })
+
+  test('disabled with the matching title while a send is in flight, while send / analyze / fusion / refactor stream, and with no analyst (the conversation\'s, or the desktop choice with none open)', () => {
+    stubFetch([])
+    const cases = [
+      { over: { sending: true }, preloaded: withConv, title: 'a send is in flight' },
+      { over: {}, preloaded: { ...withConv, streams: { send: STREAMING, analyze: IDLE, fusion: IDLE } }, title: 'a stream is running' },
+      { over: {}, preloaded: { ...withConv, streams: { send: IDLE, analyze: STREAMING, fusion: IDLE } }, title: 'the analyst is busy (Analyze, Fusion or Refactor is running)' },
+      { over: {}, preloaded: { ...withConv, streams: { send: IDLE, analyze: IDLE, fusion: STREAMING } }, title: 'the analyst is busy (Analyze, Fusion or Refactor is running)' },
+      { over: {}, preloaded: { ...withConv, streams: { send: IDLE, analyze: IDLE, fusion: IDLE, refactor: STREAMING } }, title: 'the analyst is busy (Analyze, Fusion or Refactor is running)' },
+      { over: {}, preloaded: { conversation: conv({ slot_config: { ...CFG, analyst_model: '' } }), slotConfig: { ...CFG, analyst_model: '' } }, title: 'Pre-parse needs an analyst: choose a web session or local Ollama in Settings' },
+      { over: {}, preloaded: { conversation: conv({ slot_config: { ...CFG, analyst_model: 'openai/gpt-5' } }), slotConfig: { ...CFG, analyst_model: 'openai/gpt-5' } }, title: 'Pre-parse needs an analyst: choose a web session or local Ollama in Settings' },
+    ]
+    for (const c of cases) {
+      const { unmount } = mountPre(fakeTriplex(), c.over, c.preloaded)
+      type('draft')
+      expect(preparseBtn(), c.title).toBeDisabled()
+      expect(preparseBtn().title, c.title).toBe(c.title)
+      fireEvent.click(preparseBtn())
+      unmount()
+    }
+    // a refactor stream locks nothing else (useSendTurn ignores it) — only this button
+    const refactoring = mountPre(fakeTriplex(), {}, { ...withConv, streams: { send: IDLE, analyze: IDLE, fusion: IDLE, refactor: STREAMING } })
+    type('draft')
+    expect(composer()).not.toHaveAttribute('readonly')
+    expect(sendBtn()).toBeEnabled()
+    refactoring.unmount()
+    // no conversation: the desktop choice decides
+    localStorage.setItem(ANALYST_KEY, '')
+    try {
+      mountPre(fakeTriplex())
+      type('draft')
+      expect(preparseBtn()).toBeDisabled()
+      expect(preparseBtn().title).toBe(PREPARSE_TITLES.noAnalyst)
+      fireEvent.click(preparseBtn())
+    } finally {
+      localStorage.removeItem(ANALYST_KEY)
+    }
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 })

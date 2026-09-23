@@ -161,6 +161,8 @@ test('observe on a page that already holds an assistant turn (thread=noise) wait
 test.describe('?reply=json', () => {
   const EXTRACTION = fenced(fixtureText('analyst.extraction.1.jsonl'))
   const CONVERGENCE = fenced(fixtureText('analyst.convergence.1.jsonl'))
+  // S12: the fake site's pre-parse restatement (test/fake-site/site.js CANNED_PREPARSE), keyed on `Question to restate:`
+  const CANNED_PREPARSE = `{"question": "What is the maximum selectable full-scale range of the gyroscope in the Bosch BMI088 IMU?"}`
   const DEFENSE = Object.fromEntries(SLOTS.map((s) => [s, fenced(fixtureText(`${s}.defense.1.jsonl`))]))
 
   // Stage 3: the fake site renders the fence as REAL code-block chrome (a header carrying the

@@ -7,14 +7,19 @@ Analyze actually consumes the artifact.
 
 from __future__ import annotations
 
+import inspect
+import logging
 from typing import Any
+
+import pytest
 
 from backend.features import analyze as analyze_feature
 from backend.features import refactor as feature
 from backend.prompts import refactor as prompts
-from backend.schemas import LABELS
+from backend.schemas import LABELS, FeatureUsage, KnowledgeGraph
 from tests.analyze.conftest import blocks_of, extraction_calls, persist
-from tests.conftest import DEFAULT_PROMPT
+from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
+from tests.helpers import find_identity_leaks
 
 
 def _types(events: list[dict[str, Any]]) -> list[str]:
@@ -248,3 +253,114 @@ async def test_a_partial_before_a_transport_error_is_recorded_once_and_never_ech
     second = calls[1]["messages"]
     assert [m["role"] for m in second] == [m["role"] for m in calls[0]["messages"]] + ["user"]
     assert "half a map" not in second[-1]["content"]
+
+
+# --------------------------------------------------------------------------- the claims cap
+def test_reply_messages_spell_out_the_claims_cap():
+    """Measured 2026-09-22: 51 / 82 / 87 uncapped claims per reply put the refactored set over the
+    split trigger. The cap is asked of the model, in the system prompt, per message."""
+    assert prompts.REPLY_CLAIMS_MAX == 12
+    assert "Return at most 12 claims" in prompts.REPLY_SYSTEM
+    assert "Return at most 12 claims" in prompts.REPLY_SYSTEM_FENCED
+    system, _user = prompts.reply_messages("q", "R1", "a reply", max_claims=4)
+    assert "Return at most 4 claims" in system["content"]
+    assert "at most 12" not in system["content"]
+    assert system["content"] == prompts.reply_system(max_claims=4)
+    assert prompts.reply_messages("q", "R1", "a reply")[0]["content"] == prompts.REPLY_SYSTEM
+    fenced = prompts.reply_messages("q", "R1", "a reply", fenced=True, max_claims=4)[0]["content"]
+    assert fenced == prompts.reply_system(max_claims=4, fenced=True)
+    assert fenced == system["content"].replace(
+        prompts.REPLY_JSON_INSTRUCTION, prompts.REPLY_JSON_INSTRUCTION_FENCED
+    )
+    # The user half never depends on the cap.
+    assert prompts.reply_messages("q", "R1", "a reply", max_claims=4)[1] == (
+        prompts.reply_messages("q", "R1", "a reply")[1]
+    )
+    for bad in (0, -1, True, 2.5):
+        with pytest.raises(ValueError):
+            prompts.reply_system(max_claims=bad)  # type: ignore[arg-type]
+    assert find_identity_leaks(prompts.REPLY_SYSTEM) == []
+
+
+def test_claims_per_piece_shares_the_cap_and_never_asks_for_fewer_than_four():
+    assert [feature.claims_per_piece(n) for n in (1, 2, 3, 4, 6)] == [12, 6, 4, 4, 4]
+    with pytest.raises(ValueError):
+        feature.claims_per_piece(0)
+    notice = feature.chunk_notice("R2", 17_532, 3, 4)
+    assert notice.endswith("in 3 pieces of at most 4 claims each")
+    assert "17,532" in notice
+
+
+def _recording_call(recorder: list[list[dict[str, str]]], *, claims: int):
+    """A `validated_call` stand-in: records every messages list and answers the right shape."""
+
+    async def call(*, model: str, messages: list[dict[str, str]], schema_model: Any, fenced: bool):
+        recorder.append(messages)
+        if schema_model is feature._MapResult:
+            value = schema_model(graph=KnowledgeGraph(), question="q, restated")
+        else:
+            value = schema_model(summary="s", claims=[f"claim {i}" for i in range(claims)])
+        return value, "raw", FeatureUsage(), None
+
+    return call
+
+
+async def test_a_chunked_reply_is_asked_for_its_share_of_claims_per_piece(
+    make_conversation, refactor, monkeypatch
+):
+    """A three-piece reply is asked for 4 + 4 + 4, not 36; the single-piece replies keep the full
+    cap, and the chunk narration says so."""
+    paragraph = "Paragraph about the gyroscope full-scale range and its selectable steps. " * 40
+    long_reply = "\n\n".join([paragraph.strip()] * 6)  # ~17.5 KB: three pieces under 6,000
+    assert len(analyze_feature.chunk_reply(long_reply)) == 3
+    conv = await persist(make_conversation(responses={
+        "claude": DEFAULT_RESPONSES["claude"],
+        "chatgpt": long_reply,
+        "grok": DEFAULT_RESPONSES["grok"],
+    }))
+    seen: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(feature, "validated_call", _recording_call(seen, claims=2))
+    r, events = await refactor(conv.id)
+    assert r.status_code == 200, r.text
+    assert events[-1]["type"] == "refactor_done"
+    narrations = [e["error"] for e in events if e["type"] == "refactor_retry"]
+    assert any(n.endswith("in 3 pieces of at most 4 claims each") for n in narrations)
+    systems = [m[0]["content"] for m in seen]
+    assert len(systems) == 6  # the map call, R1, R2 × 3 pieces, R3
+    assert systems[0] == prompts.MAP_SYSTEM
+    assert systems[1] == prompts.REPLY_SYSTEM  # R1: one piece, the full cap
+    assert systems[2:5] == [prompts.reply_system(max_claims=4)] * 3  # R2: its share per piece
+    assert systems[5] == prompts.REPLY_SYSTEM  # R3
+    reduced = events[-1]["turn"]["refactoring"]["replies"]
+    assert [x["model"] for x in reduced] == list(LABELS)
+    assert len(reduced[1]["claims"]) == 6  # 2 per piece, concatenated, none dropped
+
+
+async def test_claims_over_the_cap_are_kept_with_one_warning(monkeypatch, caplog):
+    """House rule: never a silent truncation. More than was asked for is kept, and named once."""
+    seen: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(feature, "validated_call", _recording_call(seen, claims=13))
+    with caplog.at_level(logging.WARNING, logger="triplex.features.refactor"):
+        reduced, raws, _usage, error = await feature._refactor_reply(
+            model="m", question="q", label="R2", response="short", fenced=False
+        )
+    assert error is None and reduced is not None
+    assert len(reduced.claims) == 13 and raws == ["raw"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["refactor: R2 returned 13 claims, over the 12 asked for; kept all"]
+
+    # At the cap: no warning at all.
+    caplog.clear()
+    seen.clear()
+    monkeypatch.setattr(feature, "validated_call", _recording_call(seen, claims=12))
+    with caplog.at_level(logging.WARNING, logger="triplex.features.refactor"):
+        reduced, _raws, _usage, error = await feature._refactor_reply(
+            model="m", question="q", label="R2", response="short", fenced=False
+        )
+    assert error is None and len(reduced.claims) == 12
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_validated_call_is_the_promoted_primitive():
+    assert feature._call is feature.validated_call
+    assert inspect.iscoroutinefunction(feature.validated_call)

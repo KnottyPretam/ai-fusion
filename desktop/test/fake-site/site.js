@@ -11,9 +11,12 @@
  *   ?replyMs=N       after a submit, stream an assistant reply "Echo: <typed text>" over N ms (0 = at once)
  *   ?reply=json      canned JSON instead of the echo, fenced ```json … ```, keyed on the typed text —
  *                    "YOUR CLAIM" → this site's DefenseReply, "<<<DIVERGENCES>>>" → the ConvergenceCheck,
- *                    "<<<R1>>>" → the Extraction, checked in THAT order (a challenge prompt for R2/R3 also
- *                    carries <<<R1>>> in its anonymised peer block); no key → the echo. The texts are the
- *                    assembled `content` of backend/llm/fixtures/scenarios/planted_factual/*.jsonl, verbatim.
+ *                    "<<<R1>>>" → the Extraction, "Question to restate:" → the Pre-parse restatement,
+ *                    checked in THAT order (a challenge prompt for R2/R3 also carries <<<R1>>> in its
+ *                    anonymised peer block; a pre-parse prompt carries none of the earlier keys); no key
+ *                    → the echo. The first three texts are the assembled `content` of
+ *                    backend/llm/fixtures/scenarios/planted_factual/*.jsonl, verbatim; the restatement is
+ *                    that scenario's question restated (no fixture to mirror — a pre-parse leaves no turn).
  *   ?reply=rich      (Stage 3) CANNED_RICH instead of the echo: a heading, bold / italic / inline code, a
  *                    link, a nested list, a GFM table and a fenced code block — every shape `toMarkdown`
  *                    has to rebuild
@@ -224,6 +227,12 @@
     grok: `{"stance": "defend", "justification": "The datasheet's gyroscope specification table gives the full-scale range as +/-125, +/-250, +/-500, +/-1000 and +/-2000 deg/s selected through GYRO_RANGE; 1000 deg/s is a mid-scale setting and the maximum is 2000 deg/s.", "revised_claim": null, "confidence": 0.93, "persuaded_by": null}`,
   }
   const CANNED_CONVERGENCE = `{"statuses": [{"divergence_id": "d1", "status": "resolved"}]}`
+  // The Pre-parse restatement: the planted_factual question ("What is the maximum gyroscope full-scale
+  // range of the Bosch BMI088 IMU?") restated, keyed on the header the restate prompt opens with. No
+  // shipped fixture holds it (a pre-parse persists nothing), so nothing re-derives it; app.spec.js
+  // pins the composer to come back STARTING with this question. Plain ASCII on purpose — the reply is
+  // read back out of rendered markdown, and nothing in it is a markdown or JSON escape.
+  const CANNED_PREPARSE = `{"question": "What is the maximum selectable full-scale range of the gyroscope in the Bosch BMI088 IMU?"}`
 
   // Canned markdown for ?reply=rich (Stage 3): one reply that carries every shape `toMarkdown`
   // has to rebuild — a heading, bold / italic / inline code, a link (whose URL the capture drops),
@@ -539,6 +548,7 @@
     if (text.includes('YOUR CLAIM')) return CANNED_DEFENSE[site]
     if (text.includes('<<<DIVERGENCES>>>')) return CANNED_CONVERGENCE
     if (text.includes('<<<R1>>>')) return CANNED_EXTRACTION
+    if (text.includes('Question to restate:')) return CANNED_PREPARSE
     return null
   }
 

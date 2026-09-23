@@ -326,7 +326,7 @@ from Stage 2 `lastSend[slot]` is `{ok, code?, message?, ms}` recorded by the pan
 `pane-<slot>-health`, `pane-<slot>-session`, `pane-<slot>-reload`, `pane-<slot>-newchat`,
 `pane-<slot>-open`, `pane-<slot>-zoom-in|out|reset`, `pane-<slot>-inspect` (dev only), `pane-<slot>-capture` (S2),
 `pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`, `prompt-banner` (S2: role=alert for a pre-stream failure of a Send or of New chat everywhere),
-`prompt-newchat`, `prompt-result-<slot>`, `bridge-banner` (S2), `capture-notice` (S2),
+`prompt-newchat`, `prompt-result-<slot>`, `prompt-preparse`, `prompt-preparse-cancel`, `prompt-preparse-undo`, `prompt-preparse-status[data-state=running|done|cancelled]` and `prompt-bar[data-preparsing|data-preparsed]` (Pre-parse, 2026-09-23; slice `preparse` `{status, notice, prompt, original, question, error, rawAttempts, seq}`, action `preparse/clear`), `bridge-banner` (S2), `capture-notice` (S2),
 `desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),
 `drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8), `tooltip` (S9: the one delegated hover description, portalled to `document.body`; `data-placement` names the side it chose).  Renderer chrome never overlaps a
 view rect (deck bar above, headers above viewports, prompt bar/drawer below; no modals). The ONE thing the
@@ -377,7 +377,7 @@ untouched but now owned (not frozen) in the stages listed: `backend/features/sen
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Unified prompt flow (Stage 2+): PromptBar → `POST /api/conversations/{id}/send {prompt, slots?}`
+Unified prompt flow (Stage 2+): optionally PromptBar → `POST /api/conversations/{id}/preparse {prompt}` (Pre-parse: the reply's `prompt` replaces the composer text for review; a conversation is created adopting the panes' chats when none exists) → PromptBar → `POST /api/conversations/{id}/send {prompt, slots?}`
 → `run_send` → `stream_completion(model="web:chatgpt", …)` → bridge `request` → Electron
 injects into the ChatGPT view, observes the reply when capture is on → one `text` delta +
 `done` → `slot_delta`/`slot_done` → threads and turns persisted exactly as today. Capture off

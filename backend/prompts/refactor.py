@@ -17,7 +17,13 @@ Two call shapes, both asked for as JSON and both validated:
 - the REPLY call, once per label: one reply in, `{"summary": ..., "claims": [...]}` out. Same rules
   as the condense step it generalises (`analyze.CONDENSE_SYSTEM`) — copy every specific value
   verbatim, drop restatement, judge nothing — plus a one-sentence summary, because the exported
-  document reads better with a lede than with bullets alone.
+  document reads better with a lede than with bullets alone. The claims are CAPPED
+  (`REPLY_CLAIMS_MAX`, per piece when a reply is quoted in pieces): measured 2026-09-22, an uncapped
+  pass returned 51 / 82 / 87 claims for three replies, which put the refactored set over
+  `analyze.SPLIT_MIN_CHARS` and cost Analyze seven condense calls before its comparison — an uncapped
+  Refactor defeats a concise Send. 12 rather than the 8 a pre-parsed reply is asked for, because
+  Refactor also runs on replies that were never pre-parsed; three 12-claim blocks still fit under the
+  split trigger. The cap is asked of the model, never enforced by truncation (house rule).
 
 Transport-aware packaging, exactly as in `prompts/analyze.py` and for the same measured reason: a web
 session's reply is read back out of RENDERED markdown, where CommonMark resolves a backslash escape
@@ -65,7 +71,11 @@ MAP_SYSTEM_FENCED = _MAP_RULES + MAP_JSON_INSTRUCTION_FENCED + "\n" + _MAP_SCHEM
 QUESTION_HEADER = "Question:"
 
 # --------------------------------------------------------------------------- the per-reply call
-_REPLY_RULES = """You are condensing ONE anonymous expert response so that it can be compared with two others.
+# The most claims one reply is asked for (module docstring). A reply quoted in pieces is asked for
+# its share per piece (`features.refactor.claims_per_piece`), never this many per piece.
+REPLY_CLAIMS_MAX = 12
+
+_REPLY_RULES_HEAD = """You are condensing ONE anonymous expert response so that it can be compared with two others.
 
 Return a one-sentence summary of what this response actually recommends, and a flat list of its
 substantive claims — one claim per item: facts, numbers, limits, values, recommendations, and for
@@ -74,18 +84,41 @@ that changes is worse than one that is left out. Drop restatements, pleasantries
 prose, and anything that is only about style, order or emphasis. Keep the claims in the order they
 appear.
 
-Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a
+"""
+
+_REPLY_CAP_CLAUSE = """Return at most {max_claims} claims: the ones the answer rests on, in the order they appear.
+When the response makes more than that, keep the load-bearing ones and leave the peripheral
+ones out rather than merging several into one, because a merged claim can no longer be
+compared on its own.
+
+"""
+
+_REPLY_RULES_TAIL = """Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a
 shorter copy of one response, not an assessment of it.
 
 """
+
+
+def _reply_rules(max_claims: int = REPLY_CLAIMS_MAX) -> str:
+    """The reply rules with the claims cap spelled out; `max_claims` is a positive count."""
+    if not isinstance(max_claims, int) or isinstance(max_claims, bool) or max_claims < 1:
+        raise ValueError(f"max_claims must be a positive integer, got {max_claims!r}")
+    return _REPLY_RULES_HEAD + _REPLY_CAP_CLAUSE.format(max_claims=max_claims) + _REPLY_RULES_TAIL
+
 
 REPLY_JSON_INSTRUCTION = "Return ONLY valid JSON matching this schema (no prose, no code fences):"
 REPLY_JSON_INSTRUCTION_FENCED = MAP_JSON_INSTRUCTION_FENCED
 
 _REPLY_SCHEMA = """{"summary": string, "claims": [string, ...]}"""
 
-REPLY_SYSTEM = _REPLY_RULES + REPLY_JSON_INSTRUCTION + "\n" + _REPLY_SCHEMA
-REPLY_SYSTEM_FENCED = _REPLY_RULES + REPLY_JSON_INSTRUCTION_FENCED + "\n" + _REPLY_SCHEMA
+
+def reply_system(*, max_claims: int = REPLY_CLAIMS_MAX, fenced: bool = False) -> str:
+    instruction = REPLY_JSON_INSTRUCTION_FENCED if fenced else REPLY_JSON_INSTRUCTION
+    return _reply_rules(max_claims) + instruction + "\n" + _REPLY_SCHEMA
+
+
+REPLY_SYSTEM = reply_system()
+REPLY_SYSTEM_FENCED = reply_system(fenced=True)
 
 REPLY_HEADER = "Response to condense:"
 
@@ -113,10 +146,16 @@ def map_messages(question: str, *, fenced: bool = False) -> list[dict[str, str]]
 
 
 def reply_messages(
-    question: str, label: Label, response: str, *, fenced: bool = False
+    question: str,
+    label: Label,
+    response: str,
+    *,
+    fenced: bool = False,
+    max_claims: int = REPLY_CLAIMS_MAX,
 ) -> list[dict[str, str]]:
     """`[system, user]` for one label's reply. The question rides along so "substantive" has a
-    referent, quoted the same inert way; exactly one label's block is ever present."""
+    referent, quoted the same inert way; exactly one label's block is ever present. `max_claims`
+    is the cap this ONE message asks for (a reply quoted in pieces gets its share per piece)."""
     if label not in LABELS:
         raise ValueError(f"unknown label {label!r}")
     user = "\n\n".join(
@@ -127,7 +166,7 @@ def reply_messages(
         ]
     )
     return [
-        {"role": "system", "content": REPLY_SYSTEM_FENCED if fenced else REPLY_SYSTEM},
+        {"role": "system", "content": reply_system(max_claims=max_claims, fenced=fenced)},
         {"role": "user", "content": user},
     ]
 
@@ -143,6 +182,7 @@ __all__ = [
     "MAP_SYSTEM",
     "MAP_SYSTEM_FENCED",
     "QUESTION_HEADER",
+    "REPLY_CLAIMS_MAX",
     "REPLY_HEADER",
     "REPLY_JSON_INSTRUCTION",
     "REPLY_JSON_INSTRUCTION_FENCED",
@@ -152,5 +192,6 @@ __all__ = [
     "RETRY_USER_MESSAGE",
     "map_messages",
     "reply_messages",
+    "reply_system",
     "retry_message",
 ]

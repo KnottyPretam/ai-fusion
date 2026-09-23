@@ -1,0 +1,2 @@
+{"id": "gen-preparse-ok", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "```json\n{\"question\": \"What is the maximum selectable full-scale range of the Bosch BMI088 gyroscope?\"}\n```"}, "finish_reason": "stop"}]}
+{"id": "gen-preparse-ok", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 420, "completion_tokens": 32, "total_tokens": 452, "cost": 0.0001}}

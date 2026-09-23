@@ -16,7 +16,31 @@ error_type:"triplex", message:"model returned no text (finish_reason=<fr>)", par
 nothing is appended, `responses[slot]=None`, `errors[slot]=message`, `truncated[slot]` still
 reflects `finish_reason=="length"`, and the slot's `Usage` is still folded into `turn_done.usage`. On client disconnect, producers run to completion and
 persist (v1); `busy_guard` makes a concurrent feature call on the same conversation `409 busy`.
-Title = first prompt truncated to 60 chars (no LLM titling); renamable.
+Title = first prompt truncated to 60 chars (no LLM titling); renamable — a trailing Pre-parse
+answer block is stripped first (`prompts.preparse.strip_format`), so a short pre-parsed question
+titles as the question and never as the first line of Triplex's own block.
+
+**Pre-parse (2026-09-23).** `POST …/preparse {prompt}` is a PREVIEW step for the desktop prompt bar,
+never a Send: one analyst call (`role="analyst"`, `purpose="extraction"` — the frozen `Purpose`
+literal has no room, as for Refactor; the same `refactor.validated_call` primitive, `retries=0` plus
+one correction attempt, the web no-retry rule, `on_partial` into `raw_attempts`) restates the
+question clearly and succinctly as JSON `{"question"}`; the deterministic `ANSWER_FORMAT` block
+(direct answer, at most 8 numbered claims each with one sentence of reasoning, an `Uncertain:` line,
+the whole reply under 4,000 characters) is appended by code, LAST, and `preparse_done.prompt` is
+what the composer receives. Pre-checks before the first yield: 404 → 422 `empty_prompt` (blank, or
+nothing but the block once `strip_format` has run) → 422 `prompt_too_long` at
+`analyze.CONDENSE_CHUNK_CHARS` → `busy_guard` LAST. Nothing is persisted. **This is the one feature
+whose analyst call runs INLINE in the response stream rather than in a detached producer task:**
+there is no persistence write to protect, and running inline is what makes Cancel real — Starlette
+cancels the body task on client disconnect, the guard is released in `finally`, and the bridge
+request is closed under `aclosing`, which sends the `cancel` frame that frees the analyst page.
+The generator re-enters `bridge.conversation_scope(conv_id)` itself (the router's scope is gone by
+the time the streaming task drives it), so the request frame carries the conversation id and the
+correction attempt returns to the same analyst chat. Refactor's map and reply calls and Analyze's
+raw-reply path quote `strip_format(send_turn.prompt)` as the question, so Triplex's own scaffold
+never becomes a node of the knowledge graph. Refactor also asks for at most `REPLY_CLAIMS_MAX` (12)
+claims per reply — `max(4, ceil(12 / pieces))` per piece when a reply is quoted in pieces — and
+KEEPS everything the analyst returns over that, logging one WARNING (never a silent truncation).
 
 **Analyze.** `of_turn` defaults to the most recent `send` turn; explicit but unknown → `404
 {detail:{error:"not_found", what:"turn"}}`; explicit but not a send turn (continue turns are never

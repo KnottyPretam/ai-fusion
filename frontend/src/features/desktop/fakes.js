@@ -17,6 +17,11 @@
 // `sseResponse(events)`, `controlledStream()`, `conv(over)` and `CFG` — the stubbed-fetch harness
 // of features/send/useSendTurn.test.jsx / SendPane.test.jsx, so the desktop specs drive the real
 // api/http.js + api/sse.js + useSendTurn.js against canned responses.
+// Pre-parse (2026-09-23): `preparse.start/retry/done/degraded/stream` build the events of a
+//                  `POST …/preparse` stream in the shapes backend/features/preparse.py sends;
+//                  `controlledStream().bind(signal)` makes a pending read reject with AbortError when
+//                  the fetch is aborted, as a browser's reader does (the Cancel button's path) —
+//                  `stubFetch` hands the route's `respond` the request's `signal` for that.
 import { vi } from 'vitest'
 
 export const RECTS = {
@@ -236,15 +241,25 @@ export function sseResponse(events) {
   }
 }
 
-/** A stream whose chunks the test serves by hand: `push(events)` = one chunk, `end()` closes it. */
+/** The rejection a browser's `reader.read()` produces once the fetch's signal is aborted. */
+function abortError() {
+  return typeof DOMException === 'function' ? new DOMException('The operation was aborted.', 'AbortError') : Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' })
+}
+
+/**
+ * A stream whose chunks the test serves by hand: `push(events)` = one chunk, `end()` closes it.
+ * `bind(signal)` (optional) ties it to the request's AbortSignal: a pending read rejects with
+ * AbortError when the signal fires, and every later read too.
+ */
 export function controlledStream() {
   const queue = []
   let waiter = null
+  let aborted = false
   const serve = (item) => {
     if (waiter) {
       const w = waiter
       waiter = null
-      w(item)
+      w.resolve(item)
     } else queue.push(item)
   }
   const response = {
@@ -253,7 +268,10 @@ export function controlledStream() {
     json: async () => null,
     body: {
       getReader: () => ({
-        read: () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((r) => (waiter = r))),
+        read: () => {
+          if (aborted) return Promise.reject(abortError())
+          return queue.length ? Promise.resolve(queue.shift()) : new Promise((resolve, reject) => (waiter = { resolve, reject }))
+        },
         cancel: async () => {},
         releaseLock() {},
       }),
@@ -263,6 +281,17 @@ export function controlledStream() {
     response,
     push: (events) => serve({ value: new TextEncoder().encode(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), done: false }),
     end: () => serve({ value: undefined, done: true }),
+    bind: (signal) => {
+      if (!signal || typeof signal.addEventListener !== 'function') return
+      signal.addEventListener('abort', () => {
+        aborted = true
+        if (waiter) {
+          const w = waiter
+          waiter = null
+          w.reject(abortError())
+        }
+      })
+    },
   }
 }
 
@@ -277,10 +306,42 @@ export function stubFetch(routes) {
       calls.push({ method, url, body })
       const r = routes.find((x) => x.method === method && (x.url instanceof RegExp ? x.url.test(url) : x.url === url))
       if (!r) throw new TypeError(`fetch failed: unstubbed ${method} ${url}`)
-      return typeof r.respond === 'function' ? r.respond({ method, url, body }) : r.respond
+      return typeof r.respond === 'function' ? r.respond({ method, url, body, signal: init.signal }) : r.respond
     }),
   )
   return calls
 }
 
 export const seqOf = (calls) => calls.map((c) => `${c.method} ${c.url}`)
+
+// ---------------------------------------------------------------------------------------------
+// Pre-parse (2026-09-23): the events of one `POST …/preparse` stream
+// ---------------------------------------------------------------------------------------------
+
+/** The progress narration backend/features/preparse.py sends as preparse_retry{error} (its NOTICE). */
+export const PREPARSE_NOTICE = 'restating the question concisely'
+/**
+ * Stands in for the backend's answer-format block (backend/prompts/preparse.py ANSWER_FORMAT): the
+ * composed prompt looks like the real thing without pinning that text here — the desktop app spec
+ * checks the real one through the fake site.
+ */
+export const ANSWER_FORMAT_STANDIN =
+  'Answer format, follow it exactly:\nFirst, one paragraph that answers the question directly.\nThen a line "Key claims:" and a numbered list of at most 8 claims.\nThen a line "Uncertain:" and one sentence.'
+
+const preparseUsage = () => ({ calls: [], totals: { prompt_tokens: 120, completion_tokens: 40, reasoning_tokens: 0, cost_usd: 0, latency_ms: 47000, calls: 1 } })
+
+export const preparse = {
+  start: () => ({ type: 'preparse_start' }),
+  retry: (error = PREPARSE_NOTICE) => ({ type: 'preparse_retry', error }),
+  /** `prompt` defaults to the restated question with the answer block appended, as `compose()` builds it. */
+  done: ({ question = 'What is the capital of Australia?', original = question, prompt = `${question}\n\n${ANSWER_FORMAT_STANDIN}` } = {}) => ({
+    type: 'preparse_done',
+    prompt,
+    original,
+    question,
+    usage: preparseUsage(),
+  }),
+  degraded: ({ error = 'parse_error', original = 'draft', raw_attempts = [''] } = {}) => ({ type: 'preparse_degraded', error, original, raw_attempts, usage: preparseUsage() }),
+  /** start → the notice → done: one whole successful stream, for `sseResponse`. */
+  stream: (over) => [preparse.start(), preparse.retry(), preparse.done(over)],
+}

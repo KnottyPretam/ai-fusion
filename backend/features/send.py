@@ -60,6 +60,7 @@ from ..llm import catalog
 from ..llm import client as llm_client
 from ..llm import reasoning as reasoning_mod
 from ..llm.errors import EMPTY_REPLY
+from ..prompts.preparse import strip_format
 from ..prompts.send import PURPOSE, title_from_prompt, user_message, web_plugins
 from ..schemas import (
     SLOT_IDS,
@@ -234,7 +235,9 @@ async def _coordinate(
         if feature == "send":
             turn = _build_send_turn(conv, prompt, turn_id, outcomes, usage)
             if not conv.turns:  # the conversation's FIRST send auto-titles it
-                await store.rename(conv.id, title_from_prompt(prompt))
+                # A pre-parsed prompt ends in Triplex's own answer block: the title is the question
+                # in front of it (`or prompt` keeps a block-only prompt titled rather than blank).
+                await store.rename(conv.id, title_from_prompt(strip_format(prompt) or prompt))
         else:
             turn = _build_continue_turn(conv, prompt, turn_id, outcomes[0], usage)
         await store.append_turn(conv.id, turn)  # completes BEFORE turn_done is yielded

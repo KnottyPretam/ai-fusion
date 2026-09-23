@@ -28,12 +28,26 @@ correcting it are different things, and only the first is safe after a site erro
 new name, and the meter reads these as analyst work, which is what they are. No reply is ever quoted
 into a message bigger than `analyze.CONDENSE_CHUNK_CHARS` — that bound was measured (a single 15.5 KB
 analyst message never came back inside 20 minutes), and it applies here for the same reason.
+
+The claims are capped on the asking side (`prompts.refactor.REPLY_CLAIMS_MAX`; measured 2026-09-22,
+51 / 82 / 87 uncapped claims per reply put the refactored set over Analyze's split trigger). A reply
+quoted in pieces is asked for its share per piece (`claims_per_piece`), so a three-piece reply is
+asked for 4 + 4 + 4, not 36. A model that returns more than it was asked for is NOT truncated (house
+rule: fail loudly, never silently truncate): every claim is kept and ONE warning names the overshoot.
+
+The question the analyst is shown is `prompts.preparse.strip_format(send_turn.prompt)`: a pre-parsed
+prompt ends with Triplex's own answer-format block, and the map rules would otherwise fold "at most
+8 claims… no tables" into the restated question that heads the comparison prompt and the export.
+
+`validated_call` is the one-call-plus-retry-rule primitive; Pre-parse (`features/preparse.py`)
+borrows it for its single restate call, so the web no-retry rule has exactly one implementation.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -45,6 +59,7 @@ from .. import api_errors
 from ..config import ANALYST_EFFORT, MAX_TOKENS_STAGE
 from ..llm import client
 from ..llm.errors import COST_CAP_EXCEEDED
+from ..prompts import preparse as preparse_prompts
 from ..prompts import refactor as prompts
 from ..schemas import (
     LABELS,
@@ -99,11 +114,20 @@ def cached_ok_turn(conv: Conversation, of_turn: str) -> RefactorTurn | None:
     return None
 
 
-def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
+def chunk_notice(label: Label | str, chars: int, pieces: int, max_claims: int) -> str:
     return (
         f"{label}'s reply is {chars:,} characters, over the {CONDENSE_CHUNK_CHARS:,} one message can "
-        f"be answered for, so it is being refactored in {pieces} pieces"
+        f"be answered for, so it is being refactored in {pieces} pieces of at most {max_claims} "
+        f"claims each"
     )
+
+
+def claims_per_piece(pieces: int) -> int:
+    """The claims cap ONE piece of a reply is asked for: the reply's share of `REPLY_CLAIMS_MAX`,
+    floored at 4 so a piece is never asked for a list too short to carry its own substance."""
+    if pieces < 1:
+        raise ValueError(f"pieces must be at least 1, got {pieces!r}")
+    return max(4, math.ceil(prompts.REPLY_CLAIMS_MAX / pieces))
 
 
 def reply_notice(label: Label | str, chars: int) -> str:
@@ -121,7 +145,7 @@ def _error_of(code: str | None, message: str | None) -> str:
     return message or (str(code) if code is not None else "unknown error")
 
 
-async def _call(
+async def validated_call(
     *,
     model: str,
     messages: list[dict[str, str]],
@@ -131,6 +155,7 @@ async def _call(
     """One validated call plus Analyze's own retry rule, driven here: `retries=0` on the client and
     at most `ATTEMPTS` tries, the second one carrying the correction message — and not at all when
     the web no-retry rule applies (nothing was typed back, so there is nothing to correct).
+    Returns `(value | None, raw, usage, error)`, `raw` being every non-empty attempt joined.
 
     The partial of a failed capture is recorded in the attempts (`on_partial`) and NEVER folded
     into `raw`: the gate below and the correction message read `raw`, and after a site error the
@@ -184,6 +209,9 @@ async def _call(
     return value, "\n\n".join(a for a in attempts if a), usage, error
 
 
+_call = validated_call  # the name the S11 review notes and tests refer to
+
+
 def _max_tokens(model: str) -> int:
     """The stage budget plus room for reasoning tokens — the same rule and the same reason as
     `analyze._analyst_max_tokens` (reasoning tokens are counted as completion tokens)."""
@@ -197,15 +225,21 @@ async def _refactor_reply(
 ) -> tuple[RefactoredReply | None, list[str], FeatureUsage, str | None]:
     """One label's reply, in pieces when it is too big for one message. The claims of every piece are
     concatenated; the SUMMARY is the first piece's, because a reply states what it recommends near
-    the top and a summary stitched out of three pieces reads like none of them."""
+    the top and a summary stitched out of three pieces reads like none of them. Each piece is asked
+    for its share of the claims cap (`claims_per_piece`); more than was asked for is kept, with one
+    WARNING, never cut."""
     usage = FeatureUsage()
     raws: list[str] = []
     claims: list[str] = []
     summary = ""
-    for piece in chunk_reply(response):
-        value, raw, call_usage, error = await _call(
+    pieces = chunk_reply(response)
+    per_piece = claims_per_piece(len(pieces))
+    for piece in pieces:
+        value, raw, call_usage, error = await validated_call(
             model=model,
-            messages=prompts.reply_messages(question, label, piece, fenced=fenced),
+            messages=prompts.reply_messages(
+                question, label, piece, fenced=fenced, max_claims=per_piece
+            ),
             schema_model=_ReplyResult,
             fenced=fenced,
         )
@@ -219,6 +253,14 @@ async def _refactor_reply(
         claims.extend(c.strip() for c in value.claims if c.strip())
     if not claims:
         return None, raws, usage, "the refactor pass returned no claims"
+    asked = per_piece * len(pieces)
+    if len(claims) > asked:
+        log.warning(
+            "refactor: %s returned %d claims, over the %d asked for; kept all",
+            label,
+            len(claims),
+            asked,
+        )
     return RefactoredReply(model=label, summary=summary, claims=claims), raws, usage, None
 
 
@@ -241,10 +283,13 @@ async def _produce(
         refactoring: Refactoring | None = None
         error: str | None = None
 
+        # The question alone: a pre-parsed prompt ends with Triplex's own answer block, which is
+        # not part of what was asked (module docstring; an exact-match strip, never user text).
+        question = preparse_prompts.strip_format(send_turn.prompt)
         queue.put_nowait({"type": "refactor_retry", "error": MAP_NOTICE})
-        mapped, raw, map_usage, error = await _call(
+        mapped, raw, map_usage, error = await validated_call(
             model=model,
-            messages=prompts.map_messages(send_turn.prompt, fenced=fenced),
+            messages=prompts.map_messages(question, fenced=fenced),
             schema_model=_MapResult,
             fenced=fenced,
         )
@@ -264,12 +309,13 @@ async def _produce(
                     queue.put_nowait(
                         {
                             "type": "refactor_retry",
-                            "error": chunk_notice(label, len(response), len(pieces)),
+                            "error": chunk_notice(
+                                label, len(response), len(pieces), claims_per_piece(len(pieces))
+                            ),
                         }
                     )
                 reduced, raws, reply_usage, reply_error = await _refactor_reply(
-                    model=model, question=send_turn.prompt, label=label, response=response,
-                    fenced=fenced,
+                    model=model, question=question, label=label, response=response, fenced=fenced
                 )
                 usage.merge(reply_usage)
                 raw_attempts.extend(raws)
@@ -358,7 +404,9 @@ __all__ = [
     "ROLE",
     "cached_ok_turn",
     "chunk_notice",
+    "claims_per_piece",
     "reply_notice",
     "run_refactor",
+    "validated_call",
     "wait_for_background",
 ]

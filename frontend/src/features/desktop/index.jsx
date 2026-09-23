@@ -15,18 +15,22 @@
 // Stage 2: ONE ./chats.js instance per shell keeps the panes on the open conversation's chats
 // (`openChats(id)` on every id change except the one a Send's own create produces, which the panes
 // adopt — Decision 12) and implements "New chat everywhere", shared by the prompt-bar button and
-// the Ctrl+Shift+N shortcut handled in PaneDeck.
+// the Ctrl+Shift+N shortcut handled in PaneDeck. Pre-parse (2026-09-23): the `preparse` slice
+// (./preparseSlice.js) is registered here beside `panes` — a slice of its own, so the frozen
+// desktop-smoke.test.jsx (which checks `panes` sub-shapes only) never sees it.
 import { useEffect, useRef, useState } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
 import { useOpenChats } from './chats.js'
 import Drawer from './Drawer.jsx'
 import PaneDeck, { desktopApi } from './PaneDeck.jsx'
+import { FEATURE as PREPARSE, initial as preparseInitial, reducer as preparseReducer } from './preparseSlice.js'
 import PromptBar from './PromptBar.jsx'
 import { initialPanes, loadPersistedPanes, panesReducer, persistPanes } from './slice.js'
 import css from './desktop.module.css'
 
 registerSlice('panes', panesReducer, () => initialPanes(loadPersistedPanes()))
+registerSlice(PREPARSE, preparseReducer, preparseInitial)
 
 export default function DesktopShell() {
   const api = desktopApi()

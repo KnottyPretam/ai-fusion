@@ -276,6 +276,7 @@ with tests written from the acceptance criteria before implementation.
 - [x] Strip the always-on pipeline: Send performs collection only.  ✅ greenfield: Send is collection only (backend/features/send.py); Analyze/Fusion are on-demand routes
 - [x] Per-slot model + effort config, wired from UI to request payloads.  ✅ S1/S2: per-column model + effort controls → PUT slot_config → payload assertions in tests/send
 - [x] Per-slot thread persistence and solo continuation (input box per tab).  ✅ S1/S2: threads per slot in the store; per-column solo composer; tests/send continue tests
+- [x] Pre-parse (preview): the prompt restated by the analyst + a deterministic answer-format block, reviewed in the composer before Send.  ✅ 2026-09-23: `backend/features/preparse.py`, `prompts/preparse.py`, the PromptBar button; Refactor claims capped at 12
 - **AC:** a test asserts each slot's request carries its own model slug and reasoning
   setting; three outputs stream and render; rabbit-hole one slot ≥3 turns with the
   other threads byte-identical before/after.

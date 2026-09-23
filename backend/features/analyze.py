@@ -102,6 +102,7 @@ from ..config import ANALYST_EFFORT, MAX_TOKENS_STAGE
 from ..llm import client
 from ..llm.errors import COST_CAP_EXCEEDED, TRANSPORT_ERROR
 from ..prompts import analyze as prompts
+from ..prompts import preparse as preparse_prompts
 from ..schemas import (
     LABELS,
     SLOT_IDS,
@@ -625,7 +626,9 @@ async def _produce(
         error: str | None = None
         condensed = False
 
-        question = send_turn.prompt
+        # A pre-parsed prompt carries Triplex's own answer block after the question; the analyst
+        # is handed the question alone (`prompts/preparse.py`, `strip_format`: exact match only).
+        question = preparse_prompts.strip_format(send_turn.prompt)
         # Refactor first (S11): when an ok Refactor turn exists for this send turn, its restated
         # question and reduced replies ARE the comparison's input. The blocks are condensed claims, so
         # the comparison is told so — an analyst that thinks it is reading full replies would read a

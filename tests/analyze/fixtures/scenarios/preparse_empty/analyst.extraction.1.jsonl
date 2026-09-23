@@ -1,0 +1,2 @@
+{"id": "gen-preparse-empty", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "{\"question\": \"  \"}"}, "finish_reason": "stop"}]}
+{"id": "gen-preparse-empty", "object": "chat.completion.chunk", "created": 1757260800, "model": "m", "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": null}], "usage": {"prompt_tokens": 420, "completion_tokens": 32, "total_tokens": 452, "cost": 0.0001}}

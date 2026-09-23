@@ -27,8 +27,10 @@
 // slot_config.analyst_model = 'web:chatgpt:analyst' and captured on all three gets three replies;
 // Analyze renders analyze-report from the HIDDEN analyst view (the fake site's ?reply=json answers
 // the extraction) while the chatgpt pane types nothing; Fusion(1) challenges the three panes, checks
-// convergence on the analyst view and reaches fusion-exit-reason converged; navigating the analyst
-// view to ?state=challenge auto-reveals it as deck-tab-analyst.
+// convergence on the analyst view and reaches fusion-exit-reason converged; Pre-parse (prompt-preparse)
+// rewrites the composer from the hidden analyst view (the fake site's "Question to restate:" key) while
+// the panes type nothing, and the Send that follows types the composer text byte for byte; navigating
+// the analyst view to ?state=challenge auto-reveals it as deck-tab-analyst.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -48,6 +50,8 @@ const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'e2e'
 const SLOTS = ['claude', 'chatgpt', 'grok']
 // A real backtick, double quotes, a dollar-brace and a newline — the text every composer must receive verbatim.
 const PROMPT = 'hello `x` "y" ${z}\nline2'
+/** The fake site's CANNED_PREPARSE restatement (test/fake-site/site.js), answered to any prompt carrying "Question to restate:". */
+const CANNED_QUESTION = 'What is the maximum selectable full-scale range of the gyroscope in the Bosch BMI088 IMU?'
 const BOUNDS_DEBOUNCE_MS = 500
 /** The fake site's chat URLs (`/c/<id>?site=…`) for the selectors override the Stage 2 block installs. */
 const FAKE_CHAT_URL_PATTERN = `^${FAKE_BASE.replace(/[.]/g, '\\.')}/c/[A-Za-z0-9]+`
@@ -561,9 +565,10 @@ test.describe('desktop send (bridge)', () => {
 // renderer's analyst chooser. Everything else is the real path: capture on for all three panes, one
 // Send over the bridge, then Analyze (one analyst call on the HIDDEN view, answered by the fake
 // site's `?reply=json` Extraction) and Fusion(1) (three defense prompts typed into the three PANES,
-// one convergence check on the analyst view) → `fusion-exit-reason` converged. Last row: the
-// analyst view is navigated to `?state=challenge`, whose health report auto-reveals it as the
-// fourth tab (`deck-tab-analyst`).
+// one convergence check on the analyst view) → `fusion-exit-reason` converged. Then Pre-parse: on
+// fresh chats, one restate call on the hidden view rewrites the composer in place and the Send that
+// follows types that text verbatim. Last row: the analyst view is navigated to `?state=challenge`,
+// whose health report auto-reveals it as the fourth tab (`deck-tab-analyst`).
 
 test.describe('desktop analyze + fusion (hidden analyst page)', () => {
   test.describe.configure({ mode: 'serial', timeout: 300_000 })
@@ -621,8 +626,8 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     const override = {}
     for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
     fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
-    // ?reply=json answers the analyst prompts (keyed on <<<R1>>> / <<<DIVERGENCES>>> / YOUR CLAIM)
-    // with the planted_factual fixtures and everything else with the echo.
+    // ?reply=json answers the analyst prompts (keyed on <<<R1>>> / <<<DIVERGENCES>>> / YOUR CLAIM /
+    // "Question to restate:") with the planted_factual fixtures and everything else with the echo.
     ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150&reply=json') }))
   })
 
@@ -827,6 +832,62 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     expect(fs.readdirSync(outDir).filter((f) => f.endsWith('.md')).sort()).toEqual(['step-1.md', 'step-2.md'])
 
     fs.rmSync(outDir, { recursive: true, force: true })
+  })
+
+  // Pre-parse is a preview: one restate call on the HIDDEN analyst view rewrites the composer in
+  // place (the canned restatement, then the deterministic answer block), the panes type nothing
+  // until Send, and Send still sends the composer text byte for byte. "New chat everywhere" first,
+  // so every pane starts on a fresh chat and its submitted[0] IS that Send — with the conversation
+  // it creates carrying the default `web:chatgpt:analyst`, the same analyst this describe runs on.
+  test('Pre-parse rewrites the composer from the hidden analyst view, the panes type nothing until Send, and Send types the composer text verbatim', async () => {
+    await page.getByTestId('prompt-newchat').click()
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.url), { timeout: 20_000 }).toBe(`${FAKE_BASE}/?site=${slot}&replyMs=150&reply=json`)
+    }
+    const paneBefore = {}
+    for (const slot of SLOTS) {
+      paneBefore[slot] = (await fakeState(app, slot)).submitted.length
+      expect(paneBefore[slot], `${slot} starts on a fresh chat`).toBe(0)
+    }
+
+    const composer = page.getByTestId('prompt-composer')
+    await expect(composer).toBeEditable({ timeout: 30_000 })
+    await composer.fill(PROMPT)
+    expect(await composer.inputValue()).toBe(PROMPT)
+    const preparse = page.getByTestId('prompt-preparse')
+    await expect(preparse).toBeEnabled({ timeout: 20_000 })
+    await preparse.click()
+
+    // the composer is rewritten in place: the restatement first, the answer block after it
+    await expect
+      .poll(async () => {
+        const v = await composer.inputValue()
+        return v.startsWith(CANNED_QUESTION) ? 'rewritten' : `still: ${v.slice(0, 60)}`
+      }, { timeout: 180_000 })
+      .toBe('rewritten')
+    const composed = await composer.inputValue()
+    expect(composed).toContain('Answer format')
+    expect(composed).toContain('Uncertain:')
+    // the restate prompt went to the hidden analyst view, on its own chat — never to a pane
+    await expect.poll(() => analystFakeState().then((s) => (s && s.submitted && s.submitted.length ? s.submitted.at(-1) : '')), { timeout: 30_000 }).toContain('Question to restate:')
+    for (const slot of SLOTS) {
+      expect((await fakeState(app, slot)).submitted.length, `${slot} typed nothing during the pre-parse`).toBe(paneBefore[slot])
+    }
+
+    // Send types the composer text as it stands, once per pane, byte for byte
+    const send = page.getByTestId('prompt-send')
+    await expect(send).toBeEnabled({ timeout: 20_000 })
+    await send.click()
+    for (const slot of SLOTS) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted), { timeout: 45_000 }).toEqual([composed])
+      const s = await fakeState(app, slot)
+      expect(Buffer.from(s.submitted[0], 'utf8').equals(Buffer.from(composed, 'utf8')), `${slot} byte-equal`).toBe(true)
+    }
+    for (const slot of SLOTS) {
+      const line = page.getByTestId(`prompt-result-${slot}`)
+      await expect(line).toBeVisible({ timeout: 15_000 })
+      await expect(line).not.toContainText('✗')
+    }
   })
 
   test('a challenge on the analyst page auto-reveals it as the fourth tab (deck-tab-analyst)', async () => {

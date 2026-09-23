@@ -64,6 +64,18 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   Same pre-checks, same cache-per-send-turn and the same busy guard as Analyze. `refactor_retry` is
   PROGRESS, not a failed attempt: one per analyst call (the map call, then one per label, plus one
   when a reply has to be quoted in pieces), which is why the pane shows it as a status line.
+- `POST …/preparse {prompt}` → `preparse_start{}`, `preparse_retry{error}`,
+  `preparse_done{prompt, original, question, usage}` | `preparse_degraded{error, original,
+  raw_attempts, usage}`. Added 2026-09-23 (Pre-parse). A PREVIEW for the desktop prompt bar: one
+  analyst call restates the question clearly and succinctly (`prompts/preparse.py`), then the
+  deterministic answer-format block is appended LAST (`compose`) and the result replaces the
+  composer text for the user to review, edit and Send — Send itself is unchanged and still
+  verbatim. Pre-stream errors in order: 404 `not_found/conversation`, 422 `empty_prompt` (blank, or
+  nothing but the answer block), 422 `prompt_too_long{chars, max}` (over `CONDENSE_CHUNK_CHARS`, the
+  measured single-message bound — never truncated), 409 `busy` LAST. Nothing is persisted — no turn,
+  no schema change; `preparse_retry` is PROGRESS (one narration per analyst call). Unlike every
+  other feature the call runs INLINE in the stream, so a client abort cancels it and frees the
+  analyst page (`docs/semantics.md`, "Pre-parse").
 - `POST …/analyze {of_turn?, force?}` → `analyze_start{turn_id, of_turn}`,
   `analyze_retry{error}`, `analyze_done{turn, cached}` | `analyze_degraded{turn}`. When an ok
   Refactor turn exists for the send turn, Analyze compares ITS restated question and reduced
