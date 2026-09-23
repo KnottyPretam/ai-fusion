@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -39,6 +40,7 @@ fake_desktop = bridge_fixtures.fake_desktop
 web_env = bridge_fixtures.web_env
 
 ANALYST = ("chatgpt", "analyst", "extraction")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 # One sentence of plausible reply prose, repeated to reach an exact length.
 FILLER = "The gyroscope full-scale range is selectable in four steps up to 2000 deg/s. "
 
@@ -140,6 +142,7 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
         "analyze_done",
     ]
     for label, event in zip(LABELS, events[1:4], strict=True):
+        assert event["error"].startswith(feature.SPLIT_NOTICE_PREFIX)  # progress, not a failure
         assert label in event["error"]
         assert f"{feature.SPLIT_MIN_CHARS:,}" in event["error"]
 
@@ -227,8 +230,45 @@ def test_the_chunk_size_is_under_what_was_measured_to_fail():
 
 def test_chunk_notice_names_the_label_the_size_and_the_piece_count():
     message = feature.chunk_notice("R1", 15_460, 3)
+    assert message.startswith(feature.SPLIT_NOTICE_PREFIX)  # progress, so the pane shows it as such
     assert "R1" in message and "15,460" in message and "3 pieces" in message
     assert f"{feature.CONDENSE_CHUNK_CHARS:,}" in message
+
+
+# --------------------------------------------------------------------------- the narration prefix
+# `analyze_retry` is the ONE event that carries both a failed attempt being sent back and a progress
+# narration (a reply being condensed, a reply being condensed in pieces), because the alphabet is
+# frozen. The pane keys its progress branch on `SPLIT_NOTICE_PREFIX` alone and docs/api-contract.md
+# promises it; the chunk notice shipped without it in 1fc9339 and every chunked reply reached the
+# user as "the analyst output failed validation" (found 2026-09-22). These pin the invariant.
+def test_every_progress_narration_begins_with_the_prefix_the_pane_keys_on():
+    prefix = feature.SPLIT_NOTICE_PREFIX
+    split = feature.split_notice("R2", 13_677, 27_252)
+    chunk = feature.chunk_notice("R1", 6_187, 2)
+    assert split.startswith(f"{prefix}: ")
+    assert chunk.startswith(f"{prefix}: ")
+    # What follows the prefix is where the two differ; a client need not care.
+    assert "condensed to its substantive claims" in split
+    assert "condensed in 2 pieces" in chunk
+
+
+async def test_a_genuine_retry_never_carries_the_progress_prefix(scenario_conversation, analyze):
+    """The other kind of `analyze_retry`: the `error or "unknown error"` the producer sends back
+    after a failed attempt. The pane must keep reading that one as a failure."""
+    conv = await scenario_conversation("analyst_retry")
+    r, events = await analyze(conv.id)
+    assert r.status_code == 200, r.text
+    (retry,) = [e for e in events if e["type"] == "analyze_retry"]
+    assert retry["error"] and not retry["error"].startswith(feature.SPLIT_NOTICE_PREFIX)
+    assert not "unknown error".startswith(feature.SPLIT_NOTICE_PREFIX)  # the fallback text too
+
+
+def test_the_pane_mirrors_the_prefix_verbatim():
+    """Product code in the renderer never reads the backend, so the pane carries a copy of the
+    constant with a pointer (the way `SLOT_VENDORS` is duplicated). This is the guard that the two
+    copies still say the same thing -- the regression class 1fc9339 was."""
+    pane = (REPO_ROOT / "frontend" / "src" / "features" / "analyze" / "AnalyzePane.jsx").read_text()
+    assert f"NOTICE_PREFIX = '{feature.SPLIT_NOTICE_PREFIX}'" in pane
 
 
 async def test_condensations_that_do_not_shrink_degrade_instead_of_sending_the_prompt_anyway(
@@ -283,6 +323,8 @@ async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the
 
     # R1 (claude in mock mode) is announced once as a split and once as a chunked reply.
     narrations = [e["error"] for e in events if e["type"] == "analyze_retry"]
+    # Every one of them is progress, and the pane can only tell by the prefix (1fc9339 lost it).
+    assert all(n.startswith(feature.SPLIT_NOTICE_PREFIX) for n in narrations), narrations
     assert any("3 pieces" in n and "R1" in n for n in narrations), narrations
     assert sum(1 for n in narrations if "being condensed to its substantive claims" in n) == 3
 

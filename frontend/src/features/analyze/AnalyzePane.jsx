@@ -9,7 +9,8 @@
 //   analyze-cached               "cached" chip (analyze_done.cached)
 //   export-analyze               the Export control (features/export; R1/R2/R3 documents only)
 //   analyze-status               running indicator
-//   analyze-retry                retry indicator (analyze_retry), with the validation error
+//   analyze-retry                retry indicator (analyze_retry): a progress narration shown as
+//                                itself, a failed attempt with its error tucked away
 //   analyze-error                error box (terminal error event / pre-stream failure)
 //   analyze-degraded             degraded box; analyze-fusion-disabled inside it
 //   analyze-raw-attempts         <details> with analyze-raw-attempt-<n> <pre> blocks
@@ -29,13 +30,24 @@ import { initial as refactorInitial } from './refactorSlice.js'
 import css from './analyze.module.css'
 import { APP_NAME } from '../../branding.js'
 
-/** The prefix `features/analyze.py split_notice()` writes when it condenses a reply first. */
-export const SPLIT_NOTICE_PREFIX = 'splitting the analyst prompt'
+/**
+ * The prefix every PROGRESS narration on `analyze_retry` begins with. The source is
+ * `SPLIT_NOTICE_PREFIX` in `backend/features/analyze.py`; this is its mirror (product code never
+ * reads the backend, so it is duplicated with a pointer, like SLOT_VENDORS, and pinned verbatim by
+ * tests/analyze/test_split.py). The event alphabet is frozen, so a reply being condensed and a
+ * reply being condensed in pieces both announce themselves on the retry event, and this prefix is
+ * the only thing that tells either apart from a failed attempt being sent back.
+ */
+export const NOTICE_PREFIX = 'splitting the analyst prompt'
 
-/** True when an `analyze_retry` is narrating the split step rather than a failed attempt. */
-export function isSplitNotice(error) {
-  return typeof error === 'string' && error.startsWith(SPLIT_NOTICE_PREFIX)
+/** True when an `analyze_retry` is narrating progress (a condensation) rather than a failed attempt. */
+export function isProgressNotice(error) {
+  return typeof error === 'string' && error.startsWith(NOTICE_PREFIX)
 }
+
+// The names this pair shipped under at S10, kept so an in-flight importer keeps resolving.
+export const SPLIT_NOTICE_PREFIX = NOTICE_PREFIX
+export const isSplitNotice = isProgressNotice
 
 export default function AnalyzePane() {
   const dispatch = useDispatch()
@@ -202,10 +214,10 @@ export default function AnalyzePane() {
         <div className={css.retry} data-testid="analyze-retry">
           {/* The same event narrates two different things, because the event alphabet is frozen: a
               failed attempt being sent back, and — on a long conversation — each reply being
-              condensed before the comparison. Announcing a condensation as a validation failure
-              would be three wrong sentences in a row, so the message speaks for itself when the
-              backend wrote one. */}
-          {isSplitNotice(analyze.error) ? (
+              condensed before the comparison (in pieces, when one is too big for one message).
+              Announcing a condensation as a validation failure would be three wrong sentences in a
+              row, so a message carrying the backend's progress prefix speaks for itself. */}
+          {isProgressNotice(analyze.error) ? (
             analyze.error
           ) : (
             <>
@@ -234,10 +246,20 @@ export default function AnalyzePane() {
 
 function Degraded({ turn }) {
   const attempts = Array.isArray(turn.raw_attempts) ? turn.raw_attempts : []
+  // "after one retry" is true only when the comparison ran and its failed output was sent back once.
+  // A size-bound degrade — a reply over the budget, a condensation that failed or did not shrink —
+  // never got that far, and the frozen turn has no field for which it was; the raw-attempt count is
+  // the one signal it carries: a retried comparison always leaves more than one, an oversize reply
+  // leaves none. (A condensation that failed after the first succeeded also leaves two and reads as
+  // the former; the quoted error below names the real cause either way.)
+  const retried = attempts.length > 1
   return (
     <div className={css.degraded} data-testid="analyze-degraded">
       <div>
-        <strong>Analysis degraded.</strong> The analyst did not return a valid extraction after one retry.{' '}
+        <strong>Analysis degraded.</strong>{' '}
+        {retried
+          ? 'The analyst did not return a valid extraction after one retry.'
+          : 'The analyst could not produce a report.'}{' '}
         <span data-testid="analyze-fusion-disabled">Fusion disabled for this turn.</span>
       </div>
       {turn.error && <pre className={css.raw}>{turn.error}</pre>}

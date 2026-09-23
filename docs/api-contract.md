@@ -69,9 +69,12 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   Refactor turn exists for the send turn, Analyze compares ITS restated question and reduced
   replies instead of the raw ones (`analyze.refactored_input`); a degraded Refactor is ignored.
   `analyze_retry` carries two kinds of `error`: a failed attempt being sent back, and — from
-  S10, on a conversation over the size bound — one per label as its reply is condensed before
-  the comparison (`error` then begins `splitting the analyst prompt`). No new event type was
-  added for the split, so a client that ignores the distinction still behaves correctly.
+  S10, on a conversation over the size bound — progress: one per label as its reply is condensed
+  before the comparison, plus one more when that reply is condensed in pieces. EVERY progress
+  narration begins `splitting the analyst prompt` (`analyze.SPLIT_NOTICE_PREFIX`; the chunk
+  narration shares the prefix), and that prefix is the one thing a client may key on to tell
+  progress from a failed attempt. No new event type was added for the split, so a client that
+  ignores the distinction still behaves correctly.
 - `POST …/fusion {of_analyze?, max_iterations (required, 1..5)}` → (if Analyze must be auto-run:
   the full `analyze_*` sequence first) `fusion_start{turn_id, of_analyze, max_iterations,
   standing}`, `round_start{round}`, `exchange{round, …Exchange}`, `round_done{round,
