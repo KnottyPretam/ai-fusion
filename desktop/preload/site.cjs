@@ -354,7 +354,10 @@
       sendWaitMs: 18000,
       submitVerifyMs: 5000,
       // v2 (Stage 2)
-      stop: ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']"],
+      // 2026-09-27 (Part 0): chatgpt.com's new composer (the one with the effort picker) labels its stop
+      // control just "Stop" — a failed capture's own snapshot showed it, 108 s into a reply the site was
+      // still "Working" on. The older labels stay for accounts that have not been moved yet.
+      stop: ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"],
       assistant: ["[data-message-author-role='assistant']"],
       assistantText: ['.markdown', '.whitespace-pre-wrap'],
       done: ["button[data-testid='copy-turn-action-button']"],
@@ -366,7 +369,10 @@
       // finished — it is the ordinary pause while the next batch is being thought about.
       settleMs: 1200,
       firstTokenMs: 90000,
-      captureTimeoutMs: 300000,
+      // 2026-09-27: at the site's higher effort settings a reply thinks for minutes with the stop control up
+      // and nothing else on the page; 300 s ended such captures mid-thought. 600 s is the pane grant
+      // (BRIDGE_TIMEOUT_S), the most a pane capture can be given without a backend change.
+      captureTimeoutMs: 600000,
     },
     claude: {
       chatUrlPattern: '^https://claude\\.ai/chat/[0-9a-f-]+',

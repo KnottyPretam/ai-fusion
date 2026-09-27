@@ -137,7 +137,8 @@ test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com
 
 test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and claude (grok above); empty stop + done ⇒ quiet detection', () => {
   const { chatgpt, claude } = DEFAULT_SELECTORS
-  assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']"])
+  // 2026-09-27 (Part 0): the effort-picker composer labels its stop control just "Stop" (fixture chatgpt-thinking)
+  assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"])
   assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']"])
   // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
   // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
@@ -151,7 +152,8 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   // container and claude's thinking widget contributed its summary line TWICE before the answer.
   assert.deepEqual(claude.assistantText, ['.prose'])
   assert.deepEqual(claude.done, [])
-  for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, 300000])
+  // chatgpt's capture budget is the whole pane grant since 2026-09-27: its higher effort settings think for minutes
+  for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, site === 'chatgpt' ? 600000 : 300000])
   // S10: the settle window after an end signal is per site — chatgpt holds a long answer far longer
   // between two renders than the four throttle ticks every other site settles for.
   assert.deepEqual(SLOTS.map((s) => DEFAULT_SELECTORS[s].settleMs), [400, 1200, 400])

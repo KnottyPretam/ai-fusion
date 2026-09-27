@@ -30,6 +30,11 @@ const EXPECTED = {
   'chatgpt-streaming': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
   'chatgpt-done': { composer: 0, send: 0, reply: 0, stop: null, session: 'ok', messages: 2, assistant: 1 },
   'chatgpt-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
+  // 2026-09-27: a failed capture's own snapshot (Part 0), 108 s into the first reply of a fresh chat on the
+  // composer chatgpt.com ships with its effort picker: no #prompt-textarea (entry 1 matches), no send button
+  // while the site works, the stop control labelled plainly "Stop" (the new 4th entry) — and NO turn
+  // markup at all yet, which is what read as `reply_not_found` before the stop selector was known.
+  'chatgpt-thinking': { composer: 1, send: null, reply: null, stop: 3, session: 'ok', messages: 0, assistant: 0 },
   'claude-composer': { composer: 0, send: 0, reply: null, stop: null, session: 'ok', messages: 0, assistant: 0 },
   'claude-streaming': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
   'claude-done': { composer: 0, send: 0, reply: 0, stop: null, session: 'ok', messages: 2, assistant: 1 },
@@ -91,7 +96,10 @@ test('every state of every site has a fixture, and every fixture has an expectat
     .sort()
   const wanted = []
   for (const slot of [...SLOTS].sort()) for (const state of ['composer', 'done', 'logged-out', 'streaming']) wanted.push(`${slot}-${state}`)
-  assert.deepEqual(names, wanted.sort())
+  // Every site has the four states; a site may add a NAMED extra state measured later (2026-09-27:
+  // `chatgpt-thinking`, the effort-picker composer mid-thought). Every file on disk has an expectation.
+  const EXTRA = ['chatgpt-thinking']
+  assert.deepEqual(names, [...wanted, ...EXTRA].sort())
   assert.deepEqual(Object.keys(EXPECTED).sort(), names)
   assert.ok(fs.existsSync(path.join(FIXTURES_DIR, 'README.md')), 'the fixtures must document what is measured and what is not')
 })

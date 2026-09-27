@@ -190,8 +190,8 @@ and (Stage 2) on `fs.watch`.
     "errorText": ["unusual activity"], "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 } }
 ```
 Version 2 (Stage 2, additive per site; `DEFAULT_SELECTORS.version` stays 1 — an override carrying `version: 2` warns and is applied): `"stop"`, `"assistant"`, `"assistantText"`, `"done"`,
-`"quietMs": 2500`, `"firstTokenMs": 90000`, `"captureTimeoutMs": 300000` — chatgpt
-`stop:["button[data-testid='stop-button']","button[aria-label='Stop streaming']","button[aria-label='Stop answering']"]`,
+`"quietMs": 2500`, `"firstTokenMs": 90000`, `"captureTimeoutMs": 600000` (the pane grant; its effort picker thinks for minutes — 2026-09-27) — chatgpt
+`stop:["button[data-testid='stop-button']","button[aria-label='Stop streaming']","button[aria-label='Stop answering']","button[aria-label='Stop']"]` (the last one is the effort-picker composer, measured 2026-09-27 from a failed capture's own snapshot),
 `assistant:["[data-message-author-role='assistant']"]`, `assistantText:[".markdown",".whitespace-pre-wrap"]`,
 `done:["button[data-testid='copy-turn-action-button']"]`; claude
 `stop:["button[aria-label='Stop response']","button[aria-label*='Stop']"]`,
