@@ -139,11 +139,13 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   const { chatgpt, claude } = DEFAULT_SELECTORS
   // 2026-09-27 (Part 0): the effort-picker composer labels its stop control just "Stop" (fixture chatgpt-thinking)
   assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"])
-  assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']"])
+  // 2026-09-27 (Part 0): the effort-picker layout has no data-* turn attributes; the reply body is the
+  // direct child of a `block-<hash>` wrapper (fixtures chatgpt-thinking / chatgpt-effort-streaming)
+  assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']", "div[class*='block-'] > div.text-size-chat.relative.overflow-visible"])
   // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
   // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
-  assert.deepEqual(chatgpt.assistantText, ['.markdown', '.whitespace-pre-wrap'])
-  assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']"])
+  assert.deepEqual(chatgpt.assistantText, ['.markdown', "div[class*='block-'] > div.text-size-chat.relative.overflow-visible > div.flex.min-w-0.flex-col", '.whitespace-pre-wrap'])
+  assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"])
   assert.deepEqual(claude.stop, ["button[aria-label='Stop response']", "button[aria-label*='Stop']"])
   assert.deepEqual(claude.assistant, ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'])
   // S8 (contract §4 change request): claude's reply BODY, not the whole turn. Measured 2026-09-17 —

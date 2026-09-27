@@ -224,3 +224,17 @@ persistent one (the analyst view is `setVisible(false)`, so its layout may not a
 not decidable offline: read `panes:analyst.health.stop` while the analyst streams. If it never goes
 true, the analyst's only end signal is `quiet`, and the follow-up is a per-view `quietMs` (contract §4),
 not another rule here.
+
+
+## chatgpt-thinking.html, chatgpt-effort-streaming.html (2026-09-27)
+
+Two failed captures' own snapshots (`snapshots/chatgpt-failed-<ts>.html`, Part 0) of the layout
+chatgpt.com ships with its composer effort picker. There are no `data-message-*` attributes any
+more: a user turn is `group/user-message`, an assistant turn is the reply body
+`div[class*='block-'] > div.text-size-chat.relative.overflow-visible` (the direct-child rule is what excludes the same
+class combination nested inside a body), the stop control is `button[aria-label='Stop']`, and the
+finished turn's action bar carries `Rate response`, the done marker. `thinking` is 108 s into the
+first reply of a fresh chat: the body is mounted and EMPTY while the site works (the S10 shape).
+`effort-streaming` is one turn later: the first reply finished, the second streaming, six message
+matches for two turn pairs. Neither snapshot shows a send button (the site was working both times),
+so the `send` cascade is still measured only on the older layout.

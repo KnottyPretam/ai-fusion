@@ -30,11 +30,16 @@ const EXPECTED = {
   'chatgpt-streaming': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
   'chatgpt-done': { composer: 0, send: 0, reply: 0, stop: null, session: 'ok', messages: 2, assistant: 1 },
   'chatgpt-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
-  // 2026-09-27: a failed capture's own snapshot (Part 0), 108 s into the first reply of a fresh chat on the
-  // composer chatgpt.com ships with its effort picker: no #prompt-textarea (entry 1 matches), no send button
-  // while the site works, the stop control labelled plainly "Stop" (the new 4th entry) — and NO turn
-  // markup at all yet, which is what read as `reply_not_found` before the stop selector was known.
-  'chatgpt-thinking': { composer: 1, send: null, reply: null, stop: 3, session: 'ok', messages: 0, assistant: 0 },
+  // 2026-09-27 (Part 0): two failed captures' own snapshots of the layout chatgpt.com ships with its effort
+  // picker — no data-* turn attributes at all. `thinking`: 108 s into the first reply of a fresh chat — no
+  // #prompt-textarea (composer entry 1), no send button while the site works, the stop control labelled
+  // plainly "Stop" (stop entry 3), and the reply BODY already mounted and EMPTY (the S10 thinking shape;
+  // assistant entry 1) — which read as `reply_not_found` while neither the stop nor the body selector was
+  // known. `effort-streaming`: the same chat one turn later, the first reply finished (its action bar
+  // carries the "Rate response" done marker) and the second still streaming: two bodies, six message
+  // matches (a user turn matches twice through `group/user-message`).
+  'chatgpt-thinking': { composer: 1, send: null, reply: 1, stop: 3, session: 'ok', messages: 3, assistant: 1 },
+  'chatgpt-effort-streaming': { composer: 1, send: null, reply: 1, stop: 3, session: 'ok', messages: 6, assistant: 2 },
   'claude-composer': { composer: 0, send: 0, reply: null, stop: null, session: 'ok', messages: 0, assistant: 0 },
   'claude-streaming': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
   'claude-done': { composer: 0, send: 0, reply: 0, stop: null, session: 'ok', messages: 2, assistant: 1 },
@@ -98,7 +103,7 @@ test('every state of every site has a fixture, and every fixture has an expectat
   for (const slot of [...SLOTS].sort()) for (const state of ['composer', 'done', 'logged-out', 'streaming']) wanted.push(`${slot}-${state}`)
   // Every site has the four states; a site may add a NAMED extra state measured later (2026-09-27:
   // `chatgpt-thinking`, the effort-picker composer mid-thought). Every file on disk has an expectation.
-  const EXTRA = ['chatgpt-thinking']
+  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming']
   assert.deepEqual(names, [...wanted, ...EXTRA].sort())
   assert.deepEqual(Object.keys(EXPECTED).sort(), names)
   assert.ok(fs.existsSync(path.join(FIXTURES_DIR, 'README.md')), 'the fixtures must document what is measured and what is not')
@@ -212,3 +217,14 @@ test('the composer fixtures are insertable: the composer is a contenteditable Pr
   assert.equal(grok.adapter.findSendButton(), null)
   assert.ok(adapterFor('grok-done').adapter.findSendButton())
 })
+
+test('chatgpt-effort-streaming: the finished turn carries the "Rate response" done marker after its body, the streaming turn does not', () => {
+  const { doc, adapter } = adapterFor('chatgpt-effort-streaming')
+  const bodies = [...doc.querySelectorAll("div[class*='block-'] > div.text-size-chat.relative.overflow-visible")]
+  assert.equal(bodies.length, 2)
+  const done = adapter.findDone(bodies[0])
+  assert.ok(done, 'the first (finished) reply has its action bar')
+  assert.equal(done.getAttribute('aria-label'), 'Rate response')
+  assert.equal(adapter.findDone(bodies[1]), null, 'the second reply is still streaming: no action bar yet')
+})
+

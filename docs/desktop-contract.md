@@ -192,8 +192,8 @@ and (Stage 2) on `fs.watch`.
 Version 2 (Stage 2, additive per site; `DEFAULT_SELECTORS.version` stays 1 — an override carrying `version: 2` warns and is applied): `"stop"`, `"assistant"`, `"assistantText"`, `"done"`,
 `"quietMs": 2500`, `"firstTokenMs": 90000`, `"captureTimeoutMs": 600000` (the pane grant; its effort picker thinks for minutes — 2026-09-27) — chatgpt
 `stop:["button[data-testid='stop-button']","button[aria-label='Stop streaming']","button[aria-label='Stop answering']","button[aria-label='Stop']"]` (the last one is the effort-picker composer, measured 2026-09-27 from a failed capture's own snapshot),
-`assistant:["[data-message-author-role='assistant']"]`, `assistantText:[".markdown",".whitespace-pre-wrap"]`,
-`done:["button[data-testid='copy-turn-action-button']"]`; claude
+`assistant:["[data-message-author-role='assistant']","div[class*='block-'] > div.text-size-chat.relative.overflow-visible"]` (the second is the effort-picker layout, no data-* attributes — measured 2026-09-27), `assistantText:[".markdown","div[class*='block-'] > div.text-size-chat.relative.overflow-visible > div.flex.min-w-0.flex-col",".whitespace-pre-wrap"]`,
+`done:["button[data-testid='copy-turn-action-button']","button[aria-label='Rate response']"]` (the finished turn's action bar; "Copy" also sits on code blocks and tables); claude
 `stop:["button[aria-label='Stop response']","button[aria-label*='Stop']"]`,
 `assistant:[".font-claude-response:not(#markdown-artifact)",".font-claude-message"]`, `assistantText:[".prose"]`, `done:[]`;
 grok `stop:["button[aria-label='Stop']","button[aria-label*='Stop']"]`, `assistant:["div[id^='response-']"]`,

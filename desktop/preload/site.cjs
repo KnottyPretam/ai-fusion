@@ -282,6 +282,8 @@
    */
   const MESSAGE_SELECTORS = Object.freeze([
     '[data-message-author-role]', // chatgpt (and the fake site): user + assistant turns
+    "[class~='group/user-message']", // chatgpt, effort-picker layout (2026-09-27): user turns
+    "div[class*='block-'] > div.text-size-chat.relative.overflow-visible", // chatgpt, effort-picker layout: assistant reply bodies
     "[data-testid='user-message']", // claude user turns
     '.font-claude-message', // claude assistant turns (older markup)
     '.font-claude-response', // claude assistant turns
@@ -297,6 +299,7 @@
    */
   const ASSISTANT_SELECTORS = Object.freeze([
     "[data-message-author-role='assistant']", // chatgpt
+    "div[class*='block-'] > div.text-size-chat.relative.overflow-visible", // chatgpt, effort-picker layout (2026-09-27)
     '.font-claude-response', // claude
     '.font-claude-message', // claude (older markup)
     "div[id^='response-']", // grok
@@ -358,9 +361,16 @@
       // control just "Stop" — a failed capture's own snapshot showed it, 108 s into a reply the site was
       // still "Working" on. The older labels stay for accounts that have not been moved yet.
       stop: ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"],
-      assistant: ["[data-message-author-role='assistant']"],
-      assistantText: ['.markdown', '.whitespace-pre-wrap'],
-      done: ["button[data-testid='copy-turn-action-button']"],
+      // 2026-09-27 (Part 0, second snapshot chatgpt-failed-1790534993854): the effort-picker layout carries NO
+      // data-* turn attributes at all. One assistant turn = the reply body `div.text-size-chat.relative.overflow-
+      // visible` that is a direct child of a `block-<hash>` wrapper (the direct-child rule is what excludes the
+      // same class combination nested INSIDE a body — measured: 2 bodies for 2 turns, 5 matches without it);
+      // its markdown lives in the body's own `div.flex.min-w-0.flex-col`; the finished turn's action bar
+      // (Copy · Rate response · Share · Read aloud · Sources) sits after the body, so "Rate response" is the
+      // done marker — unlike "Copy", which a code block or a table also carries. Older entries stay first.
+      assistant: ["[data-message-author-role='assistant']", "div[class*='block-'] > div.text-size-chat.relative.overflow-visible"],
+      assistantText: ['.markdown', "div[class*='block-'] > div.text-size-chat.relative.overflow-visible > div.flex.min-w-0.flex-col", '.whitespace-pre-wrap'],
+      done: ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"],
       quietMs: 2500,
       // S10: three times the 400 ms every other site uses. A chosen value, not a measurement, and the
       // reason is the failure of 2026-09-20: chatgpt re-renders the WHOLE markdown body on every token
