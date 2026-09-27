@@ -1079,8 +1079,9 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
     // the view still exists (views.slots() is always the three sites) but sits hidden on a null rect
     expect(await app.evaluate(() => globalThis.__triplexTest.views.slots())).toEqual(SLOTS)
     await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
-    const grok = await viewState(app, 'grok')
-    expect([grok.bounds.width, grok.bounds.height]).toEqual([0, 0])
+    // A null rect hides the view (`setVisible(false)`); its LAST bounds are kept, exactly as tabs mode
+    // keeps a hidden pane's bounds — measured 2026-09-27 (446×590 here), so hidden is the invariant.
+    expect(await viewState(app, 'grok')).not.toBeNull()
 
     const before = {}
     for (const slot of SLOTS) before[slot] = (await fakeState(app, slot)).submitted.length
