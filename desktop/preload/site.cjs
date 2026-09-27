@@ -356,7 +356,11 @@
       challengeTitle: ['Just a moment'],
       errorText: ['Unusual activity has been detected', "You've reached", 'Something went wrong'],
       composerWaitMs: 15000,
-      sendWaitMs: 18000,
+      // 2026-09-27: the effort-picker layout's send control is still unmeasured, so every submit fell
+      // through the whole 18 s button poll to the Enter fallback — while the other panes waited behind
+      // the insert mutex (the user saw Grok's prompt land 5–20 s after Claude's). Enter is proven and
+      // retried, so the poll is a short courtesy now; a measured selector puts the click back first.
+      sendWaitMs: 4000,
       submitVerifyMs: 5000,
       // v2 (Stage 2)
       // 2026-09-27 (Part 0): chatgpt.com's new composer (the one with the effort picker) labels its stop

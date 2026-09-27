@@ -184,7 +184,7 @@ and (Stage 2) on `fs.watch`.
     "loggedOut": ["a[href*='/auth/login']", "button[data-testid='login-button']"], "loggedOutUrl": ["/auth/login", "auth.openai.com", "auth0.openai.com"],
     "challenge": ["iframe[src*='challenges.cloudflare.com']", "#challenge-running", "#challenge-form"], "challengeTitle": ["Just a moment"],
     "errorText": ["Unusual activity has been detected", "You've reached", "Something went wrong"],
-    "composerWaitMs": 15000, "sendWaitMs": 18000, "submitVerifyMs": 5000 },
+    "composerWaitMs": 15000, "sendWaitMs": 4000, "submitVerifyMs": 5000 },
   "claude": { "chatUrlPattern": "^https://claude\\.ai/chat/[0-9a-f-]+",
     "composer": ["div[contenteditable='true'].ProseMirror", "div[contenteditable='true'][data-testid]", "div[contenteditable='true']"],
     "send": ["button[aria-label='Send message']", "button[aria-label*='Send Message']", "button[aria-label*='Send']"],
