@@ -1,18 +1,18 @@
 // The refactored view (S11), rendered INSIDE the Analyze pane: the restated question, the knowledge
-// graph, and the three responses reduced to a summary plus claims. Refactor is an OPTION ON ANALYZE —
+// graph, and each response reduced to a summary plus claims. Refactor is an OPTION ON ANALYZE —
 // its button sits beside the Analyze button and Analyze compares this artifact instead of the raw
 // answers — so it lives in the analyze feature rather than as a pane of its own, and no feature has to
 // import across to another.
 //
 // Presentational only: every button, the run wiring and the export control are in AnalyzePane, which
-// owns the toolbar the user asked for. Labels are R1/R2/R3; this component never sees a slot name.
+// owns the toolbar the user asked for. Labels are R1..Rn; this component never sees a slot name.
 //
 // data-testids (for Playwright):
 //   refactor-report              the refactored view
 //   refactor-question            the restated question
 //   refactor-graph-nodes         <table> of things; refactor-node-<id> rows
 //   refactor-graph-edges         <table> of relations; refactor-edge-<n> rows
-//   refactor-replies             the three reduced responses; refactor-reply-<label>,
+//   refactor-replies             the reduced responses, one per label; refactor-reply-<label>,
 //                                refactor-summary-<label>, refactor-claim-<label>-<n>
 //   refactor-degraded            degraded box; refactor-fallback inside it
 //   refactor-raw-attempts        <details> with refactor-raw-attempt-<n> <pre> blocks
@@ -20,6 +20,12 @@ import { edgeRows } from './refactorSlice.js'
 import css from './refactor.module.css'
 
 export const FALLBACK_NOTE = 'Analyze falls back to comparing the responses as they were sent.'
+
+/** "The three responses, reduced" — the count in words for a council of 2..5 (n=3 reads as before). */
+export function repliesHeading(n) {
+  const words = { 2: 'two', 3: 'three', 4: 'four', 5: 'five' }
+  return `The ${words[n] || n} responses, reduced`
+}
 
 export default function RefactorView({ refactor }) {
   const turn = refactor && refactor.turn
@@ -98,7 +104,7 @@ export default function RefactorView({ refactor }) {
       )}
       {nodes.length === 0 && edges.length === 0 && <p className={css.muted}>The analyst returned no graph for this question.</p>}
 
-      <h3 className={css.h3}>The three responses, reduced</h3>
+      <h3 className={css.h3}>{repliesHeading((ref.replies || []).length)}</h3>
       <div className={css.replies} data-testid="refactor-replies">
         {(ref.replies || []).map((reply) => (
           <section key={reply.model} className={css.reply} data-testid={`refactor-reply-${reply.model}`}>

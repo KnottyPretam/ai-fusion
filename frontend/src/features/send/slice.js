@@ -1,8 +1,13 @@
-// W9 (send-ui). The `slots` slice: live per-column state for the three provider slots, driven by
-// the frozen `sse` actions of feature 'send' (Send AND solo continue both stream under that key).
+// W9 (send-ui). The `slots` slice: live per-column state for every provider slot of the catalog,
+// driven by the frozen `sse` actions of feature 'send' (Send AND solo continue both stream under
+// that key). Council (2026-09-27): the slice is EAGER over the 7-id catalog — one Slot per
+// `SLOT_IDS` entry whatever the open conversation seats — and the council (2..5 of them,
+// `councilOf(slotConfig)`) is a VIEW the pane maps over. The five `idle`-guarded handlers are
+// untouched: a slot outside the council never sees a `slot_start`, so it stays `idle` and ignores
+// every later event exactly like a stale stream.
 //
 // Shape (docs/api-contract.md "Frontend contract"):
-//   slots = { claude: Slot, chatgpt: Slot, grok: Slot }
+//   slots = { claude: Slot, chatgpt: Slot, grok: Slot, gemini: Slot, deepseek: Slot, qwen: Slot, mimo: Slot }
 //   Slot  = { buffer, reasoning, citations, status: 'idle'|'streaming'|'done'|'error', usage,
 //             truncated, error, effort, effortCoerced, model }  (+ code / errorType / finishReason)
 //
@@ -28,10 +33,23 @@
 // mid-stream): it is ignored, so conversation A's reply never streams into conversation B's
 // columns. The pane side of that isolation (pending prompt, post-stream refetch) is in SendPane.
 
-export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
-// Duplicated from backend/schemas.py SLOT_VENDORS (state/* is frozen, so it lives here).
-export const SLOT_VENDORS = { claude: 'anthropic', chatgpt: 'openai', grok: 'x-ai' }
-export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+// The vendor CATALOG, mirrored from backend/schemas.py (state/* is frozen): the classic three FIRST
+// — the order every subset rule and mock anon map is written against — then the four vendors a
+// council may also seat. A conversation's council is `slot_config.slots` (2..5 keys), never the
+// whole catalog; `DEFAULT_COUNCIL` names the three. Duplicated per feature (features never import
+// each other): features/desktop/slice.js, features/fusion/derive.js carry the same lists.
+export const SLOT_IDS = ['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo']
+export const DEFAULT_COUNCIL = SLOT_IDS.slice(0, 3)
+export const COUNCIL_MIN = 2
+export const COUNCIL_MAX = 5
+// Slot -> OpenRouter slug vendor prefix (backend/schemas.py SLOT_VENDORS).
+export const SLOT_VENDORS = { claude: 'anthropic', chatgpt: 'openai', grok: 'x-ai', gemini: 'google', deepseek: 'deepseek', qwen: 'qwen', mimo: 'xiaomi' }
+export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini', deepseek: 'DeepSeek', qwen: 'Qwen', mimo: 'MiMo' }
+// The sites with a native view and a Stage-1 adapter (`web:<site>` is a legal model only for these).
+export const SITES = ['claude', 'chatgpt', 'grok']
+// The three transports a slot's model string names (backbone rule 1: transport IS the model string).
+export const TRANSPORTS = ['web', 'openrouter', 'ollama']
+export const TRANSPORT_LABELS = { web: 'web', openrouter: 'OpenRouter', ollama: 'local' }
 // Fallback when the catalog has no entry for a model (docs/api-contract.md effort rule).
 export const DEFAULT_EFFORTS = ['off', 'low', 'medium', 'high']
 
@@ -53,7 +71,7 @@ export function emptySlot() {
   }
 }
 
-// { claude, chatgpt, grok: Slot, conversationId: the id of the loaded conversation (null before
+// { <every SLOT_IDS entry>: Slot, conversationId: the id of the loaded conversation (null before
 //   the first conversation/loaded and after conversation/cleared) }
 export function initialSlots() {
   const s = { conversationId: null }
@@ -63,6 +81,41 @@ export function initialSlots() {
 
 export function isSlotId(x) {
   return SLOT_IDS.includes(x)
+}
+
+export function isSiteId(x) {
+  return SITES.includes(x)
+}
+
+/**
+ * The council a SlotConfig seats, in CATALOG order (never the dict's own key order — the backend's
+ * `council_of` does the same, and the subset rule below relies on it); null without a config.
+ * Accepts anything shaped `{slots: {<slot>: …}}` — the frozen `slotConfig` slice, a persisted
+ * turn's `slot_config`, main's default council spec — so every consumer applies one precedence:
+ * the open conversation's config, else the desktop default (`panes.council`), else DEFAULT_COUNCIL.
+ */
+export function councilOf(slotConfig) {
+  const slots = slotConfig && typeof slotConfig === 'object' && slotConfig.slots && typeof slotConfig.slots === 'object' ? slotConfig.slots : null
+  if (!slots) return null
+  const list = SLOT_IDS.filter((s) => s in slots)
+  return list.length ? list : null
+}
+
+/** 'web' | 'openrouter' | 'ollama' for a model string; null for '' / null / a non-string. */
+export function transportOf(model) {
+  if (typeof model !== 'string' || !model) return null
+  if (model.startsWith('web:')) return 'web'
+  if (model.startsWith('ollama:')) return 'ollama'
+  return 'openrouter'
+}
+
+/**
+ * The inline style that colours a column / tab / target for its slot: one `--slot-color` custom
+ * property, so the CSS carries ONE rule per element instead of one per vendor (the palette tokens
+ * `--claude` … `--mimo` live in the frozen index.css, light and dark).
+ */
+export function slotStyle(slot) {
+  return { '--slot-color': isSlotId(slot) ? `var(--${slot})` : 'var(--border)' }
 }
 
 export function citationUrl(item) {
@@ -133,7 +186,7 @@ function isEmptySlot(x) {
 function reduceEvent(s, ev) {
   switch (ev.type) {
     case 'turn_start': {
-      // Send lists all three slots; a continue lists exactly one. Only the listed slots reset.
+      // Send lists the council; a continue lists exactly one. Only the listed slots reset.
       const list = Array.isArray(ev.slots) ? ev.slots.filter(isSlotId) : SLOT_IDS
       let next = s
       for (const k of list) next = { ...next, [k]: emptySlot() }
@@ -248,9 +301,12 @@ export function slotsReducer(s = initialSlots(), a) {
 // ---------------------------------------------------------------------------- derived helpers
 // (pure, shared by SlotColumn and its tests)
 
-// Models of this slot's vendor, plus the configured slug when the catalog lacks it.
+// Models of this slot's vendor — an OpenRouter slug under the vendor's prefix, or the site's own
+// `web:<slot>` entry of the desktop catalog — plus every local `ollama:*` model (a local model can
+// seat any slot: the vendor's "uncensored" variants run there), plus the configured id when the
+// catalog lacks it.
 export function vendorModels(items, slot, configured) {
-  const list = (Array.isArray(items) ? items : []).filter((m) => m && m.vendor === SLOT_VENDORS[slot])
+  const list = (Array.isArray(items) ? items : []).filter((m) => m && (m.vendor === SLOT_VENDORS[slot] || (typeof m.id === 'string' && m.id.startsWith('ollama:'))))
   if (configured && !list.some((m) => m.id === configured)) {
     return [{ id: configured, name: configured, vendor: SLOT_VENDORS[slot], efforts: null, missing: true }, ...list]
   }

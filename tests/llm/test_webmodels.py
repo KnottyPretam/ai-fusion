@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from backend.features.slot_config import validate_slot_config
 from backend.llm import catalog, webmodels
-from backend.schemas import SLOT_IDS, ModelMeta, SlotConfig, SlotSpec
+from backend.schemas import DEFAULT_COUNCIL, ModelMeta, SlotConfig, SlotSpec
 from tests.llm.conftest import BASE_URL, MODELS_URL
 
 EFFORTS = ["off", "low", "medium", "high"]
@@ -46,7 +46,7 @@ def test_vendors_and_names():
     assert by_id["web:claude"].name == "Claude (web session)"
     assert by_id["web:chatgpt"].name == "ChatGPT (web session)"
     assert by_id["web:grok"].name == "Grok (web session)"
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         analyst = by_id[f"web:{slot}:analyst"]
         assert analyst.vendor == "triplex-analyst"
         assert analyst.name == f"{webmodels.SITE_NAMES[slot]} web session (hidden analyst page)"
@@ -184,7 +184,7 @@ async def test_unset_flag_keeps_the_live_catalog_fetch(client, respx_router, mon
 # --------------------------------------------------------------------------- validate_slot_config
 def _config(effort: str, **models: str) -> SlotConfig:
     return SlotConfig(
-        slots={slot: SlotSpec(model=models[slot], effort=effort) for slot in SLOT_IDS},
+        slots={slot: SlotSpec(model=models[slot], effort=effort) for slot in DEFAULT_COUNCIL},
         analyst_model="web:chatgpt:analyst",
     )
 
@@ -198,6 +198,17 @@ def test_validate_slot_config_accepts_web_and_ollama_with_any_effort(effort):
     validate_slot_config(
         _config(effort, claude="web:claude:analyst", chatgpt="web:chatgpt", grok="ollama:qwen3")
     )
+
+
+@pytest.mark.parametrize("model", ["web:claude:foo", "web:claude:analyst:x", "web:", "web::analyst"])
+def test_validate_slot_config_rejects_a_web_string_the_bridge_could_not_parse(model):
+    """`web_slot_mismatch` mirrors `bridge.parse_web_model`'s grammar: only `web:<slot>` and
+    `web:<slot>:analyst` pass, so a typo on the slot's own site is refused at PUT time rather
+    than at the bridge."""
+    with pytest.raises(HTTPException) as ei:
+        validate_slot_config(_config("off", claude=model, chatgpt="web:chatgpt", grok="web:grok"))
+    assert ei.value.status_code == 422
+    assert ei.value.detail == {"error": "web_slot_mismatch", "slot": "claude", "model": model}
 
 
 def test_validate_slot_config_still_rejects_a_known_model_at_an_unsupported_effort():

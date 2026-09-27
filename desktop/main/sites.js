@@ -1,7 +1,9 @@
-// desktop/main/sites.js — the three embedded sites and the SSO host allow-list.
+// desktop/main/sites.js — the three embedded sites with a Stage-1 adapter and the SSO host allow-list.
 // Contract §5 of docs/desktop-contract.md. Pure module: no electron import, no I/O.
+// A council (council.js) may seat up to five agents from a seven-vendor catalog; only these three
+// have a native view — the others are OpenRouter / Ollama agents drawn by the renderer.
 
-/** Slot order used everywhere in the desktop app (matches `window.triplex.slots`). */
+/** The sites with a native view, in view order (matches `window.triplex.slots` / `.sites`). */
 export const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok'])
 
 /** Site table exactly as in contract §5. `hosts` also covers every subdomain of each entry. */

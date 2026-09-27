@@ -1,5 +1,5 @@
-// The Export control: one trigger + one in-flow menu, used by all three panes (Send, Analyze,
-// Fusion) with nothing but the turn it should write out.
+// The Export control: one trigger + one in-flow menu, used by the Send, Analyze and Fusion panes
+// with nothing but the turn it should write out.
 //
 // Shape decisions:
 //  - The menu is IN FLOW, directly under the trigger: it can never overlay a site view in the

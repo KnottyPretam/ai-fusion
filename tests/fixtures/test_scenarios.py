@@ -14,10 +14,12 @@ import pytest
 from pydantic import ValidationError
 
 from backend.schemas import (
-    LABELS,
+    DEFAULT_COUNCIL,
     ConvergenceCheck,
     DefenseReply,
     Extraction,
+    SlotConfig,
+    council_of,
     is_unjustified,
 )
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
@@ -27,12 +29,14 @@ from tests.fixtures.conftest import (
     SCENARIOS_DIR,
     annotations,
     content_text,
+    council_labels_of,
     documented_scenarios,
     fixture_files,
     is_error_fixture,
     load_chunks,
     readme_expectations,
     reasoning_text,
+    scenario_council,
     scenario_dirs,
 )
 from tests.helpers import find_identity_leaks
@@ -54,6 +58,9 @@ EXPECTED_SCENARIOS = [
     "vendor_in_prompt",
     "two_divergences",
 ]
+# The council scenarios (2026-09-27): shipped and validated here, but docs/fixtures.md is frozen for
+# this workstream, so its table may not list them yet (integrator: add the two rows).
+COUNCIL_SCENARIOS = ["council_two", "council_five"]
 
 _SCENARIOS = scenario_dirs()
 _FILES = fixture_files()
@@ -82,9 +89,13 @@ def _valid_extraction(scenario: Path) -> dict | None:
 # --------------------------------------------------------------------------- corpus shape
 def test_every_documented_scenario_has_a_directory_and_readme():
     documented = documented_scenarios()
-    assert documented == EXPECTED_SCENARIOS, "docs/fixtures.md table changed; update W-fix"
+    assert documented[: len(EXPECTED_SCENARIOS)] == EXPECTED_SCENARIOS, (
+        "docs/fixtures.md table changed; update W-fix"
+    )
+    assert set(documented) <= set(EXPECTED_SCENARIOS) | set(COUNCIL_SCENARIOS)
     on_disk = sorted(d.name for d in _SCENARIOS)
-    assert on_disk == sorted(documented), f"scenario dirs {on_disk} != documented {documented}"
+    expected = sorted(EXPECTED_SCENARIOS + COUNCIL_SCENARIOS)
+    assert on_disk == expected, f"scenario dirs {on_disk} != {expected}"
     for d in _SCENARIOS:
         assert (d / "README.md").is_file(), f"{d.name} has no README.md"
         assert any(d.glob("*.jsonl")), f"{d.name} has no fixtures"
@@ -103,8 +114,11 @@ def test_file_names_roles_and_contiguous_counters(scenario: Path):
         seen.setdefault((role, purpose), []).append(n)
     for key, ns in seen.items():
         assert sorted(ns) == list(range(1, len(ns) + 1)), f"{scenario.name} {key}: gaps in {ns}"
-    # Every scenario has all three chat fixtures (a Send always calls the three slots).
-    assert {("claude", "chat"), ("chatgpt", "chat"), ("grok", "chat")} <= set(seen)
+    # Every scenario has a chat fixture per council member (a Send calls the whole council), and
+    # no fixture for a slot outside its council.
+    council = scenario_council(scenario)
+    assert {(slot, "chat") for slot in council} <= set(seen)
+    assert {role for role, _ in seen} <= {*council, "analyst"}
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS, ids=[d.name for d in _SCENARIOS])
@@ -118,9 +132,16 @@ def test_readme_states_planted_content_outcome_and_exact_sequence(scenario: Path
         "## Exact per-role call sequence",
     ):
         assert heading in text, f"{scenario.name}/README.md lacks {heading!r}"
-    assert "R1=claude, R2=chatgpt, R3=grok" in text
+    council = scenario_council(scenario)
+    labels = council_labels_of(council)
+    pairs = ", ".join(f"{label}={slot}" for label, slot in zip(labels, council, strict=True))
+    assert pairs in text  # "R1=claude, R2=chatgpt, R3=grok" for the three
     exp = readme_expectations(scenario)
-    assert exp["anon_map"] == {"R1": "claude", "R2": "chatgpt", "R3": "grok"}
+    assert exp["anon_map"] == dict(zip(labels, council, strict=True))
+    if council != tuple(DEFAULT_COUNCIL):
+        # A custom council ships the config the e2e flow creates the conversation with.
+        cfg = SlotConfig.model_validate(exp["slot_config"])
+        assert council_of(cfg) == council
     on_disk = sorted(f.name for f in scenario.glob("*.jsonl"))
     assert sorted(exp["files"]) == on_disk, "README expectations do not list exactly the fixtures"
     for fname in on_disk:
@@ -249,13 +270,14 @@ def test_fixture_matches_readme_expectation(path: Path):
         ]
         assert {d.id: d.materiality for d in ex.divergences} == exp["divergences"]
         assert len(ex.agreements) == exp["agreements"]
+        labels = list(council_labels_of(scenario_council(path.parent)))
         for d in ex.divergences:
-            assert [p.model for p in d.positions] == list(LABELS), (
-                f"{d.id}: one Position per label, in R1/R2/R3 order"
+            assert [p.model for p in d.positions] == labels, (
+                f"{d.id}: one Position per label, in R1..Rn order"
             )
             assert d.topic and all(p.claim for p in d.positions)
         for a in ex.agreements:
-            assert a.models and set(a.models) <= set(LABELS)
+            assert a.models and set(a.models) <= set(labels)
     elif exp["kind"] == "defense":
         if "error" in exp:
             assert text == "", "a failed defense call streams no JSON"
@@ -268,7 +290,7 @@ def test_fixture_matches_readme_expectation(path: Path):
         div = next(d for d in extraction["divergences"] if d["id"] == exp["divergence"])
         assert exp["label"] in {p["model"] for p in div["positions"]}
         peer_claims = [p["claim"] for p in div["positions"] if p["model"] != exp["label"]]
-        assert len(peer_claims) == 2
+        assert len(peer_claims) == len(scenario_council(path.parent)) - 1
         if reply.stance == "revise":
             assert is_unjustified(reply, peer_claims) is exp["unjustified"]
             if exp["unjustified"]:

@@ -11,7 +11,12 @@
 //                         (plus ANALYST_MODEL when no analyst is chosen) is PINNED to '' rather than
 //                         omitted: python-dotenv only fills variables that are absent, so the repo
 //                         `.env` can never re-supply them — a desktop backend never routes a live
-//                         OpenRouter call with the user's key ('' reads as "no key" / "no analyst").
+//                         OpenRouter call with an ENV key ('' reads as "no key" / "no analyst").
+//                         The user's own OpenRouter key (2026-09-27) takes the HTTP path instead:
+//                         main keeps it encrypted (openrouter-key.js) and PUTs it, with the default
+//                         council, to `/api/session/openrouter_key` / `/api/session/defaults` under
+//                         `Authorization: Bearer <BRIDGE_TOKEN>` on every bridge connect — so the
+//                         pins here are unchanged and the backend holds the key in memory only.
 //   attachSpec(env)       `TRIPLEX_BACKEND_URL` → {url, port, token: BRIDGE_TOKEN} (nothing spawned);
 //                         a non-loopback host is refused (the token, every prompt and every captured
 //                         reply would leave the machine) unless TRIPLEX_ALLOW_REMOTE_BACKEND=1, which

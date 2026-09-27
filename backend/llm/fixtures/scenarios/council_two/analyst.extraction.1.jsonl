@@ -1,0 +1,22 @@
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"What"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" sets the value\", \""},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"statement\": \"The pull-up value is set by the"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" bus capacitance and the ri"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"se-time requirement; a longer or mor"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e loaded bus needs a stronger p"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ull-up.\", \"models\":"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" [\"R1\", \"R2\"]}], \"divergences\": [{\"id\": \"d1\""},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":", \"topic\": \"Recommended pul"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"l-up value at 400 kHz\", \"positions\":"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" [{\"model\": \"R1\", \"claim\": \"2.2"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" kOhm to 4.7 kOhm, "},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with 2.2 kOhm once the bus capacitance appro"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"aches 200 pF.\", \"evidence_c"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ited\": \"the 300 ns fast-mode rise-ti"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"me limit and the RC with the bu"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"s capacitance\"}, {\""},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"model\": \"R2\", \"claim\": \"10 kOhm is the stand"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ard value and a fine defaul"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"t.\", \"evidence_cited\": null}], \"mate"},"finish_reason":null}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"riality\": \"high\"}]}"},"finish_reason":"stop"}]}
+{"id":"gen-27797c693b27c04b","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":641,"completion_tokens":162,"total_tokens":803,"cost":0.0003226,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

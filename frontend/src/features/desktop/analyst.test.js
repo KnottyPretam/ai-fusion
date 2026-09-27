@@ -55,9 +55,13 @@ describe('analyst choice: pure helpers', () => {
 describe('analyst choice: localStorage mirror', () => {
   test('loadAnalyst returns the default when nothing (or junk) is stored, the stored desktop analyst otherwise, and "" for none', () => {
     expect(loadAnalyst(memoryStorage())).toBe(DEFAULT_ANALYST)
-    expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'openai/gpt-5.6-luna' }))).toBe(DEFAULT_ANALYST)
+    expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'nonsense' }))).toBe(DEFAULT_ANALYST)
+    expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'web:bing:analyst' }))).toBe(DEFAULT_ANALYST)
     expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'web:grok:analyst' }))).toBe('web:grok:analyst')
     expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'ollama:hermes3' }))).toBe('ollama:hermes3')
+    // an OpenRouter slug is kept by SHAPE: whether the key is configured is judged where readiness
+    // is (isDesktopAnalyst(model, { keyConfigured }) in the drawer / prompt bar), never at load
+    expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: 'openai/gpt-5' }))).toBe('openai/gpt-5')
     expect(loadAnalyst(memoryStorage({ [ANALYST_KEY]: '' }))).toBe(ANALYST_NONE)
     expect(loadAnalyst(null)).toBe(DEFAULT_ANALYST)
     expect(

@@ -1,0 +1,10 @@
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.summary","id":"rs-62b31808-0","index":0,"summary":"Recalling the BMI088 digital interface limits."}]},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Up to 10 MHz "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on SPI. The device accepts SPI "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"mode 0 or "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"mode 3, and the two "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sensors are addressed through separate chip-select lines; "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"I2C is "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"limited to 400 kHz by "},"finish_reason":null}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"comparison."},"finish_reason":"stop"}]}
+{"id":"gen-62b31808217582d0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":55,"completion_tokens":55,"total_tokens":110,"cost":0.00066,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":12}}}

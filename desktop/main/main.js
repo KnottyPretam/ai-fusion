@@ -42,18 +42,27 @@
 //                pushed to the renderer, the bridge `analyst` frame re-sent from the settings
 //                subscription on every change, and `ANALYST_MODEL` picked up by the NEXT backend
 //                spawn (buildSpawnSpec reads settings.getAnalyst() at spawn time).
+// Council + key: (2026-09-27) the default council (settings.json `council`, council.js) and the
+//                OpenRouter key (openrouter-key.js: safeStorage ciphertext in settings.json, the
+//                plaintext only in that module's closure) both reach the backend over ONE path —
+//                `syncKey()`, bound to the backend this launch talks to (spawned or attached, the
+//                same bridge token) and called on every bridge `connected` rising edge (first
+//                connect, a restart, a reconnect), on a council / analyst change and after the
+//                renderer stores or clears the key. A non-loopback attached backend never gets the
+//                key. `safeStorage.setUsePlainTextEncryption(true)` ONLY under TRIPLEX_E2E_APP=1.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
-import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme, dialog } from 'electron'
+import { app, BrowserWindow, WebContentsView, session, shell, ipcMain, screen, Menu, nativeTheme, dialog, safeStorage } from 'electron'
 import { resolveSites, nonLoopbackSiteUrls, SSO_HOSTS } from './sites.js'
 import { flagsFromEnv, applyFlags, ALLOWED_DESCRIPTION } from './chromium-flags.js'
 import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.js'
 import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
 import { createSettings, asTheme, DEFAULT_THEME } from './settings.js'
+import { createOpenRouterKey, isLoopbackUrl, KEY_ERRORS } from './openrouter-key.js'
 import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, backgroundFor, LOAD_RETRY_MS } from './views.js'
 import { APP_TITLE, iconPath } from './branding.js'
@@ -167,6 +176,11 @@ let ipc = null
 let bridge = null
 let backend = null
 let bridgeState = { connected: false }
+/** openrouter-key.js, created in start() after settings.load() (safeStorage is only meaningful after ready). */
+let openRouterKey = null
+/** The bridge token of this launch (random for a spawn, BRIDGE_TOKEN for an attach): the Bearer of every key push. */
+let bridgeToken = null
+let remoteRefusalLogged = false
 /** {mode, active} as last reported by the renderer over 'panes:active' (shared with shortcuts). */
 const layoutState = { mode: null, active: null }
 
@@ -283,6 +297,34 @@ function replayToRenderer() {
   sendToRenderer('panes:bridge', bridgeState)
   if (analystViews) sendToRenderer('panes:analyst', analystViews.state())
   if (settings) sendToRenderer('panes:theme', { theme: settings.getTheme() })
+  if (settings) sendToRenderer('panes:council', settings.getCouncil())
+  if (openRouterKey) sendToRenderer('panes:openRouterKey', openRouterKey.status())
+}
+
+/**
+ * Push the OpenRouter key (or its absence) and the default council to the backend this launch
+ * talks to. One path for spawn, attach and restart: the URL is `backendInfo.url`, the Bearer is this
+ * launch's bridge token. An attached backend on a non-loopback host (TRIPLEX_ALLOW_REMOTE_BACKEND=1)
+ * is refused — the bridge may talk to it, the key never leaves this machine. Never rejects.
+ *
+ * Every settled push is announced as `panes:openRouterKey` — this is the ONE place that does, for
+ * every caller (the bridge's connected edge, a council / analyst change, the IPC set / clear, the
+ * late decrypt): the renderer reads the status once at mount and then only follows the event, so a
+ * push that flipped `pushed` or set `error` without an announce would leave the Agents page reading
+ * "stored, not yet pushed" after a launch, or "pushed" after a backend restart that never got it.
+ */
+function syncKey() {
+  if (!openRouterKey || !backendInfo || !settings) return Promise.resolve({ ok: false, error: KEY_ERRORS.syncUnavailable })
+  if (!isLoopbackUrl(backendInfo.url)) {
+    if (!remoteRefusalLogged) console.warn(`[openrouter-key] the attached backend is not on this machine; the key and the default council are not pushed to it`)
+    remoteRefusalLogged = true
+    return Promise.resolve({ ok: false, error: KEY_ERRORS.syncRefusedRemote })
+  }
+  const analyst = settings.getAnalyst()
+  return openRouterKey.sync({ url: backendInfo.url, token: bridgeToken, council: settings.getCouncil(), analystModel: analyst ? `web:${analyst}:analyst` : '' }).then((r) => {
+    sendToRenderer('panes:openRouterKey', openRouterKey.status())
+    return r
+  })
 }
 
 /** Decide where the backend is: attach to TRIPLEX_BACKEND_URL (decided in preflight), else prepare a spawn on TRIPLEX_BACKEND_PORT. */
@@ -367,6 +409,20 @@ function start() {
 
   settings = createSettings({ dir: userData, screen })
   settings.load()
+  if (E2E) {
+    // The E2E box has no keyring, and the key round trip is one of the rows: Electron's plaintext
+    // "encryption" is allowed HERE ONLY — beside the other E2E relaxations, never in a normal launch.
+    try {
+      safeStorage.setUsePlainTextEncryption(true)
+    } catch (e) {
+      console.warn(`[openrouter-key] setUsePlainTextEncryption failed: ${(e && e.message) || e}`)
+    }
+  }
+  // After settings.load() and after ready: on Linux `isEncryptionAvailable()` answers for the
+  // keyring only once the app is up, and the module decrypts the stored ciphertext lazily. A key
+  // that only becomes readable later (the keyring unlocked after launch) is pushed the moment it
+  // decrypts — `onDecrypted` — instead of waiting for the next bridge reconnect.
+  openRouterKey = createOpenRouterKey({ settings, safeStorage, log: console, onDecrypted: () => syncKey() })
   // A launch that carries TRIPLEX_THEME (dev / screenshots) writes it into settings.theme, so the
   // renderer, the site views and the next launch all read ONE value; nothing reads env again.
   const seedTheme = asTheme(env.TRIPLEX_THEME)
@@ -381,6 +437,7 @@ function start() {
 
   const resolved = resolveBackend(userData)
   backend = resolved.backend
+  bridgeToken = resolved.token
 
   createWindow()
 
@@ -525,8 +582,12 @@ function start() {
     onRequest: (frame, emit) => orchestrator.run(frame, emit),
     onCancel: (reqId) => orchestrator.cancel(reqId),
     onState: (state) => {
+      const rising = !!state.connected && !bridgeState.connected
       bridgeState = state
       sendToRenderer('panes:bridge', state)
+      // Every connected edge — the first hello_ack, a backend restart, a reconnect — is a backend
+      // that may hold nothing: push the key and the default council again (coalesced, idempotent).
+      if (rising) syncKey()
     },
     log: console,
   })
@@ -535,6 +596,8 @@ function start() {
     // A new analyst takes effect for the backend in two steps: the frame tells the running backend
     // which page answers now, and the next spawn's ANALYST_MODEL (buildSpawnSpec) makes it durable.
     if (key === 'analyst') bridge.sendAnalyst(settings.getAnalyst())
+    // The session defaults follow the default council and the analyst (its analyst_model).
+    if (key === 'council' || key === 'analyst') syncKey()
   })
 
   ipc = registerIpc({
@@ -547,6 +610,8 @@ function start() {
     selectors,
     settings,
     applyTheme,
+    openRouterKey,
+    syncKey,
     chats,
     // The file side of "export this step": the backend renders the document (anonymous for Analyze
     // and Fusion), export.js asks for a destination once and writes the files.
@@ -603,7 +668,20 @@ function start() {
   }
 
   if (E2E) {
-    globalThis.__triplexTest = { views, analystViews, orchestrator, settings, selectors, layoutState, ipc, bridge, chats, backend: backend || { info: () => backendInfo, attached: true } }
+    globalThis.__triplexTest = {
+      views,
+      analystViews,
+      orchestrator,
+      settings,
+      selectors,
+      layoutState,
+      ipc,
+      bridge,
+      chats,
+      backend: backend || { info: () => backendInfo, attached: true },
+      // status and a push only — the plaintext never crosses this seam either
+      openRouterKey: { status: () => openRouterKey.status(), sync: () => syncKey() },
+    }
   }
 }
 
@@ -642,6 +720,7 @@ app.on('before-quit', (event) => {
     stopSelectorsWatch = null
   }
   if (bridge) bridge.close()
+  if (openRouterKey) openRouterKey.dispose()
   if (backend && !quitting) {
     // stop() sends SIGTERM now and SIGKILL after STOP_GRACE_MS; hold the quit until the child is
     // gone (bounded), otherwise the SIGKILL timer dies with this process and a backend that

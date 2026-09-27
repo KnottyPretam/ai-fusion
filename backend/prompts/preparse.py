@@ -41,12 +41,18 @@ names, slot ids and R-labels (the leak tests scan it).
 from __future__ import annotations
 
 from . import QUOTED_DATA_NOTICE, delimited
+from .council import check_council_size, number_word
 from .refactor import MAP_JSON_INSTRUCTION as RESTATE_JSON_INSTRUCTION
 from .refactor import MAP_JSON_INSTRUCTION_FENCED as RESTATE_JSON_INSTRUCTION_FENCED
 from .refactor import RETRY_FENCE_CLAUSE, RETRY_USER_MESSAGE, retry_message
 
+
 # --------------------------------------------------------------------------- the restate call
-_RESTATE_RULES = """You are restating a question so that it can be put to three experts clearly, and nothing else.
+def restate_rules_for(n: int) -> str:
+    """The restate rules for a council of n experts (2026-09-27, count-aware; `_RESTATE_RULES` is
+    n=3, byte for byte as before)."""
+    check_council_size(n)
+    return f"""You are restating a question so that it can be put to {number_word(n)} experts clearly, and nothing else.
 
 Rewrite the QUESTION clearly and succinctly. Keep every constraint, number, unit, named thing,
 requested output form, and the asker's evident intent; if it asks several things, keep all of
@@ -59,10 +65,18 @@ the question has several parts.
 
 """
 
+
 _RESTATE_SCHEMA = '{"question": string}'
 
-RESTATE_SYSTEM = _RESTATE_RULES + RESTATE_JSON_INSTRUCTION + "\n" + _RESTATE_SCHEMA
-RESTATE_SYSTEM_FENCED = _RESTATE_RULES + RESTATE_JSON_INSTRUCTION_FENCED + "\n" + _RESTATE_SCHEMA
+
+def restate_system_for(n: int, *, fenced: bool = False) -> str:
+    instruction = RESTATE_JSON_INSTRUCTION_FENCED if fenced else RESTATE_JSON_INSTRUCTION
+    return restate_rules_for(n) + instruction + "\n" + _RESTATE_SCHEMA
+
+
+_RESTATE_RULES = restate_rules_for(3)
+RESTATE_SYSTEM = restate_system_for(3)
+RESTATE_SYSTEM_FENCED = restate_system_for(3, fenced=True)
 
 # Deliberately not Refactor's `Question:` so a fake site can key a canned reply on it.
 QUESTION_HEADER = "Question to restate:"
@@ -99,12 +113,13 @@ def strip_format(prompt: str) -> str:
     return prompt
 
 
-def restate_messages(question: str, *, fenced: bool = False) -> list[dict[str, str]]:
+def restate_messages(question: str, *, fenced: bool = False, n: int = 3) -> list[dict[str, str]]:
     """`[system, user]` for the restate call — byte for byte the shape of `refactor.map_messages`,
-    so its hostile-input tests transfer: the question is QUOTED, not interpolated."""
+    so its hostile-input tests transfer: the question is QUOTED, not interpolated. `n` is the
+    council size (how many experts the question is put to)."""
     user = f"{QUESTION_HEADER}\n\n{QUOTED_DATA_NOTICE}\n\n{delimited('QUESTION', question)}"
     return [
-        {"role": "system", "content": RESTATE_SYSTEM_FENCED if fenced else RESTATE_SYSTEM},
+        {"role": "system", "content": restate_system_for(n, fenced=fenced)},
         {"role": "user", "content": user},
     ]
 
@@ -120,6 +135,8 @@ __all__ = [
     "RETRY_USER_MESSAGE",
     "compose",
     "restate_messages",
+    "restate_rules_for",
+    "restate_system_for",
     "retry_message",
     "strip_format",
 ]

@@ -107,7 +107,7 @@ async def test_refactor_maps_the_question_and_reduces_every_reply(
     # Narrated with its own alphabet: the map call, then one per label.
     narrations = [e["error"] for e in events if e["type"] == "refactor_retry"]
     assert narrations[0] == feature.MAP_NOTICE
-    for label in LABELS:
+    for label in LABELS[:3]:
         assert any(label in n and "refactoring" in n for n in narrations)
 
     calls = extraction_calls()
@@ -126,7 +126,7 @@ async def test_refactor_maps_the_question_and_reduces_every_reply(
         "datasheet",
     ]
     assert [e["relation"] for e in ref["graph"]["edges"]] == ["has property", "is documented in"]
-    assert [x["model"] for x in ref["replies"]] == list(LABELS)
+    assert [x["model"] for x in ref["replies"]] == list(LABELS[:3])
     assert ref["replies"][0]["claims"] == ["The upper range is 2000 dps", "Cites the datasheet table 3"]
     assert turn["usage"]["totals"]["calls"] == 4  # every sub-call metered
 
@@ -216,7 +216,7 @@ async def test_analyze_compares_the_refactored_version_when_one_exists(
     assert body.index("<<<QUESTION MAP>>>") < body.index("<<<R1>>>")
     # the reduced replies, not the raw ones
     quoted = blocks_of(body)
-    assert list(quoted) == list(LABELS)
+    assert list(quoted) == list(LABELS[:3])
     assert "The upper range is 2000 dps" in quoted["R1"]
     assert "R1 raw reply" not in user["content"]
     # and the analyst is told the blocks are condensed
@@ -332,7 +332,7 @@ async def test_a_chunked_reply_is_asked_for_its_share_of_claims_per_piece(
     assert systems[2:5] == [prompts.reply_system(max_claims=4)] * 3  # R2: its share per piece
     assert systems[5] == prompts.REPLY_SYSTEM  # R3
     reduced = events[-1]["turn"]["refactoring"]["replies"]
-    assert [x["model"] for x in reduced] == list(LABELS)
+    assert [x["model"] for x in reduced] == list(LABELS[:3])
     assert len(reduced[1]["claims"]) == 6  # 2 per piece, concatenated, none dropped
 
 

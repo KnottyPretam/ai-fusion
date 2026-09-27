@@ -56,6 +56,7 @@ from pydantic import BaseModel
 from .. import api_errors
 from ..llm import bridge, client
 from ..prompts import preparse as prompts
+from ..schemas import council_of
 from ..store import conversations as store
 from . import refactor
 from .analyze import CONDENSE_CHUNK_CHARS
@@ -107,7 +108,10 @@ async def run_preparse(conv_id: str, prompt: str) -> AsyncIterator[dict[str, Any
         with bridge.conversation_scope(conv_id):
             value, raw, usage, error = await refactor.validated_call(
                 model=model,
-                messages=prompts.restate_messages(question, fenced=fenced),
+                # "put to <n> experts": the conversation's own council size (2..5, 2026-09-27).
+                messages=prompts.restate_messages(
+                    question, fenced=fenced, n=len(council_of(conv.slot_config))
+                ),
                 schema_model=_RestateResult,
                 fenced=fenced,
             )

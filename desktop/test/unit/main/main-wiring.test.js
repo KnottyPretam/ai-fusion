@@ -16,8 +16,13 @@
 // challenge, the `analyst` rect, panes:setAnalyst switching the partition + the `analyst` frame +
 // the next spawn's ANALYST_MODEL, analyst_not_chosen);
 // TRIPLEX_BACKEND_URL on a non-loopback host refused (exit 2) unless
-// TRIPLEX_ALLOW_REMOTE_BACKEND=1. The fake forces TRIPLEX_BACKEND_URL (attach mode): a wiring run
-// never spawns a backend and never opens a real socket.
+// TRIPLEX_ALLOW_REMOTE_BACKEND=1. Council + key (2026-09-27): safeStorage's plaintext mode is
+// switched on under TRIPLEX_E2E_APP=1 only, the four council / key channels, a column as the active
+// tab (accepted; Ctrl+R / Ctrl+= become no-ops), Ctrl+4, and the recorded fetch — one PUT of the key
+// with `Bearer <token>` after the hello_ack (a DELETE while none is stored), the defaults PUT after a
+// council change, a second PUT after a reconnect, a DELETE after a clear — with the key absent from
+// every socket frame, every log line and settings.json. The fake forces TRIPLEX_BACKEND_URL (attach
+// mode): a wiring run never spawns a backend and never opens a real socket.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -35,6 +40,11 @@ const FAKE_BASE = 'http://127.0.0.1:5199'
 const SLOTS = ['claude', 'chatgpt', 'grok']
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 const ATTACH_URL = 'http://127.0.0.1:1'
+/** The key the fake's probes store (73 chars, the real format) and the two-member council they set. */
+const KEY = `sk-or-v1-${'a'.repeat(64)}`
+const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
+const CLASSIC = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
+const defaultsBody = (council, analyst_model) => ({ slot_config: { slots: council.slots, analyst_model, max_iterations: 2, materiality_min: 'medium', grounded: false } })
 
 function sitesJson(base = FAKE_BASE) {
   const sites = {}
@@ -56,10 +66,10 @@ function run(env) {
   return { status: r.status, report: line ? JSON.parse(line.slice('FAKE_ELECTRON_REPORT '.length)) : null, stderr: r.stderr, stdout: r.stdout }
 }
 
-test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, the Stage 3 analyst page, crash recreate, bounds flush', () => {
+test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, the Stage 3 analyst page, the council + key channels and pushes, crash recreate, bounds flush', () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-'))
   writeSelectorsOverride(userData)
-  const { status, report, stderr } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson(), TRIPLEX_RENDERER_URL: 'http://localhost:5184' })
+  const { status, report, stderr, stdout } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson(), TRIPLEX_RENDERER_URL: 'http://localhost:5184' })
   assert.equal(status, 0, stderr)
   assert.ok(report, 'report printed')
   assert.equal(report.exit, null)
@@ -99,7 +109,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
 
   // every §2 channel is registered once; prompt:send (removed in Stage 2) is not registered at all
   const handles = report.ipcHandles
-  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot', 'panes:setAnalyst', 'panes:showAnalyst', 'panes:export']) {
+  for (const c of ['panes:getInfo', 'panes:newChat', 'panes:reload', 'panes:openExternal', 'panes:inspect', 'panes:focus', 'panes:zoom', 'adapter:config', 'panes:getCapture', 'panes:setCapture', 'panes:openChats', 'panes:signOut', 'panes:snapshot', 'panes:setAnalyst', 'panes:showAnalyst', 'panes:export', 'panes:getCouncil', 'panes:setCouncil', 'panes:getOpenRouterKey', 'panes:setOpenRouterKey']) {
     assert.equal(handles.filter((h) => h === c).length, 1, c)
   }
   assert.equal(handles.includes('prompt:send'), false, 'prompt:send is gone')
@@ -119,10 +129,10 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.ok(pinned !== -1 && named !== -1, `both calls happened: ${report.order.join(', ')}`)
   assert.ok(pinned < named, `userData is pinned before the rename (${report.order.join(', ')})`)
   assert.equal(report.paths.userData, userData, 'and it is the directory that was asked for')
-  for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
+  for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+4', 'CommandOrControl+5', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
   }
-  for (const label of ['Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
+  for (const label of ['Pane 4', 'Pane 5', 'Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
     assert.ok(report.menu.items.includes(label), label)
   }
 
@@ -175,6 +185,17 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.bridgeSentToRenderer.filter((s) => s.connected).length, 1)
   assert.equal(p.bridgeSentToRenderer.at(-1).connected, true)
   assert.equal(typeof p.bridgeSentToRenderer.at(-1).since, 'number')
+  // the connected edge pushes the session state: no key stored → DELETE, then the default council,
+  // both with the attach token as Bearer, to the attached backend and nothing else
+  assert.deepEqual(p.fetchesAfterAck, [
+    { method: 'DELETE', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: null },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(CLASSIC, 'web:chatgpt:analyst') },
+  ])
+  for (const f of report.fetches) assert.ok(f.url.startsWith(`${ATTACH_URL}/`), `every fetch targets the attached backend: ${f.url}`)
+  // ...and the renderer, which reads the status once at mount and then only follows the event, hears
+  // the settled push: the ack's DELETE counts as "pushed" (what is configured — nothing — is what the
+  // backend holds)
+  assert.deepEqual(p.keyStatesAfterAck, [{ configured: false, prefix: '', length: 0, pushed: true }], 'the connected edge announces panes:openRouterKey once the push settles')
 
   // capture switch → settings + a capture frame; a bad payload is refused
   assert.deepEqual(p.getCapture, { ok: true, value: { claude: false, chatgpt: false, grok: false } })
@@ -294,6 +315,45 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.analystNullState, { destroyed: true, spawnAnalystModel: '' })
   assert.equal(p.analystViewsAfterRestore, 2, 'choosing an analyst again stays lazy: no view until it is needed')
 
+  // --- council + key ----------------------------------------------------------------------------
+  assert.equal(report.plainTextEncryption, true, 'TRIPLEX_E2E_APP=1 switches safeStorage to plaintext (the E2E box has no keyring)')
+  assert.deepEqual(p.getCouncil, { ok: true, value: CLASSIC }, 'the default council is the classic three on their web sessions')
+  assert.deepEqual(p.setCouncilBad, { ok: false, error: 'bad_request' }, 'one member is below COUNCIL_MIN')
+  assert.deepEqual(p.setCouncilForeign, { ok: false, error: 'bad_request' }, 'only the renderer may set the council')
+  assert.deepEqual(p.setCouncil, { ok: true, value: TWO })
+  assert.deepEqual(p.councilSentToRenderer, [TWO], 'panes:council announces the change once')
+  assert.deepEqual(p.fetchesAfterCouncil, [
+    { method: 'DELETE', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: null },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(TWO, 'web:chatgpt:analyst') },
+  ], 'a council change runs the one sync path: the (absent) key again, then the NEW defaults')
+  assert.deepEqual(p.keyStatesAfterCouncil, [{ configured: false, prefix: '', length: 0, pushed: true }], 'and announces the settled status like every other push')
+  assert.deepEqual(p.getOpenRouterKeyBefore, { ok: true, value: { configured: false, prefix: '', length: 0, pushed: true } }, 'no key: the DELETE after the ack counts as pushed')
+  assert.deepEqual(p.setKeyBad, { ok: false, error: 'bad_request' })
+  assert.deepEqual(p.setKeyMissing, { ok: false, error: 'bad_request' }, 'no payload is not a clear')
+  assert.deepEqual(p.setKeyForeign, { ok: false, error: 'bad_request' }, 'only the renderer may set the key')
+  assert.deepEqual(p.setKey, { ok: true, value: { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false } }, 'answered as soon as it is stored')
+  assert.deepEqual(p.keyStatesAfterSet, [
+    { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false },
+    { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true },
+  ], 'panes:openRouterKey twice: stored (the IPC handler), then pushed (syncKey itself) — never a third')
+  assert.deepEqual(p.fetchesAfterSet, [
+    { method: 'PUT', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: { key: KEY } },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(TWO, 'web:chatgpt:analyst') },
+  ], 'the bad and foreign calls sent nothing; the good one PUT the key with the bridge token')
+  assert.deepEqual(p.keyStatus, { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }, '__triplexTest.openRouterKey.status()')
+  assert.deepEqual(p.getOpenRouterKeyAfter.value, p.keyStatus)
+  assert.equal(typeof p.settingsAfterKey.openrouterKey, 'string', 'settings.json holds the ciphertext')
+  assert.match(p.settingsAfterKey.openrouterKey, /^[A-Za-z0-9+/]+=*$/, 'as base64')
+  assert.equal(p.settingsAfterKey.openrouterKey.includes(KEY), false, 'and never the key')
+  assert.equal(Buffer.from(p.settingsAfterKey.openrouterKey, 'base64').toString('utf8').includes(KEY), false, 'not even decoded once')
+  assert.deepEqual(p.settingsAfterKey.council, TWO)
+  assert.deepEqual(p.getInfoCouncilKey, { council: TWO, openRouterKey: p.keyStatus }, 'getInfo carries the council and the key status')
+  assert.equal(p.shortcutTab4.prevented, true)
+  assert.deepEqual(p.shortcutTab4.sent, [['panes:shortcut', { name: 'tab-4' }]], 'Ctrl+4 → tab-4')
+  assert.deepEqual(p.activeColumn, { mode: 'tabs', active: 'qwen' }, 'a renderer column may be the active tab')
+  assert.deepEqual(p.columnActions, { reloadPrevented: true, zoomPrevented: true, reloads: [0, 0, 0], zooms: [0, 0, 0] }, 'Ctrl+R / Ctrl+= on a column: consumed, no pane touched')
+  assert.match(stderr, /\[shortcuts\] reload: the active tab is a renderer column/)
+
   // a socket drop → the banner state reaches the renderer; the client is scheduling a reconnect
   assert.equal(p.bridgeAfterDrop, 'closed')
   assert.deepEqual(p.bridgeSentAfterDrop.at(-1), { connected: false })
@@ -339,9 +399,29 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     ['panes:bridge', { connected: false }],
     ['panes:analyst', { slot: 'chatgpt', visible: false, health: null }],
     ['panes:theme', { theme: 'light' }],
+    ['panes:council', TWO],
+    ['panes:openRouterKey', { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }],
   ]
   assert.deepEqual(p.replay, expectedReplay)
   assert.deepEqual(p.replayOnGetInfo, expectedReplay)
+
+  // the reconnect's hello_ack is another rising edge: the key goes out again and the renderer hears
+  // it settle (a re-push that failed would reach it the same way, as `error`); a clear → DELETE
+  assert.deepEqual(p.fetchesAfterReconnect, [
+    { method: 'PUT', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: { key: KEY } },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(TWO, 'web:chatgpt:analyst') },
+  ])
+  assert.deepEqual(p.keyStatesAfterReconnect, [{ configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }], 'the reconnect\'s push is announced')
+  assert.deepEqual(p.clearKey, { ok: true, value: { configured: false, prefix: '', length: 0, pushed: false } })
+  assert.deepEqual(p.fetchesAfterClear, [
+    { method: 'DELETE', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: null },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(TWO, 'web:chatgpt:analyst') },
+  ])
+  assert.deepEqual(p.keyStatesAfterClear, [
+    { configured: false, prefix: '', length: 0, pushed: false },
+    { configured: false, prefix: '', length: 0, pushed: true },
+  ], 'a clear: forgotten, then its DELETE pushed')
+  assert.deepEqual(p.keyStatusAfterClear, { configured: false, prefix: '', length: 0, pushed: true })
 
   // theme: settings.json (default dark) is applied to nativeTheme at start; panes:setTheme
   // persists + applies + announces; a bad payload or a foreign sender changes nothing
@@ -387,10 +467,23 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.settingsFile.analyst, 'chatgpt')
   assert.equal(p.settingsFile.analystVisible, false)
   assert.equal(p.settingsFile.theme, 'light', 'the theme choice is persisted for the next launch')
-  for (const key of ['views', 'analystViews', 'orchestrator', 'settings', 'bridge', 'chats', 'backend']) assert.ok(p.testGlobal.includes(key), key)
+  assert.deepEqual(p.settingsFile.council, TWO, 'the default council is persisted')
+  assert.equal(p.settingsFile.openrouterKey, null, 'cleared: no ciphertext left')
+  for (const key of ['views', 'analystViews', 'orchestrator', 'settings', 'bridge', 'chats', 'backend', 'openRouterKey']) assert.ok(p.testGlobal.includes(key), key)
 
   // the token never reaches a log line
   assert.equal(stderr.includes('wiring'), false, 'BRIDGE_TOKEN is never logged')
+  // the KEY reaches exactly one place — the body of the key PUT — and never a socket frame, a log
+  // line, the report's other fields or settings.json
+  assert.equal(stderr.includes(KEY), false, 'the key is never logged (stderr)')
+  const stdoutSansReport = stdout.split('\n').filter((l) => !l.startsWith('FAKE_ELECTRON_REPORT ')).join('\n')
+  assert.equal(stdoutSansReport.includes(KEY), false, 'the key is never logged (stdout)')
+  assert.equal(JSON.stringify(report.sockets).includes(KEY), false, 'the key never crosses the bridge socket')
+  const { fetches: _fetches, probes: _probes, ...rest } = report
+  assert.equal(JSON.stringify(rest).includes(KEY), false, 'no window / view / menu / theme record carries it')
+  const { fetchesAfterSet: _a, fetchesAfterReconnect: _b, ...otherProbes } = p
+  assert.equal(JSON.stringify(otherProbes).includes(KEY), false, 'no IPC reply, status or file content carries it')
+  assert.equal(JSON.stringify(report.fetches.filter((f) => !f.url.endsWith('/api/session/openrouter_key'))).includes(KEY), false, 'only the key endpoint ever sees it')
 })
 
 test('saved window bounds are restored (clamped) on the next launch and maximized is honoured', () => {
@@ -423,6 +516,7 @@ test('allowed flags and TRIPLEX_DISABLE_GPU=1 are appended to the command line; 
   assert.equal(report.views[0].loads[0], 'https://claude.ai/new', 'the real sites without TRIPLEX_SITES_JSON')
   assert.deepEqual(report.windows[0].loads, ['http://127.0.0.1:8021/app/'], 'default renderer URL = the backend /app/')
   assert.equal(report.sockets[0].url, 'ws://127.0.0.1:8021/api/bridge')
+  assert.equal(report.plainTextEncryption, null, 'outside TRIPLEX_E2E_APP=1 safeStorage is never switched to plaintext')
 })
 
 test('TRIPLEX_E2E_APP=1 refuses a non-loopback site URL (exit 3) before any window', () => {
@@ -464,6 +558,12 @@ test('TRIPLEX_BACKEND_URL on a non-loopback host is refused before any window (e
   assert.equal(allowed.status, 0, allowed.stderr)
   assert.equal(allowed.report.windows.length, 1)
   assert.equal(allowed.report.sockets[0].url, 'ws://10.0.0.5:8021/api/bridge')
+  // the bridge may attach remotely; the key and the defaults never follow: the hello_ack's rising
+  // edge (the probes drive it before they stop at the E2E-only Stage 3 checks) sent no session fetch
+  assert.ok(allowed.report.sockets[0].sent.some((f) => f.type === 'hello'), 'the handshake ran')
+  assert.deepEqual(allowed.report.fetches.filter((f) => f.url.includes('/api/session/')), [], 'nothing is pushed to a non-loopback backend')
+  assert.match(allowed.stderr, /\[openrouter-key\] the attached backend is not on this machine/)
+  assert.equal(allowed.stderr.includes(KEY), false)
   assert.match(allowed.stderr, /WARNING: TRIPLEX_ALLOW_REMOTE_BACKEND=1 .*REMOTE backend host 10\.0\.0\.5.*cleartext http/)
   assert.equal(allowed.stderr.includes('remote-secret'), false, 'the token is never logged')
 })

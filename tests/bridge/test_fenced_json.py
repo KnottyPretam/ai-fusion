@@ -27,10 +27,10 @@ import re
 from typing import Any
 
 from backend.llm import mock
+from backend.llm.bridge_protocol import BRIDGE_SLOTS
 from backend.prompts import QUOTED_DATA_NOTICE
 from backend.prompts import analyze as analyze_prompts
 from backend.prompts import fusion as fusion_prompts
-from backend.schemas import SLOT_IDS
 from tests.bridge.conftest import planted, planted_script
 from tests.bridge.test_flow import PROMPT, create, get, stream
 
@@ -151,7 +151,7 @@ async def test_web_challenge_asks_for_a_fence_and_a_fenced_defense_parses(
 ):
     fenced_defense = {
         (slot, "pane", "defense"): "```json\n" + planted(f"{slot}.defense.1.jsonl") + "\n```"
-        for slot in SLOT_IDS
+        for slot in BRIDGE_SLOTS
     }
     desk = await fake_desktop(planted_script(fenced_defense))
     cid = await create(client)
@@ -183,7 +183,7 @@ async def test_web_challenge_asks_for_a_fence_and_a_fenced_defense_parses(
         assert '"persuaded_by"' in text  # the key list is shared with the API variant
     # the fenced reply is what the challenged thread keeps, verbatim
     conv = await get(client, cid)
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         reply = [m for m in conv["threads"][slot] if m["kind"] == "fusion_reply"][0]["content"]
         assert reply.startswith("```json") and reply.endswith("```")
         assert json.loads(fence_body(reply))["stance"] in ("defend", "revise")

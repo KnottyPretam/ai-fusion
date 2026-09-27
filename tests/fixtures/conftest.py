@@ -12,24 +12,39 @@ from pathlib import Path
 
 import pytest
 
+from backend.schemas import DEFAULT_COUNCIL, SLOT_IDS
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS_DIR = REPO_ROOT / "backend" / "llm" / "fixtures" / "scenarios"
 FIXTURES_DOC = REPO_ROOT / "docs" / "fixtures.md"
 
+# Roles are the seven catalog slots (2026-09-27) plus the analyst; a scenario's own council is
+# what `scenario_council` reads back from its README.
 FIXTURE_NAME_RE = re.compile(
-    r"^(?P<role>claude|chatgpt|grok|analyst)\.(?P<purpose>chat|extraction|defense|convergence)"
+    r"^(?P<role>" + "|".join([*SLOT_IDS, "analyst"]) + r")"
+    r"\.(?P<purpose>chat|extraction|defense|convergence)"
     r"\.(?P<n>[1-9]\d*)\.jsonl$"
 )
 ROLE_PURPOSES = {
-    "claude": {"chat", "defense"},
-    "chatgpt": {"chat", "defense"},
-    "grok": {"chat", "defense"},
+    **{slot: {"chat", "defense"} for slot in SLOT_IDS},
     "analyst": {"extraction", "convergence"},
 }
 
 
 def scenario_dirs() -> list[Path]:
     return sorted(p for p in SCENARIOS_DIR.iterdir() if p.is_dir())
+
+
+def scenario_council(scenario_dir: Path) -> tuple[str, ...]:
+    """The council a scenario was written for: the README's `council` key, else the classic
+    three (`DEFAULT_COUNCIL`); its labels are R1..Rn in that order (the fixed mock map)."""
+    exp = readme_expectations(scenario_dir)
+    council = exp.get("council")
+    return tuple(council) if council else tuple(DEFAULT_COUNCIL)
+
+
+def council_labels_of(council: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(f"R{i}" for i in range(1, len(council) + 1))
 
 
 def fixture_files() -> list[Path]:

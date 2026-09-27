@@ -1,17 +1,21 @@
 // desktop/main/menu.js — the application menu (Stage 2 electron-bridge; contract §2 shortcuts).
 //
 //   Triplex  Quit
-//   Panes    the shortcut table of shortcuts.js (Pane 1/2/3, Toggle, Focus prompt, New chat
+//   Panes    the shortcut table of shortcuts.js (Pane 1…5, Toggle, Focus prompt, New chat
 //            everywhere, Zoom, Reload pane, Inspect pane (dev))
 //   Site     Reload selectors · Save DOM snapshot of the active pane · Show analyst page (reveals
-//            the hidden analyst view as the fourth tab) · Sign out of ChatGPT / Claude / Grok
+//            the hidden analyst view as the fourth tab) · Sign out of <site> for each of the three
+//            sites with a Stage-1 adapter (ChatGPT / Claude / Grok)
 //   Edit     the standard roles
 //
 // `autoHideMenuBar` keeps it hidden (Alt reveals it); the accelerators are the fallback for keys
-// no view holds. Pure module: `shortcuts.menuTemplate()` and every action are injected, so
-// node --test walks the template and clicks the items.
+// no view holds. The active tab may be a renderer column (a token / local council member) since
+// 2026-09-27: the snapshot item is then a warned no-op, as the pane-only shortcuts are. Pure
+// module: `shortcuts.menuTemplate()` and every action are injected, so node --test walks the
+// template and clicks the items.
 
 import { SLOTS } from './sites.js'
+import { isCouncilSlot } from './council.js'
 import { APP_TITLE } from './branding.js'
 
 export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok' })
@@ -27,10 +31,13 @@ export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude',
  */
 export function buildMenuTemplate({ shortcuts, dev = false, getActive, actions = {}, log = console } = {}) {
   const base = shortcuts && typeof shortcuts.menuTemplate === 'function' ? shortcuts.menuTemplate() : [{ label: APP_TITLE, submenu: [{ role: 'quit' }] }]
+  /** The active site pane; null for a renderer column; the first pane when unknown. */
   const active = () => {
     const slot = typeof getActive === 'function' ? getActive() : null
-    return SLOTS.includes(slot) ? slot : SLOTS[0]
+    if (SLOTS.includes(slot)) return slot
+    return isCouncilSlot(slot) ? null : SLOTS[0]
   }
+  const warn = (m) => log && typeof log.warn === 'function' && log.warn(`[menu] ${m}`)
   const run = (name, fn, ...args) => {
     try {
       const r = typeof fn === 'function' ? fn(...args) : undefined
@@ -50,7 +57,14 @@ export function buildMenuTemplate({ shortcuts, dev = false, getActive, actions =
     label: 'Site',
     submenu: [
       { label: 'Reload selectors', click: () => run('reload selectors', actions.reloadSelectors) },
-      { label: 'Save DOM snapshot of the active pane', click: () => run('save DOM snapshot', actions.saveSnapshot, active()) },
+      {
+        label: 'Save DOM snapshot of the active pane',
+        click: () => {
+          const slot = active()
+          if (slot === null) return warn('save DOM snapshot: the active tab is a renderer column, not a site pane; nothing to snapshot')
+          return run('save DOM snapshot', actions.saveSnapshot, slot)
+        },
+      },
       ...(typeof actions.showAnalyst === 'function' ? [{ label: 'Show analyst page', click: () => run('show analyst page', actions.showAnalyst) }] : []),
       { type: 'separator' },
       ...SLOTS.map((slot) => ({ label: `Sign out of ${SITE_LABELS[slot]}`, click: () => run(`sign out of ${SITE_LABELS[slot]}`, actions.signOut, slot) })),

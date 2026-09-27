@@ -8,7 +8,7 @@ import uuid
 import pytest
 
 from backend.config import DEFAULT_SLOT_CONFIG
-from backend.schemas import SLOT_IDS, ModelMeta, SlotConfig
+from backend.schemas import DEFAULT_COUNCIL, ModelMeta, SlotConfig
 from backend.store import conversations as store
 from tests.conftest import DEFAULT_ANON, DEFAULT_PROMPT, DEFAULT_RESPONSES
 
@@ -51,7 +51,7 @@ async def test_create_with_empty_body_uses_defaults(client):
     assert set(body) == PUBLIC_KEYS and "anon_map" not in body
     assert body["title"] == "New conversation" and body["schema_version"] == 1
     assert body["slot_config"] == DEFAULT_SLOT_CONFIG.model_dump()
-    assert body["threads"] == {s: [] for s in SLOT_IDS} and body["turns"] == []
+    assert body["threads"] == {s: [] for s in DEFAULT_COUNCIL} and body["turns"] == []
     assert uuid.UUID(body["id"]).version == 4 and body["created_at"].endswith("Z")
     assert body["created_at"] == body["updated_at"]
     r = await client.post("/api/conversations")  # no body at all is fine too
@@ -75,6 +75,28 @@ async def test_create_rejects_a_malformed_slot_config(client):
     r = await client.post("/api/conversations", json={"slot_config": _cfg(max_iterations=6)})
     assert r.status_code == 422 and isinstance(r.json()["detail"], list)
     assert (await client.get("/api/conversations")).json() == []
+
+
+async def test_create_runs_validate_slot_config_like_a_put(client, monkeypatch):
+    """A body config is checked before anything is written -- the desktop creates WITH a council,
+    so the 422s a PUT would give (web_slot_mismatch first, then unsupported_effort) apply here."""
+    cfg = _cfg()
+    cfg["slots"]["chatgpt"]["model"] = "web:claude"
+    r = await client.post("/api/conversations", json={"slot_config": cfg})
+    assert r.status_code == 422
+    assert r.json()["detail"] == {"error": "web_slot_mismatch", "slot": "chatgpt", "model": "web:claude"}
+    monkeypatch.setattr(
+        "backend.llm.catalog.get_meta",
+        lambda model: ModelMeta(id=model, name=model, efforts=["off"]) if model == "org/m" else None,
+    )
+    cfg = _cfg()
+    cfg["slots"]["grok"] = {"model": "org/m", "effort": "high"}
+    r = await client.post("/api/conversations", json={"slot_config": cfg})
+    assert r.status_code == 422 and r.json()["detail"]["error"] == "unsupported_effort"
+    assert (await client.get("/api/conversations")).json() == []
+    cfg["slots"]["grok"]["effort"] = "off"
+    r = await client.post("/api/conversations", json={"slot_config": cfg})
+    assert r.status_code == 201 and r.json()["slot_config"] == cfg
 
 
 async def test_list_newest_updated_first_with_summary_shape(client):
@@ -246,7 +268,7 @@ async def test_persisted_conversation_is_served_by_the_api(client, persisted_con
     assert len(body["turns"]) == 1 and body["turns"][0]["type"] == "send"
     assert body["turns"][0]["prompt"] == DEFAULT_PROMPT
     assert body["turns"][0]["responses"] == DEFAULT_RESPONSES
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m["content"] for m in body["threads"][slot]] == [
             DEFAULT_PROMPT,
             DEFAULT_RESPONSES[slot],

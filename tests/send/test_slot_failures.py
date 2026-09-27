@@ -24,12 +24,12 @@ import pytest
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.features import send as send_mod
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, Delta, Usage
+from backend.schemas import DEFAULT_COUNCIL, Delta, Usage
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.send.conftest import assert_stream_invariants, for_slot, of_type, one, slot_text
 
 SEND_FIXTURES = Path(__file__).resolve().parent / "fixtures"
-MODEL = {slot: DEFAULT_SLOT_CONFIG.slots[slot].model for slot in SLOT_IDS}
+MODEL = {slot: DEFAULT_SLOT_CONFIG.slots[slot].model for slot in DEFAULT_COUNCIL}
 EMPTY_LENGTH = "model returned no text (finish_reason=length)"
 EMPTY_STOP = "model returned no text (finish_reason=stop)"
 
@@ -113,7 +113,7 @@ async def test_reasoning_only_reply_is_empty_reply_and_the_thread_stays_replayab
         one(events, "slot_done", slot)
     done = events[-1]
     assert done["usage"]["totals"]["calls"] == 3  # the empty call is still billed
-    assert {u["role"] for u in done["usage"]["calls"]} == set(SLOT_IDS)
+    assert {u["role"] for u in done["usage"]["calls"]} == set(DEFAULT_COUNCIL)
     claude_usage = [u for u in done["usage"]["calls"] if u["role"] == "claude"]
     assert len(claude_usage) == 1
     assert claude_usage[0]["reasoning_tokens"] == 64 and claude_usage[0]["cost_usd"] == 0.0007
@@ -227,7 +227,7 @@ async def test_empty_reply_scenario_through_the_real_parser(
     events = await send(cid, "Which BMI088 register selects the gyroscope range?")
     assert_stream_invariants(events)
     assert [c["fixture"] for c in mock.calls] == [
-        f"empty_reply/{slot}.chat.1.jsonl" for slot in SLOT_IDS
+        f"empty_reply/{slot}.chat.1.jsonl" for slot in DEFAULT_COUNCIL
     ]
 
     claude = one(events, "slot_error", "claude")

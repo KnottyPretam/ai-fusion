@@ -36,7 +36,7 @@ from typing import Any
 import pytest
 
 from backend.llm import bridge
-from backend.schemas import SLOT_IDS
+from backend.llm.bridge_protocol import BRIDGE_SLOTS
 from tests.e2e.conftest import fixture_text
 
 SCENARIO = "planted_factual"
@@ -52,8 +52,8 @@ def hello(**overrides: Any) -> dict[str, Any]:
         "protocol": 1,
         "token": HELLO_TOKEN,
         "version": "0.1.0",
-        "sites": list(SLOT_IDS),
-        "capture": {slot: True for slot in SLOT_IDS},
+        "sites": list(BRIDGE_SLOTS),
+        "capture": {slot: True for slot in BRIDGE_SLOTS},
         "analyst": {"slot": "chatgpt"},
     }
     frame.update(overrides)
@@ -70,7 +70,7 @@ def planted_script(
 ) -> dict[Any, Any]:
     """Every (slot, view, purpose) the planted_factual flow needs, from the committed fixtures."""
     script: dict[Any, Any] = {}
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         script[(slot, "pane", "chat")] = planted(f"{slot}.chat.1.jsonl")
         script[(slot, "pane", "defense")] = planted(f"{slot}.defense.1.jsonl")
     script[(analyst, "analyst", "extraction")] = planted("analyst.extraction.1.jsonl")
@@ -117,7 +117,7 @@ async def attached() -> FakeConnection:
 
 @pytest.fixture
 def web_env(monkeypatch):
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         monkeypatch.setenv(f"SLOT_{slot.upper()}_MODEL", f"web:{slot}")
         monkeypatch.setenv(f"SLOT_{slot.upper()}_EFFORT", "off")
     monkeypatch.setenv("ANALYST_MODEL", "web:chatgpt:analyst")

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from backend.features.fusion import run_fusion
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, FusionTurn
+from backend.schemas import DEFAULT_COUNCIL, FusionTurn
 from backend.store import conversations as store
 from tests.fusion.conftest import (
     assert_fusion_stream_invariants,
@@ -17,8 +17,8 @@ from tests.fusion.conftest import (
     types_of,
 )
 
-CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in SLOT_IDS]
-DEFENSE_FILES = [f"{slot}.defense.1.jsonl" for slot in SLOT_IDS]
+CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in DEFAULT_COUNCIL]
+DEFENSE_FILES = [f"{slot}.defense.1.jsonl" for slot in DEFAULT_COUNCIL]
 
 
 async def test_planted_factual_auto_runs_analyze_then_fuses(prepare, fusion):
@@ -94,7 +94,7 @@ async def test_baseline_auto_run_ends_with_nothing_to_fuse_and_no_fusion_turn(pr
     assert sorted(files[:3]) == sorted(CHAT_FILES)
     assert files[3:] == ["analyst.extraction.1.jsonl"]
     assert calls("defense") == [] and calls("convergence") == []
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert len(after.threads[slot]) == 2  # nothing appended
 
     # Now that an ok Analyze exists, the same request is refused before the stream.

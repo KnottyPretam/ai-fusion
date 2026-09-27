@@ -7,7 +7,7 @@ import json
 
 from backend.config import MAX_TOKENS_STAGE
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.send.conftest import assert_stream_invariants, one, slot_text
 
@@ -116,7 +116,7 @@ async def test_continue_after_send_carries_only_that_slots_history(send, cont, c
     await send(cid)
     await send(cid, "Second question about the accelerometer.")
     conv = await get_conv(cid)
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         mock.reset()
         events = await cont(cid, slot, f"Follow-up for this column only ({slot}).")
         assert_stream_invariants(events, slots=(slot,))

@@ -239,6 +239,77 @@ export function fakeTimers() {
   return api
 }
 
+/**
+ * A safeStorage-like object: `encryptString` hex-encodes behind an `enc:` marker (so the base64 the
+ * settings file holds never contains the plaintext), `decryptString` reverses it and throws on any
+ * other blob; `available` / `backend` are switchable; `setUsePlainTextEncryption` is recorded.
+ */
+export function fakeSafeStorage({ available = true, backend = 'gnome_libsecret' } = {}) {
+  return {
+    available,
+    backend,
+    plainText: null,
+    encrypted: 0,
+    decrypted: 0,
+    isEncryptionAvailable() {
+      return this.available
+    },
+    getSelectedStorageBackend() {
+      return this.backend
+    },
+    setUsePlainTextEncryption(v) {
+      this.plainText = !!v
+    },
+    encryptString(s) {
+      this.encrypted += 1
+      return Buffer.from(`enc:${Buffer.from(String(s), 'utf8').toString('hex')}`)
+    },
+    decryptString(buf) {
+      this.decrypted += 1
+      const t = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf)
+      if (!t.startsWith('enc:')) throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString')
+      return Buffer.from(t.slice(4), 'hex').toString('utf8')
+    },
+  }
+}
+
+/**
+ * A recording fetch: every call lands in `calls` as {url, method, headers, body, signal}; `answer(call)`
+ * decides the response — a number is an HTTP status, an Error is thrown (a transport failure), a
+ * function is called, 'hang' leaves the promise pending until the signal aborts (AbortError).
+ */
+export function fakeFetch(answer = 200) {
+  const calls = []
+  const fetch = (url, init = {}) => {
+    const call = { url: String(url), method: init.method || 'GET', headers: init.headers || {}, body: typeof init.body === 'string' ? init.body : null, signal: init.signal || null }
+    calls.push(call)
+    const a = typeof answer === 'function' ? answer(call) : answer
+    if (a instanceof Error) return Promise.reject(a)
+    if (a === 'hang') {
+      return new Promise((_resolve, reject) => {
+        if (call.signal && typeof call.signal.addEventListener === 'function') {
+          call.signal.addEventListener('abort', () => {
+            const e = new Error('This operation was aborted')
+            e.name = 'AbortError'
+            reject(e)
+          })
+        }
+      })
+    }
+    const status = Number(a) || 200
+    return Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => ({}) })
+  }
+  fetch.calls = calls
+  return fetch
+}
+
+/** A transport failure as Node's fetch reports one: `fetch failed` with the errno in `cause.code`. */
+export function connRefused() {
+  const e = new Error('fetch failed')
+  e.cause = { code: 'ECONNREFUSED' }
+  return e
+}
+
 /** A logger that records instead of printing. */
 export function fakeLog() {
   const log = { lines: [] }
@@ -248,7 +319,7 @@ export function fakeLog() {
   return log
 }
 
-/** Site table pointing the three slots at a loopback fake site. */
+/** Site table pointing the three sites (the ones with a Stage-1 adapter) at a loopback fake site. */
 export function fakeSites(base = 'http://127.0.0.1:5199') {
   const out = {}
   for (const slot of ['claude', 'chatgpt', 'grok']) {

@@ -14,7 +14,48 @@
 
 // docs/api-contract.md: RANK is duplicated locally (state/* is frozen).
 export const RANK = { low: 0, medium: 1, high: 2 }
-export const LABELS = ['R1', 'R2', 'R3']
+export const LABELS = ['R1', 'R2', 'R3', 'R4', 'R5']
+
+// Council (2026-09-27): a conversation seats 2..5 of the 7-vendor catalog and uses the label prefix
+// of its size (R1..Rn). Mirrored per feature (features never import each other): the same three
+// helpers live in analyze/refactorSlice.js and fusion/derive.js.
+export const SLOT_IDS = ['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo']
+export const DEFAULT_COUNCIL_SIZE = 3
+
+/** R1..Rn for a council of n (clamped to the five labels; below 2 reads as the classic three). */
+export function labelsFor(n) {
+  const size = Number.isInteger(n) && n >= 2 ? Math.min(n, LABELS.length) : DEFAULT_COUNCIL_SIZE
+  return LABELS.slice(0, size)
+}
+
+/** The council a persisted turn was run for, in catalog order (its `slot_config.slots` keys, else its `responses` keys); [] for anything else. */
+export function councilOfTurn(turn) {
+  const cfg = turn && turn.slot_config && turn.slot_config.slots
+  const source = cfg && typeof cfg === 'object' ? cfg : turn && turn.responses && typeof turn.responses === 'object' ? turn.responses : null
+  return source ? SLOT_IDS.filter((s) => s in source) : []
+}
+
+/** "two" … "five" for a council size (the n=3 wording stays byte-identical to the fixed-three days). */
+export function countWord(n) {
+  const words = { 2: 'two', 3: 'three', 4: 'four', 5: 'five' }
+  return words[n] || String(n)
+}
+
+/** How many agents a send turn seats (the label prefix its Analyze / Fusion use); 3 when unknown. */
+export function councilSize(turn) {
+  const n = councilOfTurn(turn).length
+  return n >= 2 ? n : DEFAULT_COUNCIL_SIZE
+}
+
+/**
+ * `councilSize` of the send turn, else — before the first Send lands — of the open conversation's
+ * own slot config (a two-agent conversation reads "two" from the start, not "three"); 3 when
+ * neither is known.
+ */
+export function councilSizeFor(turn, slotConfig) {
+  if (turn) return councilSize(turn)
+  return councilSize(slotConfig && typeof slotConfig === 'object' && slotConfig.slots ? { slot_config: slotConfig } : null)
+}
 
 /**
  * Message prefix of the `not_captured` slot error, MIRRORED from
@@ -38,11 +79,19 @@ export function latestSendTurn(conversation) {
   return null
 }
 
-// Complete when every slot in `responses` is non-null (Analyze button rule).
+// Complete when every slot of the turn's OWN council has a non-null response (Analyze button
+// rule): a two-agent turn is complete with two replies, a five-agent one needs five.
 export function isSendTurnComplete(turn) {
   if (!turn || !turn.responses || typeof turn.responses !== 'object') return false
-  const values = Object.values(turn.responses)
-  return values.length > 0 && values.every((v) => v !== null && v !== undefined)
+  const council = councilOfTurn(turn)
+  return council.length > 0 && council.every((s) => turn.responses[s] !== null && turn.responses[s] !== undefined)
+}
+
+/** The send turn an analyze turn (or an `ofTurn` id) was run on, else the latest send turn. */
+export function sendTurnFor(conversation, ofTurn) {
+  const turns = (conversation && conversation.turns) || []
+  if (ofTurn) for (const t of turns) if (t && t.type === 'send' && t.id === ofTurn) return t
+  return latestSendTurn(conversation)
 }
 
 // Newest analyze turn with status 'ok' for the given send turn id.

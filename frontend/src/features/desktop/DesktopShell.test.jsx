@@ -164,7 +164,7 @@ describe('DesktopShell: shortcuts through the composed shell', () => {
     act(() => fake.emit.turn({ slot: 'claude', phase: 'replying' }))
     expect(screen.getByTestId('pane-claude-phase')).toHaveTextContent('replying…')
     unmount()
-    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 1, turn: 1, analyst: 1, theme: 1 })
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 1, turn: 1, analyst: 1, theme: 1, council: 1, openRouterKey: 1 })
   })
 })
 
@@ -199,7 +199,7 @@ describe('DesktopShell: localStorage persistence', () => {
 
   test('invalid stored values fall back to the defaults', () => {
     localStorage.setItem(PERSIST_KEYS.mode, 'cinema')
-    localStorage.setItem(PERSIST_KEYS.active, 'gemini')
+    localStorage.setItem(PERSIST_KEYS.active, 'bing')
     localStorage.setItem(PERSIST_KEYS.targets, 'not json')
     mount()
     expect(screen.getByTestId('deck-mode-split')).toHaveAttribute('aria-pressed', 'true')

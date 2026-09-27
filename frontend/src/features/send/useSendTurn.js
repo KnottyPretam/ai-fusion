@@ -3,7 +3,7 @@
 // and by the desktop PromptBar (features/desktop/PromptBar.jsx). One turn:
 //   no conversation -> createConversation(dispatch, {}) first — the lock is taken BEFORE this
 //                      round-trip, so a second call during POST /api/conversations never creates
-//                      a second conversation plus a second three-model Send for one intended turn
+//                      a second conversation plus a second whole-council Send for one intended turn
 //   run('send', url, body)                  (a solo continue also streams under feature key 'send')
 //   then loadConversation(dispatch, id, { isCurrent })   (the persisted thread is the source of truth)
 //   and, after the conversation's first send, loadConversations(dispatch) (the backend auto-titles).
@@ -21,29 +21,34 @@
 // itself refuses a second call while one is in flight (synchronously, before any render).
 //
 // Body rule (docs/desktop-contract.md §6): `startTurn({ prompt, slots })` with `slots` a strict
-// subset of the three slot ids posts `{ prompt, slots }` and `pending.slots` lists exactly those
-// slots; omitted / null / not an array / empty / all three posts `{ prompt }` with all three
-// pending — the web pane's unchanged behaviour. A solo continue (`slot` set) ignores `slots`.
+// subset of the COUNCIL posts `{ prompt, slots }` and `pending.slots` lists exactly those slots;
+// omitted / null / not an array / empty / the whole council posts `{ prompt }` with the whole
+// council pending — the web pane's unchanged behaviour. A solo continue (`slot` set) ignores
+// `slots`. Council (2026-09-27): the council the subset is judged against is the conversation's
+// own (`councilOf(conv.slot_config)`, read AFTER the create round-trip so a first Send judges the
+// council the backend actually stamped), else the desktop default in `panes.council` (a slice read
+// by KEY — features never import each other), else DEFAULT_COUNCIL.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useRunStream } from '../../api/runStream.js'
 import { createConversation, loadConversation, loadConversations } from '../../api/http.js'
 import './register.js'
-import { SLOT_IDS } from './slice.js'
+import { DEFAULT_COUNCIL, councilOf } from './slice.js'
 
 export const STREAM_KEYS = ['send', 'analyze', 'fusion']
 
-// The slots a Send targets when `slots` names a strict subset: known ids only, de-duplicated, in
-// SLOT_IDS order (what the backend does too); null otherwise (= all three, the default).
-export function subsetSlots(slots) {
+// The slots a Send targets when `slots` names a strict subset of the council: council members
+// only, de-duplicated, in council (= catalog) order — what the backend's resolve_slots does too;
+// null otherwise (= the whole council, the default).
+export function subsetSlots(slots, council = DEFAULT_COUNCIL) {
   if (!Array.isArray(slots)) return null
-  const list = SLOT_IDS.filter((s) => slots.includes(s))
-  return list.length && list.length < SLOT_IDS.length ? list : null
+  const list = council.filter((s) => slots.includes(s))
+  return list.length && list.length < council.length ? list : null
 }
 
-// POST …/send body: `{ prompt }` by default, `{ prompt, slots }` for a strict subset.
-export function sendBody(prompt, slots) {
-  const subset = subsetSlots(slots)
+// POST …/send body: `{ prompt }` by default, `{ prompt, slots }` for a strict subset of the council.
+export function sendBody(prompt, slots, council = DEFAULT_COUNCIL) {
+  const subset = subsetSlots(slots, council)
   return subset ? { prompt, slots: subset } : { prompt }
 }
 
@@ -52,6 +57,7 @@ export function useSendTurn() {
   const run = useRunStream()
   const conversation = useSlice('conversation')
   const streams = useSlice('streams') || {}
+  const panes = useSlice('panes') // desktop only; the web app never registers it
   const [pending, setPending] = useState(null) // { prompt, slots, convId } while a turn is in flight
   const [inFlight, setInFlight] = useState(false) // submit -> post-stream refetch settled
   const [localError, setLocalError] = useState(null)
@@ -83,7 +89,7 @@ export function useSendTurn() {
       setBannerFor(conversation ? conversation.id : null)
       // Lock first: the create round-trip below is part of the turn. Unlocked, a second Enter
       // during POST /api/conversations would run with the same `conversation === null` closure
-      // and create a second conversation plus a second three-model Send for one intended turn.
+      // and create a second conversation plus a second whole-council Send for one intended turn.
       inFlightRef.current = true
       setInFlight(true)
       let conv = conversation
@@ -104,8 +110,10 @@ export function useSendTurn() {
       setBannerFor(id)
       const firstSend = !slot && !(conv.turns || []).length
       const url = slot ? `/api/conversations/${id}/slots/${slot}/continue` : `/api/conversations/${id}/send`
-      const body = slot ? { prompt: text } : sendBody(text, slots)
-      setPending({ prompt: text, slots: slot ? [slot] : body.slots || SLOT_IDS, convId: id })
+      // The council this turn is judged against: the conversation's own, once it exists.
+      const council = councilOf(conv.slot_config) || councilOf(panes && panes.council) || DEFAULT_COUNCIL
+      const body = slot ? { prompt: text } : sendBody(text, slots, council)
+      setPending({ prompt: text, slots: slot ? [slot] : body.slots || council, convId: id })
       let ok = true
       try {
         await run('send', url, body)
@@ -137,7 +145,7 @@ export function useSendTurn() {
       }
       return ok
     },
-    [conversation, dispatch, run],
+    [conversation, dispatch, run, panes],
   )
 
   const clearError = useCallback(() => {

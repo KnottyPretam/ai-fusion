@@ -12,8 +12,8 @@ import pytest
 from starlette.testclient import TestClient
 
 from backend.llm import bridge
+from backend.llm.bridge_protocol import BRIDGE_SLOTS
 from backend.routers import bridge as bridge_router
-from backend.schemas import SLOT_IDS
 from tests.bridge.conftest import FakeConnection, hello
 
 TOKEN = "9f86d081884c7d659a2feaa0c55ad015"
@@ -53,7 +53,7 @@ def test_hello_is_acked_and_status_reports_connected(tc):
         assert st["connected"] is True and st["protocol"] == 1 and st["version"] == "0.1.0"
         assert st["analyst"] == "chatgpt" and st["inflight"] == 0
         assert isinstance(st["since"], str)
-        assert all(st["sites"][s]["capture"] is True for s in SLOT_IDS)
+        assert all(st["sites"][s]["capture"] is True for s in BRIDGE_SLOTS)
     wait_until(lambda: status(tc)["connected"] is False)
 
 
@@ -264,7 +264,7 @@ async def test_failed_ack_send_never_attaches(monkeypatch, caplog):
 def test_status_shape(tc):
     st = status(tc)
     assert set(st) == {"connected", "protocol", "version", "since", "sites", "analyst", "inflight"}
-    assert set(st["sites"]) == set(SLOT_IDS)
+    assert set(st["sites"]) == set(BRIDGE_SLOTS)
     for site in st["sites"].values():
         assert set(site) == {"capture", "health", "health_ts"}
     assert st == bridge.hub.status()
@@ -293,7 +293,7 @@ def test_cache_frames_update_status(tc):
         ws.send_json({"type": "analyst", "analyst": {"slot": "grok"}})
         wait_until(lambda: status(tc)["analyst"] == "grok")
         st = status(tc)
-        assert [st["sites"][s]["capture"] for s in SLOT_IDS] == [False, False, True]
+        assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, False, True]
         assert st["sites"]["claude"]["health"] == health
         assert isinstance(st["sites"]["claude"]["health_ts"], int)
 

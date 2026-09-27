@@ -1,0 +1,17 @@
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"Every peer "},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"cites the datasheet's digital interface spec"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ification with a maximum SP"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"I clock frequency of 10 MHz, and I h"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ad inferred 20 MHz from the pol"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ling rates flight c"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ontrollers use rather than from the interfac"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"e specification itself; the"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" specified maximum is 10 MHz.\", \"rev"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ised_claim\": \"The maximum SPI c"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"lock frequency is 1"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"0 MHz.\", \"confidence\": 0.86, \"persuaded_by\":"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"the datasheet's digital i"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"nterface specification giving a 10 M"},"finish_reason":null}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Hz maximum SPI clock\"}"},"finish_reason":"stop"}]}
+{"id":"gen-3245b449aef526c0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":593,"completion_tokens":124,"total_tokens":717,"cost":0.00090975,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

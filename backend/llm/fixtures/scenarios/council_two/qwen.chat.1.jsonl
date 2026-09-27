@@ -1,0 +1,14 @@
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.summary","id":"rs-ca02faa1-0","index":0,"summary":"Recalling common I2C pull-up defaults."}]},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"A 10 kOhm pull-up "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"on each line is the standard "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"value and works "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"at 3.3 V. The exact "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"value depends on the bus capacitance: a "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"longer bus "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with more devices needs a "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"stronger (lower) pull-up to "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"meet the rise-time requirement, but 10 "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"kOhm is a "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"fine default for a small "},"finish_reason":null}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"board."},"finish_reason":"stop"}]}
+{"id":"gen-ca02faa18fd15cd0","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":41,"completion_tokens":77,"total_tokens":118,"cost":0.0004012,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":10}}}

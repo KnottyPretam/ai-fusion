@@ -62,7 +62,6 @@ from ..llm.errors import COST_CAP_EXCEEDED
 from ..prompts import preparse as preparse_prompts
 from ..prompts import refactor as prompts
 from ..schemas import (
-    LABELS,
     Conversation,
     FeatureUsage,
     KnowledgeGraph,
@@ -71,6 +70,8 @@ from ..schemas import (
     Refactoring,
     RefactorTurn,
     SendTurn,
+    council_labels,
+    council_of,
 )
 from ..store import conversations as store
 from .analyze import (
@@ -221,7 +222,7 @@ def _max_tokens(model: str) -> int:
 
 
 async def _refactor_reply(
-    *, model: str, question: str, label: Label, response: str, fenced: bool
+    *, model: str, question: str, label: Label, response: str, fenced: bool, n: int = 3
 ) -> tuple[RefactoredReply | None, list[str], FeatureUsage, str | None]:
     """One label's reply, in pieces when it is too big for one message. The claims of every piece are
     concatenated; the SUMMARY is the first piece's, because a reply states what it recommends near
@@ -238,7 +239,7 @@ async def _refactor_reply(
         value, raw, call_usage, error = await validated_call(
             model=model,
             messages=prompts.reply_messages(
-                question, label, piece, fenced=fenced, max_claims=per_piece
+                question, label, piece, fenced=fenced, max_claims=per_piece, n=n
             ),
             schema_model=_ReplyResult,
             fenced=fenced,
@@ -297,9 +298,12 @@ async def _produce(
         raw_attempts.append(raw)
 
         replies: list[RefactoredReply] = []
+        # The send turn's own council (2..5 agents, 2026-09-27): one reply call per label R1..Rn,
+        # and the reply rules count the peers accordingly.
+        labels = council_labels(council_of(send_turn.slot_config))
         if mapped is not None:
             assert isinstance(mapped, _MapResult)
-            for label in LABELS:
+            for label in labels:
                 response = responses[label]
                 queue.put_nowait(
                     {"type": "refactor_retry", "error": reply_notice(label, len(response))}
@@ -315,7 +319,12 @@ async def _produce(
                         }
                     )
                 reduced, raws, reply_usage, reply_error = await _refactor_reply(
-                    model=model, question=question, label=label, response=response, fenced=fenced
+                    model=model,
+                    question=question,
+                    label=label,
+                    response=response,
+                    fenced=fenced,
+                    n=len(labels),
                 )
                 usage.merge(reply_usage)
                 raw_attempts.extend(raws)

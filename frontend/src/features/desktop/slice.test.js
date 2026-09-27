@@ -7,6 +7,8 @@ import {
   NOT_CAPTURED,
   NOT_CAPTURED_MESSAGE_PREFIX,
   PERSIST_KEYS,
+  DEFAULT_COUNCIL,
+  SITES,
   SLOT_IDS,
   allCaptureTouched,
   healthLevel,
@@ -55,7 +57,7 @@ describe('panes slice: shape and reducer', () => {
     expect(r.mode).toBe('tabs')
     expect(r.active).toBe('grok')
     expect(r.targets).toEqual({ claude: false, chatgpt: true, grok: true })
-    const bad = initialPanes({ mode: 'stack', active: 'gemini', targets: 'x' })
+    const bad = initialPanes({ mode: 'stack', active: 'bing', targets: 'x' })
     expect(bad.mode).toBe('split')
     expect(bad.active).toBe('chatgpt')
     expect(bad.targets).toEqual({ claude: true, chatgpt: true, grok: true })
@@ -67,13 +69,14 @@ describe('panes slice: shape and reducer', () => {
       { type: 'panes/mode', mode: 'split' },
       { type: 'panes/mode', mode: 'stack' },
       { type: 'panes/active', active: 'chatgpt' },
-      { type: 'panes/active', active: 'gemini' },
+      { type: 'panes/active', active: 'bing' },
       { type: 'panes/target', slot: 'claude', on: true },
       { type: 'panes/target', slot: 'nope', on: false },
-      { type: 'panes/health', slot: 'gemini', health: health() },
+      { type: 'panes/health', slot: 'bing', health: health() },
+      { type: 'panes/health', slot: 'qwen', health: health() }, // a catalog vendor without a site: no health map entry
       { type: 'panes/health', slot: 'claude', health: null },
       { type: 'panes/sendResult', results: {} },
-      { type: 'panes/sendResult', results: { gemini: { ok: true } } },
+      { type: 'panes/sendResult', results: { bing: { ok: true } } },
       { type: 'panes/zoom', slot: 'claude', factor: 1 },
       { type: 'panes/zoom', slot: 'claude', factor: -1 },
       { type: 'panes/zoom', slot: 'claude', factor: 'big' },
@@ -82,7 +85,11 @@ describe('panes slice: shape and reducer', () => {
       // send-stream events that carry no per-slot outcome, or belong to another feature
       { type: 'sse', feature: 'send', event: { type: 'slot_delta', slot: 'claude', text: 'x' } },
       { type: 'sse', feature: 'send', event: { type: 'slot_start', slot: 'claude' } },
-      { type: 'sse', feature: 'send', event: { type: 'slot_done', slot: 'gemini' } },
+      { type: 'sse', feature: 'send', event: { type: 'slot_done', slot: 'bing' } },
+      { type: 'panes/council', council: { slots: { claude: { model: 'web:claude' } } } }, // one member: invalid
+      { type: 'panes/council', council: { slots: { claude: { model: 'web:claude' }, bing: { model: 'x/y' } } } },
+      { type: 'panes/council', council: null }, // already null
+      { type: 'panes/openRouterKey', status: null }, // already null
       { type: 'sse', feature: 'send', event: { type: 'turn_start', slots: ['claude'] } },
       { type: 'sse', feature: 'send', event: null },
       { type: 'sse', feature: 'send' },
@@ -146,9 +153,14 @@ describe('panes slice: shape and reducer', () => {
 })
 
 describe('panes slice: derivations', () => {
-  test('selectedTargets keeps SLOT order and drops unknown keys', () => {
-    expect(selectedTargets({ grok: true, claude: true, chatgpt: false, gemini: true })).toEqual(['claude', 'grok'])
-    expect(selectedTargets(null)).toEqual([])
+  test('selectedTargets keeps council order, drops unknown keys, and reads an absent member as on', () => {
+    expect(selectedTargets({ grok: true, claude: true, chatgpt: false, bing: true })).toEqual(['claude', 'grok'])
+    // absent = on: a freshly seated member is targeted before its checkbox was ever touched
+    expect(selectedTargets(null)).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(selectedTargets({ chatgpt: false }, ['chatgpt', 'qwen'])).toEqual(['qwen'])
+    expect(selectedTargets({ qwen: false, gemini: true }, ['claude', 'gemini', 'qwen', 'mimo'])).toEqual(['claude', 'gemini', 'mimo'])
+    // never a slot outside the council, whatever the map says
+    expect(selectedTargets({ grok: true }, ['claude', 'chatgpt'])).toEqual(['claude', 'chatgpt'])
   })
 
   test('session helpers', () => {
@@ -204,7 +216,7 @@ describe('panes slice: localStorage persistence', () => {
   })
 
   test('invalid stored values are ignored and a throwing storage never propagates', () => {
-    const junk = memoryStorage({ [PERSIST_KEYS.mode]: 'stack', [PERSIST_KEYS.active]: 'gemini', [PERSIST_KEYS.targets]: '{not json' })
+    const junk = memoryStorage({ [PERSIST_KEYS.mode]: 'stack', [PERSIST_KEYS.active]: 'bing', [PERSIST_KEYS.targets]: '{not json' })
     expect(loadPersistedPanes(junk)).toEqual({})
     const partial = memoryStorage({ [PERSIST_KEYS.targets]: JSON.stringify({ claude: 'no', grok: false }) })
     expect(loadPersistedPanes(partial)).toEqual({ targets: { grok: false } })
@@ -240,8 +252,10 @@ describe('panes slice: localStorage persistence', () => {
     expect(() => persistPanes(undefined, initialPanes())).not.toThrow()
   })
 
-  test('SLOT_IDS is the contract order', () => {
-    expect(SLOT_IDS).toEqual(['claude', 'chatgpt', 'grok'])
+  test('SLOT_IDS is the catalog order (classic three first) and SITES the three with a view', () => {
+    expect(SLOT_IDS).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo'])
+    expect(SITES).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(DEFAULT_COUNCIL).toEqual(SITES)
   })
 })
 
@@ -263,7 +277,8 @@ describe('panes slice: send-stream outcomes (Stage 2)', () => {
     expect(sendOutcome({ type: 'slot_error', slot: 'grok', code: 500, message: 7 })).toEqual({ ok: false, code: '500', message: '', ms: 0 })
     expect(sendOutcome({ type: 'slot_error', slot: 'grok' })).toEqual({ ok: false, code: 'error', message: '', ms: 0 })
     expect(sendOutcome({ type: 'slot_delta', slot: 'grok', text: 'x' })).toBeNull()
-    expect(sendOutcome({ type: 'slot_done', slot: 'gemini' })).toBeNull()
+    expect(sendOutcome({ type: 'slot_done', slot: 'bing' })).toBeNull()
+    expect(sendOutcome({ type: 'slot_done', slot: 'qwen', usage: { latency_ms: 5 } })).toEqual({ ok: true, ms: 5 }) // a token/local member has an outcome too
     expect(sendOutcome(null)).toBeNull()
   })
 
@@ -419,6 +434,6 @@ describe('panes slice: Stage 3 (bridge error, drawerOpen persistence, notCapture
     expect(notCapturedSlots({ ...turn, errors: undefined })).toEqual([])
     expect(notCapturedSlots({ ...turn, type: 'analyze' })).toEqual([])
     expect(notCapturedSlots(null)).toEqual([])
-    expect(notCapturedSlots({ ...turn, errors: { gemini: msg('gemini'), chatgpt: 42 } })).toEqual([])
+    expect(notCapturedSlots({ ...turn, errors: { bing: msg('bing'), chatgpt: 42 } })).toEqual([])
   })
 })

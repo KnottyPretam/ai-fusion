@@ -9,7 +9,7 @@ from pathlib import Path
 
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.send.conftest import assert_stream_invariants, for_slot, of_type, one, slot_text
 
 SEND_FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -36,7 +36,7 @@ async def test_citations_from_delta_and_usage_chunk_are_deduplicated_per_slot(
     events = await send(conv["id"], "Where is the BMI088 gyro range documented?")
     assert_stream_invariants(events)
     assert [c["fixture"] for c in mock.calls] == [
-        f"grounded_dupes/{s}.chat.1.jsonl" for s in SLOT_IDS
+        f"grounded_dupes/{s}.chat.1.jsonl" for s in DEFAULT_COUNCIL
     ]
     assert all(c["plugins"] == [{"id": "web", "max_results": 5}] for c in mock.calls)
 
@@ -60,7 +60,7 @@ async def test_citations_from_delta_and_usage_chunk_are_deduplicated_per_slot(
     assert [i["type"] for i in turn["citations"]["claude"]] == ["url_citation", "url_citation"]
     assert turn["citations"]["claude"][0]["url_citation"]["start_index"] == 18  # verbatim object
     assert turn["responses"]["claude"] == slot_text(events, "claude")
-    for slot in SLOT_IDS:  # never in threads
+    for slot in DEFAULT_COUNCIL:  # never in threads
         for m in stored["threads"][slot]:
             assert "annotations" not in m["content"] and set(m) == {
                 "role",

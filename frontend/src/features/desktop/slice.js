@@ -4,9 +4,21 @@ import { APP_NAME } from '../../branding.js'
 //
 // Shape (docs/desktop-contract.md §7):
 //   { mode: 'tabs'|'split', active: slot, targets: {slot: bool},
-//     health: {slot: Health|null}, lastSend: {slot: {ok, code, message, ms, composerSelector, sendSelector}},
-//     sending: bool, zoom: {slot: number}, capture: {slot: bool} (S2), bridge: {connected: bool} (S2),
-//     turn: {slot: phase} (S2), drawerOpen: bool (S3), analyst: {slot: slot|null, visible, health} (S3) }
+//     health: {site: Health|null}, lastSend: {slot: {ok, code, message, ms, composerSelector, sendSelector}},
+//     sending: bool, zoom: {site: number}, capture: {site: bool} (S2), bridge: {connected: bool} (S2),
+//     turn: {site: phase} (S2), drawerOpen: bool (S3), analyst: {slot: site|null, visible, health} (S3),
+//     council: {slots: {slot: {model, effort}}} | null (2026-09-27), openRouterKey: KeyStatus | null (2026-09-27) }
+//
+// Council (2026-09-27, "a council anyone can assemble"): a conversation seats 2..5 of the 7-vendor
+// catalog (`SLOT_IDS`); only the three SITES have a native view, so `health` / `zoom` / `capture` /
+// `turn` stay PER-SITE maps (the frozen desktop-smoke.test.jsx pins their three-key literals),
+// while `active` and `targets` range over the whole catalog — a token/local member is a renderer
+// column that can be the active tab and a Send target. `targets[k] !== false` means ON, so a
+// member the map has never seen (a freshly seated Qwen) is targeted by default; `selectedTargets`
+// intersects with the council. `council` is main's DEFAULT for new conversations (`getCouncil`,
+// replayed on `panes:council`), stored as the spec main hands over and validated here (2..5 known
+// slots, each with a string model); `openRouterKey` is main's key STATUS ({configured, prefix,
+// length, pushed, error?}) — the key itself never reaches the renderer.
 //
 // Health is the object `site.cjs` publishes over 'panes:health' (contract §3):
 //   { composer: bool, send: bool, reply, stop, session: 'ok'|'logged_out'|'challenge'|'blocked'|'unknown',
@@ -27,6 +39,8 @@ import { APP_NAME } from '../../branding.js'
 //   panes/turn       {slot, phase}                phase string from triplex.onTurn
 //   panes/drawer     {open?}                      boolean sets, omitted toggles
 //   panes/analyst    {slot?, visible?, health?}   merges the keys present
+//   panes/council    {council}                    main's default council spec (validated; null clears)
+//   panes/openRouterKey {status}                  main's key status object (null clears)
 //
 // Stage 2 — the unified prompt is a Triplex Send (`POST /api/conversations/{id}/send` through
 // features/send/useSendTurn.js) and the per-slot outcome comes from that stream, so this slice also
@@ -57,12 +71,19 @@ import { APP_NAME } from '../../branding.js'
 // them; both swallow storage errors
 // (private mode, quota, a missing `localStorage` in the thumbnail/test sandbox). Stage 2 adds
 // `triplex.panes.captureNoticeSeen` = JSON `{slot: bool}` of the capture switches touched once
-// (the first-run ToS notice hides when all three are true); the switch VALUES themselves are
+// (the first-run ToS notice hides when every site's is true); the switch VALUES themselves are
 // main's (`settings.json`), read back through `getCapture`.
 
-// Mirrored from features/send/slice.js (features never import across each other; state/* is frozen).
-export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
-export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+// Mirrored from features/send/slice.js (features never import across each other; state/* is frozen):
+// the 7-vendor catalog in backend/schemas.py SLOT_IDS order, the classic three first.
+export const SLOT_IDS = ['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo']
+export const DEFAULT_COUNCIL = SLOT_IDS.slice(0, 3)
+export const COUNCIL_MIN = 2
+export const COUNCIL_MAX = 5
+export const SLOT_VENDORS = { claude: 'anthropic', chatgpt: 'openai', grok: 'x-ai', gemini: 'google', deepseek: 'deepseek', qwen: 'qwen', mimo: 'xiaomi' }
+export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini', deepseek: 'DeepSeek', qwen: 'Qwen', mimo: 'MiMo' }
+/** The sites with a native WebContentsView and a Stage-1 adapter (= the preload's `sites`). */
+export const SITES = ['claude', 'chatgpt', 'grok']
 export const MODES = ['tabs', 'split']
 
 /** Session states that need the user (contract §3 codes = Health.session values). */
@@ -97,13 +118,74 @@ export function isSlotId(x) {
   return SLOT_IDS.includes(x)
 }
 
+export function isSiteId(x) {
+  return SITES.includes(x)
+}
+
 export function isMode(x) {
   return MODES.includes(x)
 }
 
-function perSlot(value) {
+/** 'web' | 'openrouter' | 'ollama' for a model string; null for '' / null / a non-string. */
+export function transportOf(model) {
+  if (typeof model !== 'string' || !model) return null
+  if (model.startsWith('web:')) return 'web'
+  if (model.startsWith('ollama:')) return 'ollama'
+  return 'openrouter'
+}
+
+/** Inline `--slot-color` for a slot (the palette tokens `--claude` … `--mimo` are in the frozen index.css). */
+export function slotStyle(slot) {
+  return { '--slot-color': isSlotId(slot) ? `var(--${slot})` : 'var(--border)' }
+}
+
+/**
+ * The council a config seats, in catalog order; null without one. Works on the frozen `slotConfig`
+ * slice, a turn's `slot_config` and main's council spec alike (all are `{slots: {<slot>: …}}`).
+ */
+export function councilOf(spec) {
+  const slots = spec && typeof spec === 'object' && spec.slots && typeof spec.slots === 'object' ? spec.slots : null
+  if (!slots) return null
+  const list = SLOT_IDS.filter((s) => s in slots)
+  return list.length ? list : null
+}
+
+/**
+ * A council spec as main hands it over (`getCouncil` / `panes:council`), validated and re-keyed in
+ * catalog order: `{slots: {<slot>: {model: string, effort: string}}}` with 2..5 known slots. Null
+ * for anything else (an unknown slot, a missing model, one member, six).
+ */
+export function normalizeCouncil(spec) {
+  const slots = spec && typeof spec === 'object' && spec.slots && typeof spec.slots === 'object' ? spec.slots : null
+  if (!slots) return null
+  const keys = Object.keys(slots)
+  if (keys.length < COUNCIL_MIN || keys.length > COUNCIL_MAX || !keys.every(isSlotId)) return null
+  const out = {}
+  for (const k of SLOT_IDS) {
+    if (!(k in slots)) continue
+    const spec1 = slots[k]
+    if (!spec1 || typeof spec1 !== 'object' || typeof spec1.model !== 'string' || !spec1.model) return null
+    out[k] = { model: spec1.model, effort: typeof spec1.effort === 'string' && spec1.effort ? spec1.effort : 'off' }
+  }
+  return { slots: out }
+}
+
+/** Main's key status, or null: `{configured, prefix, length, pushed, error?}` (never the key). */
+export function normalizeKeyStatus(status) {
+  if (!status || typeof status !== 'object') return null
+  const out = {
+    configured: !!status.configured,
+    prefix: typeof status.prefix === 'string' ? status.prefix : '',
+    length: Number.isFinite(status.length) ? status.length : 0,
+    pushed: !!status.pushed,
+  }
+  if (typeof status.error === 'string' && status.error) out.error = status.error
+  return out
+}
+
+function perSite(value) {
   const o = {}
-  for (const k of SLOT_IDS) o[k] = value
+  for (const k of SITES) o[k] = value
   return o
 }
 
@@ -113,7 +195,9 @@ function perSlot(value) {
  */
 export function initialPanes(persisted) {
   const p = persisted && typeof persisted === 'object' ? persisted : {}
-  const targets = perSlot(true)
+  // Targets start with the three sites ON (the persisted shape of Stage 1/2); a non-site member is
+  // absent from the map until switched, and `selectedTargets` reads absent as on.
+  const targets = perSite(true)
   if (p.targets && typeof p.targets === 'object') {
     for (const k of SLOT_IDS) if (typeof p.targets[k] === 'boolean') targets[k] = p.targets[k]
   }
@@ -121,15 +205,17 @@ export function initialPanes(persisted) {
     mode: isMode(p.mode) ? p.mode : 'split',
     active: isSlotId(p.active) ? p.active : 'chatgpt',
     targets,
-    health: perSlot(null),
+    health: perSite(null),
     lastSend: {},
     sending: false,
-    zoom: perSlot(1),
-    capture: perSlot(false),
+    zoom: perSite(1),
+    capture: perSite(false),
     bridge: { connected: false },
     turn: {},
     drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : false,
     analyst: { slot: null, visible: false, health: null },
+    council: null,
+    openRouterKey: null,
   }
 }
 
@@ -199,7 +285,7 @@ export function panesReducer(s = initialPanes(), a) {
     case 'panes/target':
       return isSlotId(a.slot) ? setIn(s, 'targets', a.slot, !!a.on) : s
     case 'panes/health': {
-      if (!isSlotId(a.slot)) return s
+      if (!isSiteId(a.slot)) return s
       const health = a.health && typeof a.health === 'object' ? a.health : null
       return setIn(s, 'health', a.slot, health)
     }
@@ -221,14 +307,14 @@ export function panesReducer(s = initialPanes(), a) {
       return { ...s, sending: false, lastSend }
     }
     case 'panes/zoom':
-      return isSlotId(a.slot) && isFactor(a.factor) ? setIn(s, 'zoom', a.slot, a.factor) : s
+      return isSiteId(a.slot) && isFactor(a.factor) ? setIn(s, 'zoom', a.slot, a.factor) : s
     case 'panes/capture': {
       if (a.capture && typeof a.capture === 'object') {
         let next = s
-        for (const k of SLOT_IDS) if (k in a.capture) next = setIn(next, 'capture', k, !!a.capture[k])
+        for (const k of SITES) if (k in a.capture) next = setIn(next, 'capture', k, !!a.capture[k])
         return next
       }
-      return isSlotId(a.slot) ? setIn(s, 'capture', a.slot, !!a.on) : s
+      return isSiteId(a.slot) ? setIn(s, 'capture', a.slot, !!a.on) : s
     }
     case 'panes/bridge': {
       const connected = !!a.connected
@@ -241,18 +327,30 @@ export function panesReducer(s = initialPanes(), a) {
       return { ...s, bridge }
     }
     case 'panes/turn':
-      return isSlotId(a.slot) && typeof a.phase === 'string' ? setIn(s, 'turn', a.slot, a.phase) : s
+      return isSiteId(a.slot) && typeof a.phase === 'string' ? setIn(s, 'turn', a.slot, a.phase) : s
     case 'panes/drawer': {
       const open = a.open === undefined ? !s.drawerOpen : !!a.open
       return open === s.drawerOpen ? s : { ...s, drawerOpen: open }
     }
     case 'panes/analyst': {
       const next = { ...s.analyst }
-      if ('slot' in a) next.slot = isSlotId(a.slot) ? a.slot : null
+      if ('slot' in a) next.slot = isSiteId(a.slot) ? a.slot : null
       if ('visible' in a) next.visible = !!a.visible
       if ('health' in a) next.health = a.health && typeof a.health === 'object' ? a.health : null
       const same = next.slot === s.analyst.slot && next.visible === s.analyst.visible && next.health === s.analyst.health
       return same ? s : { ...s, analyst: next }
+    }
+    case 'panes/council': {
+      // An invalid spec is ignored (the state keeps the last good default); `null` clears it.
+      if (a.council === null) return s.council === null ? s : { ...s, council: null }
+      const council = normalizeCouncil(a.council)
+      if (!council) return s
+      return sameCouncil(council, s.council) ? s : { ...s, council }
+    }
+    case 'panes/openRouterKey': {
+      const status = normalizeKeyStatus(a.status)
+      if (status === null) return s.openRouterKey === null ? s : { ...s, openRouterKey: null }
+      return sameKeyStatus(status, s.openRouterKey) ? s : { ...s, openRouterKey: status }
     }
     case 'sse':
       // The unified prompt streams under feature key 'send' (a solo continue from the Stage 3
@@ -263,13 +361,28 @@ export function panesReducer(s = initialPanes(), a) {
   }
 }
 
+function sameCouncil(a, b) {
+  if (!a || !b) return a === b
+  const ka = Object.keys(a.slots)
+  const kb = Object.keys(b.slots)
+  return ka.length === kb.length && ka.every((k, i) => k === kb[i] && a.slots[k].model === b.slots[k].model && a.slots[k].effort === b.slots[k].effort)
+}
+
+function sameKeyStatus(a, b) {
+  if (!a || !b) return a === b
+  return a.configured === b.configured && a.prefix === b.prefix && a.length === b.length && a.pushed === b.pushed && a.error === b.error
+}
+
 // ---------------------------------------------------------------------------------------------
 // Derivations shared by PaneDeck / PromptBar (pure)
 // ---------------------------------------------------------------------------------------------
 
-/** The slots whose target checkbox is on, in SLOT_IDS order. */
-export function selectedTargets(targets) {
-  return SLOT_IDS.filter((k) => !!(targets && targets[k]))
+/**
+ * The council members whose target checkbox is on, in council (= catalog) order. A member the map
+ * does not name is ON (`targets[k] !== false`): only an explicit `false` unchecks it.
+ */
+export function selectedTargets(targets, council = DEFAULT_COUNCIL) {
+  return council.filter((k) => !(targets && targets[k] === false))
 }
 
 /** Health.session or 'unknown' when the pane has not reported yet. */
@@ -331,7 +444,7 @@ export function phaseText(phase) {
 
 /** True when every capture switch has been set at least once (the first-run notice hides). */
 export function allCaptureTouched(touched) {
-  return SLOT_IDS.every((k) => !!(touched && touched[k]))
+  return SITES.every((k) => !!(touched && touched[k]))
 }
 
 /**
@@ -391,8 +504,10 @@ export function persistPanes(storage = defaultStorage(), panes) {
   try {
     storage.setItem(PERSIST_KEYS.mode, panes.mode)
     storage.setItem(PERSIST_KEYS.active, panes.active)
+    // Only the keys the map holds are written: an absent member stays "on by default" (never
+    // frozen into `false` by a write that predates its seating).
     const targets = {}
-    for (const k of SLOT_IDS) targets[k] = !!(panes.targets && panes.targets[k])
+    for (const k of SLOT_IDS) if (panes.targets && typeof panes.targets[k] === 'boolean') targets[k] = panes.targets[k]
     storage.setItem(PERSIST_KEYS.targets, JSON.stringify(targets))
     storage.setItem(PERSIST_KEYS.drawerOpen, panes.drawerOpen ? 'true' : 'false')
   } catch {
@@ -405,14 +520,14 @@ export function persistPanes(storage = defaultStorage(), panes) {
  * map this module writes and a bare `true` (= all seen); anything else means "none yet".
  */
 export function loadCaptureTouched(storage = defaultStorage()) {
-  const out = perSlot(false)
+  const out = perSite(false)
   if (!storage) return out
   try {
     const raw = storage.getItem(CAPTURE_NOTICE_KEY)
     if (!raw) return out
     const parsed = JSON.parse(raw)
-    if (parsed === true) return perSlot(true)
-    if (parsed && typeof parsed === 'object') for (const k of SLOT_IDS) if (parsed[k] === true) out[k] = true
+    if (parsed === true) return perSite(true)
+    if (parsed && typeof parsed === 'object') for (const k of SITES) if (parsed[k] === true) out[k] = true
   } catch {
     /* a bad value or an unavailable storage means "nothing persisted" */
   }
@@ -424,7 +539,7 @@ export function persistCaptureTouched(storage = defaultStorage(), touched) {
   if (!storage || !touched) return
   try {
     const o = {}
-    for (const k of SLOT_IDS) o[k] = !!touched[k]
+    for (const k of SITES) o[k] = !!touched[k]
     storage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify(o))
   } catch {
     /* quota / private mode: the in-memory state is still right */

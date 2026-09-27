@@ -10,7 +10,7 @@ import uuid
 
 from backend.features import send as send_mod
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from backend.store import conversations as store
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.helpers import parse_sse_text
@@ -39,7 +39,7 @@ async def test_unknown_conversation_is_404_json(client):
 
 
 async def test_unknown_slot_is_404_json(client, cid, get_conv):
-    for bad in ("gemini", "R1", "Claude", ""):
+    for bad in ("gemini", "bing", "R1", "Claude", ""):  # gemini: a vendor this council did not seat
         r = await client.post(
             CONTINUE_URL.format(cid=cid, slot=bad), json={"prompt": DEFAULT_PROMPT}
         )
@@ -59,7 +59,7 @@ async def test_blank_prompt_is_422_json(client, cid, get_conv):
         assert r.status_code == 422 and r.json() == EMPTY_PROMPT and _is_json(r)
     assert mock.calls == []
     conv = await get_conv(cid)
-    assert conv["turns"] == [] and all(conv["threads"][s] == [] for s in SLOT_IDS)
+    assert conv["turns"] == [] and all(conv["threads"][s] == [] for s in DEFAULT_COUNCIL)
     assert conv["title"] == "New conversation"
     assert not store.is_busy(cid)
 
@@ -192,7 +192,7 @@ async def test_disconnected_client_does_not_stop_the_turn(cid):
     assert conv.turns[0].id == first["turn_id"]
     assert conv.turns[0].responses == DEFAULT_RESPONSES
     assert conv.title == DEFAULT_PROMPT[:60]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m.role for m in conv.threads[slot]] == ["user", "assistant"]
     assert len(mock.calls) == 3
 
@@ -219,7 +219,7 @@ async def test_persistence_failure_after_first_event_is_terminal_error_and_relea
     assert not store.is_busy(cid)
     conv = await get_conv(cid)
     assert conv["turns"] == []  # the turn itself never made it
-    for slot in SLOT_IDS:  # the per-slot pairs did (appended at each slot_done)
+    for slot in DEFAULT_COUNCIL:  # the per-slot pairs did (appended at each slot_done)
         assert [m["role"] for m in conv["threads"][slot]] == ["user", "assistant"]
 
     fail["on"] = False

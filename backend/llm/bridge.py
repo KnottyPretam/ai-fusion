@@ -69,7 +69,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
-from ..schemas import SLOT_IDS, Delta, Usage
+from ..schemas import Delta, Usage
 from . import bridge_protocol as bp
 from .errors import ERROR_TYPE_TRIPLEX, TIMEOUT, TRANSPORT_ERROR
 
@@ -172,15 +172,22 @@ def current_conversation() -> str | None:
 
 # --------------------------------------------------------------------------- pure helpers
 def parse_web_model(model: str) -> tuple[str, View]:
-    """`web:<slot>` -> (slot, "pane"); `web:<slot>:analyst` -> (slot, "analyst"); else ValueError."""
+    """`web:<slot>` -> (slot, "pane"); `web:<slot>:analyst` -> (slot, "analyst"); else ValueError.
+
+    The slot vocabulary is the bridge's own (`bridge_protocol.BRIDGE_SLOTS`, the sites with a
+    Stage-1 adapter), not the seven-vendor council catalog: `web:gemini` names a vendor a council
+    can seat on OpenRouter or Ollama, but no site adapter exists for it, so it is refused here."""
     if not isinstance(model, str):
         raise ValueError(f"web model must be a string, got {type(model).__name__}")
     parts = model.split(":")
     if len(parts) < 2 or parts[0] != "web" or not parts[1]:
         raise ValueError(f"not a web model: {model!r}")
     slot = parts[1]
-    if slot not in SLOT_IDS:
-        raise ValueError(f"unknown slot {slot!r} in web model {model!r}")
+    if slot not in bp.BRIDGE_SLOTS:
+        raise ValueError(
+            f"unknown site {slot!r} in web model {model!r}; sites with an adapter: "
+            + ", ".join(bp.BRIDGE_SLOTS)
+        )
     if len(parts) == 2:
         return slot, "pane"
     if len(parts) == 3 and parts[2] == "analyst":
@@ -520,7 +527,7 @@ class BridgeHub:
         connected = self._conn is not None
         capture = self._capture.model_dump() if self._capture is not None else {}
         sites: dict[str, Any] = {}
-        for slot in SLOT_IDS:
+        for slot in bp.BRIDGE_SLOTS:  # the sites with an adapter, not the council catalog
             entry = self._health.get(slot)
             sites[slot] = {
                 "capture": bool(capture.get(slot, False)),

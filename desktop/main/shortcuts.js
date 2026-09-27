@@ -1,6 +1,7 @@
 // desktop/main/shortcuts.js — the keyboard table of contract §2, handled once in main.
 //
-//   Ctrl+1 / Ctrl+2 / Ctrl+3   → renderer 'panes:shortcut' {name:'tab-n'}   (tabs: activate; split: focusPane)
+//   Ctrl+1 … Ctrl+5            → renderer 'panes:shortcut' {name:'tab-n'}   (tabs: activate; split: focusPane;
+//                                the n-th council member — a site pane or, for a token / local agent, a renderer column)
 //   Ctrl+\                     → {name:'toggle-mode'}
 //   Ctrl+L                     → main focuses the renderer, then {name:'focus-prompt'}
 //   Ctrl+Shift+N               → {name:'new-chat-all'}
@@ -13,12 +14,16 @@
 // every webContents (site views + renderer; `event.preventDefault()` also suppresses the menu
 // accelerator, so a shortcut never fires twice) and, as the fallback for focus that no view
 // holds, by a hidden application Menu whose accelerators call the same `run()`.
+// The pane-only actions (zoom / reload / inspect) act on the ACTIVE tab, which since the council
+// work (2026-09-27) may be a renderer column rather than a site view: `active()` is null then and
+// the action is a handled no-op with a warning — never a zoom or reload of some other pane.
 // Pure module: everything (views, renderer, Menu) is injected.
 
 import { SLOTS } from './sites.js'
+import { isCouncilSlot } from './council.js'
 import { APP_TITLE } from './branding.js'
 
-export const SHORTCUT_NAMES = Object.freeze(['tab-1', 'tab-2', 'tab-3', 'toggle-mode', 'focus-prompt', 'new-chat-all'])
+export const SHORTCUT_NAMES = Object.freeze(['tab-1', 'tab-2', 'tab-3', 'tab-4', 'tab-5', 'toggle-mode', 'focus-prompt', 'new-chat-all'])
 
 /**
  * matchShortcut(input, {dev}) → action | null for an Electron `Input` (`before-input-event`).
@@ -48,6 +53,8 @@ export function matchShortcut(input, { dev = false } = {}) {
   if (key === '1' || code === 'Digit1' || code === 'Numpad1') return { kind: 'shortcut', name: 'tab-1' }
   if (key === '2' || code === 'Digit2' || code === 'Numpad2') return { kind: 'shortcut', name: 'tab-2' }
   if (key === '3' || code === 'Digit3' || code === 'Numpad3') return { kind: 'shortcut', name: 'tab-3' }
+  if (key === '4' || code === 'Digit4' || code === 'Numpad4') return { kind: 'shortcut', name: 'tab-4' }
+  if (key === '5' || code === 'Digit5' || code === 'Numpad5') return { kind: 'shortcut', name: 'tab-5' }
   if (key === '\\' || code === 'Backslash' || code === 'IntlBackslash') return { kind: 'shortcut', name: 'toggle-mode' }
   if (lower === 'l' || code === 'KeyL') return { kind: 'shortcut', name: 'focus-prompt' }
   if (key === '=' || key === '+' || code === 'Equal' || code === 'NumpadAdd') return { kind: 'zoom', direction: 'in' }
@@ -68,9 +75,19 @@ export function matchShortcut(input, { dev = false } = {}) {
  * `inspect(slot)`, `focusRenderer()`, `sendToRenderer(channel, payload)`.
  */
 export function createShortcuts({ getActive, zoom, reload, inspect, focusRenderer, sendToRenderer, dev = false, log = console } = {}) {
+  const warn = (m) => {
+    if (log && typeof log.warn === 'function') log.warn(`[shortcuts] ${m}`)
+  }
+  /** The active site pane; null when the active tab is a renderer column (a council member without a view); the first pane when unknown. */
   const active = () => {
     const slot = typeof getActive === 'function' ? getActive() : null
-    return SLOTS.includes(slot) ? slot : SLOTS[0]
+    if (SLOTS.includes(slot)) return slot
+    return isCouncilSlot(slot) ? null : SLOTS[0]
+  }
+  /** True (handled, nothing done) with a warning when the active tab has no site view. */
+  const noPane = (what) => {
+    warn(`${what}: the active tab is a renderer column, not a site pane; ignored`)
+    return true
   }
   const safe = (fn, ...args) => {
     try {
@@ -92,17 +109,24 @@ export function createShortcuts({ getActive, zoom, reload, inspect, focusRendere
       }
       case 'zoom': {
         const slot = active()
+        if (slot === null) return noPane('zoom')
         const factor = safe(zoom, slot, action.direction)
         if (typeof factor === 'number') safe(sendToRenderer, 'panes:zoom', { slot, factor })
         return true
       }
-      case 'reload':
-        safe(reload, active())
+      case 'reload': {
+        const slot = active()
+        if (slot === null) return noPane('reload')
+        safe(reload, slot)
         return true
-      case 'inspect':
+      }
+      case 'inspect': {
         if (!dev) return false
-        safe(inspect, active())
+        const slot = active()
+        if (slot === null) return noPane('inspect')
+        safe(inspect, slot)
         return true
+      }
       default:
         return false
     }
@@ -130,6 +154,8 @@ export function createShortcuts({ getActive, zoom, reload, inspect, focusRendere
       item('Pane 1', 'CommandOrControl+1', { kind: 'shortcut', name: 'tab-1' }),
       item('Pane 2', 'CommandOrControl+2', { kind: 'shortcut', name: 'tab-2' }),
       item('Pane 3', 'CommandOrControl+3', { kind: 'shortcut', name: 'tab-3' }),
+      item('Pane 4', 'CommandOrControl+4', { kind: 'shortcut', name: 'tab-4' }),
+      item('Pane 5', 'CommandOrControl+5', { kind: 'shortcut', name: 'tab-5' }),
       { type: 'separator' },
       item('Toggle tabs / split', 'CommandOrControl+\\', { kind: 'shortcut', name: 'toggle-mode' }),
       item('Focus prompt', 'CommandOrControl+L', { kind: 'shortcut', name: 'focus-prompt' }),

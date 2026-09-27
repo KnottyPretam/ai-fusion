@@ -62,7 +62,7 @@ describe('slots slice: three synthetic streams isolate', () => {
     expect(s1.slots).toBe(s0.slots)
     const s2 = applyEvents('send', [sample.slotDelta('analyst', 'nope'), { type: 'unknown_event' }], { state: s0 })
     expect(s2.slots).toBe(s0.slots)
-    expect(Object.keys(s2.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'grok'])
+    expect(Object.keys(s2.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'deepseek', 'gemini', 'grok', 'mimo', 'qwen'])
   })
 })
 
@@ -187,9 +187,9 @@ describe('slots slice: turn lifecycle', () => {
     expect(early.slots.claude).toMatchObject({ status: 'idle', buffer: '' })
   })
 
-  test('initial state has exactly the three slots with the documented shape (plus the loaded conversation id)', () => {
+  test('initial state has exactly the seven catalog slots with the documented shape (plus the loaded conversation id)', () => {
     const s = initialState()
-    expect(Object.keys(s.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'grok'])
+    expect(Object.keys(s.slots).sort()).toEqual(['chatgpt', 'claude', 'conversationId', 'deepseek', 'gemini', 'grok', 'mimo', 'qwen'])
     expect(s.slots.conversationId).toBeNull()
     expect(s.slots.claude).toMatchObject({ buffer: '', reasoning: '', citations: [], status: 'idle', usage: null, truncated: false, error: null, effort: null, effortCoerced: false, model: null })
     expect(initialState().slots).not.toBe(s.slots)

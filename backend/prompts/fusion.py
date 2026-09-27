@@ -37,6 +37,7 @@ import json
 from typing import Any
 
 from . import QUOTED_DATA_NOTICE, delimited
+from .council import check_council_size, label_list, number_word
 
 CLAIM_LABEL = "YOUR CLAIM"
 JUSTIFICATION_LABEL = "YOUR JUSTIFICATION"
@@ -77,13 +78,19 @@ _DEFENSE_KEYS = (
 DEFENSE_JSON_INSTRUCTION = DEFENSE_JSON_LEAD + _DEFENSE_KEYS
 DEFENSE_JSON_INSTRUCTION_FENCED = DEFENSE_JSON_LEAD_FENCED + _DEFENSE_KEYS
 
-_CONVERGENCE_RULES = (
-    "You are an analyst checking whether three anonymous expert reviewers (R1, R2, R3) now "
-    "agree. For each divergence below, compare the reviewers' CURRENT claims after this "
-    'round\'s revisions. Mark "resolved" only if the claims are now substantively compatible; '
-    'otherwise "standing". Judge on substance, not on length, wording or confidence of tone. '
-    + QUOTED_DATA_NOTICE
-)
+def convergence_rules_for(n: int) -> str:
+    """The convergence check's rules for a council of n reviewers (R1..Rn)."""
+    check_council_size(n)
+    return (
+        f"You are an analyst checking whether {number_word(n)} anonymous expert reviewers "
+        f"({label_list(n)}) now "
+        "agree. For each divergence below, compare the reviewers' CURRENT claims after this "
+        'round\'s revisions. Mark "resolved" only if the claims are now substantively compatible; '
+        'otherwise "standing". Judge on substance, not on length, wording or confidence of tone. '
+        + QUOTED_DATA_NOTICE
+    )
+
+
 CONVERGENCE_JSON_LEAD = " Return ONLY valid JSON (no prose, no code fences) of the form "
 CONVERGENCE_JSON_LEAD_FENCED = (
     " Return ONLY a fenced code block tagged json — a line with ```json, then the JSON, then a "
@@ -93,10 +100,18 @@ _CONVERGENCE_FORM = (
     '{"statuses": [{"divergence_id": "...", "status": "resolved" | "standing"}]} '
     "with exactly one entry per divergence listed and no other status values."
 )
-CONVERGENCE_SYSTEM = _CONVERGENCE_RULES + CONVERGENCE_JSON_LEAD + _CONVERGENCE_FORM
-CONVERGENCE_SYSTEM_FENCED = (
-    _CONVERGENCE_RULES + CONVERGENCE_JSON_LEAD_FENCED + _CONVERGENCE_FORM
-)
+
+
+def convergence_system_for(n: int, *, fenced: bool = False) -> str:
+    """The convergence system message for a council of n on this transport; the constants below
+    are n=3 (2026-09-27: count-aware, byte-identical for the three)."""
+    lead = CONVERGENCE_JSON_LEAD_FENCED if fenced else CONVERGENCE_JSON_LEAD
+    return convergence_rules_for(n) + lead + _CONVERGENCE_FORM
+
+
+_CONVERGENCE_RULES = convergence_rules_for(3)
+CONVERGENCE_SYSTEM = convergence_system_for(3)
+CONVERGENCE_SYSTEM_FENCED = convergence_system_for(3, fenced=True)
 
 CONVERGENCE_USER_LEAD = (
     "Divergences with each reviewer's current claim after this round, as a JSON array of "
@@ -148,13 +163,13 @@ def convergence_payload(items: list[dict[str, Any]]) -> str:
 
 
 def convergence_messages(
-    items: list[dict[str, Any]], *, fenced: bool = False
+    items: list[dict[str, Any]], *, fenced: bool = False, n: int = 3
 ) -> list[dict[str, str]]:
     """`[system(instructions), user(notice + delimited payload + answer rule)]`.
 
     `fenced=True` (the caller passes `client.transport_kind(analyst_model) == "web"`) swaps ONLY
     the system message's JSON instruction for the fenced one; the user message never depends on
-    the transport."""
+    the transport. `n` is the council size (the reviewers the system message counts)."""
     user = "\n\n".join(
         [
             QUOTED_DATA_NOTICE,
@@ -164,7 +179,7 @@ def convergence_messages(
         ]
     )
     return [
-        {"role": "system", "content": CONVERGENCE_SYSTEM_FENCED if fenced else CONVERGENCE_SYSTEM},
+        {"role": "system", "content": convergence_system_for(n, fenced=fenced)},
         {"role": "user", "content": user},
     ]
 
@@ -193,4 +208,6 @@ __all__ = [
     "challenge_prompt",
     "convergence_messages",
     "convergence_payload",
+    "convergence_rules_for",
+    "convergence_system_for",
 ]

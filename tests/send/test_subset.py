@@ -1,7 +1,7 @@
 """`POST …/send` with `slots` (docs/api-contract.md desktop addendum): a subset runs exactly the
 listed slots and persists only their entries; omitted / null / all-three are identical to
 today's run; unknown -> 404 not_found(slot); [] -> 422 empty_slots; duplicates collapse in
-SLOT_IDS order."""
+DEFAULT_COUNCIL order."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from backend.features import send as send_mod
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.helpers import parse_sse_text
 from tests.send.conftest import SEND_URL, assert_stream_invariants, one, types
@@ -51,7 +51,7 @@ def neutral(events: list[dict[str, Any]]) -> dict[str, Any]:
     pinned = [pin(e) for e in copy.deepcopy(events)]
     return {
         "turn": [e for e in pinned if e["type"] in ("turn_start", "turn_done")],
-        **{slot: [e for e in pinned if e.get("slot") == slot] for slot in SLOT_IDS},
+        **{slot: [e for e in pinned if e.get("slot") == slot] for slot in DEFAULT_COUNCIL},
     }
 
 
@@ -116,7 +116,7 @@ async def test_omitted_null_and_all_three_are_identical(client, new_conv, get_co
         r, events = await post(client, cid, body)
         assert r.status_code == 200, (name, r.text)
         assert_stream_invariants(events)
-        assert events[0]["slots"] == list(SLOT_IDS)
+        assert events[0]["slots"] == list(DEFAULT_COUNCIL)
         runs[name] = neutral(events)
         convs[name] = await get_conv(cid)
     assert runs["omitted"] == runs["null"] == runs["all"]
@@ -128,13 +128,20 @@ async def test_omitted_null_and_all_three_are_identical(client, new_conv, get_co
         t["usage"]["calls"].sort(key=lambda u: (u["role"], u["purpose"]))
     assert turns["omitted"] == turns["null"] == turns["all"]
     for c in convs.values():
-        assert all(len(c["threads"][s]) == 2 for s in SLOT_IDS)
+        assert all(len(c["threads"][s]) == 2 for s in DEFAULT_COUNCIL)
 
 
 # --------------------------------------------------------------------------- refusals
 @pytest.mark.parametrize(
     "slots",
-    [["gemini"], ["claude", "R1"], ["Claude"], ["grok", ""], ["claude", "chatgpt", "grok", "nope"]],
+    [
+        ["gemini"],  # a catalog vendor the default council did not seat (2026-09-27)
+        ["bing"],  # not a vendor at all
+        ["claude", "R1"],
+        ["Claude"],
+        ["grok", ""],
+        ["claude", "chatgpt", "grok", "nope"],
+    ],
 )
 async def test_unknown_slot_is_404_json(client, cid, get_conv, slots):
     r, _ = await post(client, cid, {"prompt": DEFAULT_PROMPT, "slots": slots})
@@ -174,19 +181,37 @@ async def test_continue_ignores_slots(client, cid):
 
 # --------------------------------------------------------------------------- the pure helper
 def test_resolve_slots():
-    assert send_mod.resolve_slots(None) == SLOT_IDS
+    assert send_mod.resolve_slots(None) == DEFAULT_COUNCIL
     assert send_mod.resolve_slots(("grok",)) == ("grok",)
     assert send_mod.resolve_slots(["grok", "claude", "grok"]) == ("claude", "grok")
-    assert send_mod.resolve_slots(list(reversed(SLOT_IDS))) == SLOT_IDS
+    assert send_mod.resolve_slots(list(reversed(DEFAULT_COUNCIL))) == DEFAULT_COUNCIL
     with pytest.raises(HTTPException) as ei:
         send_mod.resolve_slots([])
     assert ei.value.status_code == 422 and ei.value.detail == {"error": "empty_slots"}
     with pytest.raises(HTTPException) as ei:
-        send_mod.resolve_slots(["claude", "gemini"])
+        send_mod.resolve_slots(["claude", "gemini"])  # a catalog vendor this council did not seat
+    assert ei.value.status_code == 404 and ei.value.detail == {"error": "not_found", "what": "slot"}
+    with pytest.raises(HTTPException) as ei:
+        send_mod.resolve_slots(["claude", "bing"])  # not a vendor at all
     assert ei.value.status_code == 404 and ei.value.detail == {"error": "not_found", "what": "slot"}
     with pytest.raises(HTTPException) as ei:
         send_mod.resolve_slots("grok")  # type: ignore[arg-type]
     assert ei.value.status_code == 404
+
+
+def test_resolve_slots_against_a_council():
+    """2026-09-27: the subset is resolved against the conversation's own council, in catalog order."""
+    council = ("chatgpt", "gemini", "qwen")
+    assert send_mod.resolve_slots(None, council) == council
+    assert send_mod.resolve_slots(["qwen", "chatgpt", "qwen"], council) == ("chatgpt", "qwen")
+    assert send_mod.resolve_slots(("gemini",), council) == ("gemini",)
+    for outside in (["claude"], ["chatgpt", "grok"], ["bing"]):
+        with pytest.raises(HTTPException) as ei:
+            send_mod.resolve_slots(outside, council)
+        assert ei.value.status_code == 404 and ei.value.detail == {"error": "not_found", "what": "slot"}
+    with pytest.raises(HTTPException) as ei:
+        send_mod.resolve_slots([], council)
+    assert ei.value.status_code == 422
 
 
 async def test_run_send_direct_call_with_slots(cid, get_conv):

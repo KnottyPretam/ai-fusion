@@ -1,0 +1,19 @@
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"stance\": \"revise\", \"justifica"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"tion\": \"The peer's "},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rise-time calculation is right: with the 300"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" ns fast-mode limit and a b"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"us capacitance around 120 pF, a 10 k"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Ohm pull-up gives a rise time n"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ear 1 us, so the re"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"commended value for 400 kHz has to be in the"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" 2.2 kOhm to 4.7 kOhm range"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"; 10 kOhm only suits 100 kHz on a ve"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ry short bus.\", \"revised_claim\""},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"Use 2.2 kOhm to "},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"4.7 kOhm at 400 kHz; 10 kOhm is too weak for"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" the 300 ns rise time.\", \"c"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"onfidence\": 0.88, \"persuaded_by\": \"t"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he 300 ns rise-time limit and t"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"he RC calculation w"},"finish_reason":null}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ith 100-200 pF bus capacitance\"}"},"finish_reason":"stop"}]}
+{"id":"gen-8729d21ddfde0be4","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":587,"completion_tokens":139,"total_tokens":726,"cost":0.0014809,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

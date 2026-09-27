@@ -23,7 +23,7 @@ import httpx
 import pytest
 
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, Conversation, DefenseReply, Extraction
+from backend.schemas import DEFAULT_COUNCIL, Conversation, DefenseReply, Extraction
 from backend.store import conversations as store
 from tests.helpers import parse_sse_text
 
@@ -94,7 +94,7 @@ def scenario_prompt(scenario: str) -> str:
 
 def scenario_responses(scenario: str) -> dict[str, str]:
     files = scenario_expectations(scenario)["files"]
-    return {slot: files[f"{slot}.chat.1.jsonl"]["text"] for slot in SLOT_IDS}
+    return {slot: files[f"{slot}.chat.1.jsonl"]["text"] for slot in DEFAULT_COUNCIL}
 
 
 def extraction_of(scenario: str, n: int = 1) -> Extraction:

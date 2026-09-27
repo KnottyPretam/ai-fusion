@@ -7,10 +7,13 @@
 // slices; no slice of its own.
 //
 // Stage 3 (renderer-drawer): desktop mode. `desktop` groups the analyst picker as "web sessions
-// (hidden analyst page)" — the three fixed `web:<slot>:analyst` ids (names from the desktop
+// (hidden analyst page)" — the three fixed `web:<site>:analyst` ids (names from the desktop
 // catalog when loaded, contract §6) — and "local Ollama" — every `ollama:<name>` the catalog
 // lists — with a "none" option (plan Decision 4), and hides the grounded toggle (OpenRouter web
-// search never applies to a web session). `analyst` + `onAnalystChange(model)` make the picker the
+// search never applies to a web session). Council (2026-09-27): once an OpenRouter key is
+// configured (`panes.openRouterKey`, main's status, read by slice KEY) the desktop catalog also
+// carries OpenRouter entries (`raw.transport === 'openrouter'`), listed as two more groups —
+// structured-outputs models first, as on the web — so a token analyst can be picked. `analyst` + `onAnalystChange(model)` make the picker the
 // DESKTOP CHOICE control: it is enabled without a conversation (its value is then `analyst`, the
 // renderer's persisted choice), shows the open conversation's analyst_model when one is selected,
 // and a change reports the new model to the caller (which mirrors it to localStorage and to
@@ -30,7 +33,7 @@ const EMPTY_MODELS = { items: [], byId: {}, loaded: false, error: null }
 // the provider) plus the prompt tokens of the injected results, on every grounded call.
 export const GROUNDED_LABEL = 'Grounded (web search on Send)'
 export const GROUNDED_TITLE =
-  'Adds the OpenRouter web-search plugin to every Send (three calls) and every solo continue; never to Analyze or Fusion. ' +
+  'Adds the OpenRouter web-search plugin to every Send (one call per agent) and every solo continue; never to Analyze or Fusion. ' +
   'Costs extra: each grounded call pays a per-request search fee (engine-dependent, roughly $0.001-$0.015; native search is billed by the provider) ' +
   'plus the prompt tokens of the injected results, on top of the model\'s own usage. Replies carry url citations.'
 
@@ -51,22 +54,35 @@ function label(m) {
 
 // Desktop (contract §6): the three web analysts are fixed ids whatever the catalog holds (offline
 // the picker still works); Ollama entries come only from GET /api/models. Mirrored from
-// backend/llm/webmodels.py (features never import across each other).
-const DESKTOP_SLOTS = ['claude', 'chatgpt', 'grok']
-const DESKTOP_SITE = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+// backend/llm/webmodels.py (features never import across each other). SITES are the sites with a
+// native view and a Stage-1 adapter — a subset of the 7-vendor catalog, not the council.
+export const SITES = ['claude', 'chatgpt', 'grok']
+export const SITE_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
 export const WEB_ANALYST_GROUP = 'web sessions (hidden analyst page)'
 export const OLLAMA_GROUP = 'local Ollama'
+export const OPENROUTER_STRUCTURED_GROUP = 'OpenRouter — structured outputs (recommended)'
+export const OPENROUTER_OTHER_GROUP = 'OpenRouter — other models'
 export const ANALYST_NONE_LABEL = '— none (Analyze disabled) —'
 
-export function desktopAnalystGroups(items) {
+/** An OpenRouter entry of the desktop catalog: tagged `raw.transport === 'openrouter'` (never `web:` / `ollama:`). */
+function isOpenRouterItem(m) {
+  return !!(m && typeof m.id === 'string' && !m.id.startsWith('web:') && !m.id.startsWith('ollama:') && m.raw && m.raw.transport === 'openrouter')
+}
+
+/**
+ * `{web, ollama, openrouter: {structured, other}}` — the OpenRouter groups are filled only with
+ * `keyConfigured` (without a key those entries are not offered: the backend refuses the call).
+ */
+export function desktopAnalystGroups(items, { keyConfigured = false } = {}) {
   const byId = {}
   for (const m of items || []) if (m && typeof m.id === 'string') byId[m.id] = m
-  const web = DESKTOP_SLOTS.map((slot) => {
+  const web = SITES.map((slot) => {
     const id = `web:${slot}:analyst`
-    return byId[id] || { id, name: `${DESKTOP_SITE[slot]} web session (hidden analyst page)` }
+    return byId[id] || { id, name: `${SITE_LABELS[slot]} web session (hidden analyst page)` }
   })
   const ollama = (items || []).filter((m) => m && typeof m.id === 'string' && m.id.startsWith('ollama:')).sort(byName)
-  return { web, ollama }
+  const openrouter = keyConfigured ? analystGroups((items || []).filter(isOpenRouterItem)) : { structured: [], other: [] }
+  return { web, ollama, openrouter }
 }
 
 export default function SlotConfigBar({ desktop = false, analyst: analystChoice, onAnalystChange = null }) {
@@ -74,6 +90,8 @@ export default function SlotConfigBar({ desktop = false, analyst: analystChoice,
   const conversation = useSlice('conversation')
   const slotConfig = useSlice('slotConfig')
   const models = useSlice('models') || EMPTY_MODELS
+  const panes = useSlice('panes') // desktop only: main's key status lives there (read by key, never imported)
+  const keyConfigured = !!(panes && panes.openRouterKey && panes.openRouterKey.configured)
   const [error, setError] = useState(null)
   const conversationId = conversation ? conversation.id : null
   const disabled = !conversationId || !slotConfig
@@ -126,14 +144,16 @@ export default function SlotConfigBar({ desktop = false, analyst: analystChoice,
   }
   let analystSelect
   if (desktop) {
-    const { web, ollama } = desktopAnalystGroups(items)
-    const known = analyst === '' || web.some((m) => m.id === analyst) || ollama.some((m) => m.id === analyst)
+    const { web, ollama, openrouter } = desktopAnalystGroups(items, { keyConfigured })
+    const known = analyst === '' || [...web, ...ollama, ...openrouter.structured, ...openrouter.other].some((m) => m.id === analyst)
     analystSelect = (
       <select data-testid="config-analyst-model" value={analyst || ''} disabled={controlled ? false : disabled} onChange={onAnalyst}>
         <option value="">{ANALYST_NONE_LABEL}</option>
         {!known && <option value={analyst}>{analyst}</option>}
         <optgroup label={WEB_ANALYST_GROUP}>{web.map(opt)}</optgroup>
         {ollama.length > 0 && <optgroup label={OLLAMA_GROUP}>{ollama.map(opt)}</optgroup>}
+        {openrouter.structured.length > 0 && <optgroup label={OPENROUTER_STRUCTURED_GROUP}>{openrouter.structured.map(opt)}</optgroup>}
+        {openrouter.other.length > 0 && <optgroup label={OPENROUTER_OTHER_GROUP}>{openrouter.other.map(opt)}</optgroup>}
       </select>
     )
   } else {

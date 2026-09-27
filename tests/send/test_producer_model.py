@@ -23,7 +23,7 @@ import pytest
 from backend.config import settings
 from backend.features import send as send_mod
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, Delta
+from backend.schemas import DEFAULT_COUNCIL, Delta
 from backend.store import conversations as store
 from backend.store import files
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
@@ -202,7 +202,7 @@ async def test_cancelling_the_consumer_while_it_waits_on_the_queue_does_not_stop
     assert turn.type == "send" and turn.id == first["turn_id"]
     assert turn.responses == DEFAULT_RESPONSES and turn.errors == {}
     assert conv.title == DEFAULT_PROMPT[:60]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m.role for m in conv.threads[slot]] == ["user", "assistant"]
     assert len(mock.calls) == 3
 
@@ -261,4 +261,4 @@ async def test_transport_is_closed_before_persistence_and_the_terminal_slot_even
             ("_slot_error", "grok", True),
         ]
     )
-    assert closed == dict.fromkeys(SLOT_IDS, True)
+    assert closed == dict.fromkeys(DEFAULT_COUNCIL, True)

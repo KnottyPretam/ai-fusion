@@ -1,7 +1,7 @@
 // chats.js (renderer-desktop-2, Stage 2): the conversation ↔ site-chat link, renderer side.
 //
 // Main records each site's chat URL per Triplex conversation (`chats.json`, plan Decision 12) and
-// `triplex.openChats(convId)` navigates the three panes to the chats recorded for that conversation
+// `triplex.openChats(convId)` navigates the site panes to the chats recorded for that conversation
 // ('navigated'), to a fresh chat when none is recorded ('new') or leaves them ('kept') — main
 // decides; the renderer only says WHICH conversation is open:
 //   * whenever the selected conversation id changes after the first render — a sidebar select, a
@@ -16,8 +16,8 @@
 //     whatever chat each pane currently shows; main records the link from that turn.
 //   * "New chat everywhere" (the prompt-bar button and the Ctrl+Shift+N `new-chat-all` shortcut)
 //     = `createConversation` + `openChats(newId)` (plan row); from Stage 3 the conversation is
-//     created with `desktopSlotConfig()` (./analyst.js: web:* panes + the chosen analyst), like
-//     PromptBar's first-Send create. The id last handed to main is
+//     created with `councilSlotConfig(panes.council)` (./analyst.js: main's default council — the
+//     three web panes when none — plus the chosen analyst), like PromptBar's first-Send create. The id last handed to main is
 //     remembered so the `conversation/loaded` the create dispatches does not open the same chats a
 //     second time (a double `loadURL` would reload the panes mid-navigation).
 //   * Pre-parse (2026-09-23): a first Pre-parse with no conversation selected needs an id — the
@@ -37,7 +37,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { desktopSlotConfig } from './analyst.js'
+import { councilSlotConfig } from './analyst.js'
 
 export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse'] // preparse: the panes must not navigate while the composer waits on the analyst
 
@@ -63,6 +63,8 @@ export function useOpenChats(api, { enabled = true } = {}) {
   // Send's own create.
   const panes = useSlice('panes')
   const sending = !!(panes && panes.sending)
+  const councilRef = useRef(null) // main's default council, read at create time (never a stale closure)
+  councilRef.current = panes ? panes.council : null
   const sendSeen = useRef(false)
   if (sending) sendSeen.current = true
   // The conversation id whose chats main was last asked to open; `undefined` until the first render.
@@ -110,7 +112,7 @@ export function useOpenChats(api, { enabled = true } = {}) {
       setBusy(true)
       setError(null)
       try {
-        const conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
+        const conv = await createConversation(dispatch, { slot_config: councilSlotConfig(councilRef.current) })
         lastOpened.current = conv.id
         if (navigate) settle(api?.openChats?.(conv.id))
         return conv

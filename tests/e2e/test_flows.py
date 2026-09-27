@@ -22,7 +22,7 @@ from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE
 from backend.prompts import QUOTED_DATA_NOTICE
 from backend.prompts import analyze as analyze_prompts
 from backend.prompts import fusion as fusion_prompts
-from backend.schemas import SLOT_IDS, AnalyzeTurn, FusionTurn, SendTurn
+from backend.schemas import DEFAULT_COUNCIL, AnalyzeTurn, FusionTurn, SendTurn
 from backend.store import conversations as store
 from tests.e2e.conftest import (
     ALL_SCENARIOS,
@@ -44,6 +44,8 @@ from tests.e2e.conftest import (
     one,
     readme_sequence,
     readme_served_by_role,
+    scenario_council,
+    scenario_label_of,
     scenario_send,
     served,
     served_all,
@@ -60,10 +62,12 @@ FUSION_REFUSALS = ("nothing_to_fuse", "analyze_degraded", "incomplete_send_turn"
 def assert_send_persisted(f: Flow) -> None:
     """The send turn and threads match the scenario's chat fixtures (docs/semantics.md)."""
     prompt, responses = scenario_send(f.scenario)
-    assert_send_stream_invariants(f.send_events)
+    council = scenario_council(f.scenario)  # the three, or a council scenario's own (2026-09-27)
+    assert_send_stream_invariants(f.send_events, council)
     turn = SendTurn.model_validate(f.send_turn)
     assert turn.prompt == prompt and f.conv["title"] == prompt[:60]
-    for slot in SLOT_IDS:
+    assert tuple(f.conv["threads"]) == council and tuple(turn.responses) == council
+    for slot in council:
         expected = responses[slot]
         thread = f.threads(slot)
         chat = [m for m in thread if m["kind"] == "chat"]
@@ -78,7 +82,8 @@ def assert_send_persisted(f: Flow) -> None:
                 ("assistant", expected),
             ]
             assert chat[0]["turn_id"] == chat[1]["turn_id"] == turn.id
-    assert sorted(served_all()[:3]) == sorted(CHAT_FILES)
+    chat_files = [f"{slot}.chat.1.jsonl" for slot in council]
+    assert sorted(served_all()[: len(council)]) == sorted(chat_files)
 
 
 def assert_fusion_threads(
@@ -86,8 +91,7 @@ def assert_fusion_threads(
 ) -> None:
     """Every available exchange appended [challenge, reply] with the right meta to the slot
     behind its label, in round order; unavailable slots got nothing (docs/semantics.md)."""
-    for slot in SLOT_IDS:
-        label = LABEL_OF[slot]
+    for slot, label in scenario_label_of(f.scenario).items():
         thread = f.threads(slot)
         fusion_msgs = [m for m in thread if m["kind"] != "chat"]
         expected: list[tuple[str, int]] = []
@@ -189,7 +193,7 @@ async def test_planted_factual_full_flow(run_flow):
     assert_send_persisted(f)
     assert f.conv["title"] == f.prompt[:60]
     # Send: three streamed columns, one usage per slot, reasoning kept on the turn only.
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         done = one(f.send_events, "slot_done", slot)
         assert done["truncated"] is False and done["finish_reason"] == "stop"
         assert done["usage"]["role"] == slot and done["usage"]["purpose"] == "chat"
@@ -240,7 +244,7 @@ async def test_planted_factual_full_flow(run_flow):
     assert turn.exit_reason == "converged" and len(turn.rounds) == 1
     assert [s.model_dump() for s in turn.final] == [{"divergence_id": "d1", "status": "resolved"}]
     assert_fusion_threads(f, turn)
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m["kind"] for m in f.threads(slot)] == [
             "chat",
             "chat",
@@ -257,7 +261,7 @@ async def test_planted_factual_full_flow(run_flow):
     # README: 8 files -- chats, extraction, three defenses, then the convergence check last.
     files = served_all()
     assert sorted(files[:3]) == sorted(CHAT_FILES) and files[3] == EXTRACTION_1
-    assert sorted(files[4:7]) == sorted(f"{s}.defense.1.jsonl" for s in SLOT_IDS)
+    assert sorted(files[4:7]) == sorted(f"{s}.defense.1.jsonl" for s in DEFAULT_COUNCIL)
     assert files[7] == CONVERGENCE_1 and len(files) == 8
     # d2 (low) is below materiality_min=medium: never challenged, never sent to the analyst.
     d2_topic = analyze.extraction.divergences[1].topic
@@ -307,7 +311,7 @@ async def test_stalemate_exits_after_round_one_without_an_analyst_call(run_flow)
     assert [s.model_dump() for s in turn.final] == [{"divergence_id": "d1", "status": "standing"}]
     # Both sides' final justifications are reported on the standing divergence.
     by_label = {e.model: e for e in turn.rounds[0].exchanges}
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert (
             by_label[LABEL_OF[slot]].justification
             == defense_obj("stalemate", slot)["justification"]
@@ -315,7 +319,7 @@ async def test_stalemate_exits_after_round_one_without_an_analyst_call(run_flow)
     assert calls("convergence") == [], "a stalemate round must not call the analyst"
     assert len(mock.calls) == 7 and served("analyst", "extraction") == [EXTRACTION_1]
     assert_fusion_threads(f, turn)
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert len(f.threads(slot)) == 4
 
 
@@ -411,7 +415,7 @@ async def test_two_divergences_resolve_d1_and_never_rechallenge_it(run_flow):
         ("d2", "R3"),
     ]
     # README: per slot `.1` (d1) then `.2` (d2) in round 1, sticky `.2` in round 2; 11 files.
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert served(slot, "defense") == [
             f"{slot}.defense.1.jsonl",
             f"{slot}.defense.2.jsonl",
@@ -496,7 +500,7 @@ async def test_grounded_mode_adds_the_web_plugin_and_persists_citations(run_flow
     assert f.send_turn["reasoning"]["claude"].startswith("Search result: BMI088 datasheet")
     assert "[REDACTED]" not in f.send_turn["reasoning"]["claude"]
     # Nothing citation- or reasoning-shaped ever lands in a thread.
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert all(set(m) >= {"role", "content", "kind", "turn_id", "ts"} for m in f.threads(slot))
     # The web plugin rides on Send only (never on the analyst).
     for c in calls("chat"):
@@ -626,7 +630,7 @@ async def test_analyst_degrade_refuses_fusion_and_never_caches(run_flow, api):
         "analyst.extraction.2.jsonl",
     ]
     assert calls("defense") == [] and calls("convergence") == []
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert len(conv["threads"][slot]) == 2
 
 
@@ -671,7 +675,7 @@ async def test_injection_text_only_ever_appears_inside_delimiters(run_flow):
     r3_claim = analyze.extraction.divergences[0].positions[2].claim
     assert INJECTION in r3_claim  # the extraction records it as R3's quoted claim
     # Every challenge prompt: R3 sees it as its own delimited claim, R1/R2 as the <<<R3>>> peer.
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         challenge = challenge_of(calls("defense", slot)[0])
         blocks = delimited_blocks(challenge)
         assert INJECTION not in strip_delimited(challenge), slot
@@ -704,7 +708,7 @@ async def test_vendor_in_prompt_leaks_nothing_beyond_the_user_prompt(run_flow, a
     assert turn.exit_reason == "converged"
     assert [s.status for s in turn.final] == ["resolved"]
     # The prompt sits in every slot's thread (history) and in every continue payload.
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert f.threads(slot)[0]["content"] == f.prompt
     await api.cont(f.cid, "claude", "Thanks.")
     assert mock.calls[-1]["messages"][0] == {"role": "user", "content": f.prompt}

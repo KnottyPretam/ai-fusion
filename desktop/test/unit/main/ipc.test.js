@@ -10,19 +10,26 @@
 // injected applyTheme, answered + replayed as panes:theme, carried by getInfo).
 // panes:export (the renderer-only channel: every bad payload shape rejected before the injected
 // runner is called, the validated request — and nothing else — handed over, export_unavailable when
-// no runner is wired).
+// no runner is wired). Council + key (2026-09-27): requireActive accepts any catalog member,
+// requireCouncil / requireOpenRouterKey (`undefined` is a bad_request, never a clear), the four
+// channels (validate before persist, panes:council / panes:openRouterKey emitted — the key one ONCE
+// here as soon as it is stored; the injected syncKey, main's, announces the settled push), getInfo and the
+// replay carrying the council + key status only when wired, and the key never in a log line.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, SNAPSHOT_NAMES, ANALYST_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, requireCouncil, requireOpenRouterKey, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, SNAPSHOT_NAMES, ANALYST_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
 import { SLOTS } from '../../../main/sites.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
+const CLASSIC = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
+const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
+const KEY = `sk-or-v1-${'c'.repeat(64)}`
 
-function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false, withExport = true, exportResult = null } = {}) {
+function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false, withExport = true, exportResult = null, withCouncil = false, withKey = false, keyAvailable = true } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
   const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
@@ -72,6 +79,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
   const capture = { claude: false, chatgpt: false, grok: false }
   const themeState = { value: theme }
   const themeApplied = []
+  const councilState = { value: JSON.parse(JSON.stringify(CLASSIC)) }
   const settings = {
     getCapture: () => ({ ...capture }),
     setCapture: (s, on) => {
@@ -79,6 +87,17 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
       calls.push(['setCapture', s, on])
       return on
     },
+    // the default council (settings.js getCouncil/setCouncil, validated by council.js in ipc.js first)
+    ...(withCouncil
+      ? {
+          getCouncil: () => JSON.parse(JSON.stringify(councilState.value)),
+          setCouncil: (c) => {
+            councilState.value = c
+            calls.push(['setCouncil', c])
+            return JSON.parse(JSON.stringify(c))
+          },
+        }
+      : {}),
     // main's settings.json is the one source of truth for the theme (settings.js getTheme/setTheme)
     ...(noThemeSettings
       ? {}
@@ -90,6 +109,35 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
             return t
           },
         }),
+  }
+  // A stand-in for openrouter-key.js: set/clear/status, `encryption_unavailable` when the fake keyring is off;
+  // the "plaintext" is held here so the test can assert it never reaches a log line or an emit.
+  const keyState = { value: null, pushed: false }
+  const openRouterKey = {
+    status: () => ({ configured: keyState.value !== null, prefix: keyState.value ? keyState.value.slice(0, 9) : '', length: keyState.value ? keyState.value.length : 0, pushed: keyState.pushed }),
+    set: (k) => {
+      if (!keyAvailable) throw new Error('encryption_unavailable')
+      keyState.value = k
+      keyState.pushed = false
+      calls.push(['key.set', k.length])
+      return openRouterKey.status()
+    },
+    clear: () => {
+      keyState.value = null
+      keyState.pushed = false
+      calls.push(['key.clear'])
+      return openRouterKey.status()
+    },
+  }
+  const syncCalls = []
+  const syncKey = () => {
+    syncCalls.push(openRouterKey.status())
+    return new Promise((resolve) =>
+      setImmediate(() => {
+        keyState.pushed = true
+        resolve({ ok: true })
+      }),
+    )
   }
   const analystWc = fakeWebContents({ id: 21 })
   // A stand-in for analyst-views.js: one hidden view on the chosen slot's partition.
@@ -121,6 +169,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
   const layoutState = { mode: null, active: null }
   const snapshotsDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-ipc-')), 'snapshots')
   // export.js's exportTurn, already bound in main.js; ipc.js only validates and hands over.
+  const log = fakeLog()
   const exportCalls = []
   const exportRunner = async (req) => {
     exportCalls.push(req)
@@ -143,15 +192,16 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     getBridgeState: () => bridge,
     snapshotsDir,
     ...(withExport ? { exportTurn: exportRunner } : {}),
+    ...(withKey ? { openRouterKey, syncKey } : {}),
     applyTheme: (t) => themeApplied.push(t), // main's nativeTheme.themeSource setter
     openExternal: async (u) => opened.push(u),
     sendToRenderer: (channel, ...args) => sent.push([channel, ...args]),
     now: () => 1710000000000,
-    log: fakeLog(),
+    log,
     ...(timers ? { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout } : {}),
   })
   const fromRenderer = eventFrom(renderer)
-  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current, themeState, themeApplied, exportCalls }
+  return { ipcMain, renderer, siteWc, analystWc, analystViews, views, calls, sent, opened, health, layoutState, ipc, selectors, fromRenderer, capture, adapters, snapshotsDir, current, themeState, themeApplied, exportCalls, councilState, keyState, syncCalls, log }
 }
 
 const rejects = (p, re = /bad_request/) => assert.rejects(p, re)
@@ -181,6 +231,116 @@ test('validators: unknown slot, non-string / oversize text, bad targets, bad dir
   for (const bad of ['Dark', 'auto', '', null, undefined, 1, ['dark'], { theme: 'dark' }]) assert.throws(() => requireTheme(bad), /bad_request/)
   assert.equal(snapshotFileName('grok', 1710000000000.4), 'grok-1710000000000.html')
   assert.throws(() => snapshotFileName('bing', 1), /bad_request/)
+})
+
+test('requireActive accepts any catalog member as the active tab (a renderer column too); requireCouncil / requireOpenRouterKey validate by shape only', () => {
+  assert.deepEqual(requireActive({ mode: 'tabs', active: 'qwen' }), { mode: 'tabs', active: 'qwen' })
+  assert.deepEqual(requireActive({ mode: 'split', active: 'mimo' }), { mode: 'split', active: 'mimo' })
+  assert.throws(() => requireActive({ mode: 'tabs', active: 'bing' }), /bad_request/)
+  assert.throws(() => requireActive({ mode: 'tabs', active: 'analyst' }), /bad_request/)
+  assert.deepEqual(requireCouncil(TWO), TWO)
+  assert.deepEqual(Object.keys(requireCouncil({ slots: { qwen: TWO.slots.qwen, chatgpt: TWO.slots.chatgpt } }).slots), ['chatgpt', 'qwen'], 're-keyed in catalog order')
+  for (const bad of [null, 'x', {}, { slots: {} }, { slots: { claude: { model: 'web:claude' } } }, { slots: { ...TWO.slots, bing: { model: 'a/b' } } }, { slots: { ...TWO.slots, qwen: { model: 'web:qwen' } } }, { slots: { ...TWO.slots, qwen: { model: 'a/b', effort: 'max' } } }]) {
+    assert.throws(() => requireCouncil(bad), /bad_request/)
+  }
+  assert.equal(requireOpenRouterKey(null), null)
+  assert.throws(() => requireOpenRouterKey(undefined), /bad_request/, 'a missing payload is not a clear')
+  assert.throws(() => requireOpenRouterKey(), /bad_request/)
+  assert.equal(requireOpenRouterKey(KEY), KEY)
+  assert.equal(requireOpenRouterKey('x'.repeat(20)), 'x'.repeat(20))
+  assert.equal(requireOpenRouterKey('x'.repeat(512)), 'x'.repeat(512))
+  for (const bad of ['', 'short', 'x'.repeat(19), 'x'.repeat(513), `${'x'.repeat(19)} `, `${'x'.repeat(19)}\n`, `${'x'.repeat(19)}é`, 42, {}, ['x'.repeat(20)]]) {
+    assert.throws(() => requireOpenRouterKey(bad), /bad_request/)
+  }
+})
+
+test('panes:getCouncil / panes:setCouncil: read, validate-then-persist, panes:council emitted; bad specs and foreign senders change nothing; council_unavailable without a council-aware settings', async () => {
+  const { ipcMain, fromRenderer, calls, sent, councilState, siteWc } = setup({ withCouncil: true })
+  assert.deepEqual(await ipcMain.invoke('panes:getCouncil', fromRenderer), CLASSIC)
+  await rejects(ipcMain.invoke('panes:getCouncil', eventFrom(siteWc.claude)))
+  await rejects(ipcMain.invoke('panes:setCouncil', eventFrom(siteWc.claude), TWO))
+  await rejects(ipcMain.invoke('panes:setCouncil', fromRenderer, { slots: { claude: { model: 'web:claude' } } }))
+  await rejects(ipcMain.invoke('panes:setCouncil', fromRenderer, { slots: { ...TWO.slots, gemini: { model: 'web:gemini' } } }), /bad_request/)
+  assert.deepEqual(calls, [], 'nothing persisted by a refused call')
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:council'), [])
+  const reordered = { slots: { qwen: TWO.slots.qwen, chatgpt: TWO.slots.chatgpt } }
+  assert.deepEqual(await ipcMain.invoke('panes:setCouncil', fromRenderer, reordered), TWO, 'answered re-keyed in catalog order')
+  assert.deepEqual(calls, [['setCouncil', TWO]])
+  assert.deepEqual(councilState.value, TWO)
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:council'), [['panes:council', TWO]])
+  assert.deepEqual(await ipcMain.invoke('panes:getCouncil', fromRenderer), TWO)
+  const bare = setup()
+  await assert.rejects(bare.ipcMain.invoke('panes:getCouncil', bare.fromRenderer), /council_unavailable/)
+  await assert.rejects(bare.ipcMain.invoke('panes:setCouncil', bare.fromRenderer, TWO), /council_unavailable/)
+  assert.deepEqual(bare.calls, [])
+})
+
+test('panes:getOpenRouterKey / panes:setOpenRouterKey: status only ever crosses; set → stored status at once, then syncKey (whose settled status main announces); null clears, a missing payload does not; bad shapes and foreign senders store nothing', async () => {
+  const { ipcMain, fromRenderer, calls, sent, keyState, syncCalls, siteWc, log } = setup({ withKey: true })
+  assert.deepEqual(await ipcMain.invoke('panes:getOpenRouterKey', fromRenderer), { configured: false, prefix: '', length: 0, pushed: false })
+  await rejects(ipcMain.invoke('panes:getOpenRouterKey', eventFrom(siteWc.grok)))
+  await rejects(ipcMain.invoke('panes:setOpenRouterKey', eventFrom(siteWc.grok), KEY))
+  await rejects(ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, 'short'))
+  await rejects(ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, 42))
+  await rejects(ipcMain.invoke('panes:setOpenRouterKey', fromRenderer), /bad_request/) // no payload at all: not a clear
+  await rejects(ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, undefined), /bad_request/)
+  assert.deepEqual(calls, [], 'a refused call stores nothing')
+  assert.deepEqual(syncCalls, [], 'and pushes nothing')
+  const stored = await ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, KEY)
+  assert.deepEqual(stored, { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false }, 'answered as soon as it is stored')
+  assert.deepEqual(calls, [['key.set', 73]])
+  assert.equal(keyState.value, KEY)
+  await tick()
+  await tick()
+  assert.deepEqual(syncCalls, [{ configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false }], 'syncKey ran once, after the store')
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:openRouterKey').map(([, s]) => s), [
+    { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false },
+  ], 'the stored status is announced here; the settled push is announced by syncKey itself (main-wiring pins that), not a second time by the handler')
+  assert.deepEqual(await ipcMain.invoke('panes:getOpenRouterKey', fromRenderer), { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true })
+  sent.length = 0
+  assert.deepEqual(await ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, null), { configured: false, prefix: '', length: 0, pushed: false })
+  await tick()
+  await tick()
+  assert.deepEqual(calls.at(-1), ['key.clear'])
+  assert.equal(syncCalls.length, 2, 'a clear is pushed too')
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:openRouterKey').map(([, s]) => s.pushed), [false])
+  // the key never reaches a log line or any emit
+  const everything = JSON.stringify([sent, log.lines, syncCalls])
+  assert.equal(everything.includes(KEY), false)
+  assert.equal(everything.includes('c'.repeat(20)), false)
+})
+
+test('panes:setOpenRouterKey without a keyring: the module\'s encryption_unavailable code is the rejection, nothing is announced or pushed; openrouter_key_unavailable without the module', async () => {
+  const { ipcMain, fromRenderer, sent, syncCalls, keyState } = setup({ withKey: true, keyAvailable: false })
+  await assert.rejects(ipcMain.invoke('panes:setOpenRouterKey', fromRenderer, KEY), /^Error: encryption_unavailable$/)
+  assert.equal(keyState.value, null)
+  assert.deepEqual(sent.filter(([c]) => c === 'panes:openRouterKey'), [])
+  assert.deepEqual(syncCalls, [])
+  const bare = setup()
+  await assert.rejects(bare.ipcMain.invoke('panes:getOpenRouterKey', bare.fromRenderer), /openrouter_key_unavailable/)
+  await assert.rejects(bare.ipcMain.invoke('panes:setOpenRouterKey', bare.fromRenderer, KEY), /openrouter_key_unavailable/)
+  await rejects(bare.ipcMain.invoke('panes:setOpenRouterKey', bare.fromRenderer, 'short'), /bad_request/) // validation still first
+})
+
+test('panes:getInfo carries the council and the key status (null when not wired) and the replay adds panes:council / panes:openRouterKey after panes:theme only when wired', async () => {
+  const bare = setup({ bridge: { connected: false } })
+  const info = await bare.ipcMain.invoke('panes:getInfo', bare.fromRenderer)
+  assert.equal(info.council, null)
+  assert.equal(info.openRouterKey, null)
+  assert.deepEqual(bare.sent, [['panes:bridge', { connected: false }], ['panes:theme', { theme: 'dark' }]], 'no council / key replay without the modules')
+  const wired = setup({ bridge: { connected: false }, withCouncil: true, withKey: true })
+  const full = await wired.ipcMain.invoke('panes:getInfo', wired.fromRenderer)
+  assert.deepEqual(full.council, CLASSIC)
+  assert.deepEqual(full.openRouterKey, { configured: false, prefix: '', length: 0, pushed: false })
+  assert.deepEqual(wired.sent, [
+    ['panes:bridge', { connected: false }],
+    ['panes:theme', { theme: 'dark' }],
+    ['panes:council', CLASSIC],
+    ['panes:openRouterKey', { configured: false, prefix: '', length: 0, pushed: false }],
+  ])
+  wired.sent.length = 0
+  wired.ipc.replayState()
+  assert.deepEqual(wired.sent.map(([c]) => c), ['panes:bridge', 'panes:theme', 'panes:council', 'panes:openRouterKey'])
 })
 
 test('every renderer channel rejects bad_request for a non-renderer sender (a site view, a sub-frame, no sender)', async () => {

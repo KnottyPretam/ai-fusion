@@ -64,7 +64,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from fastapi import HTTPException
@@ -76,7 +76,6 @@ from ..prompts import fusion as prompts
 from ..schemas import (
     ANALYST_ROLE,
     MATERIALITY_RANK,
-    SLOT_IDS,
     AnalyzeTurn,
     ConvergenceCheck,
     Conversation,
@@ -95,6 +94,8 @@ from ..schemas import (
     SendTurn,
     SlotId,
     ThreadMessage,
+    council_labels,
+    council_of,
     is_unjustified,
     new_id,
     to_openai,
@@ -168,9 +169,12 @@ def resolve_analyze_turn(conv: Conversation, of_analyze: str | None) -> AnalyzeT
     return turn
 
 
-def labels_with_position(div: Divergence) -> list[Label]:
-    """Every label holding a Position on `div`, in order of appearance, each once."""
-    return list(dict.fromkeys(p.model for p in div.positions))
+def labels_with_position(div: Divergence, labels: Sequence[Label] | None = None) -> list[Label]:
+    """Every label holding a Position on `div`, in order of appearance, each once. `labels`
+    (2026-09-27) restricts it to the conversation's council: a label the analyst invented outside
+    R1..Rn has no slot behind it and is never challenged."""
+    seen = dict.fromkeys(p.model for p in div.positions)
+    return [label for label in seen if labels is None or label in labels]
 
 
 def _error_message(e: BaseException) -> str:
@@ -232,6 +236,8 @@ class _FusionRun:
         # Loop state (filled by _init_state once the Analyze turn is known).
         self.standing: list[str] = []
         self.divs: dict[str, Divergence] = {}
+        self.council: tuple[SlotId, ...] = ()  # the conversation's 2..5 slots, catalog order
+        self.council_labels: tuple[Label, ...] = ()  # R1..Rn
         self.labels: dict[Label, SlotId] = {}
         self.threads: dict[SlotId, list[ThreadMessage]] = {}
         self.status: StatusMap = {}
@@ -313,8 +319,10 @@ class _FusionRun:
     def _init_state(self) -> None:
         conv, turn = self.conv, self.analyze_turn
         assert turn is not None and turn.extraction is not None
+        self.council = council_of(conv.slot_config)
+        self.council_labels = council_labels(self.council)
         self.labels = anon.labels(conv)
-        self.threads = {slot: list(conv.threads.get(slot, [])) for slot in SLOT_IDS}
+        self.threads = {slot: list(conv.threads.get(slot, [])) for slot in self.council}
         self.standing = compute_standing(turn.extraction, conv.slot_config.materiality_min)
         self.divs = {d.id: d for d in turn.extraction.divergences}
         self.status = {d: "standing" for d in self.standing}
@@ -349,7 +357,7 @@ class _FusionRun:
         justs: dict[ClaimKey, str | None],
     ) -> Exchange:
         div = self.divs[d]
-        holders = labels_with_position(div)
+        holders = labels_with_position(div, self.council_labels)
         peers = [
             PeerState(label=peer, claim=claims[(d, peer)], justification=justs[(d, peer)])
             for peer in holders
@@ -458,14 +466,16 @@ class _FusionRun:
                 "topic": anon.scrub(self.divs[d].topic),
                 "claims": {
                     label: anon.scrub(self.current_claim(d, label))
-                    for label in labels_with_position(self.divs[d])
+                    for label in labels_with_position(self.divs[d], self.council_labels)
                 },
             }
             for d in to_check
         ]
         analyst_model = self.conv.slot_config.analyst_model
         messages = prompts.convergence_messages(
-            items, fenced=client.transport_kind(analyst_model) == "web"
+            items,
+            fenced=client.transport_kind(analyst_model) == "web",
+            n=len(self.council),
         )
         for m in messages:
             anon.find_leaks(m["content"])  # advisory only
@@ -527,9 +537,9 @@ class _FusionRun:
             claims, justs = dict(self.claims), dict(self.justs)
             per_slot: dict[SlotId, list[ClaimKey]] = {}
             for d in active:
-                for label in labels_with_position(self.divs[d]):
+                for label in labels_with_position(self.divs[d], self.council_labels):
                     per_slot.setdefault(self.labels[label], []).append((d, label))
-            slots = [s for s in SLOT_IDS if s in per_slot]
+            slots = [s for s in self.council if s in per_slot]
             results = await asyncio.gather(
                 *(self._run_slot(s, per_slot[s], round_no, claims, justs) for s in slots),
                 return_exceptions=True,  # wait for every slot, then fail as a whole
@@ -543,7 +553,7 @@ class _FusionRun:
             exchanges = [
                 by_key[(d, label)]
                 for d in active
-                for label in labels_with_position(self.divs[d])
+                for label in labels_with_position(self.divs[d], self.council_labels)
                 if (d, label) in by_key
             ]
 

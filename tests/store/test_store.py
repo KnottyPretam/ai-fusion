@@ -17,8 +17,8 @@ from pydantic import ValidationError
 
 from backend.config import DEFAULT_SLOT_CONFIG, settings
 from backend.schemas import (
+    DEFAULT_COUNCIL,
     LABELS,
-    SLOT_IDS,
     ContinueTurn,
     SendTurn,
     ThreadMessage,
@@ -62,7 +62,7 @@ async def test_create_defaults_and_document_layout(conv_dir):
     conv = await store.create()
     assert conv.title == "New conversation"
     assert conv.schema_version == 1 and files.is_uuid4(conv.id)
-    assert conv.turns == [] and conv.threads == {s: [] for s in SLOT_IDS}
+    assert conv.turns == [] and conv.threads == {s: [] for s in DEFAULT_COUNCIL}
     assert conv.created_at.endswith("Z") and conv.updated_at == conv.created_at
     path = conv_dir() / f"{conv.id}.json"
     assert path.is_file(), "one document per conversation under <DATA_DIR>/conversations/"
@@ -84,8 +84,8 @@ async def test_create_stamps_random_permutation_live(monkeypatch):
     seen = set()
     for _ in range(40):
         conv = await store.create()
-        assert tuple(conv.anon_map) == LABELS
-        assert sorted(conv.anon_map.values()) == sorted(SLOT_IDS)
+        assert tuple(conv.anon_map) == LABELS[:3]
+        assert sorted(conv.anon_map.values()) == sorted(DEFAULT_COUNCIL)
         seen.add(tuple(conv.anon_map.values()))
     assert len(seen) > 1, "live mode shuffles (40 draws from 6 permutations never all equal)"
 
@@ -97,11 +97,12 @@ async def test_create_with_custom_anon_map_is_validated_and_stamped_verbatim():
     assert (await store.load(conv.id)).anon_map == custom
     shuffled_keys = {"R3": "chatgpt", "R1": "grok", "R2": "claude"}  # key order is irrelevant
     conv2 = await store.create(anon_map=shuffled_keys)
-    assert conv2.anon_map == custom and tuple(conv2.anon_map) == LABELS
+    assert conv2.anon_map == custom and tuple(conv2.anon_map) == LABELS[:3]
     for bad in (
         {"R1": "claude", "R2": "claude", "R3": "grok"},  # not a permutation
         {"R1": "claude", "R2": "chatgpt"},  # label missing
-        {"R1": "claude", "R2": "chatgpt", "R3": "gemini"},  # unknown slot
+        {"R1": "claude", "R2": "chatgpt", "R3": "bing"},  # unknown slot
+        {"R1": "claude", "R2": "chatgpt", "R3": "gemini"},  # a catalog slot this council did not seat
         {"R1": "claude", "R2": "chatgpt", "R3": "grok", "R4": "grok"},  # extra label
     ):
         with pytest.raises(ValueError):
@@ -303,8 +304,8 @@ async def test_append_turn_rejects_duplicate_ids_and_never_assigns_them():
 
 async def test_append_rejects_unknown_slot_and_missing_conversation():
     conv = await store.create()
-    with pytest.raises(ValueError):
-        await store.append_to_thread(conv.id, "gemini", _pair("gemini", "t"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="unknown slot"):
+        await store.append_to_thread(conv.id, "bing", _pair("bing", "t"))  # type: ignore[arg-type]
     missing = str(uuid.uuid4())
     with pytest.raises(HTTPException) as ei:
         await store.append_to_thread(missing, "claude", _pair("claude", "t"))
@@ -345,11 +346,11 @@ async def test_concurrent_appends_lose_nothing(monkeypatch):
     monkeypatch.setattr(store, "_persist", slow_persist)
     turns = [_send_turn(conv, prompt=f"p{i}") for i in range(3)]
     await asyncio.gather(
-        *(store.append_to_thread(conv.id, s, _pair(s, "t1")) for s in SLOT_IDS),
+        *(store.append_to_thread(conv.id, s, _pair(s, "t1")) for s in DEFAULT_COUNCIL),
         *(store.append_turn(conv.id, t) for t in turns),
     )
     got = await store.load(conv.id)
-    for s in SLOT_IDS:
+    for s in DEFAULT_COUNCIL:
         assert [m.content for m in got.threads[s]] == [f"q-{s}-0", f"a-{s}-0"]
     assert sorted(t.id for t in got.turns) == sorted(t.id for t in turns)
     assert (await store.list_summaries())[0].turn_count == 3
@@ -357,7 +358,7 @@ async def test_concurrent_appends_lose_nothing(monkeypatch):
 
 async def test_untouched_threads_are_byte_identical_after_appends_to_another_slot(conv_dir):
     conv = await store.create()
-    for s in SLOT_IDS:
+    for s in DEFAULT_COUNCIL:
         await store.append_to_thread(conv.id, s, _pair(s, "t0"))
     before = await store.load(conv.id)
     before_json = {s: _thread_json(before, s) for s in ("chatgpt", "grok")}
@@ -511,7 +512,7 @@ async def test_persisted_conversation_fixture_roundtrips(persisted_conversation)
     assert conv.title == "Test conversation" and conv.anon_map == DEFAULT_ANON
     assert len(conv.turns) == 1 and conv.turns[0].type == "send"
     assert conv.turns[0].prompt == DEFAULT_PROMPT and conv.turns[0].responses == DEFAULT_RESPONSES
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         msgs = conv.threads[slot]
         assert [m.role for m in msgs] == ["user", "assistant"]
         assert msgs[0].content == DEFAULT_PROMPT and msgs[1].content == DEFAULT_RESPONSES[slot]

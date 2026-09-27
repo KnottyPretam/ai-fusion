@@ -1,19 +1,26 @@
-// settings.js — defaults (capture all false, analyst chatgpt, zoom 1, theme dark), clamp, atomic
-// round-trip, the theme key (the ONE source of truth for the desktop app's palette and
-// nativeTheme.themeSource) and debounced window bounds. Uses a real temp directory so the tmp +
+// settings.js — defaults (capture all false, analyst chatgpt, zoom 1, theme dark, the classic
+// council, no key), clamp, atomic round-trip, the theme key (the ONE source of truth for the desktop
+// app's palette and nativeTheme.themeSource), the council key (council.js validated; a malformed
+// member dropped on load), the openrouterKey key (base64 ciphertext or null — a plaintext key never
+// survives the sanitiser) and debounced window bounds. Uses a real temp directory so the tmp +
 // rename write is exercised.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createSettings, defaultSettings, sanitizeSettings, clampBounds, clampZoom, stepZoom, asTheme, SETTINGS_FILE, MIN_WINDOW, THEMES, DEFAULT_THEME } from '../../../main/settings.js'
+import { createSettings, defaultSettings, sanitizeSettings, clampBounds, clampZoom, stepZoom, asTheme, asCiphertext, SETTINGS_FILE, MIN_WINDOW, THEMES, DEFAULT_THEME } from '../../../main/settings.js'
+import { DEFAULT_COUNCIL } from '../../../main/council.js'
 import { fakeTimers, fakeLog } from './_fakes.js'
+
+const CLASSIC = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
+const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
+const KEY = `sk-or-v1-${'b'.repeat(64)}`
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-settings-'))
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'))
 
-test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, theme dark, window 1600×900 uncentred', () => {
+test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, theme dark, the classic council, no key, window 1600×900 uncentred', () => {
   assert.deepEqual(defaultSettings(), {
     version: 1,
     window: { x: null, y: null, width: 1600, height: 900, maximized: false },
@@ -22,8 +29,79 @@ test('defaults: version 1, capture all false, analyst chatgpt, zoom all 1, theme
     analyst: 'chatgpt',
     analystVisible: false,
     theme: 'dark',
+    council: CLASSIC,
+    openrouterKey: null,
   })
+  assert.deepEqual(defaultSettings().council, DEFAULT_COUNCIL())
   assert.notEqual(defaultSettings().zoom, defaultSettings().zoom, 'a fresh object every time')
+  assert.notEqual(defaultSettings().council, defaultSettings().council)
+})
+
+test('council: getCouncil is a copy, setCouncil validates (council.js) before persisting, notifies, round-trips; a malformed member is dropped on load and fewer than two fall back to the default — each with a warning naming what went', () => {
+  const dir = tmpDir()
+  const s = createSettings({ dir, log: fakeLog() })
+  s.load()
+  const seen = []
+  s.subscribe(({ key, value }) => seen.push([key, value]))
+  const c = s.getCouncil()
+  c.slots.claude.model = 'tampered'
+  assert.deepEqual(s.getCouncil(), CLASSIC, 'a copy out')
+  assert.deepEqual(s.setCouncil(TWO), TWO)
+  assert.deepEqual(readJson(s.file).council, TWO, 'written immediately')
+  assert.deepEqual(seen, [['council', TWO]])
+  for (const bad of [null, {}, { slots: {} }, { slots: { claude: { model: 'web:claude' } } }, { slots: { ...TWO.slots, bing: { model: 'x/y' } } }, { slots: { ...TWO.slots, qwen: { model: 'web:qwen' } } }]) {
+    assert.throws(() => s.setCouncil(bad), /invalid council/)
+  }
+  assert.deepEqual(s.getCouncil(), TWO, 'a refused write leaves the document alone')
+  assert.equal(seen.length, 1)
+  const againLog = fakeLog()
+  const again = createSettings({ dir, log: againLog })
+  assert.deepEqual(again.load().council, TWO, 'survives a restart')
+  const councilWarns = () => againLog.lines.filter(([l, m]) => l === 'warn' && m.startsWith('[settings] council:')).map(([, m]) => m)
+  assert.deepEqual(councilWarns(), [], 'a council that loads as written is not remarked on')
+  // on disk: one malformed member is dropped, the rest kept in catalog order; one survivor → default
+  // — the user's configuration going away is said in the log, never silent
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, council: { slots: { qwen: TWO.slots.qwen, grok: { model: 'web:grok', effort: 'off' }, gemini: { model: 'web:gemini', effort: 'off' } } } }))
+  assert.deepEqual(Object.keys(again.load().council.slots), ['grok', 'qwen'])
+  assert.deepEqual(councilWarns(), ['[settings] council: dropped gemini (malformed or unknown member)'])
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, council: { slots: { qwen: TWO.slots.qwen, gemini: { model: 'web:gemini' } } } }))
+  assert.deepEqual(again.load().council, CLASSIC)
+  assert.deepEqual(councilWarns().slice(1), ['[settings] council: dropped gemini (malformed or unknown member)', '[settings] council: fell back to the default council (claude, chatgpt, grok) — too_few'])
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, council: 'three' }))
+  assert.deepEqual(again.load().council, CLASSIC)
+  assert.equal(councilWarns().at(-1), '[settings] council: fell back to the default council (claude, chatgpt, grok) — not_a_council')
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1 }))
+  const n = councilWarns().length
+  assert.deepEqual(again.load().council, CLASSIC)
+  assert.equal(councilWarns().length, n, 'no council key at all is the default, not a fallback')
+})
+
+test('openrouterKey: base64 ciphertext or null round-trips and notifies {configured}; a plaintext key (or anything not base64) is refused by the setter and dropped by the sanitiser', () => {
+  const dir = tmpDir()
+  const s = createSettings({ dir, log: fakeLog() })
+  s.load()
+  assert.equal(s.getOpenRouterKeyCiphertext(), null)
+  const seen = []
+  s.subscribe(({ key, value }) => seen.push([key, value]))
+  const blob = Buffer.from('enc:anything').toString('base64')
+  assert.equal(s.setOpenRouterKeyCiphertext(blob), blob)
+  assert.equal(readJson(s.file).openrouterKey, blob)
+  assert.equal(s.setOpenRouterKeyCiphertext(null), null)
+  assert.equal(readJson(s.file).openrouterKey, null)
+  assert.deepEqual(seen, [
+    ['openrouterKey', { configured: true }],
+    ['openrouterKey', { configured: false }],
+  ])
+  for (const bad of [KEY, '', ' ', 'not base64!', 42, {}, undefined]) assert.throws(() => s.setOpenRouterKeyCiphertext(bad), /base64 ciphertext or null/)
+  assert.equal(seen.length, 2, 'a refused write notifies nobody')
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, openrouterKey: KEY }))
+  const again = createSettings({ dir, log: fakeLog() })
+  assert.equal(again.load().openrouterKey, null, 'a plaintext key in the file is dropped, never read back')
+  fs.writeFileSync(path.join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, openrouterKey: blob }))
+  assert.equal(again.load().openrouterKey, blob)
+  assert.equal(asCiphertext(KEY), null, 'an OpenRouter key carries `-`, which base64 does not')
+  assert.equal(asCiphertext(blob), blob)
+  assert.equal(asCiphertext(''), null)
 })
 
 test('load() without a file yields the defaults; get() is a copy', () => {

@@ -10,7 +10,7 @@ import pytest
 from backend.llm import bridge
 from backend.llm import bridge_protocol as bp
 from backend.llm.bridge import BridgeError
-from backend.schemas import SLOT_IDS
+from backend.llm.bridge_protocol import BRIDGE_SLOTS
 from tests.bridge.conftest import FakeConnection, hello
 
 hub = bridge.hub
@@ -161,7 +161,7 @@ async def test_detach_mid_request_fails_bridge_disconnected(attached: FakeConnec
         "protocol": None,
         "version": None,
         "since": None,
-        "sites": {s: {"capture": False, "health": None, "health_ts": None} for s in SLOT_IDS},
+        "sites": {s: {"capture": False, "health": None, "health_ts": None} for s in BRIDGE_SLOTS},
         "analyst": None,
         "inflight": 0,
     }
@@ -284,7 +284,7 @@ async def test_frames_from_a_superseded_connection_are_ignored(attached: FakeCon
         "ts": 1710000000000,
     }
     # Cache frames from the old socket leave status() alone.
-    hub.dispatch(attached, {"type": "capture", "capture": {s: False for s in SLOT_IDS}})
+    hub.dispatch(attached, {"type": "capture", "capture": {s: False for s in BRIDGE_SLOTS}})
     hub.dispatch(attached, {"type": "analyst", "analyst": None})
     hub.dispatch(attached, {"type": "health", "slot": "grok", "health": health})
     assert hub.status() == before
@@ -321,7 +321,7 @@ async def test_status_reflects_hello_and_later_cache_frames(attached: FakeConnec
     assert st["connected"] is True and st["protocol"] == 1 and st["version"] == "0.1.0"
     assert isinstance(st["since"], str) and st["since"].endswith("Z")
     assert st["analyst"] == "chatgpt" and st["inflight"] == 0
-    assert set(st["sites"]) == set(SLOT_IDS)
+    assert set(st["sites"]) == set(BRIDGE_SLOTS)
     assert all(
         v == {"capture": True, "health": None, "health_ts": None} for v in st["sites"].values()
     )
@@ -348,7 +348,7 @@ async def test_status_reflects_hello_and_later_cache_frames(attached: FakeConnec
     }
     hub.dispatch({"type": "health", "slot": "grok", "health": health})
     st = hub.status()
-    assert [st["sites"][s]["capture"] for s in SLOT_IDS] == [False, True, False]
+    assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, True, False]
     assert st["analyst"] is None
     assert st["sites"]["grok"]["health"] == health
     assert (

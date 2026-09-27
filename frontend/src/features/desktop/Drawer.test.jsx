@@ -102,9 +102,9 @@ describe('Drawer: pure helpers', () => {
     expect(analystHint('')).toBe(CHOOSE_ANALYST_HINT)
     expect(analystHint(undefined)).toBe(CHOOSE_ANALYST_HINT)
     expect(analystHint('openai/gpt-5.6-luna')).toBe(CHOOSE_ANALYST_HINT)
-    // Refactor is NOT a tab: it is a button inside the Analyze pane's toolbar (S11, user request), so
-    // the drawer keeps its four tabs.
-    expect(DRAWER_TABS.map((t) => t.key)).toEqual(['analyze', 'fusion', 'captured', 'settings'])
+    // Refactor is NOT a tab: it is a button inside the Analyze pane's toolbar (S11, user request);
+    // Agents (the council + the OpenRouter key, 2026-09-27) sits before Settings.
+    expect(DRAWER_TABS.map((t) => t.key)).toEqual(['analyze', 'fusion', 'captured', 'agents', 'settings'])
   })
 
   test('analystPageText reports the login main says its hidden page is on, and names the drift when the conversation asks for another', () => {

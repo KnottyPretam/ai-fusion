@@ -99,9 +99,30 @@ def read_json(path: Path) -> Any | None:
         return None
 
 
+_invalid_documents = 0  # documents that parsed as JSON but failed validation (this process)
+
+
+def invalid_document_count() -> int:
+    """How many documents `read_document` has reported invalid in this process (an operator's
+    signal that a schema drift is eating conversations, without a single line of their content)."""
+    return _invalid_documents
+
+
+def validation_locations(e: ValidationError) -> str:
+    """`loc: type` per error and nothing else -- never the offending value."""
+    return "; ".join(
+        f"{'.'.join(str(part) for part in err['loc']) or '<root>'}: {err['type']}"
+        for err in e.errors(include_input=False, include_url=False)
+    )
+
+
 def read_document(path: Path) -> Conversation | None:
     """The validated Conversation at ``path``; None when missing. A corrupt document is logged and
-    also reported as missing rather than crashing the caller."""
+    also reported as missing rather than crashing the caller. Unreadable JSON stays an ERROR; a
+    document that parses but fails validation is a WARNING carrying the path and the `loc: type`
+    list only (2026-09-27: `str(e)` renders `input_value=` -- a user's prompt or a model's reply --
+    and the desktop pipes stdout into backend.log on disk), and it is counted."""
+    global _invalid_documents
     try:
         raw = read_json(path)
     except (OSError, ValueError) as e:
@@ -112,7 +133,13 @@ def read_document(path: Path) -> Conversation | None:
     try:
         return Conversation.model_validate(raw)
     except ValidationError as e:
-        log.error("conversation document invalid: %s: %s", path, e)
+        _invalid_documents += 1
+        log.warning(
+            "conversation document invalid (%d error(s)): %s: %s",
+            e.error_count(),
+            path,
+            validation_locations(e),
+        )
         return None
 
 

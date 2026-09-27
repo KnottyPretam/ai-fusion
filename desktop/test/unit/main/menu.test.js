@@ -1,6 +1,7 @@
 // menu.js — the Site menu (Reload selectors, Save DOM snapshot, Show analyst page, Sign out of
 // <site>) is added to the shortcuts template before Edit; every item drives its action; failures are
-// logged, never thrown; the Stage 3 item is omitted when no showAnalyst action is wired.
+// logged, never thrown; the Stage 3 item is omitted when no showAnalyst action is wired; a renderer
+// column as the active tab makes the snapshot item a warned no-op.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildMenuTemplate, findMenuItem, SITE_LABELS } from '../../../main/menu.js'
@@ -63,6 +64,19 @@ test('clicking the items drives the actions: reload selectors, snapshot of the A
   await tick()
   assert.deepEqual(calls, [['reloadSelectors'], ['saveSnapshot', 'claude'], ['showAnalyst'], ['signOut', 'grok'], ['signOut', 'chatgpt'], ['reload', 'claude']])
   assert.ok(log.lines.some(([lvl, m]) => lvl === 'log' && m.includes('/snap/claude-1.html')), 'the snapshot path is logged')
+})
+
+test('a renderer column as the active tab: the snapshot item warns and calls nothing; Pane 4 / Pane 5 sit in the Panes menu', async () => {
+  const { template, calls, log } = setup({ active: 'qwen' })
+  findMenuItem(template, 'Save DOM snapshot of the active pane').click()
+  await tick()
+  assert.deepEqual(calls, [])
+  assert.deepEqual(log.lines, [['warn', '[menu] save DOM snapshot: the active tab is a renderer column, not a site pane; nothing to snapshot']])
+  assert.ok(findMenuItem(template, 'Pane 4'))
+  assert.ok(findMenuItem(template, 'Pane 5'))
+  findMenuItem(template, 'Sign out of Grok').click() // the site items do not depend on the active tab
+  await tick()
+  assert.deepEqual(calls, [['signOut', 'grok']])
 })
 
 test('a failing or missing action is logged, never thrown; an unknown active slot falls back to the first', async () => {

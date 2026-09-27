@@ -1,0 +1,10 @@
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.summary","id":"rs-87da55ff-0","index":0,"summary":"Estimating the SPI limit from typical IMU usage."}]},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"The BMI088 supports SPI "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"clock rates up to 20 MHz, "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"which is why "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"it is popular in flight "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"controllers that poll the gyroscope at high "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"rates. Either "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"SPI mode 0 or mode "},"finish_reason":null}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"3 may be used."},"finish_reason":"stop"}]}
+{"id":"gen-87da55ff6f8999f2","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":67,"completion_tokens":57,"total_tokens":124,"cost":0.000264,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":12}}}

@@ -33,8 +33,9 @@ fenced clause is the ONLY difference between the two system prompts (pinned in t
 
 from __future__ import annotations
 
-from ..schemas import LABELS, Label
+from ..schemas import Label
 from . import QUOTED_DATA_NOTICE, delimited
+from .council import check_council_size, labels_for, others
 
 # --------------------------------------------------------------------------- the map call
 _MAP_RULES = """You are preparing a question for comparison by restating what it is about.
@@ -75,7 +76,11 @@ QUESTION_HEADER = "Question:"
 # its share per piece (`features.refactor.claims_per_piece`), never this many per piece.
 REPLY_CLAIMS_MAX = 12
 
-_REPLY_RULES_HEAD = """You are condensing ONE anonymous expert response so that it can be compared with two others.
+def reply_rules_head_for(n: int) -> str:
+    """The reply rules' opening for a council of n: one response, compared with n-1 others
+    (2026-09-27, count-aware; `_REPLY_RULES_HEAD` is n=3, byte for byte as before)."""
+    check_council_size(n)
+    return f"""You are condensing ONE anonymous expert response so that it can be compared with {others(n)}.
 
 Return a one-sentence summary of what this response actually recommends, and a flat list of its
 substantive claims — one claim per item: facts, numbers, limits, values, recommendations, and for
@@ -85,6 +90,9 @@ prose, and anything that is only about style, order or emphasis. Keep the claims
 appear.
 
 """
+
+
+_REPLY_RULES_HEAD = reply_rules_head_for(3)
 
 _REPLY_CAP_CLAUSE = """Return at most {max_claims} claims: the ones the answer rests on, in the order they appear.
 When the response makes more than that, keep the load-bearing ones and leave the peripheral
@@ -99,11 +107,14 @@ shorter copy of one response, not an assessment of it.
 """
 
 
-def _reply_rules(max_claims: int = REPLY_CLAIMS_MAX) -> str:
-    """The reply rules with the claims cap spelled out; `max_claims` is a positive count."""
+def _reply_rules(max_claims: int = REPLY_CLAIMS_MAX, n: int = 3) -> str:
+    """The reply rules with the claims cap spelled out; `max_claims` is a positive count, `n` the
+    council size."""
     if not isinstance(max_claims, int) or isinstance(max_claims, bool) or max_claims < 1:
         raise ValueError(f"max_claims must be a positive integer, got {max_claims!r}")
-    return _REPLY_RULES_HEAD + _REPLY_CAP_CLAUSE.format(max_claims=max_claims) + _REPLY_RULES_TAIL
+    return (
+        reply_rules_head_for(n) + _REPLY_CAP_CLAUSE.format(max_claims=max_claims) + _REPLY_RULES_TAIL
+    )
 
 
 REPLY_JSON_INSTRUCTION = "Return ONLY valid JSON matching this schema (no prose, no code fences):"
@@ -112,9 +123,9 @@ REPLY_JSON_INSTRUCTION_FENCED = MAP_JSON_INSTRUCTION_FENCED
 _REPLY_SCHEMA = """{"summary": string, "claims": [string, ...]}"""
 
 
-def reply_system(*, max_claims: int = REPLY_CLAIMS_MAX, fenced: bool = False) -> str:
+def reply_system(*, max_claims: int = REPLY_CLAIMS_MAX, fenced: bool = False, n: int = 3) -> str:
     instruction = REPLY_JSON_INSTRUCTION_FENCED if fenced else REPLY_JSON_INSTRUCTION
-    return _reply_rules(max_claims) + instruction + "\n" + _REPLY_SCHEMA
+    return _reply_rules(max_claims, n) + instruction + "\n" + _REPLY_SCHEMA
 
 
 REPLY_SYSTEM = reply_system()
@@ -152,12 +163,14 @@ def reply_messages(
     *,
     fenced: bool = False,
     max_claims: int = REPLY_CLAIMS_MAX,
+    n: int = 3,
 ) -> list[dict[str, str]]:
     """`[system, user]` for one label's reply. The question rides along so "substantive" has a
     referent, quoted the same inert way; exactly one label's block is ever present. `max_claims`
-    is the cap this ONE message asks for (a reply quoted in pieces gets its share per piece)."""
-    if label not in LABELS:
-        raise ValueError(f"unknown label {label!r}")
+    is the cap this ONE message asks for (a reply quoted in pieces gets its share per piece); `n`
+    is the council size, and `label` must be one of its R1..Rn."""
+    if label not in labels_for(n):
+        raise ValueError(f"unknown label {label!r} for a council of {n}")
     user = "\n\n".join(
         [
             f"{QUESTION_HEADER}\n\n{delimited('QUESTION', question)}",
@@ -166,7 +179,7 @@ def reply_messages(
         ]
     )
     return [
-        {"role": "system", "content": reply_system(max_claims=max_claims, fenced=fenced)},
+        {"role": "system", "content": reply_system(max_claims=max_claims, fenced=fenced, n=n)},
         {"role": "user", "content": user},
     ]
 
@@ -192,6 +205,7 @@ __all__ = [
     "RETRY_USER_MESSAGE",
     "map_messages",
     "reply_messages",
+    "reply_rules_head_for",
     "reply_system",
     "retry_message",
 ]

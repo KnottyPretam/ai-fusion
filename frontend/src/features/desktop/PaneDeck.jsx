@@ -1,8 +1,9 @@
 // PaneDeck (renderer-desktop Stage 1, renderer-desktop-2 Stage 2): the deck bar (tabs, Tabs/Split
-// toggle), the first-run capture notice and the three panes. Each pane is a header (health,
-// session badge, Reload / New chat / Open / zoom / Inspect, then the capture switch and the turn
-// phase) above an EMPTY viewport div: the site page itself is a native Electron WebContentsView
-// that main positions over the viewport's rect. This component is therefore the layout reporter —
+// toggle), the first-run capture notice and one pane per council member. A SITE pane is a header
+// (health, session badge, Reload / New chat / Open / zoom / Inspect, then the capture switch and
+// the turn phase) above an EMPTY viewport div: the site page itself is a native Electron
+// WebContentsView that main positions over the viewport's rect. This component is therefore the
+// layout reporter —
 //   * `triplex.setLayout({slot: rect|null})`, rAF-throttled, from a ResizeObserver on every
 //     viewport, the window `resize` event and every mode/active change (hidden panes → null);
 //   * `triplex.setActive({mode, active})` whenever either changes;
@@ -30,25 +31,40 @@
 // health, Hide) above `pane-analyst-viewport` — as an EXTRA pane in both modes (in tabs mode next
 // to the active pane; `panes.active` only ever names a slot), reported to main under the layout
 // key 'analyst' (contract §2) only while mounted: an absent key is "hidden" for main.
+// Council (2026-09-27): the deck is MIXED. The council — the open conversation's `slotConfig`, else
+// main's default (`panes.council`), else the classic three — is mapped in catalog order: a member
+// on a WEB SESSION (`web:<site>`, so a site vendor on its own login) is today's native pane
+// (`SitePane`, `pane-<slot>[data-kind=site]`), any other member (an OpenRouter or local Ollama
+// agent — a site vendor seated on OpenRouter included: nothing is typed into its page) is a
+// renderer COLUMN (`ColumnPane`, `pane-<slot>[data-kind=column]`) wrapping the Send feature's
+// `SlotColumn` with `solo={false}` — the desktop feature is the composition layer. Every member has a tab; `Ctrl+1…5` → `council[n-1]`; a column may be the
+// active tab (in tabs mode every site view is then hidden — rects.js — and pane-only actions do
+// not exist on it). A site outside the council is not rendered: its viewport is gone, so its rect
+// is null and main hides the view. `setActive` sends the real active, column or site (main accepts
+// either). The layout reporter re-observes whenever the council changes (a viewport appears or
+// disappears). An `active` outside the council is moved to its first member.
 // Every `window.triplex` call is optional-chained: the deck renders under a partial stub and
 // under the web app, where the object is absent. Renderer chrome never overlaps a viewport
 // (deck bar and notice above, header above, prompt bar / drawer below — see desktop.module.css).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
+import { SlotColumn } from '../send/index.jsx'
 import { LAYOUT_KEYS, rectsFor, sameLayout } from './rects.js'
 import { themeLabel, themeTitle, useTheme } from './theme.js'
 import {
   CAPTURE_LABEL,
   CAPTURE_NOTICE_TEXT,
   CAPTURE_TITLE,
+  DEFAULT_COUNCIL,
   SESSION_BADGES,
-  SLOT_IDS,
   SLOT_LABELS,
   allCaptureTouched,
+  councilOf,
   healthLevel,
   healthText,
   healthTitle,
   initialPanes,
+  isSiteId,
   isSlotId,
   loadCaptureTouched,
   needsAttention,
@@ -56,8 +72,13 @@ import {
   phaseText,
   sessionOf,
   sessionText,
+  slotStyle,
+  transportOf,
 } from './slice.js'
 import css from './desktop.module.css'
+
+/** Tab / pane wording for a non-site member: 'OpenRouter agent' | 'local Ollama agent'. */
+export const COLUMN_KIND_TEXT = { openrouter: 'OpenRouter agent', ollama: 'local Ollama agent', web: 'web session' }
 
 /** The contextBridge surface of desktop/preload/renderer.cjs, or null under the web app. */
 export function desktopApi() {
@@ -86,7 +107,7 @@ function cancelFrame(h) {
  * observer callbacks it causes); a map identical to the last one sent is skipped. The analyst
  * viewport (S3) is observed and reported only while its pane is mounted (`analystVisible`).
  */
-function useLayoutReporter(api, mode, active, viewports, analystVisible = false) {
+function useLayoutReporter(api, mode, active, viewports, analystVisible = false, councilKey = '') {
   const pending = useRef(false)
   const handle = useRef(null)
   const latest = useRef({ mode, active, analystVisible })
@@ -116,7 +137,8 @@ function useLayoutReporter(api, mode, active, viewports, analystVisible = false)
   useEffect(() => {
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
     // The analyst viewport exists only while its pane is mounted (the ref callback ran before
-    // this effect), so re-running on `analystVisible` observes it as it appears.
+    // this effect), so re-running on `analystVisible` observes it as it appears; a site viewport
+    // likewise comes and goes with the council (`councilKey`).
     if (ro) for (const key of LAYOUT_KEYS) if (viewports.current[key]) ro.observe(viewports.current[key])
     window.addEventListener('resize', schedule)
     return () => {
@@ -126,11 +148,11 @@ function useLayoutReporter(api, mode, active, viewports, analystVisible = false)
       handle.current = null
       pending.current = false
     }
-  }, [schedule, viewports, analystVisible])
+  }, [schedule, viewports, analystVisible, councilKey])
 
   useEffect(() => {
     schedule()
-  }, [schedule, mode, active, analystVisible])
+  }, [schedule, mode, active, analystVisible, councilKey])
 }
 
 function zoomPercent(factor) {
@@ -140,33 +162,48 @@ function zoomPercent(factor) {
 export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null, onNewChatAll = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
+  const slotConfig = useSlice('slotConfig')
   const { mode, active, health, lastSend, zoom, sending, capture, turn } = panes
   const analyst = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
   const analystVisible = !!analyst.visible
+  // The council on screen: the open conversation's, else main's default, else the classic three.
+  const council = councilOf(slotConfig) || councilOf(panes.council) || DEFAULT_COUNCIL
+  const councilKey = council.join(',')
+  const modelOf = (slot) => (slotConfig && slotConfig.slots && slotConfig.slots[slot] ? slotConfig.slots[slot].model : panes.council && panes.council.slots && panes.council.slots[slot] ? panes.council.slots[slot].model : isSiteId(slot) ? `web:${slot}` : '')
+  // A native pane needs a site AND its web session; a site vendor on OpenRouter / Ollama is a column.
+  const isSitePane = (slot) => isSiteId(slot) && transportOf(modelOf(slot)) === 'web'
+  const sitePanes = council.filter(isSitePane)
   const viewports = useRef({})
   const [theme, cycleTheme] = useTheme(api, info)
-  const latest = useRef({ mode, active, sending, onNewChatAll })
-  latest.current = { mode, active, sending, onNewChatAll }
+  const latest = useRef({ mode, active, sending, onNewChatAll, council, sitePanes })
+  latest.current = { mode, active, sending, onNewChatAll, council, sitePanes }
 
-  useLayoutReporter(api, mode, active, viewports, analystVisible)
+  useLayoutReporter(api, mode, active, viewports, analystVisible, `${councilKey}|${sitePanes.join(',')}`)
 
   useEffect(() => {
     api?.setActive?.({ mode, active })
   }, [api, mode, active])
 
+  // An active tab the council no longer seats (a switch to a conversation without it) moves to the
+  // first member, so tabs mode never shows nothing.
+  useEffect(() => {
+    if (!council.includes(active)) dispatch({ type: 'panes/active', active: council[0] })
+  }, [councilKey, active, dispatch]) // eslint-disable-line react-hooks/exhaustive-deps -- council is derived from councilKey
+
   const activate = useCallback(
     (slot) => {
       if (!isSlotId(slot)) return
       dispatch({ type: 'panes/active', active: slot })
-      // Tabs: the view becomes visible. Split: every view is visible, so move the focus instead.
-      if (latest.current.mode === 'split') settle(api?.focusPane?.(slot))
+      // Tabs: the view becomes visible. Split: every view is visible, so move the focus instead
+      // (a column has no view to focus).
+      if (latest.current.mode === 'split' && latest.current.sitePanes.includes(slot)) settle(api?.focusPane?.(slot))
     },
     [api, dispatch],
   )
 
   useEffect(() => {
     const off = api?.onHealth?.((slot, h) => {
-      if (isSlotId(slot)) dispatch({ type: 'panes/health', slot, health: h && typeof h === 'object' ? h : null })
+      if (isSiteId(slot)) dispatch({ type: 'panes/health', slot, health: h && typeof h === 'object' ? h : null })
     })
     return () => {
       if (typeof off === 'function') off()
@@ -175,7 +212,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
 
   useEffect(() => {
     const off = api?.onZoom?.((msg) => {
-      if (msg && isSlotId(msg.slot)) dispatch({ type: 'panes/zoom', slot: msg.slot, factor: msg.factor })
+      if (msg && isSiteId(msg.slot)) dispatch({ type: 'panes/zoom', slot: msg.slot, factor: msg.factor })
     })
     return () => {
       if (typeof off === 'function') off()
@@ -184,7 +221,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
 
   useEffect(() => {
     const off = api?.onTurn?.((msg) => {
-      if (msg && isSlotId(msg.slot) && typeof msg.phase === 'string') dispatch({ type: 'panes/turn', slot: msg.slot, phase: msg.phase })
+      if (msg && isSiteId(msg.slot) && typeof msg.phase === 'string') dispatch({ type: 'panes/turn', slot: msg.slot, phase: msg.phase })
     })
     return () => {
       if (typeof off === 'function') off()
@@ -230,14 +267,15 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   useEffect(() => {
     const off = api?.onShortcut?.((msg) => {
       const name = msg && typeof msg === 'object' ? msg.name : msg
-      const tab = /^tab-([123])$/.exec(String(name))
-      if (tab) return activate(SLOT_IDS[Number(tab[1]) - 1])
+      // Ctrl+1…5 → the n-th council member (a site or a column); a number past the council is a no-op.
+      const tab = /^tab-([1-5])$/.exec(String(name))
+      if (tab) return activate(latest.current.council[Number(tab[1]) - 1])
       if (name === 'toggle-mode') return dispatch({ type: 'panes/mode', mode: latest.current.mode === 'tabs' ? 'split' : 'tabs' })
       if (name === 'focus-prompt') return promptRef?.current?.focus?.()
       if (name === 'new-chat-all') {
         if (latest.current.sending) return undefined
         const handler = latest.current.onNewChatAll
-        return typeof handler === 'function' ? settle(handler()) : settle(api?.newChat?.([...SLOT_IDS]))
+        return typeof handler === 'function' ? settle(handler()) : settle(api?.newChat?.([...latest.current.sitePanes]))
       }
       return undefined
     })
@@ -278,13 +316,15 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
     <div className={css.deck} data-testid="pane-deck" data-mode={mode}>
       <div className={css.deckBar}>
         <div className={css.tabs} role="tablist" aria-label="Panes">
-          {SLOT_IDS.map((slot) => {
-            const h = health[slot]
-            const session = sessionOf(h)
+          {council.map((slot) => {
+            const site = isSitePane(slot)
+            const h = site ? health[slot] : null
+            const session = site ? sessionOf(h) : 'none'
             const badge = SESSION_BADGES[session]
             const hidden = mode === 'tabs' && slot !== active
             const failed = !!(lastSend[slot] && !lastSend[slot].ok)
             const attention = hidden && (needsAttention(session) || failed)
+            const kind = site ? healthText(h) : COLUMN_KIND_TEXT[transportOf(modelOf(slot))] || 'agent'
             return (
               <button
                 key={slot}
@@ -293,13 +333,15 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
                 className={css.tab}
                 data-testid={`deck-tab-${slot}`}
                 data-slot={slot}
+                data-kind={site ? 'site' : 'column'}
                 data-session={session}
                 data-attention={attention ? 'true' : 'false'}
                 aria-selected={slot === active}
-                title={`${SLOT_LABELS[slot]} — ${healthText(h)}${mode === 'tabs' ? ' (Ctrl+' + (SLOT_IDS.indexOf(slot) + 1) + ')' : ''}`}
+                title={`${SLOT_LABELS[slot]} — ${kind}${mode === 'tabs' ? ' (Ctrl+' + (council.indexOf(slot) + 1) + ')' : ''}`}
+                style={slotStyle(slot)}
                 onClick={() => activate(slot)}
               >
-                <span className={css.dot} data-level={healthLevel(h)} aria-hidden="true" />
+                <span className={css.dot} data-level={site ? healthLevel(h) : 'none'} aria-hidden="true" />
                 <span>{SLOT_LABELS[slot]}</span>
                 {badge ? (
                   <span className={css.badge} data-session={session}>
@@ -339,7 +381,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
           <button type="button" data-testid="deck-mode-tabs" aria-pressed={mode === 'tabs'} title="One site at a time (Ctrl+\\ toggles)" onClick={() => setMode('tabs')}>
             Tabs
           </button>
-          <button type="button" data-testid="deck-mode-split" aria-pressed={mode === 'split'} title="All three side by side (Ctrl+\\ toggles)" onClick={() => setMode('split')}>
+          <button type="button" data-testid="deck-mode-split" aria-pressed={mode === 'split'} title="Every agent side by side (Ctrl+\\ toggles)" onClick={() => setMode('split')}>
             Split
           </button>
         </div>
@@ -353,15 +395,24 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
           <strong>Capture reply text:</strong> {CAPTURE_NOTICE_TEXT}
         </div>
       ) : null}
-      <div className={css.panes} data-mode={mode}>
-        {SLOT_IDS.map((slot) => {
+      <div className={css.panes} data-mode={mode} data-council-size={council.length}>
+        {council.map((slot) => {
+          const hidden = mode === 'tabs' && slot !== active
+          if (!isSitePane(slot)) {
+            // A token / local member: a renderer column (the Send feature's SlotColumn, no solo box —
+            // the unified prompt bar is the composer), coloured like its tab.
+            return (
+              <section key={slot} className={css.pane} data-testid={`pane-${slot}`} data-slot={slot} data-kind="column" data-active={slot === active} hidden={hidden} aria-label={`${SLOT_LABELS[slot]} column`} style={slotStyle(slot)}>
+                <SlotColumn slot={slot} solo={false} busy={sending} />
+              </section>
+            )
+          }
           const h = health[slot]
           const session = sessionOf(h)
           const badge = SESSION_BADGES[session]
-          const hidden = mode === 'tabs' && slot !== active
           const phase = turn[slot]
           return (
-            <section key={slot} className={css.pane} data-testid={`pane-${slot}`} data-slot={slot} data-active={slot === active} hidden={hidden} aria-label={`${SLOT_LABELS[slot]} pane`}>
+            <section key={slot} className={css.pane} data-testid={`pane-${slot}`} data-slot={slot} data-kind="site" data-active={slot === active} hidden={hidden} aria-label={`${SLOT_LABELS[slot]} pane`} style={slotStyle(slot)}>
               <header className={css.paneHead}>
                 <div className={css.paneHeader}>
                   <span

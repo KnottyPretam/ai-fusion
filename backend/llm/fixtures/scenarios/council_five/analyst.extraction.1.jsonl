@@ -1,0 +1,25 @@
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"agreements\": [{\"topic\": \"SPI "},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"modes\", \"statement\""},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"The interface supports SPI modes 0 and 3."},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"\", \"models\": [\"R1\", \"R2\", \""},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"R3\", \"R5\"]}], \"divergences\": [{\"id\":"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"d1\", \"topic\": \"Maximum SPI cl"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ock frequency\", \"po"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sitions\": [{\"model\": \"R1\", \"claim\": \"The SPI"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" interface runs at up to 10"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" MHz.\", \"evidence_cited\": null}, {\"m"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"odel\": \"R2\", \"claim\": \"Up to 10"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" MHz on SPI.\", \"evi"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"dence_cited\": null}, {\"model\": \"R3\", \"claim\""},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":": \"10 MHz is the maximum SP"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"I clock.\", \"evidence_cited\": null}, "},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"{\"model\": \"R4\", \"claim\": \"SPI c"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"lock rates up to 20"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" MHz are supported.\", \"evidence_cited\": null"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"}, {\"model\": \"R5\", \"claim\":"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"The maximum SPI clock is 10 MHz.\","},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":" \"evidence_cited\": \"the datashe"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"et's digital interf"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"ace specification\"}], \"materiality\": \"high\"}"},"finish_reason":null}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"]}"},"finish_reason":"stop"}]}
+{"id":"gen-449e1fb858037745","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":676,"completion_tokens":181,"total_tokens":857,"cost":0.0003524,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}}

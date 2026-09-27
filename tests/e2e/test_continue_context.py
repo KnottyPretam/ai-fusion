@@ -11,7 +11,7 @@ from backend.config import MAX_TOKENS_STAGE
 from backend.llm import mock
 from backend.prompts import QUOTED_DATA_NOTICE
 from backend.prompts import fusion as fusion_prompts
-from backend.schemas import SLOT_IDS, ContinueTurn
+from backend.schemas import DEFAULT_COUNCIL, ContinueTurn
 from tests.e2e.conftest import assert_send_stream_invariants, calls, challenge_of, fixture_text
 
 FOLLOW_UP = "Which register selects the 2000 deg/s range, and what is its reset value?"
@@ -32,7 +32,7 @@ async def test_fusion_then_continue_carries_context(run_flow, api):
     fusion_reply = fixture_text("planted_factual", "chatgpt.defense.1.jsonl")
     chatgpt_challenge = challenge_of(calls("defense", "chatgpt")[0])
 
-    before = {slot: _frozen(f.threads(slot)) for slot in SLOT_IDS}
+    before = {slot: _frozen(f.threads(slot)) for slot in DEFAULT_COUNCIL}
     thread = f.threads("chatgpt")
     assert [m["kind"] for m in thread] == ["chat", "chat", "fusion_challenge", "fusion_reply"]
     assert thread[2]["content"] == chatgpt_challenge and thread[3]["content"] == fusion_reply

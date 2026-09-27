@@ -1,4 +1,5 @@
-// shortcuts.js — Ctrl+2 → tab-2, Ctrl+= → zoom the active pane, the rest of the §2 table.
+// shortcuts.js — Ctrl+2 → tab-2 (… Ctrl+5 → tab-5), Ctrl+= → zoom the active pane, the rest of the
+// §2 table; a renderer column as the active tab makes the pane-only actions warned no-ops.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { matchShortcut, createShortcuts, SHORTCUT_NAMES } from '../../../main/shortcuts.js'
@@ -10,6 +11,11 @@ test('matchShortcut: the §2 table', () => {
   assert.deepEqual(matchShortcut(key('1')), { kind: 'shortcut', name: 'tab-1' })
   assert.deepEqual(matchShortcut(key('2')), { kind: 'shortcut', name: 'tab-2' })
   assert.deepEqual(matchShortcut(key('3')), { kind: 'shortcut', name: 'tab-3' })
+  assert.deepEqual(matchShortcut(key('4')), { kind: 'shortcut', name: 'tab-4' })
+  assert.deepEqual(matchShortcut(key('5')), { kind: 'shortcut', name: 'tab-5' })
+  assert.deepEqual(matchShortcut(key('', { code: 'Digit5' })), { kind: 'shortcut', name: 'tab-5' })
+  assert.deepEqual(matchShortcut(key('', { code: 'Numpad4' })), { kind: 'shortcut', name: 'tab-4' })
+  assert.equal(matchShortcut(key('6')), null, 'no sixth member')
   assert.deepEqual(matchShortcut(key('\\')), { kind: 'shortcut', name: 'toggle-mode' })
   assert.deepEqual(matchShortcut(key('l')), { kind: 'shortcut', name: 'focus-prompt' })
   assert.deepEqual(matchShortcut(key('L')), { kind: 'shortcut', name: 'focus-prompt' })
@@ -44,6 +50,7 @@ test('matchShortcut: Enter / Shift+Enter, plain keys, keyUp, auto-repeat, Alt an
 
 function setup({ active = 'claude', dev = false } = {}) {
   const calls = []
+  const log = fakeLog()
   const sc = createShortcuts({
     getActive: () => active,
     zoom: (slot, direction) => {
@@ -55,10 +62,29 @@ function setup({ active = 'claude', dev = false } = {}) {
     focusRenderer: () => calls.push(['focusRenderer']),
     sendToRenderer: (channel, payload) => calls.push(['send', channel, payload]),
     dev,
-    log: fakeLog(),
+    log,
   })
-  return { sc, calls }
+  return { sc, calls, log }
 }
+
+test('a renderer column as the active tab (a council member without a site view): zoom / reload / inspect are handled no-ops with a warning; the tab shortcuts still reach the renderer', () => {
+  const { sc, calls, log } = setup({ active: 'qwen', dev: true })
+  assert.equal(sc.handleInput(key('=')), true, 'consumed (never falls through to the site page)')
+  assert.equal(sc.handleInput(key('r')), true)
+  assert.equal(sc.handleInput({ type: 'keyDown', key: 'F12' }), true)
+  assert.deepEqual(calls, [], 'no pane zoomed, reloaded or inspected')
+  assert.deepEqual(
+    log.lines.map(([l, m]) => [l, m]),
+    [
+      ['warn', '[shortcuts] zoom: the active tab is a renderer column, not a site pane; ignored'],
+      ['warn', '[shortcuts] reload: the active tab is a renderer column, not a site pane; ignored'],
+      ['warn', '[shortcuts] inspect: the active tab is a renderer column, not a site pane; ignored'],
+    ],
+  )
+  sc.handleInput(key('5'))
+  sc.handleInput(key('l'))
+  assert.deepEqual(calls, [['send', 'panes:shortcut', { name: 'tab-5' }], ['focusRenderer'], ['send', 'panes:shortcut', { name: 'focus-prompt' }]])
+})
 
 test('Ctrl+2 → panes:shortcut {name:"tab-2"} to the renderer', () => {
   const { sc, calls } = setup()
@@ -124,11 +150,13 @@ test('menuTemplate carries an accelerator per table entry and its click runs the
   const template = sc.menuTemplate()
   const panes = template.find((m) => m.label === 'Panes').submenu.filter((i) => i.accelerator)
   const accelerators = panes.map((i) => i.accelerator)
-  for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
+  for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+4', 'CommandOrControl+5', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(accelerators.includes(a), a)
   }
+  assert.deepEqual(panes.slice(0, 5).map((i) => i.label), ['Pane 1', 'Pane 2', 'Pane 3', 'Pane 4', 'Pane 5'])
   panes.find((i) => i.accelerator === 'CommandOrControl+2').click()
-  assert.deepEqual(calls, [['send', 'panes:shortcut', { name: 'tab-2' }]])
+  panes.find((i) => i.accelerator === 'CommandOrControl+5').click()
+  assert.deepEqual(calls, [['send', 'panes:shortcut', { name: 'tab-2' }], ['send', 'panes:shortcut', { name: 'tab-5' }]])
   assert.equal(setup({ dev: false }).sc.menuTemplate().find((m) => m.label === 'Panes').submenu.some((i) => i.accelerator === 'F12'), false)
-  assert.deepEqual([...SHORTCUT_NAMES], ['tab-1', 'tab-2', 'tab-3', 'toggle-mode', 'focus-prompt', 'new-chat-all'])
+  assert.deepEqual([...SHORTCUT_NAMES], ['tab-1', 'tab-2', 'tab-3', 'tab-4', 'tab-5', 'toggle-mode', 'focus-prompt', 'new-chat-all'])
 })

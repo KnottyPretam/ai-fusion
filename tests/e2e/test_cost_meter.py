@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.e2e.conftest import (
     REPO_ROOT,
     Flow,
@@ -135,13 +135,13 @@ async def test_each_turn_books_exactly_its_fixtures_usage_chunks(run_flow):
     }
     # The numbers the README fixtures carry, spelled out.
     assert sums["send"]["cost_usd"] == round(
-        sum(fixture_cost("planted_factual", f"{s}.chat.1.jsonl") for s in SLOT_IDS), 8
+        sum(fixture_cost("planted_factual", f"{s}.chat.1.jsonl") for s in DEFAULT_COUNCIL), 8
     )
     assert sums["analyze"]["cost_usd"] == fixture_cost(
         "planted_factual", "analyst.extraction.1.jsonl"
     )
     assert sums["fusion"]["cost_usd"] == round(
-        sum(fixture_cost("planted_factual", f"{s}.defense.1.jsonl") for s in SLOT_IDS)
+        sum(fixture_cost("planted_factual", f"{s}.defense.1.jsonl") for s in DEFAULT_COUNCIL)
         + fixture_cost("planted_factual", "analyst.convergence.1.jsonl"),
         8,
     )
@@ -150,7 +150,7 @@ async def test_each_turn_books_exactly_its_fixtures_usage_chunks(run_flow):
     # The stream events carry the same totals the document persists.
     assert f.send_events[-1]["usage"] == send["usage"]
     assert f.fusion_events[-1]["usage"] == fusion["usage"]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         done = next(e for e in f.send_events if e["type"] == "slot_done" and e["slot"] == slot)
         booked = next(u for u in send["usage"]["calls"] if u["role"] == slot)
         assert done["usage"] == booked

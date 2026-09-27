@@ -125,7 +125,8 @@ describe('PaneDeck: layout reporting', () => {
     const { unmount } = mount(fake)
     unmount()
     expect(ro.instances.every((i) => !i.alive)).toBe(true)
-    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1, analyst: 1, theme: 1 })
+    // council / openRouterKey are the shell's subscriptions (index.jsx), never the deck's
+    expect(fake.unsubscribed).toEqual({ health: 1, shortcut: 1, zoom: 1, bridge: 0, turn: 1, analyst: 1, theme: 1, council: 0, openRouterKey: 0 })
   })
 
   test('renders without any window.triplex and under a partial stub', () => {
@@ -209,7 +210,7 @@ describe('PaneDeck: health and session', () => {
   test('unknown slots and non-object health payloads are ignored', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'split' })
-    act(() => fake.emit.health('gemini', health()))
+    act(() => fake.emit.health('bing', health()))
     act(() => fake.emit.health('claude', 'nope'))
     expect(screen.getByTestId('pane-claude-health')).toHaveTextContent('no health yet')
   })
@@ -279,7 +280,7 @@ describe('PaneDeck: header actions call the API with the slot', () => {
     mount(fake, { mode: 'split' })
     act(() => fake.emit.zoom({ slot: 'grok', factor: 1.3 }))
     expect(screen.getByTestId('pane-grok-zoom-reset')).toHaveTextContent('130%')
-    act(() => fake.emit.zoom({ slot: 'gemini', factor: 2 }))
+    act(() => fake.emit.zoom({ slot: 'bing', factor: 2 }))
     act(() => fake.emit.zoom({ slot: 'grok', factor: 'x' }))
     expect(screen.getByTestId('pane-grok-zoom-reset')).toHaveTextContent('130%')
   })
@@ -489,7 +490,7 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     expect(screen.getByTestId('pane-claude-phase')).toHaveTextContent('error')
     expect(screen.getByTestId('pane-claude-phase')).toHaveAttribute('data-phase', 'error')
     // unknown slots / non-string phases are ignored; an unknown phase word is shown verbatim
-    act(() => fake.emit.turn({ slot: 'gemini', phase: 'typing' }))
+    act(() => fake.emit.turn({ slot: 'bing', phase: 'typing' }))
     act(() => fake.emit.turn({ slot: 'chatgpt', phase: 7 }))
     expect(screen.getByTestId('pane-chatgpt-phase')).toHaveTextContent('')
     act(() => fake.emit.turn({ slot: 'chatgpt', phase: 'observing' }))
@@ -584,7 +585,7 @@ describe('PaneDeck: the analyst pane (Stage 3)', () => {
     expect(screen.queryByTestId('deck-tab-analyst')).toBeNull()
     act(() => fake.emit.analyst({ visible: true }))
     expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst · Grok')
-    act(() => fake.emit.analyst({ slot: 'gemini' }))
+    act(() => fake.emit.analyst({ slot: 'bing' }))
     expect(screen.getByTestId('deck-tab-analyst')).toHaveTextContent('Analyst') // unknown slot → null
     expect(screen.getByTestId('deck-tab-analyst')).not.toHaveTextContent('·')
     // a partial stub: no showAnalyst, no onAnalyst

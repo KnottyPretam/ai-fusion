@@ -24,22 +24,38 @@ import re
 from pathlib import Path
 from typing import Any
 
+from backend.schemas import DEFAULT_COUNCIL, SLOT_IDS
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS_DIR = REPO_ROOT / "backend" / "llm" / "fixtures" / "scenarios"
 
 CREATED = 1757260800  # 2026-09-07T16:00:00Z, fixed so the corpus is deterministic
-# USD per million tokens (prompt, completion) per role, from docs/decisions.md default slugs.
+# USD per million tokens (prompt, completion) per role, from docs/decisions.md default slugs; the
+# four council vendors (2026-09-27) from the live OpenRouter /models on that day.
 PRICES: dict[str, tuple[float, float]] = {
     "claude": (5.0, 25.0),
     "chatgpt": (2.0, 10.0),
     "grok": (2.0, 6.0),
+    "gemini": (0.75, 3.75),
+    "deepseek": (0.348, 0.696),
+    "qwen": (1.475, 4.425),
+    "mimo": (0.435, 0.87),
     "analyst": (0.2, 1.2),
 }
 PROMPT_TOKENS_BASE = {"chat": 38, "extraction": 640, "defense": 560, "convergence": 240}
 _PROSE_SIZES = (4, 6, 3, 5, 7, 2, 5)  # words per content chunk, cycled
 _JSON_SIZES = (31, 19, 44, 27, 36)  # characters per content chunk, cycled
-SLOTS = ("claude", "chatgpt", "grok")
+# The classic three: every scenario's council unless it says otherwise (`Scenario(council=)`).
+SLOTS = tuple(DEFAULT_COUNCIL)
 LABEL_OF = {"claude": "R1", "chatgpt": "R2", "grok": "R3"}
+
+
+def label_of_council(council: tuple[str, ...]) -> dict[str, str]:
+    """The fixed mock map for a council: R1..Rn in catalog order (`store.mock_anon_map`)."""
+    return {slot: f"R{i}" for i, slot in enumerate(council, 1)}
+
+
+assert label_of_council(SLOTS) == LABEL_OF
 
 PROVIDER_DISCONNECTED = {
     "code": 502,
@@ -223,6 +239,8 @@ class Scenario:
         exit_reason: str | None = None,
         final: dict[str, str] | None = None,
         analyze_status: str = "ok",
+        council: tuple[str, ...] | None = None,
+        slot_config: dict[str, Any] | None = None,
     ) -> None:
         self.name = name
         self.prompt = prompt
@@ -231,6 +249,14 @@ class Scenario:
         self.exit_reason = exit_reason
         self.final = final
         self.analyze_status = analyze_status
+        # The council (2026-09-27): the classic three unless given, in catalog order, with the
+        # fixed mock map R1..Rn over it; `slot_config` is the config the e2e flow creates the
+        # conversation with (a non-default council needs one -- the default config seats the three).
+        self.council = tuple(s for s in SLOT_IDS if s in (council or SLOTS))
+        assert len(self.council) == len(council or SLOTS), council
+        self.label_of = label_of_council(self.council)
+        self.slot_config = slot_config
+        assert (self.council == SLOTS) == (slot_config is None), "a custom council needs its config"
         self.files: dict[str, list[dict[str, Any]]] = {}
         self.expect: dict[str, dict[str, Any]] = {}
         self.sequence: list[dict[str, Any]] = []
@@ -270,7 +296,7 @@ class Scenario:
             annotations=annotations,
             error=error,
         )
-        exp: dict[str, Any] = {"kind": "chat", "label": LABEL_OF[slot], "text": text}
+        exp: dict[str, Any] = {"kind": "chat", "label": self.label_of[slot], "text": text}
         if error is not None:
             exp["error"] = {"code": error["code"], "error_type": error["metadata"]["error_type"]}
         else:
@@ -325,7 +351,7 @@ class Scenario:
     ) -> str:
         exp: dict[str, Any] = {
             "kind": "defense",
-            "label": LABEL_OF[slot],
+            "label": self.label_of[slot],
             "divergence": divergence,
         }
         if error is not None:
@@ -375,16 +401,24 @@ class Scenario:
 
     # ----------------------------------------------------------------- outputs
     def expectations(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "scenario": self.name,
             "prompt": self.prompt,
-            "anon_map": {"R1": "claude", "R2": "chatgpt", "R3": "grok"},
+            "anon_map": {label: slot for slot, label in self.label_of.items()},
             "analyze_status": self.analyze_status,
             "exit_reason": self.exit_reason,
             "final": self.final,
             "sequence": self.sequence,
             "files": self.expect,
         }
+        if self.council != SLOTS:  # the fourteen original READMEs stay byte-identical
+            out["council"] = list(self.council)
+            out["slot_config"] = self.slot_config
+        return out
+
+    def _anonymization_line(self) -> str:
+        pairs = ", ".join(f"{label}={slot}" for slot, label in self.label_of.items())
+        return f"Anonymization is the fixed mock map {pairs}. Every fixture is"
 
     def _describe(self, fname: str) -> str:
         e = self.expect[fname]
@@ -424,7 +458,7 @@ class Scenario:
         lines += [f"**Prompt (the user prompt the test sends):** {self.prompt}", ""]
         lines += [f"**Expected outcome:** {self.expected}", ""]
         lines += [
-            "Anonymization is the fixed mock map R1=claude, R2=chatgpt, R3=grok. Every fixture is",
+            self._anonymization_line(),
             "JSONL of raw OpenRouter chunk objects (no comments, no `[DONE]`); successes end with the",
             "usage chunk (`usage.cost`), errors end with the error chunk.",
             "",
@@ -462,7 +496,7 @@ class Scenario:
 def _sort_key(fname: str) -> tuple[int, int, int]:
     role, purpose, n, _ = fname.split(".")
     return (
-        ["claude", "chatgpt", "grok", "analyst"].index(role),
+        [*SLOT_IDS, "analyst"].index(role),
         ["chat", "extraction", "defense", "convergence"].index(purpose),
         int(n),
     )
@@ -2210,6 +2244,274 @@ def build_two_divergences() -> Scenario:
     return s
 
 
+# =========================================================================== council scenarios
+# 2026-09-27, "a council anyone can assemble": a pair and a five, both on OpenRouter slugs (mixed
+# transports cannot replay through the mock -- `web:` / `ollama:` route before the mock branch --
+# so a mixed council is covered by tests/bridge/test_council_transports.py instead). The analyst
+# and every slot are the same replay machinery; only the council, its labels and the file set
+# change. Each README carries the `slot_config` the e2e flow creates the conversation with.
+COUNCIL_ANALYST = "openai/gpt-5.6-luna"
+
+
+def _council_config(slots: dict[str, tuple[str, str]]) -> dict[str, Any]:
+    return {
+        "slots": {slot: {"model": model, "effort": effort} for slot, (model, effort) in slots.items()},
+        "analyst_model": COUNCIL_ANALYST,
+        "max_iterations": 2,
+        "materiality_min": "medium",
+        "grounded": False,
+    }
+
+
+I2C_PROMPT = "What pull-up resistor value should I use on a 400 kHz I2C bus running at 3.3 V?"
+
+
+def build_council_two() -> Scenario:
+    s = Scenario(
+        "council_two",
+        prompt=I2C_PROMPT,
+        planted=(
+            "A council of TWO (chatgpt = R1, qwen = R2, both OpenRouter slugs). R2 recommends a "
+            "10 kOhm pull-up, which is too weak for 400 kHz on a real bus; R1 gives the usual 2.2 "
+            "to 4.7 kOhm range. Both agree that the value is set by the bus capacitance and the "
+            "rise-time limit. The extraction plants `d1` (materiality high, one Position for each "
+            "of R1/R2) and one agreement."
+        ),
+        expected=(
+            "Send -> two slots, threads keyed chatgpt and qwen only. Analyze -> status ok, the "
+            "analyst prompt says `two anonymous expert responses (R1, R2)` and the strict enum is "
+            "R1/R2; `standing=[d1]`. Fusion round 1: R1 defends, R2 revises (justified) -> "
+            "convergence resolved -> exit `converged`, `final=[{d1, resolved}]`. 6 files."
+        ),
+        exit_reason="converged",
+        final={"d1": "resolved"},
+        council=("chatgpt", "qwen"),
+        slot_config=_council_config(
+            {"chatgpt": ("openai/gpt-5.6-sol", "medium"), "qwen": ("qwen/qwen3.7-max", "medium")}
+        ),
+    )
+    g = s.chat(
+        "chatgpt",
+        "Use something in the 2.2 kOhm to 4.7 kOhm range. At 400 kHz the bus has to rise within "
+        "300 ns, so the pull-up must be small enough for the RC formed with the bus capacitance: "
+        "4.7 kOhm works for a short bus of a few devices, and 2.2 kOhm is the safer choice once "
+        "the capacitance approaches 200 pF. Check that the strongest pull-up still keeps the sink "
+        "current under 3 mA at 3.3 V.",
+        reasoning=[
+            (
+                "reasoning.text",
+                "Fast-mode rise-time limit is 300 ns; R = t_r / (0.8473 * C_b). For 100-200 pF that "
+                "gives roughly 1.8-3.5 kOhm minimum-safe values, so 2.2-4.7 kOhm.",
+            )
+        ],
+    )
+    q = s.chat(
+        "qwen",
+        "A 10 kOhm pull-up on each line is the standard value and works at 3.3 V. The exact value "
+        "depends on the bus capacitance: a longer bus with more devices needs a stronger (lower) "
+        "pull-up to meet the rise-time requirement, but 10 kOhm is a fine default for a small "
+        "board.",
+        reasoning=[("reasoning.summary", "Recalling common I2C pull-up defaults.")],
+    )
+    e = s.extraction(
+        {
+            "agreements": [
+                _agree(
+                    "What sets the value",
+                    "The pull-up value is set by the bus capacitance and the rise-time "
+                    "requirement; a longer or more loaded bus needs a stronger pull-up.",
+                    ["R1", "R2"],
+                )
+            ],
+            "divergences": [
+                _div(
+                    "d1",
+                    "Recommended pull-up value at 400 kHz",
+                    [
+                        _pos(
+                            "R1",
+                            "2.2 kOhm to 4.7 kOhm, with 2.2 kOhm once the bus capacitance "
+                            "approaches 200 pF.",
+                            "the 300 ns fast-mode rise-time limit and the RC with the bus "
+                            "capacitance",
+                        ),
+                        _pos("R2", "10 kOhm is the standard value and a fine default."),
+                    ],
+                    "high",
+                )
+            ],
+        }
+    )
+    d1 = s.defense(
+        "chatgpt",
+        _defend(
+            "The fast-mode specification limits the rise time to 300 ns, and with a typical bus "
+            "capacitance of 100 to 200 pF the RC time constant only meets that with a pull-up "
+            "between about 1.8 kOhm and 4.7 kOhm; 10 kOhm gives a rise time of roughly 1 us at "
+            "120 pF, which violates the 400 kHz timing.",
+            0.94,
+        ),
+        n=1,
+        divergence="d1",
+    )
+    d2 = s.defense(
+        "qwen",
+        _revise(
+            "The peer's rise-time calculation is right: with the 300 ns fast-mode limit and a "
+            "bus capacitance around 120 pF, a 10 kOhm pull-up gives a rise time near 1 us, so "
+            "the recommended value for 400 kHz has to be in the 2.2 kOhm to 4.7 kOhm range; "
+            "10 kOhm only suits 100 kHz on a very short bus.",
+            "Use 2.2 kOhm to 4.7 kOhm at 400 kHz; 10 kOhm is too weak for the 300 ns rise time.",
+            0.88,
+            "the 300 ns rise-time limit and the RC calculation with 100-200 pF bus capacitance",
+        ),
+        n=1,
+        divergence="d1",
+        unjustified=False,
+    )
+    v = s.convergence({"d1": "resolved"})
+    s.phase("Send", g, q)
+    s.phase("Analyze", e, note="d1 high -> standing=[d1]; the enum and prompt count two labels")
+    s.phase("Fusion round 1", d1, d2, v, note="R1 defend, R2 justified revise")
+    s.phase("Exit", note="`converged` after round 1")
+    return s
+
+
+SPI_PROMPT = "What is the maximum SPI clock frequency the Bosch BMI088 IMU supports?"
+
+
+def build_council_five() -> Scenario:
+    s = Scenario(
+        "council_five",
+        prompt=SPI_PROMPT,
+        planted=(
+            "A council of FIVE (claude = R1, chatgpt = R2, grok = R3, gemini = R4, deepseek = R5, "
+            "all OpenRouter slugs). R4 answers 20 MHz; the other four give the datasheet's 10 MHz. "
+            "Four of the five state that SPI modes 0 and 3 are supported. The extraction plants "
+            "`d1` (materiality high, one Position for each of R1..R5) and one agreement over R1, "
+            "R2, R3 and R5."
+        ),
+        expected=(
+            "Send -> five slots, five threads. Analyze -> status ok, the analyst prompt says "
+            "`five anonymous expert responses (R1, R2, R3, R4, R5)` and the strict enum is "
+            "R1..R5; `standing=[d1]`. Fusion round 1: R1, R2, R3 and R5 defend, R4 revises "
+            "(justified) -> convergence resolved -> exit `converged`, `final=[{d1, resolved}]`. "
+            "12 files."
+        ),
+        exit_reason="converged",
+        final={"d1": "resolved"},
+        council=("claude", "chatgpt", "grok", "gemini", "deepseek"),
+        slot_config=_council_config(
+            {
+                "claude": ("anthropic/claude-opus-5", "medium"),
+                "chatgpt": ("openai/gpt-5.6-sol", "medium"),
+                "grok": ("x-ai/grok-4.6", "medium"),
+                "gemini": ("google/gemini-3.8-flash", "medium"),
+                "deepseek": ("deepseek/deepseek-v4-pro", "high"),
+            }
+        ),
+    )
+    c = s.chat(
+        "claude",
+        "The BMI088 SPI interface runs at up to 10 MHz. It supports SPI modes 0 and 3 (CPOL/CPHA "
+        "both 0 or both 1), 4-wire operation, and the accelerometer and gyroscope each have their "
+        "own chip select.",
+        reasoning=[("reasoning.text", "Datasheet interface section: SPI up to 10 MHz, modes 0/3.")],
+    )
+    g = s.chat(
+        "chatgpt",
+        "Up to 10 MHz on SPI. The device accepts SPI mode 0 or mode 3, and the two sensors are "
+        "addressed through separate chip-select lines; I2C is limited to 400 kHz by comparison.",
+        reasoning=[("reasoning.summary", "Recalling the BMI088 digital interface limits.")],
+    )
+    k = s.chat(
+        "grok",
+        "10 MHz is the maximum SPI clock. Both mode 0 and mode 3 work, and each sensor (accel, "
+        "gyro) has its own CS pin, so you can clock them independently.",
+        reasoning=[("reasoning.text", "SPI max 10 MHz; modes 0 and 3; two CS lines.")],
+    )
+    m = s.chat(
+        "gemini",
+        "The BMI088 supports SPI clock rates up to 20 MHz, which is why it is popular in flight "
+        "controllers that poll the gyroscope at high rates. Either SPI mode 0 or mode 3 may be "
+        "used.",
+        reasoning=[("reasoning.summary", "Estimating the SPI limit from typical IMU usage.")],
+    )
+    d = s.chat(
+        "deepseek",
+        "Maximum SPI clock: 10 MHz, per the datasheet's digital interface specification. Modes 0 "
+        "and 3 are supported and there is one chip select per sensor core.",
+        reasoning=[("reasoning.text", "BMI088 datasheet: f_SPI max 10 MHz; CPOL=CPHA.")],
+    )
+    e = s.extraction(
+        {
+            "agreements": [
+                _agree(
+                    "SPI modes",
+                    "The interface supports SPI modes 0 and 3.",
+                    ["R1", "R2", "R3", "R5"],
+                )
+            ],
+            "divergences": [
+                _div(
+                    "d1",
+                    "Maximum SPI clock frequency",
+                    [
+                        _pos("R1", "The SPI interface runs at up to 10 MHz."),
+                        _pos("R2", "Up to 10 MHz on SPI."),
+                        _pos("R3", "10 MHz is the maximum SPI clock."),
+                        _pos("R4", "SPI clock rates up to 20 MHz are supported."),
+                        _pos(
+                            "R5",
+                            "The maximum SPI clock is 10 MHz.",
+                            "the datasheet's digital interface specification",
+                        ),
+                    ],
+                    "high",
+                )
+            ],
+        }
+    )
+    ten_mhz = (
+        "The datasheet's digital interface specification lists the maximum SPI clock frequency as "
+        "10 MHz; faster clocks are outside the specified timing and corrupt register reads."
+    )
+    f1 = s.defense("claude", _defend(ten_mhz, 0.95), n=1, divergence="d1")
+    f2 = s.defense("chatgpt", _defend(ten_mhz, 0.93), n=1, divergence="d1")
+    f3 = s.defense("grok", _defend(ten_mhz, 0.9), n=1, divergence="d1")
+    f4 = s.defense(
+        "gemini",
+        _revise(
+            "Every peer cites the datasheet's digital interface specification with a maximum SPI "
+            "clock frequency of 10 MHz, and I had inferred 20 MHz from the polling rates flight "
+            "controllers use rather than from the interface specification itself; the specified "
+            "maximum is 10 MHz.",
+            "The maximum SPI clock frequency is 10 MHz.",
+            0.86,
+            "the datasheet's digital interface specification giving a 10 MHz maximum SPI clock",
+        ),
+        n=1,
+        divergence="d1",
+        unjustified=False,
+    )
+    f5 = s.defense("deepseek", _defend(ten_mhz, 0.94), n=1, divergence="d1")
+    v = s.convergence({"d1": "resolved"})
+    s.phase("Send", c, g, k, m, d)
+    s.phase("Analyze", e, note="d1 high -> standing=[d1]; the enum and prompt count five labels")
+    s.phase(
+        "Fusion round 1",
+        f1,
+        f2,
+        f3,
+        f4,
+        f5,
+        v,
+        note="R1, R2, R3, R5 defend; R4 justified revise",
+    )
+    s.phase("Exit", note="`converged` after round 1")
+    return s
+
+
 BUILDERS = [
     build_baseline,
     build_planted_factual,
@@ -2225,6 +2527,8 @@ BUILDERS = [
     build_injection,
     build_vendor_in_prompt,
     build_two_divergences,
+    build_council_two,
+    build_council_five,
 ]
 
 

@@ -61,9 +61,11 @@ def test_excludes_the_challenged_label_and_keeps_the_others():
 
 @pytest.mark.parametrize("exclude", LABELS)
 def test_every_label_can_be_the_challenged_one(exclude):
+    # Five labels since the council widened (2026-09-27); PEERS is a three-council, so R4 / R5 as
+    # the challenged label simply show every peer -- the renderer knows nothing about councils.
     block = render_peer_block(PEERS, exclude=exclude)
     assert _open(exclude) not in block
-    others = [label for label in LABELS if label != exclude]
+    others = [p.label for p in PEERS if p.label != exclude]
     for label in others:
         assert _open(label) in block and _close(label) in block
     assert [label for label in LABELS if _open(label) in block] == others

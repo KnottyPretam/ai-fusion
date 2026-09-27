@@ -4,7 +4,7 @@
 //
 // Stage 2: Send is a Triplex Send through features/send/useSendTurn.js (the SendPane.startTurn
 // extraction): a conversation is created when none is selected, `POST /api/conversations/{id}/send`
-// carries `{prompt}` when all three targets are checked and `{prompt, slots}` for a strict subset
+// carries `{prompt}` when every council member is checked and `{prompt, slots}` for a strict subset
 // (`sendBody`), the persisted conversation is refetched afterwards with the hook's `isCurrent`
 // guard and the sidebar list refreshed after a first send. The backend routes each `web:<slot>`
 // model over the bridge to Electron, which types the text into that site's page. The Stage 1
@@ -34,8 +34,14 @@
 // "New chat everywhere" = createConversation + openChats(newId) through ./chats.js (the shell's
 // instance when given, else one of our own); disabled while any stream runs.
 //
+// Council (2026-09-27): the target checkboxes and the result lines range over the COUNCIL — the
+// open conversation's `slotConfig`, else main's default (`panes.council`), else the classic three —
+// a member the target map has never seen is checked (`selectedTargets`), and a first Send creates
+// the conversation with `councilSlotConfig(panes.council)` (main's default council + the analyst).
+// An OpenRouter analyst counts as chosen only once a key is configured (`panes.openRouterKey`).
+//
 // Stage 3 — the desktop create path. A desktop conversation must be created with the chosen
-// analyst (`desktopSlotConfig()`, ./analyst.js), but useSendTurn's own create posts `{}` and
+// analyst (`councilSlotConfig(panes.council)`, ./analyst.js), but useSendTurn's own create posts `{}` and
 // `startTurn` takes no create options (the hook is integrator-owned; the change is requested).
 // So when no conversation is selected this bar creates it itself — under `panes.sending`, which
 // it dispatched first, so the composer is locked for the round-trip and useOpenChats classifies
@@ -76,11 +82,11 @@ import { createConversation } from '../../api/http.js'
 import { abortStream, useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useSendTurn } from '../send/useSendTurn.js'
-import { desktopSlotConfig, isDesktopAnalyst, loadAnalyst } from './analyst.js'
+import { councilSlotConfig, isDesktopAnalyst, loadAnalyst } from './analyst.js'
 import { useOpenChats } from './chats.js'
 import { desktopApi } from './PaneDeck.jsx'
 import { FEATURE as PREPARSE, initial as preparseInitial } from './preparseSlice.js'
-import { NOT_CAPTURED, SLOT_IDS, SLOT_LABELS, initialPanes, selectedTargets } from './slice.js'
+import { DEFAULT_COUNCIL, NOT_CAPTURED, SLOT_LABELS, councilOf, initialPanes, selectedTargets, slotStyle } from './slice.js'
 import css from './desktop.module.css'
 import { APP_NAME } from '../../branding.js'
 
@@ -106,6 +112,12 @@ export function resultTitle(r) {
 }
 
 export const BRIDGE_BANNER_TEXT = `Not connected to the ${APP_NAME} backend bridge — a Send fails with bridge_unavailable until Electron reconnects (automatic).`
+
+/** Composer wording for a council of n ("Ask all three…" reads the count, never a fixed three). */
+export function councilWords(n) {
+  const words = { 2: 'both', 3: 'all three', 4: 'all four', 5: 'all five' }
+  return words[n] || `all ${n}`
+}
 
 /** The streams that run on the hidden analyst page: a pre-parse must not queue behind (or under) one. */
 export const ANALYST_STREAMS = ['analyze', 'fusion', 'refactor']
@@ -160,6 +172,8 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   const streams = useSlice('streams') || {}
   const preparse = useSlice(PREPARSE) || preparseInitial()
   const { targets: targetMap, sending, lastSend, bridge } = panes
+  const council = councilOf(slotConfig) || councilOf(panes.council) || DEFAULT_COUNCIL
+  const keyConfigured = !!(panes.openRouterKey && panes.openRouterKey.configured)
   const { startTurn, locked, banner } = useSendTurn()
   const run = useRunStream()
   const own = useOpenChats(api, { enabled: !chats })
@@ -261,7 +275,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
     return () => clearTimeout(timer)
   }, [cancelled])
 
-  const targets = selectedTargets(targetMap)
+  const targets = selectedTargets(targetMap, council)
   const empty = text.trim() === ''
   const canSend = !busy && !empty && targets.length > 0
 
@@ -270,7 +284,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   // in the drawer's select re-renders only the drawer, so this button catches up on the next store
   // change or keystroke — the click reads the same value, so it can never post to a stale choice.
   const analystModel = slotConfig && typeof slotConfig === 'object' ? slotConfig.analyst_model : loadAnalyst()
-  const analystChosen = isDesktopAnalyst(analystModel)
+  const analystChosen = isDesktopAnalyst(analystModel, { keyConfigured })
   const analystBusy = ANALYST_STREAMS.some((k) => streams[k] && streams[k].status === 'streaming')
   const unedited = !!preparsed && text === preparsed.prompt
   const canPreparse = !busy && !creating && !empty && analystChosen && !analystBusy && !unedited && typeof createAdopted === 'function'
@@ -288,7 +302,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   const runTurn = async (sent, list) => {
     let ok = false
     try {
-      // `sendBody` posts {prompt} for all three and {prompt, slots} for a strict subset.
+      // `sendBody` posts {prompt} for the whole council and {prompt, slots} for a strict subset.
       ok = await startTurn({ prompt: sent, slots: list })
     } finally {
       finish(ok, sent)
@@ -311,7 +325,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
     if (!conversation) {
       let conv = null
       try {
-        conv = await createConversation(dispatch, { slot_config: desktopSlotConfig() })
+        conv = await createConversation(dispatch, { slot_config: councilSlotConfig(panes.council) })
       } catch (e) {
         if (alive.current) setCreateError((e && e.message) || 'could not create conversation')
         finish(false, sent)
@@ -394,7 +408,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
     newChatEverywhere()
   }
 
-  const sendTitle = sending ? 'a send is in flight' : preparsing ? 'pre-parse in progress' : locked ? 'a stream is running' : empty ? 'type a prompt first' : targets.length === 0 ? 'pick at least one target' : 'Send to every checked site (Enter)'
+  const sendTitle = sending ? 'a send is in flight' : preparsing ? 'pre-parse in progress' : locked ? 'a stream is running' : empty ? 'type a prompt first' : targets.length === 0 ? 'pick at least one target' : 'Send to every checked agent (Enter)'
   const newChatTitle = preparsing ? 'pre-parse in progress' : busy ? 'a stream is running' : `Start a new ${APP_NAME} conversation and a new chat in every site (Ctrl+Shift+N)`
   const preparseTitle = preparsing
     ? PREPARSE_TITLES.running
@@ -446,8 +460,8 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
           ref={ref}
           className={css.composer}
           data-testid="prompt-composer"
-          aria-label="Prompt for every checked site"
-          placeholder="Ask all three… (Enter to send, Shift+Enter for a new line, Ctrl+L to focus)"
+          aria-label="Prompt for every checked agent"
+          placeholder={`Ask ${councilWords(council.length)}… (Enter to send, Shift+Enter for a new line, Ctrl+L to focus)`}
           rows={preparsed ? 6 : 2}
           value={text}
           readOnly={busy}
@@ -482,9 +496,9 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
           </button>
         ) : null}
         <span className={css.targets} role="group" aria-label="Targets">
-          {SLOT_IDS.map((slot) => (
-            <label key={slot} className={css.target} data-slot={slot}>
-              <input type="checkbox" data-testid={`prompt-target-${slot}`} checked={!!targetMap[slot]} onChange={(e) => dispatch({ type: 'panes/target', slot, on: e.target.checked })} />
+          {council.map((slot) => (
+            <label key={slot} className={css.target} data-slot={slot} style={slotStyle(slot)}>
+              <input type="checkbox" data-testid={`prompt-target-${slot}`} checked={targetMap[slot] !== false} onChange={(e) => dispatch({ type: 'panes/target', slot, on: e.target.checked })} />
               {SLOT_LABELS[slot]}
             </label>
           ))}
@@ -493,7 +507,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
           New chat everywhere
         </button>
         <span className={css.results} aria-live="polite">
-          {SLOT_IDS.map((slot) => {
+          {council.map((slot) => {
             const r = lastSend[slot]
             const pending = !r && !!inFlight && inFlight.includes(slot)
             if (!r && !pending) return null

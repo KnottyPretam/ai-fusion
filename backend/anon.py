@@ -5,7 +5,9 @@ Models only ever see each other as R1/R2/R3. The R-label <-> slot mapping is sta
 appears in prompts, API responses or the UI (docs/semantics.md, "Anonymization / leaks").
 
 - `labels` / `label_of` / `slot_of` read the persisted permutation (ValueError on a bad map or an
-  unknown id; the mapping is never re-derived from position).
+  unknown id; the mapping is never re-derived from position). Since 2026-09-27 the map covers the
+  conversation's COUNCIL (2..5 slots, `schemas.council_of`) as R1..Rn; `_LABEL_ORDER` runs over
+  all five labels, so any subset of peers still renders in R-order.
 - `render_peer_block` renders what a challenged model is shown about its peers: one
   `prompts.delimited(label, ...)` section per peer other than the challenged label, preceded by
   `prompts.QUOTED_DATA_NOTICE`, in R1/R2/R3 order; every claim and justification is `scrub`bed
@@ -24,7 +26,7 @@ import re
 
 from .config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES, FORBIDDEN_VENDOR_PREFIXES
 from .prompts import QUOTED_DATA_NOTICE, delimited
-from .schemas import LABELS, SLOT_IDS, Conversation, Label, PeerState, SlotId
+from .schemas import LABELS, Conversation, Label, PeerState, SlotId, council_labels, council_of
 
 log = logging.getLogger("triplex.anon")
 
@@ -54,20 +56,26 @@ _LABEL_ORDER: dict[str, int] = {label: i for i, label in enumerate(LABELS)}
 
 # --------------------------------------------------------------------------- mapping
 def labels(conv: Conversation) -> dict[Label, SlotId]:
-    """The persisted R-label -> slot permutation, keyed in R1/R2/R3 order (a fresh dict).
+    """The persisted R-label -> slot permutation, keyed in R1..Rn order (a fresh dict).
 
-    Raises ValueError when the document carries no `anon_map` or the map is not a permutation
-    of the slot ids over exactly the labels R1/R2/R3."""
+    `n` is the size of the conversation's council (`schemas.council_of(conv.slot_config)`, 2..5
+    since 2026-09-27; the three for every older document). Raises ValueError when the document
+    carries no `anon_map` or the map is not a permutation of the COUNCIL over exactly R1..Rn."""
     raw = getattr(conv, "anon_map", None)
     if not isinstance(raw, dict) or not raw:
         raise ValueError("conversation has no anon_map")
+    council = council_of(conv.slot_config)
+    expected = council_labels(council)
     try:
-        ok = set(raw) == set(LABELS) and set(raw.values()) == set(SLOT_IDS)
+        ok = set(raw) == set(expected) and set(raw.values()) == set(council)
     except TypeError:  # unhashable garbage
         ok = False
-    if not ok:
-        raise ValueError("anon_map must map exactly R1/R2/R3 to a permutation of the slot ids")
-    return {label: raw[label] for label in LABELS}
+    if not ok or len(raw) != len(council):
+        raise ValueError(
+            f"anon_map must map exactly {'/'.join(expected)} to a permutation of the council "
+            f"{list(council)}"
+        )
+    return {label: raw[label] for label in expected}
 
 
 def label_of(conv: Conversation, slot: SlotId) -> Label:

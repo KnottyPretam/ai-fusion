@@ -14,9 +14,16 @@
 // before any site view is created (the site pages' first paint) — and every window and view
 // records the grounds it was given (`background` / `backgrounds`).
 //
-// Two guards so a wiring run never touches the network: `TRIPLEX_BACKEND_URL` is forced to an
-// attach URL (main.js then never spawns a backend) and `globalThis.WebSocket` is replaced by a
-// recording fake the probes drive by hand.
+// Council + key (2026-09-27): `safeStorage` is a fake (hex behind an `enc:` marker, so the ciphertext
+// never contains the key; `setUsePlainTextEncryption` recorded), `globalThis.fetch` is a recording
+// fake that answers ONLY the two session endpoints (everything else fails like a closed port, which
+// is what the export probe relies on), and the probes drive panes:getCouncil / setCouncil,
+// panes:getOpenRouterKey / setOpenRouterKey, a column as the active tab, Ctrl+4, the push after the
+// hello_ack, after a council change, after a reconnect and the DELETE after a clear.
+//
+// Three guards so a wiring run never touches the network: `TRIPLEX_BACKEND_URL` is forced to an
+// attach URL (main.js then never spawns a backend), `globalThis.WebSocket` is replaced by a
+// recording fake the probes drive by hand, and `globalThis.fetch` by the recorder above.
 
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
@@ -46,6 +53,9 @@ const report = {
   probes: null,
   /** Every `nativeTheme.themeSource = …`, in order, with how much had been built when it happened. */
   themeSourceSets: [],
+  /** Every fetch main made: {url, method, headers, body} — the key push is the only caller that gets an answer. */
+  fetches: [],
+  plainTextEncryption: null,
 }
 let nextId = 1
 /** Monotonic counter: every BrowserWindow / WebContentsView bumps it in its constructor. */
@@ -105,6 +115,38 @@ class FakeWebSocket {
   }
 }
 globalThis.WebSocket = FakeWebSocket
+
+// --- fetch: only the session endpoints answer; every other URL fails like a closed port ------------
+globalThis.fetch = async (url, init = {}) => {
+  const u = String(url)
+  report.fetches.push({ url: u, method: init.method || 'GET', headers: init.headers || {}, body: typeof init.body === 'string' ? init.body : null })
+  if (u.includes('/api/session/openrouter_key') || u.includes('/api/session/defaults')) return { ok: true, status: 200, json: async () => ({}) }
+  const e = new Error('fetch failed')
+  e.cause = { code: 'ECONNREFUSED' }
+  throw e
+}
+
+// --- safeStorage: reversible, never the plaintext in the blob ---------------------------------------
+export const safeStorage = {
+  available: true,
+  isEncryptionAvailable() {
+    return this.available
+  },
+  getSelectedStorageBackend() {
+    return report.plainTextEncryption ? 'basic_text' : 'gnome_libsecret'
+  },
+  setUsePlainTextEncryption(v) {
+    report.plainTextEncryption = !!v
+  },
+  encryptString(s) {
+    return Buffer.from(`enc:${Buffer.from(String(s), 'utf8').toString('hex')}`)
+  },
+  decryptString(buf) {
+    const t = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf)
+    if (!t.startsWith('enc:')) throw new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString')
+    return Buffer.from(t.slice(4), 'hex').toString('utf8')
+  },
+}
 
 class FakeWebContents extends EventEmitter {
   constructor(kind) {
@@ -429,6 +471,10 @@ app.quit = () => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const mainFrameEvent = (wc) => ({ sender: wc, senderFrame: { parent: null } })
+/** The recorded fetches as {method, path, auth, body} (the body parsed; the key push is the only body with a key). */
+const fetchSummary = (list) => list.map((f) => ({ method: f.method, path: new URL(f.url).pathname, auth: f.headers.authorization || null, body: f.body ? JSON.parse(f.body) : null }))
+const KEY = `sk-or-v1-${'a'.repeat(64)}` // 73 chars, the real format
+const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 const HELLO_ACK = { type: 'hello_ack', protocol: 1, backend_version: '0.1.0', ping_s: 20 }
 const REQUEST = { type: 'request', req_id: '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c', model: 'web:claude', slot: 'claude', view: 'pane', fresh: false, text: 'hi `x`', role: 'claude', purpose: 'chat', conversation_id: CONV, timeout_s: 600 }
@@ -476,6 +522,7 @@ async function probe() {
   probes.socket = ws ? { url: ws.url, sentBeforeOpen: ws.sent.length } : null
   const t = globalThis.__triplexTest
   probes.bridgeBeforeAck = t && t.bridge ? t.bridge.status().state : null
+  const keyStatesBeforeAck = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').length
   if (ws) {
     ws.open()
     probes.hello = ws.sent[0] || null
@@ -483,6 +530,11 @@ async function probe() {
   }
   probes.bridgeAfterAck = t && t.bridge ? t.bridge.status() : null
   probes.bridgeSentToRenderer = win.webContents.sent.filter(([c]) => c === 'panes:bridge').map(([, s]) => s)
+  // the connected rising edge pushes the (absent) key and the default council to the attached
+  // backend, and announces the settled status to the renderer
+  await sleep(10)
+  probes.fetchesAfterAck = fetchSummary(report.fetches)
+  probes.keyStatesAfterAck = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').slice(keyStatesBeforeAck).map(([, s]) => s)
 
   probes.getCapture = await settle(ipcMain.invoke('panes:getCapture', renderer))
   probes.setCapture = await settle(ipcMain.invoke('panes:setCapture', renderer, 'claude', true))
@@ -701,6 +753,58 @@ async function probe() {
   probes.exportUnreachable = await settle(ipcMain.invoke('panes:export', renderer, { conversationId: CONV, turnId: 't1', formats: ['md'], title: 'Wiring run', turnType: 'analyze' }))
   probes.exportDialogCalls = dialog.saveCalls.length
 
+  // --- council + OpenRouter key -------------------------------------------------------------------
+  probes.getCouncil = await settle(ipcMain.invoke('panes:getCouncil', renderer))
+  probes.setCouncilBad = await settle(ipcMain.invoke('panes:setCouncil', renderer, { slots: { claude: { model: 'web:claude' } } }))
+  probes.setCouncilForeign = await settle(ipcMain.invoke('panes:setCouncil', mainFrameEvent(views[0].webContents), TWO))
+  const fetchesBeforeCouncil = report.fetches.length
+  const councilSentBefore = win.webContents.sent.filter(([c]) => c === 'panes:council').length
+  const keyStatesBeforeCouncil = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').length
+  probes.setCouncil = await settle(ipcMain.invoke('panes:setCouncil', renderer, TWO))
+  await sleep(10)
+  probes.councilSentToRenderer = win.webContents.sent.filter(([c]) => c === 'panes:council').slice(councilSentBefore).map(([, c]) => c)
+  probes.fetchesAfterCouncil = fetchSummary(report.fetches.slice(fetchesBeforeCouncil))
+  probes.keyStatesAfterCouncil = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').slice(keyStatesBeforeCouncil).map(([, s]) => s)
+  probes.getOpenRouterKeyBefore = await settle(ipcMain.invoke('panes:getOpenRouterKey', renderer))
+  probes.setKeyBad = await settle(ipcMain.invoke('panes:setOpenRouterKey', renderer, 'short'))
+  probes.setKeyMissing = await settle(ipcMain.invoke('panes:setOpenRouterKey', renderer))
+  probes.setKeyForeign = await settle(ipcMain.invoke('panes:setOpenRouterKey', mainFrameEvent(views[0].webContents), KEY))
+  const fetchesBeforeKey = report.fetches.length
+  const keyStatesBefore = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').length
+  probes.setKey = await settle(ipcMain.invoke('panes:setOpenRouterKey', renderer, KEY))
+  await sleep(10)
+  probes.keyStatesAfterSet = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').slice(keyStatesBefore).map(([, s]) => s)
+  probes.fetchesAfterSet = fetchSummary(report.fetches.slice(fetchesBeforeKey))
+  probes.keyStatus = t && t.openRouterKey ? t.openRouterKey.status() : null
+  probes.getOpenRouterKeyAfter = await settle(ipcMain.invoke('panes:getOpenRouterKey', renderer))
+  try {
+    probes.settingsAfterKey = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'))
+  } catch (e) {
+    probes.settingsAfterKey = { error: String(e.message) }
+  }
+  const infoCK = await settle(ipcMain.invoke('panes:getInfo', renderer))
+  probes.getInfoCouncilKey = infoCK.ok ? { council: infoCK.value.council, openRouterKey: infoCK.value.openRouterKey } : infoCK
+  // Ctrl+4 reaches the renderer as tab-4 (the fourth council member, pane or column)
+  const ev4 = { prevented: false, preventDefault() { this.prevented = true } }
+  views[0].webContents.emit('before-input-event', ev4, { type: 'keyDown', key: '4', code: 'Digit4', control: true, shift: false, alt: false, meta: false, isAutoRepeat: false })
+  probes.shortcutTab4 = { prevented: ev4.prevented, sent: win.webContents.sent.filter(([c, m]) => c === 'panes:shortcut' && m && m.name === 'tab-4') }
+  // a renderer COLUMN as the active tab: accepted, and the pane-only shortcuts become handled no-ops
+  ipcMain.emit('panes:active', renderer, { mode: 'tabs', active: 'qwen' })
+  probes.activeColumn = (await settle(ipcMain.invoke('panes:getInfo', renderer))).value.layout
+  const reloadsBefore = views.slice(0, 3).map((v) => v.webContents.reloads)
+  const zoomsBefore = views.slice(0, 3).map((v) => v.webContents.zoom)
+  const evR = { prevented: false, preventDefault() { this.prevented = true } }
+  win.webContents.emit('before-input-event', evR, { type: 'keyDown', key: 'r', code: 'KeyR', control: true, shift: false, alt: false, meta: false, isAutoRepeat: false })
+  const evZ = { prevented: false, preventDefault() { this.prevented = true } }
+  win.webContents.emit('before-input-event', evZ, { type: 'keyDown', key: '=', code: 'Equal', control: true, shift: false, alt: false, meta: false, isAutoRepeat: false })
+  probes.columnActions = {
+    reloadPrevented: evR.prevented,
+    zoomPrevented: evZ.prevented,
+    reloads: views.slice(0, 3).map((v, i) => v.webContents.reloads - reloadsBefore[i]),
+    zooms: views.slice(0, 3).map((v, i) => v.webContents.zoom - zoomsBefore[i]),
+  }
+  ipcMain.emit('panes:active', renderer, { mode: 'tabs', active: 'grok' }) // back to a pane for the replay probe
+
   // a socket drop → banner state to the renderer; the client schedules a reconnect (a new socket)
   if (ws) ws.close(1006, '')
   await sleep(10)
@@ -779,6 +883,26 @@ async function probe() {
   await sleep(1100)
   probes.recreated = views.length - beforeCrash
   probes.recreatedPartition = views[views.length - 1].options.webPreferences.partition
+
+  // the reconnect socket (0.5 s backoff, long past): its hello_ack is another rising edge → the key
+  // and the council are pushed AGAIN; then a clear → DELETE
+  const ws2 = FakeWebSocket.instances[1]
+  const fetchesBeforeReconnect = report.fetches.length
+  const keyStatesBeforeReconnect = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').length
+  if (ws2) {
+    ws2.open()
+    ws2.receive(HELLO_ACK)
+  }
+  await sleep(10)
+  probes.fetchesAfterReconnect = fetchSummary(report.fetches.slice(fetchesBeforeReconnect))
+  probes.keyStatesAfterReconnect = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').slice(keyStatesBeforeReconnect).map(([, s]) => s)
+  const fetchesBeforeClear = report.fetches.length
+  const keyStatesBeforeClear = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').length
+  probes.clearKey = await settle(ipcMain.invoke('panes:setOpenRouterKey', renderer, null))
+  await sleep(10)
+  probes.fetchesAfterClear = fetchSummary(report.fetches.slice(fetchesBeforeClear))
+  probes.keyStatesAfterClear = win.webContents.sent.filter(([c]) => c === 'panes:openRouterKey').slice(keyStatesBeforeClear).map(([, s]) => s)
+  probes.keyStatusAfterClear = t && t.openRouterKey ? t.openRouterKey.status() : null
 
   // window bounds → settings.json on close (debounce flushed)
   win.setBounds({ x: 10, y: 20, width: 900, height: 700 })

@@ -15,7 +15,7 @@ import pytest
 from backend import anon
 from backend.prompts import QUOTED_DATA_NOTICE, delimited
 from backend.prompts import fusion as prompts
-from backend.schemas import SLOT_IDS, PeerState
+from backend.schemas import DEFAULT_COUNCIL, PeerState
 from tests.fusion.conftest import (
     by_type,
     calls,
@@ -223,7 +223,7 @@ def test_challenge_prompt_round_counter_and_no_leak_on_clean_input():
     assert_no_identity_leak(p)
     # Peers are shown by label only (never a slot id): the challenged label is excluded.
     assert "<<<R2>>>" not in p and "<<<R1>>>" in p and "<<<R3>>>" in p
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert slot not in p.lower()
 
 
@@ -259,7 +259,7 @@ def test_prompt_constants_are_identity_free():
     for name in prompts.__all__:
         value = getattr(prompts, name)
         if isinstance(value, str):
-            assert_no_identity_leak(value, extra_forbidden=SLOT_IDS)
+            assert_no_identity_leak(value, extra_forbidden=DEFAULT_COUNCIL)
 
 
 # --------------------------------------------------------------------------- (i) every challenge
@@ -350,7 +350,7 @@ async def test_no_identity_leak_in_defense_or_convergence_payloads(
         for a in allow:
             excised = excised.replace(a, " ")
         low = excised.lower()
-        for slot in SLOT_IDS:
+        for slot in DEFAULT_COUNCIL:
             assert slot not in low, (name, c["role"], c["purpose"], slot)
         scanned += 1
     assert scanned >= 3
@@ -372,9 +372,9 @@ async def test_vendor_in_prompt_passes_under_the_scope_rule(prepare, fusion):
         assert c["messages"][0] == {"role": "user", "content": p.prompt}  # thread history
         challenge = challenge_of(c)
         assert "claude" not in challenge.lower()
-        assert_no_identity_leak(challenge, extra_forbidden=SLOT_IDS)
+        assert_no_identity_leak(challenge, extra_forbidden=DEFAULT_COUNCIL)
         # Without the allow list the payload as a whole DOES contain the prompt's "Claude".
         assert find_identity_leaks(messages_text(c["messages"])) == ["claude"]
         assert find_identity_leaks(messages_text(c["messages"]), allow=[p.prompt]) == []
     for c in calls("convergence"):
-        assert_no_identity_leak(messages_text(c["messages"]), extra_forbidden=SLOT_IDS)
+        assert_no_identity_leak(messages_text(c["messages"]), extra_forbidden=DEFAULT_COUNCIL)

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.conftest import DEFAULT_PROMPT
 from tests.helpers import parse_sse_text
 
@@ -54,7 +54,7 @@ def slot_text(events: list[dict], slot: str, kind: str = "slot_delta") -> str:
     return "".join(e["text"] for e in for_slot(events, slot) if e["type"] == kind)
 
 
-def assert_stream_invariants(events: list[dict], slots: tuple[str, ...] = SLOT_IDS) -> None:
+def assert_stream_invariants(events: list[dict], slots: tuple[str, ...] = DEFAULT_COUNCIL) -> None:
     """The contract's ordering rules: turn_start first, each slot's slot_start before any of its
     other events, exactly one slot_done|slot_error per slot, turn_done last."""
     assert events, "empty stream"

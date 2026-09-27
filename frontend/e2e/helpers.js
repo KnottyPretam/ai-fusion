@@ -7,6 +7,8 @@
 // `test.skip(SCENARIO !== '<name>')` and are run on their own ports (see each spec's header).
 import { expect } from '@playwright/test'
 
+// The classic three-slot council every shipped scenario runs (the catalog has seven vendors; a
+// conversation seats 2..5 of them and uses the label prefix of its size).
 export const SLOTS = ['claude', 'chatgpt', 'grok']
 export const LABELS = ['R1', 'R2', 'R3']
 export const SCENARIO = process.env.MOCK_SCENARIO || 'planted_factual'
@@ -25,8 +27,10 @@ export const PROMPTS = {
 
 // A leak in the report / timeline would show a vendor or slot name instead of R1/R2/R3. Mirrors
 // backend/config.py: FORBIDDEN_IDENTITY_STRINGS on word boundaries (so "per sol" or "grokking"
-// do not trip it) and FORBIDDEN_MODEL_CODENAMES only in slug context (preceded by "-").
-export const IDENTITY_RE = /\b(claude|chatgpt|grok|openai|anthropic|xai|x-ai|spacexai|gpt|opus|sonnet|fable)\b|-(luna|sol|astra)\b/i
+// do not trip it), FORBIDDEN_MODEL_CODENAMES only in slug context (preceded by "-") and, since
+// the council (2026-09-27), the four new vendors' words plus `google` in slug context only
+// (FORBIDDEN_VENDOR_PREFIXES: "Google's TPU" is an ordinary claim, `google/` a model slug).
+export const IDENTITY_RE = /\b(claude|chatgpt|grok|openai|anthropic|xai|x-ai|spacexai|gpt|opus|sonnet|fable|gemini|deepseek|qwen|mimo|alibaba|xiaomi)\b|\bgoogle\/|-(luna|sol|astra)\b/i
 
 // Screenshots land next to the ones the integrator flow already produces (docs/screenshots/).
 export const shot = (name) => ({ path: `../docs/screenshots/${name}.png`, fullPage: true })
@@ -77,7 +81,7 @@ export function messagesOf(page, slot, role = null) {
 }
 
 // Type into the main composer and Send. Waits until the turn is persisted and the page settled:
-// the Analyze button is enabled only once the refetched send turn has all three responses and no
+// the Analyze button is enabled only once the refetched send turn has every slot's response and no
 // stream is running; the composer unlocks once the post-stream refetch settled.
 // `expectText` is asserted on every slot's newest persisted ASSISTANT message, never on the whole
 // thread: the thread also holds the user's prompt (pending bubble, then the persisted user

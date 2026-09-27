@@ -5,7 +5,10 @@
 //
 //   desk-drawer                        the container (data-open, data-tab)
 //   drawer-toggle                      open / close (`panes/drawer`; persisted as triplex.panes.drawerOpen)
-//   drawer-tab-analyze|fusion|captured|settings   the tabs; clicking one opens the drawer on it
+//   drawer-tab-analyze|fusion|captured|agents|settings   the tabs; clicking one opens the drawer on it
+//   drawer-panel-agents                Agents (2026-09-27): the council — 2..5 agents, each on a
+//                                      web session / OpenRouter / local Ollama — and the OpenRouter
+//                                      key (./AgentsPage.jsx)
 //   drawer-capture-hint                "capture is off for <slots>" when the latest send turn of the
 //                                      open conversation has not_captured errors (its persisted
 //                                      `errors[slot]` messages, slice.notCapturedSlots) and / or
@@ -23,11 +26,12 @@
 //
 // Tabs: Analyze = the unchanged features/analyze pane, Fusion = the unchanged features/fusion pane
 // (their slices are registered by the index.jsx modules imported here), Captured = the web
-// SendPane with `composer={false}` (the three captured threads and their solo continue boxes; the
-// unified prompt bar is the composer), Settings = SlotConfigBar in desktop mode (analyst groups
-// "web sessions (hidden analyst page)" / "local Ollama", grounded hidden) plus the analyst-page
-// switch. All four stay mounted (hidden) so the Fusion stepper and scroll positions survive a tab
-// switch; the CostMeter (desktop mode: tokens / latency / calls, no cost) is the drawer's footer.
+// SendPane with `composer={false}` (the council's captured threads and their solo continue boxes;
+// the unified prompt bar is the composer), Agents = AgentsPage, Settings = SlotConfigBar in
+// desktop mode (analyst groups "web sessions (hidden analyst page)" / "local Ollama" / OpenRouter
+// once a key is configured, grounded hidden) plus the analyst-page switch. All five stay mounted
+// (hidden) so the Fusion stepper and scroll positions survive a tab switch; the CostMeter (desktop
+// mode: tokens / latency / calls, cost only when a member is on OpenRouter) is the drawer's footer.
 //
 // Analyst choice (./analyst.js): the select's value is the open conversation's analyst_model, or
 // the desktop choice when none is open; a change persists the mirror (`triplex.desktop.analyst`),
@@ -56,22 +60,31 @@ import SlotConfigBar from '../config/index.jsx'
 import FusionPane from '../fusion/index.jsx'
 import CostMeter from '../meter/index.jsx'
 import SendPane from '../send/SendPane.jsx'
+import AgentsPage from './AgentsPage.jsx'
 import { analystSlotOf, isDesktopAnalyst, loadAnalyst, persistAnalyst } from './analyst.js'
 import { desktopApi } from './PaneDeck.jsx'
-import { SLOT_LABELS, initialPanes, isSlotId, notCapturedSlots } from './slice.js'
+import { DEFAULT_COUNCIL, SLOT_LABELS, councilOf, initialPanes, isSiteId, notCapturedSlots } from './slice.js'
 import css from './desktop.module.css'
 import { APP_NAME } from '../../branding.js'
 
 export const DRAWER_TABS = [
-  { key: 'analyze', label: 'Analyze', tip: 'What the three answers agree on and where they differ, labelled R1/R2/R3. Needs captured replies.' },
+  { key: 'analyze', label: 'Analyze', tip: 'What the answers agree on and where they differ, labelled R1…Rn. Needs captured replies.' },
   { key: 'fusion', label: 'Fusion', tip: 'Put each difference back to the models that hold it, round by round, and report what converged and what still stands.' },
-  { key: 'captured', label: 'Captured', tip: 'The reply text read out of each site, as stored: this is exactly what Analyze and Fusion see.' },
+  { key: 'captured', label: 'Captured', tip: 'The reply text read out of each site (or streamed from a token / local agent), as stored: this is exactly what Analyze and Fusion see.' },
+  { key: 'agents', label: 'Agents', tip: 'Assemble the council: two to five agents, each on a web session, OpenRouter or local Ollama; and the OpenRouter key.' },
   { key: 'settings', label: 'Settings', tip: 'Which page answers as the analyst, how many Fusion rounds, and the materiality floor for fusing a difference.' },
 ]
 export const TAB_KEYS = DRAWER_TABS.map((t) => t.key)
 export const CHOOSE_ANALYST_HINT = 'choose an analyst'
 /** Shown instead of the Analyze pane while no analyst can answer (Decision 4: Analyze disabled). */
-export const ANALYZE_BLOCKED_HINT = 'Analyze needs an analyst: choose a web session or local Ollama in Settings.'
+export const ANALYZE_BLOCKED_HINT = 'Analyze needs an analyst: choose a web session or local Ollama in Settings, or an OpenRouter model once a key is saved on the Agents page.'
+
+/** "the three answers R1/R2/R3" for a council of n (n=3 reads exactly as before). */
+export function councilAnswersText(n) {
+  const words = { 2: 'two', 3: 'three', 4: 'four', 5: 'five' }
+  const labels = ['R1', 'R2', 'R3', 'R4', 'R5'].slice(0, Math.min(Math.max(n, 2), 5)).join('/')
+  return `the ${words[n] || n} answers ${labels}`
+}
 /** Every pane returns null without a selected conversation, which left the drawer a blank slab. */
 export const NO_CONVERSATION_HINT = 'No conversation selected. Send a prompt, or pick one in the sidebar, and its Analyze, Fusion and captured replies appear here.'
 
@@ -81,9 +94,9 @@ export function captureHint(conversation) {
   return slots.length ? `capture is off for ${slots.join(', ')}` : null
 }
 
-/** 'choose an analyst' unless the model is a desktop analyst (web:<slot>:analyst | ollama:*). */
-export function analystHint(model) {
-  return isDesktopAnalyst(model) ? null : CHOOSE_ANALYST_HINT
+/** 'choose an analyst' unless the model is a desktop analyst (web:<site>:analyst | ollama:* | an OpenRouter slug with a key). */
+export function analystHint(model, opts) {
+  return isDesktopAnalyst(model, opts) ? null : CHOOSE_ANALYST_HINT
 }
 
 /**
@@ -92,7 +105,7 @@ export function analystHint(model) {
  * one that decides whether a bridge analyst request is answered at all.
  */
 export function analystPageText(pageSlot, model) {
-  const on = isSlotId(pageSlot) ? `signed in as ${SLOT_LABELS[pageSlot]}` : 'not open'
+  const on = isSiteId(pageSlot) ? `signed in as ${SLOT_LABELS[pageSlot]}` : 'not open'
   const wanted = analystSlotOf(model)
   const drift = wanted && wanted !== pageSlot ? ` This conversation asks for ${SLOT_LABELS[wanted]}, so the hidden page is being switched over.` : ''
   return `Hidden analyst page: ${on}.${drift}`
@@ -141,10 +154,12 @@ export default function Drawer({ api = desktopApi() }) {
   }
 
   const effectiveAnalyst = slotConfig && typeof slotConfig === 'object' ? slotConfig.analyst_model : choice
-  const analystReady = isDesktopAnalyst(effectiveAnalyst)
-  const hints = [captureHint(conversation), analystHint(effectiveAnalyst)].filter(Boolean)
+  const keyConfigured = !!(panes.openRouterKey && panes.openRouterKey.configured)
+  const analystReady = isDesktopAnalyst(effectiveAnalyst, { keyConfigured })
+  const hints = [captureHint(conversation), analystHint(effectiveAnalyst, { keyConfigured })].filter(Boolean)
   const wantedSlot = analystSlotOf(effectiveAnalyst)
-  const pageSlot = isSlotId(analystState.slot) ? analystState.slot : null
+  const pageSlot = isSiteId(analystState.slot) ? analystState.slot : null
+  const councilSize = (councilOf(slotConfig) || councilOf(panes.council) || DEFAULT_COUNCIL).length
 
   // Main's hidden page must be the login this conversation's analyst_model names, or the bridge
   // answers analyst_not_chosen: push the choice once (mount included — main never sees the
@@ -207,6 +222,9 @@ export default function Drawer({ api = desktopApi() }) {
           <div className={`${css.drawerPanel} ${css.captured}`} data-testid="drawer-panel-captured" hidden={tab !== 'captured'}>
             <SendPane composer={false} />
           </div>
+          <div className={css.drawerPanel} data-testid="drawer-panel-agents" hidden={tab !== 'agents'}>
+            <AgentsPage api={api} />
+          </div>
           <div className={css.drawerPanel} data-testid="drawer-panel-settings" hidden={tab !== 'settings'}>
             <div className={css.settings}>
               <SlotConfigBar desktop analyst={choice} onAnalystChange={onAnalystChange} />
@@ -218,8 +236,8 @@ export default function Drawer({ api = desktopApi() }) {
                 {analystPageText(pageSlot, effectiveAnalyst)}
               </p>
               <p className={css.hint}>
-                {APP_NAME} labels the three answers R1/R2/R3 and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it. A web session runs the analyst in a
-                hidden page signed in as that site (a fresh chat per Analyze); local Ollama needs a running server. New conversations start with the choice above; the open conversation is updated in place.
+                {APP_NAME} labels {councilAnswersText(councilSize)} and never names the sites, but it quotes them verbatim — a reply that names its own maker still identifies it. A web session runs the analyst in a
+                hidden page signed in as that site (a fresh chat per Analyze); local Ollama needs a running server; an OpenRouter analyst needs the key from the Agents page. New conversations start with the choice above; the open conversation is updated in place.
               </p>
             </div>
           </div>

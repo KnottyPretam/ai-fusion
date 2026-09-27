@@ -41,22 +41,39 @@ into a bullet list that simply dropped a restatement.
 
 from __future__ import annotations
 
-from ..schemas import LABELS, Label
+from ..schemas import Label
 from . import QUOTED_DATA_NOTICE, delimited
+from .council import (
+    check_council_size,
+    label_and_list,
+    label_list,
+    label_or_list,
+    labels_for,
+    number_word,
+    others,
+    schema_alternatives,
+)
 
-# System instructions: the analyst compares three anonymous responses on substance only.
-_SYSTEM_RULES = """You are an analyst comparing three anonymous expert responses (R1, R2, R3) to the same question.
+
+# Count-aware builders (2026-09-27, `prompts/council.py`): a council of n agents is shown as R1..Rn,
+# and every clause that names the count or the labels is built from n. The module constants below
+# are the builders AT n=3, so the three-council text is byte for byte what it always was.
+def system_rules_for(n: int) -> str:
+    """System instructions: the analyst compares n anonymous responses on substance only."""
+    check_council_size(n)
+    return f"""You are an analyst comparing {number_word(n)} anonymous expert responses ({label_list(n)}) to the same question.
 
 Identify (a) substantive points where the responses agree, and (b) substantive points where they disagree or give incompatible specifics (numbers, limits, register values, recommendations, claims of fact). Ignore differences of style, order, or emphasis. Judge on substance, not length or confidence of tone: a short, tentative answer and a long, assertive one carry equal weight.
 
 Rules for the output:
 - Number the divergences d1, d2, ... in order of appearance in the responses.
 - Rate each divergence's materiality as "high" (the answers are incompatible on the core question), "medium" (a meaningful difference in a supporting detail) or "low" (a minor or peripheral difference).
-- For each divergence, list a position for EVERY label (R1, R2 or R3) that takes a stance on it, with that label's claim in one sentence and the evidence it cites (or null).
+- For each divergence, list a position for EVERY label ({label_or_list(n)}) that takes a stance on it, with that label's claim in one sentence and the evidence it cites (or null).
 - An agreement names the labels that share the statement; do not invent agreement where a response is silent.
-- Refer to the responses only as R1, R2 and R3.
+- Refer to the responses only as {label_and_list(n)}.
 
 """
+
 
 # The one transport-dependent clause (module docstring). `JSON_INSTRUCTION` is Appendix A verbatim.
 JSON_INSTRUCTION = "Return ONLY valid JSON matching this schema (no prose, no code fences):"
@@ -67,13 +84,25 @@ JSON_INSTRUCTION_FENCED = (
     "The JSON must match this schema:"
 )
 
-_SCHEMA = """{"agreements": [{"topic": string, "statement": string, "models": ["R1" | "R2" | "R3", ...]}],
- "divergences": [{"id": "d1" | "d2" | ..., "topic": string,
-                  "positions": [{"model": "R1" | "R2" | "R3", "claim": string, "evidence_cited": string | null}],
-                  "materiality": "high" | "medium" | "low"}]}"""
 
-SYSTEM = _SYSTEM_RULES + JSON_INSTRUCTION + "\n" + _SCHEMA
-SYSTEM_FENCED = _SYSTEM_RULES + JSON_INSTRUCTION_FENCED + "\n" + _SCHEMA
+def schema_for(n: int) -> str:
+    alts = schema_alternatives(n)
+    return f"""{{"agreements": [{{"topic": string, "statement": string, "models": [{alts}, ...]}}],
+ "divergences": [{{"id": "d1" | "d2" | ..., "topic": string,
+                  "positions": [{{"model": {alts}, "claim": string, "evidence_cited": string | null}}],
+                  "materiality": "high" | "medium" | "low"}}]}}"""
+
+
+def system_for(n: int, *, fenced: bool = False) -> str:
+    """The analyst instructions for a council of n on this transport (`system_message`)."""
+    instruction = JSON_INSTRUCTION_FENCED if fenced else JSON_INSTRUCTION
+    return system_rules_for(n) + instruction + "\n" + schema_for(n)
+
+
+_SYSTEM_RULES = system_rules_for(3)
+_SCHEMA = schema_for(3)
+SYSTEM = system_for(3)
+SYSTEM_FENCED = system_for(3, fenced=True)
 
 # Sent as a follow-up user message when the first attempt fails lenient parsing or validation
 # (docs/semantics.md "Analyze": Analyze drives its single retry itself).
@@ -109,13 +138,18 @@ CONDENSED_RESPONSES_HEADER = (
 )
 
 # --------------------------------------------------------------------------- the condense step
-CONDENSE_SYSTEM = """You are condensing ONE anonymous expert response so that it can be compared with two others.
+def condense_system_for(n: int, *, fenced: bool = False) -> str:
+    """The condense instructions for a council of n: one response, compared with n-1 others."""
+    check_council_size(n)
+    system = f"""You are condensing ONE anonymous expert response so that it can be compared with {others(n)}.
 
 Rewrite it as a flat list of short bullet points, one substantive claim per bullet: facts, numbers, limits, register values, recommendations, and for each claim the evidence it cites, if any. Copy every specific value verbatim — a number or a limit that changes is worse than one that is left out. Drop restatements, pleasantries, worked-example prose, and anything that is only about style, order or emphasis. Keep the claims in the order they appear.
 
 Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a shorter copy of one response, not an assessment of it.
 
-Return ONLY a JSON object of the form {"claims": ["<one claim>", "<one claim>", ...]} and nothing else. One claim per string, in the order they appear."""
+Return ONLY a JSON object of the form {{"claims": ["<one claim>", "<one claim>", ...]}} and nothing else. One claim per string, in the order they appear."""
+    return system + (CONDENSE_FENCE_CLAUSE if fenced else "")
+
 
 #: Appended for a web session, which is read back out of RENDERED markdown: the same fence rule the
 #: comparison prompt uses, for the same reason (docs/semantics.md, "Structured output").
@@ -124,6 +158,8 @@ CONDENSE_FENCE_CLAUSE = (
     "closing line with ``` — and write nothing outside the block."
 )
 
+CONDENSE_SYSTEM = condense_system_for(3)
+
 CONDENSE_HEADER = "Response to condense:"
 
 
@@ -131,16 +167,21 @@ def build_user(
     question: str, responses: dict[Label, str], *, condensed: bool = False, graph: str = ""
 ) -> str:
     """The user message: the question, the graph when there is one, the quoted-data notice, then one
-    delimited block per label in R1/R2/R3 order (`responses` must carry every label).
+    delimited block per label in R1..Rn order. `n = len(responses)` is the council size, and
+    `responses` must carry exactly `LABELS[:n]` -- a missing or a foreign label is a ValueError.
 
     `condensed=True` (the blocks hold condensed claims instead of the replies) swaps ONLY the
     responses header; the blocks and their order never change. `graph` (S11, from a Refactor pass)
     adds ONE delimited block before them and nothing else -- absent or blank, the message is byte for
     byte what it has always been, which is what keeps every fixture and golden still."""
-    missing = [label for label in LABELS if label not in responses]
+    expected = labels_for(len(responses))  # ValueError outside 2..5
+    missing = [label for label in expected if label not in responses]
     if missing:
         raise ValueError(f"responses missing labels {missing}")
-    blocks = [delimited(label, responses[label]) for label in LABELS]
+    extra = [label for label in responses if label not in expected]
+    if extra:
+        raise ValueError(f"responses carry labels outside the council: {extra}")
+    blocks = [delimited(label, responses[label]) for label in expected]
     header = CONDENSED_RESPONSES_HEADER if condensed else RESPONSES_HEADER
     parts = [f"{QUESTION_HEADER}\n{question}"]
     if graph.strip():
@@ -164,26 +205,31 @@ def condense_user(question: str, label: Label | str, response: str) -> str:
 
 
 def condense_messages(
-    question: str, label: Label | str, response: str, *, fenced: bool = False
+    question: str,
+    label: Label | str,
+    response: str,
+    *,
+    fenced: bool = False,
+    n: int = 3,
 ) -> list[dict[str, str]]:
     """`[system(condense instructions), user(question + the one delimited block)]`.
 
     The claims come back as JSON, not prose, for two reasons that only apply to a web session:
     the capture refuses to end on a document whose braces do not balance (S10), so a condensation
     truncated mid-answer FAILS loudly instead of being quoted into the comparison as though it were
-    the whole reply; and `fenced=True` asks for the code block that survives markdown rendering."""
-    system = CONDENSE_SYSTEM + (CONDENSE_FENCE_CLAUSE if fenced else "")
+    the whole reply; and `fenced=True` asks for the code block that survives markdown rendering.
+    `n` is the council size (how many others the response is compared with)."""
     return [
-        {"role": "system", "content": system},
+        {"role": "system", "content": condense_system_for(n, fenced=fenced)},
         {"role": "user", "content": condense_user(question, label, response)},
     ]
 
 
-def system_message(*, fenced: bool = False) -> str:
-    """The analyst instructions for this transport: `SYSTEM_FENCED` asks for a ```json fence (the
-    web transport, whose reply is read back out of rendered markdown), `SYSTEM` forbids one (every
-    API transport, Appendix A verbatim). Module docstring."""
-    return SYSTEM_FENCED if fenced else SYSTEM
+def system_message(*, fenced: bool = False, n: int = 3) -> str:
+    """The analyst instructions for this transport and council size: the fenced variant asks for
+    a ```json fence (the web transport, whose reply is read back out of rendered markdown), the
+    other forbids one (every API transport, Appendix A verbatim). Module docstring."""
+    return system_for(n, fenced=fenced)
 
 
 def build_messages(
@@ -193,15 +239,21 @@ def build_messages(
     fenced: bool = False,
     condensed: bool = False,
     graph: str = "",
+    n: int | None = None,
 ) -> list[dict[str, str]]:
-    """`[system(instructions), user(question + the question map + delimited R1/R2/R3 blocks)]`.
+    """`[system(instructions), user(question + the question map + delimited R1..Rn blocks)]`.
 
     `fenced=True` (the caller passes `client.transport_kind(model) == "web"`) swaps ONLY the JSON
     instruction for the fenced one; `condensed=True` swaps ONLY the responses header; `graph` adds one
     delimited block before the responses. All three are independent: the first is about the transport,
-    the second about what the blocks hold, the third about what an earlier pass worked out."""
+    the second about what the blocks hold, the third about what an earlier pass worked out. The
+    council size is `len(responses)` (`build_user` checks the labels are exactly R1..Rn); `n`, when
+    given, must say the same (ValueError otherwise) -- a caller that knows its council size states
+    it, one that does not lets the responses decide."""
+    if n is not None and n != len(responses):
+        raise ValueError(f"n={n} but {len(responses)} responses were given")
     return [
-        {"role": "system", "content": system_message(fenced=fenced)},
+        {"role": "system", "content": system_message(fenced=fenced, n=len(responses))},
         {
             "role": "user",
             "content": build_user(question, responses, condensed=condensed, graph=graph),
@@ -232,7 +284,11 @@ __all__ = [
     "build_messages",
     "build_user",
     "condense_messages",
+    "condense_system_for",
     "condense_user",
     "retry_message",
+    "schema_for",
+    "system_for",
     "system_message",
+    "system_rules_for",
 ]

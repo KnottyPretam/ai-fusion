@@ -14,7 +14,7 @@ from backend.features import fusion as feature
 from backend.features.fusion import run_fusion
 from backend.llm import mock
 from backend.routers import fusion as router_mod
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from backend.store import conversations as store
 from tests.fusion.conftest import by_type, calls, types_of, wait_until_free
 
@@ -86,7 +86,7 @@ async def test_client_disconnect_lets_the_producer_finish_and_persist(prepare, m
     turn = loaded.turns[-1]
     assert turn.id == first["turn_id"] and turn.exit_reason == "max_iterations"
     assert len(turn.rounds) == 2 and [s.status for s in turn.final] == ["standing"]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert len(loaded.threads[slot]) == 2 + 2 * 2
     assert len(calls("defense")) == 6 and len(calls("convergence")) == 2
     assert not feature._tasks  # the finished task dropped its strong reference
@@ -121,7 +121,7 @@ async def test_turn_persistence_failure_after_the_first_event_is_terminal_error(
     after = await store.load(p.cid)
     assert after is not None
     assert [t.type for t in after.turns] == ["send", "analyze"]  # the turn never made it
-    for slot in SLOT_IDS:  # the exchanges did (appended as each challenge completed)
+    for slot in DEFAULT_COUNCIL:  # the exchanges did (appended as each challenge completed)
         assert [m.kind for m in after.threads[slot]] == [
             "chat",
             "chat",

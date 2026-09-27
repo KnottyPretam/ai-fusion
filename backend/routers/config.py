@@ -3,11 +3,17 @@
     GET /api/conversations/{id}/slot_config -> 200 SlotConfig           (404 not_found/conversation)
     PUT /api/conversations/{id}/slot_config -> 200 the STORED SlotConfig (not the conversation)
         body = a full SlotConfig (pydantic 422 list otherwise);
+        422 {detail:{error:"web_slot_mismatch", slot, model}} when a `web:` model names another
+        slot's site, a site without a Stage-1 adapter, or is malformed (features/slot_config.py);
         422 {detail:{error:"unsupported_effort", slot, model, effort, supported:[...]}} only when
-        the catalog knows the model and the effort is not in meta.efforts (features/slot_config.py).
+        the catalog knows the model and the effort is not in meta.efforts (features/slot_config.py);
+        409 {detail:{error:"council_changed", current:[...], requested:[...]}} when the config's
+        council (its slot key set) differs from the stored one and the conversation is no longer
+        empty -- a turn, a thread message, or a feature call in flight (store.update_slot_config).
 
 Order of checks on PUT: body validation (FastAPI) -> 404 when the conversation is missing ->
-422 unsupported_effort -> store.update_slot_config, which REPLACES the stored object.
+422 web_slot_mismatch -> 422 unsupported_effort -> store.update_slot_config, which raises
+409 council_changed or REPLACES the stored object.
 """
 
 from __future__ import annotations

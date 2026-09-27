@@ -18,7 +18,7 @@ import pytest
 
 from backend import branding, export
 from backend.config import FORBIDDEN_IDENTITY_STRINGS
-from backend.schemas import LABELS, SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL, LABELS, SLOT_IDS
 from tests.export.conftest import logo_uris, without_assets
 from tests.helpers import find_identity_leaks
 
@@ -54,11 +54,11 @@ def test_analyze_and_fusion_exports_are_r_labels_only(fused, which, fmt):
     # Nothing allowed: the whole document is Triplex-authored plus vendor-free quoted text.
     assert find_identity_leaks(doc) == []
     # The labels ARE there (the document is anonymised, not stripped).
-    for label in LABELS:
+    for label in LABELS[:3]:
         assert label in doc
     # No slot id, no per-slot model id, no analyst model id, and never the mapping itself.
     lowered = doc.lower()
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert slot not in lowered
         assert conv.slot_config.slots[slot].model.lower() not in lowered
     assert conv.slot_config.analyst_model.lower() not in lowered
@@ -108,9 +108,11 @@ def test_send_export_names_the_slots_and_uses_no_r_labels(fused):
     conv, _, _ = fused()
     for fmt in ("md", "html"):
         doc = without_assets(export.render_doc(export.build_document(conv, conv.turns[0].id), fmt))
-        for name in export.SLOT_NAMES.values():
-            assert name in doc
-        for label in LABELS:
+        for slot in DEFAULT_COUNCIL:  # the council's names; SLOT_NAMES covers all seven vendors
+            assert export.SLOT_NAMES[slot] in doc
+        for slot in set(SLOT_IDS) - set(DEFAULT_COUNCIL):
+            assert export.SLOT_NAMES[slot] not in doc
+        for label in LABELS[:3]:
             assert label not in doc
         assert "anon_map" not in doc
 

@@ -1,5 +1,6 @@
-"""Local Ollama transport helpers (owner: desktop-catalog-and-ollama S3). Pure: no network I/O,
-never raises (`warn_if_remote` logs, and that is the module's only side effect).
+"""Local Ollama transport helpers (owner: desktop-catalog-and-ollama S3). Pure, never raises
+(`warn_if_remote` logs), with ONE network call since 2026-09-27: `list_local_models`, the
+loopback-only `/api/tags` listing behind `GET /api/ollama/models`.
 
 docs/desktop-contract.md section 6: an `ollama:<name>` model is served by Ollama's OpenAI-compatible
 endpoint through the same httpx transport as OpenRouter -- `client._live_stream(base_url=,
@@ -103,6 +104,45 @@ def headers() -> dict[str, str]:
     return {"Content-Type": "application/json", "Accept": "text/event-stream"}
 
 
+def tags_url(base: str) -> str:
+    """Ollama's own listing endpoint for a base URL: the OpenAI-compatible `/v1` suffix comes off
+    (`http://127.0.0.1:11434/v1` -> `http://127.0.0.1:11434/api/tags`)."""
+    root = base.strip().rstrip("/")
+    if root.endswith("/v1"):
+        root = root[: -len("/v1")]
+    return root + "/api/tags"
+
+
+async def list_local_models(timeout_s: float = 2.0) -> list[str]:
+    """The model names Ollama reports at `/api/tags` (2026-09-27, the Agents page's local list).
+
+    Loopback ONLY: a non-loopback `OLLAMA_BASE_URL` is served for calls (with `warn_if_remote`),
+    but this listing never reaches across the network -- it returns `[]` without a request. Never
+    raises: a server that is not running, a timeout, a non-2xx status or a malformed body is `[]`
+    too, because "no local models" is the ordinary state of a machine without Ollama."""
+    base = base_url()
+    if not is_loopback(base):
+        return []
+    import httpx  # local: the module is otherwise pure, and this is its one network call
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            resp = await client.get(tags_url(base), headers={"Accept": "application/json"})
+            if not (200 <= resp.status_code < 300):
+                return []
+            doc = resp.json()
+    except Exception as e:  # any failure at all is "no local models"
+        log.debug("ollama listing failed: %s: %s", type(e).__name__, e)
+        return []
+    models = doc.get("models") if isinstance(doc, dict) else None
+    names: list[str] = []
+    for entry in models if isinstance(models, list) else []:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if isinstance(name, str) and name and name not in names:
+            names.append(name)
+    return names
+
+
 def sanitize_payload(payload: dict[str, Any], model: str) -> dict[str, Any]:
     """The OpenAI-compatible subset Ollama accepts (see the module docstring)."""
     out: dict[str, Any] = {
@@ -124,7 +164,9 @@ __all__ = [
     "headers",
     "host_of",
     "is_loopback",
+    "list_local_models",
     "model_name",
     "sanitize_payload",
+    "tags_url",
     "warn_if_remote",
 ]

@@ -7,7 +7,11 @@
     PATCH  /api/conversations/{id}/title   -> 200 ConversationPublic  body {title: 1..200 chars}
 
 The `anon_map` never appears in a response: every document goes through `schemas.to_public`.
-The slot_config endpoints live in `routers/config.py`.
+The slot_config endpoints live in `routers/config.py`. A POST without `slot_config` seats the
+council the desktop pushed (`routers/session.py` `session_defaults()`, 2026-09-27) when there is
+one, else `settings().default_slot_config`; a POST WITH one runs `validate_slot_config` exactly as
+`PUT …/slot_config` does (422 `web_slot_mismatch` / `unsupported_effort`), so the desktop's
+create-with-council path keeps the same mistakes out of the document.
 """
 
 from __future__ import annotations
@@ -16,8 +20,10 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
 from .. import api_errors
+from ..features.slot_config import validate_slot_config
 from ..schemas import ConversationPublic, ConversationSummary, SlotConfig, to_public
 from ..store import conversations as store
+from .session import session_defaults
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -39,7 +45,12 @@ async def list_conversations() -> list[ConversationSummary]:
 @router.post("", status_code=201, response_model=ConversationPublic)
 async def create_conversation(body: CreateConversationBody | None = None) -> ConversationPublic:
     body = body or CreateConversationBody()
-    conv = await store.create(slot_config=body.slot_config, title=body.title)
+    # The body's config, else the council the desktop pushed (`PUT /api/session/defaults`), else
+    # `settings().default_slot_config` (store.create's own fallback when given None).
+    if body.slot_config is not None:
+        validate_slot_config(body.slot_config)  # the same 422s as a PUT, before anything is written
+    cfg = body.slot_config or session_defaults()
+    conv = await store.create(slot_config=cfg, title=body.title)
     return to_public(conv)
 
 

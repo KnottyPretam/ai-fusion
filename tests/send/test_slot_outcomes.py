@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.send.conftest import assert_stream_invariants, of_type, one, slot_text
 
 SLOT_FAILURE_PROMPT = (
@@ -145,7 +145,7 @@ async def test_grounded_mode_sends_web_plugin_and_yields_citations(
     assert "[REDACTED]" not in turn["reasoning"]["claude"]
     assert turn["slot_config"]["grounded"] is True
     # citations live on the turn, never in threads
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         for m in stored["threads"][slot]:
             assert set(m) == {"role", "content", "kind", "turn_id", "ts", "meta"}
 

@@ -58,6 +58,7 @@ from urllib.parse import urlsplit
 from . import api_errors
 from .branding import HTML_LOGO_PX, MARKDOWN_LOGO_PX, logo_data_uri
 from .config import settings
+from .prompts.council import label_or_list, number_word
 from .schemas import (
     LABELS,
     MATERIALITY_RANK,
@@ -73,13 +74,17 @@ from .schemas import (
     Label,
     RefactorTurn,
     SendTurn,
+    SlotConfig,
     SlotId,
+    council_of,
 )
+from .vendors import CATALOG as VENDORS
 
 # ------------------------------------------------------------------ vocabulary / public constants
-#: Slot display names, as the Send columns are labelled on screen (frontend `SLOT_LABELS`).
+#: Slot display names, as the Send columns are labelled on screen (frontend `SLOT_LABELS`), from
+#: the vendor catalog (2026-09-27: seven vendors, a council seats 2..5 of them).
 #: Send / Continue documents only -- never Analyze or Fusion (see the module docstring).
-SLOT_NAMES: dict[SlotId, str] = {"claude": "Claude", "chatgpt": "ChatGPT", "grok": "Grok"}
+SLOT_NAMES: dict[SlotId, str] = {v.id: v.name for v in VENDORS}
 
 Format = Literal["md", "html"]
 FORMATS: tuple[Format, ...] = ("md", "html")
@@ -452,10 +457,29 @@ def _header(conv: Conversation, turn: Any, extra: tuple[tuple[str, str], ...] = 
     return Meta(items + extra)
 
 
-ANON_NOTE = (
-    "Each model is shown as R1, R2 or R3, exactly as the pane shows it. Which model is behind "
-    "which label is not part of this document."
-)
+def anon_note(n: int) -> str:
+    """The anonymity caption for a council of n (`ANON_NOTE` is n=3, byte for byte as before)."""
+    return (
+        f"Each model is shown as {label_or_list(n)}, exactly as the pane shows it. Which model is "
+        "behind which label is not part of this document."
+    )
+
+
+ANON_NOTE = anon_note(3)
+
+
+def council_size(cfg: SlotConfig) -> int:
+    """How many agents the turn's own config seats (every turn stamps its `slot_config`)."""
+    return len(council_of(cfg))
+
+
+def others_not_called(n: int) -> str:
+    """The Continue document's aside for a council of n: "the other two slots were not called."
+    for the three (byte for byte as before), "the other slot was not called." for a pair."""
+    k = n - 1
+    if k == 1:
+        return "the other slot was not called."
+    return f"the other {number_word(k)} slots were not called."
 
 
 # --------------------------------------------------------------------------- send / continue
@@ -542,7 +566,10 @@ def _continue_blocks(conv: Conversation, turn: ContinueTurn) -> list[Any]:
         extra += (("grounded", "on"),)
     out: list[Any] = [
         _header(conv, turn, extra),
-        Para(f"A solo continuation of the {SLOT_NAMES[turn.slot]} thread; the other two slots were not called."),
+        Para(
+            f"A solo continuation of the {SLOT_NAMES[turn.slot]} thread; "
+            + others_not_called(council_size(turn.slot_config))
+        ),
         Heading("Prompt", 2),
         body(turn.prompt),
     ]
@@ -641,7 +668,7 @@ def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
             (("status", turn.status), ("refactored send turn", turn.of_turn)),
         ),
         Para(REFACTOR_NOTE),
-        Para(ANON_NOTE),
+        Para(anon_note(council_size(turn.slot_config))),
     ]
     of_turn = _turn_by_id(conv, turn.of_turn)
     out.append(Heading("The question as asked", 2))
@@ -697,7 +724,7 @@ def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
     if not ref.graph.nodes and not ref.graph.edges:
         out.append(Para("The analyst returned no graph for this question."))
 
-    out.append(Heading("The three responses, reduced", 2))
+    out.append(Heading(f"The {number_word(council_size(turn.slot_config))} responses, reduced", 2))
     for reply in ref.replies:
         out.append(Heading(reply.model, 3))
         if reply.summary:
@@ -721,7 +748,7 @@ def _analyze_blocks(conv: Conversation, turn: AnalyzeTurn) -> list[Any]:
                 ("materiality threshold", turn.slot_config.materiality_min),
             ),
         ),
-        Para(ANON_NOTE),
+        Para(anon_note(council_size(turn.slot_config))),
         Heading("The Send that was analysed", 2),
     ]
     of_turn = _turn_by_id(conv, turn.of_turn)
@@ -892,7 +919,7 @@ def _fusion_blocks(conv: Conversation, turn: FusionTurn) -> list[Any]:
                 ("exit reason", turn.exit_reason),
             ),
         ),
-        Para(ANON_NOTE),
+        Para(anon_note(council_size(turn.slot_config))),
         Heading("The Analyze that was fused", 2),
     ]
     if isinstance(analyze, AnalyzeTurn):

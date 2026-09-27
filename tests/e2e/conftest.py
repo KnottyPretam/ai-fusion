@@ -37,7 +37,7 @@ import pytest
 
 from backend.config import settings as _settings
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.helpers import find_identity_leaks, parse_sse_text
 
 # Load a developer .env NOW (collection time) so `_no_real_key` in tests/conftest.py sees and
@@ -79,13 +79,17 @@ ALL_SCENARIOS = [
     "injection",
     "vendor_in_prompt",
     "two_divergences",
+    # 2026-09-27, councils of 2..5: their README carries the `slot_config` the flow creates with.
+    "council_two",
+    "council_five",
 ]
+COUNCIL_SCENARIOS = ["council_two", "council_five"]
 # The `max_iterations` each README's call sequence was written for (default cap otherwise).
 MAX_ITERATIONS_FOR = {"standing_at_cap": 5, "two_divergences": 2}
 DEFAULT_MAX_ITERATIONS = 2
 # Purposes whose payloads carry Triplex-authored text (analyst prompts, challenges, convergence).
 TRIPLEX_PURPOSES = ("extraction", "defense", "convergence")
-CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in SLOT_IDS]
+CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in DEFAULT_COUNCIL]
 EXTRACTION_1 = "analyst.extraction.1.jsonl"
 CONVERGENCE_1 = "analyst.convergence.1.jsonl"
 
@@ -151,10 +155,26 @@ def scenario_prompt(scenario: str) -> str:
     return scenario_expectations(scenario)["prompt"]
 
 
+def scenario_council(scenario: str) -> tuple[str, ...]:
+    """The council the scenario was written for: the README's `council`, else the three."""
+    council = scenario_expectations(scenario).get("council")
+    return tuple(council) if council else tuple(DEFAULT_COUNCIL)
+
+
+def scenario_label_of(scenario: str) -> dict[str, str]:
+    """`{slot: label}` -- the fixed mock map R1..Rn over the scenario's council."""
+    return {slot: f"R{i}" for i, slot in enumerate(scenario_council(scenario), 1)}
+
+
+def scenario_slot_config(scenario: str) -> dict[str, Any] | None:
+    """The `slot_config` a council scenario's flow creates the conversation with (None: default)."""
+    return scenario_expectations(scenario).get("slot_config")
+
+
 def scenario_send(scenario: str) -> tuple[str, dict[str, str | None]]:
     """(prompt, {slot: reply text | None}) of the scenario's send turn; an errored slot -> None."""
     responses: dict[str, str | None] = {}
-    for slot in SLOT_IDS:
+    for slot in scenario_council(scenario):
         name = f"{slot}.chat.1.jsonl"
         responses[slot] = None if fixture_is_error(scenario, name) else fixture_text(scenario, name)
     return scenario_prompt(scenario), responses
@@ -234,7 +254,7 @@ def fusion_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_send_stream_invariants(
-    events: list[dict[str, Any]], slots: tuple[str, ...] = SLOT_IDS
+    events: list[dict[str, Any]], slots: tuple[str, ...] = DEFAULT_COUNCIL
 ) -> None:
     """docs/api-contract.md: turn_start first, each slot's slot_start before its other events,
     exactly one slot_done | slot_error per slot, turn_done last, no `error`."""
@@ -690,7 +710,10 @@ def run_flow(api: Api, scenario) -> Callable[..., Awaitable[Flow]]:
         fusion_body: dict[str, Any] | None = None,
     ) -> Flow:
         scenario(name)
-        conv = await api.create()
+        # A council scenario ships the config its conversation is created with (README
+        # `slot_config`); the fourteen three-council scenarios use the default, exactly as before.
+        cfg = scenario_slot_config(name)
+        conv = await api.create(**({"slot_config": cfg} if cfg else {}))
         cid = conv["id"]
         if grounded:
             cfg = conv["slot_config"]

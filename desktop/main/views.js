@@ -1,4 +1,6 @@
-// desktop/main/views.js — the three site views (contract §2/§5; plan Stage 1 electron-main).
+// desktop/main/views.js — the site views: one per site with a Stage-1 adapter, always the same
+// three whatever council a conversation seats (a site outside the council gets a null rect and is
+// hidden; contract §2/§5; plan Stage 1 electron-main).
 //
 // Every view: `WebContentsView` on `persist:<slot>` with `preload/site.cjs`, `sandbox:true`,
 // `contextIsolation:true`, `nodeIntegration:false`, `backgroundThrottling:false` (hidden views

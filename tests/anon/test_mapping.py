@@ -9,7 +9,7 @@ import pytest
 
 from backend import anon
 from backend.config import DEFAULT_SLOT_CONFIG
-from backend.schemas import LABELS, SLOT_IDS, Conversation, empty_threads, new_anon_map
+from backend.schemas import DEFAULT_COUNCIL, LABELS, Conversation, empty_threads, new_anon_map
 
 
 def _unchecked(anon_map: object) -> Conversation:
@@ -25,7 +25,7 @@ def test_labels_returns_the_persisted_map_in_label_order(make_conversation, anon
     conv = make_conversation()
     got = anon.labels(conv)
     assert got == anon_map
-    assert list(got) == list(LABELS)
+    assert list(got) == list(LABELS[:3])
 
 
 def test_labels_returns_a_fresh_dict(make_conversation):
@@ -51,9 +51,9 @@ def test_random_permutations_round_trip(make_conversation, seed):
     mapping = new_anon_map(random.Random(seed))
     conv = make_conversation(anon=mapping)
     assert anon.labels(conv) == mapping
-    for label in LABELS:
+    for label in LABELS[:3]:
         assert anon.label_of(conv, anon.slot_of(conv, label)) == label
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert anon.slot_of(conv, anon.label_of(conv, slot)) == slot
 
 
@@ -73,7 +73,8 @@ def test_mapping_is_read_from_the_document_not_from_position(make_conversation):
         pytest.param(
             {"R1": "claude", "R2": "chatgpt", "R3": "grok", "R4": "claude"}, id="extra-label"
         ),
-        pytest.param({"R1": "claude", "R2": "chatgpt", "R3": "gemini"}, id="unknown-slot"),
+        pytest.param({"R1": "claude", "R2": "chatgpt", "R3": "bing"}, id="unknown-slot"),
+        pytest.param({"R1": "claude", "R2": "chatgpt", "R3": "gemini"}, id="outside-council"),
         pytest.param({"R1": "claude", "R2": "chatgpt", "R9": "grok"}, id="unknown-label"),
         pytest.param({"claude": "R1", "chatgpt": "R2", "grok": "R3"}, id="inverted"),
         pytest.param({}, id="empty"),
@@ -117,7 +118,9 @@ def test_labels_rejects_an_absent_map():
 def test_unknown_slot_or_label_lookups_raise(make_conversation):
     conv = make_conversation()
     with pytest.raises(ValueError):
-        anon.label_of(conv, "gemini")
+        anon.label_of(conv, "bing")
+    with pytest.raises(ValueError):
+        anon.label_of(conv, "bing")  # a catalog slot, but not in this council
     with pytest.raises(ValueError):
         anon.slot_of(conv, "R4")
     with pytest.raises(ValueError):

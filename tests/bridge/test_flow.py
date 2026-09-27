@@ -11,10 +11,10 @@ import pytest
 
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.llm import mock
+from backend.llm.bridge_protocol import BRIDGE_SLOTS
 from backend.prompts import QUOTED_DATA_NOTICE
 from backend.prompts import analyze as analyze_prompts
 from backend.prompts import fusion as fusion_prompts
-from backend.schemas import SLOT_IDS
 from tests.bridge.conftest import NOT_CAPTURED, planted, planted_script
 from tests.e2e.conftest import (
     assert_fusion_stream_invariants,
@@ -28,7 +28,7 @@ from tests.helpers import find_identity_leaks, parse_sse_text
 
 PROMPT = scenario_prompt("planted_factual")
 LABEL_OF = {"claude": "R1", "chatgpt": "R2", "grok": "R3"}
-CHAT = {slot: planted(f"{slot}.chat.1.jsonl") for slot in SLOT_IDS}
+CHAT = {slot: planted(f"{slot}.chat.1.jsonl") for slot in BRIDGE_SLOTS}
 
 
 async def create(client, **body: Any) -> str:
@@ -64,7 +64,7 @@ async def test_send_three_slot_done_and_threads_appended(client, web_env, fake_d
     r, events = await stream(client, f"/api/conversations/{cid}/send", {"prompt": PROMPT})
     assert r.status_code == 200, r.text
     assert_send_stream_invariants(events)
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         start = one(events, "slot_start", slot)
         assert start["model"] == f"web:{slot}" and start["effort"] == "off"
         assert not start["effort_coerced"]
@@ -81,7 +81,7 @@ async def test_send_three_slot_done_and_threads_appended(client, web_env, fake_d
     conv = await get(client, cid)
     turn = conv["turns"][0]
     assert turn["responses"] == CHAT and turn["errors"] == {} and turn["reasoning"] == {}
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         msgs = conv["threads"][slot]
         assert [(m["role"], m["content"]) for m in msgs] == [
             ("user", PROMPT),
@@ -93,7 +93,7 @@ async def test_send_three_slot_done_and_threads_appended(client, web_env, fake_d
     assert mock.calls == []
     assert desk.errors == [] and desk.cancels == []
     assert len(desk.requests) == 3
-    assert {r["slot"] for r in desk.requests} == set(SLOT_IDS)
+    assert {r["slot"] for r in desk.requests} == set(BRIDGE_SLOTS)
     for req in desk.requests:
         assert req["view"] == "pane" and req["fresh"] is False and req["text"] == PROMPT
         assert req["model"] == f"web:{req['slot']}" and req["role"] == req["slot"]
@@ -171,11 +171,11 @@ async def test_send_analyze_fusion_over_the_bridge_matches_the_mock_run(
     # A web analyst is asked for a FENCED json block, not for a bare object (the reply is read
     # back out of rendered markdown -- tests/bridge/test_fenced_json.py).
     system, user = analyze_prompts.build_messages(
-        PROMPT, {LABEL_OF[s]: CHAT[s] for s in SLOT_IDS}, fenced=True
+        PROMPT, {LABEL_OF[s]: CHAT[s] for s in BRIDGE_SLOTS}, fenced=True
     )
     assert extraction["text"] == system["content"] + "\n\n" + user["content"]
 
-    assert {r["slot"] for r in defenses} == set(SLOT_IDS)
+    assert {r["slot"] for r in defenses} == set(BRIDGE_SLOTS)
     for req in defenses:
         challenge = [m for m in web_conv["threads"][req["slot"]] if m["kind"] == "fusion_challenge"]
         assert len(challenge) == 1 and req["text"] == challenge[0]["content"]
@@ -191,7 +191,7 @@ async def test_send_analyze_fusion_over_the_bridge_matches_the_mock_run(
     assert "<<<DIVERGENCES>>>" in convergence["text"] and "R2" in convergence["text"]
 
     # ---- leak sweep over every typed text -----------------------------------------------
-    allow = [PROMPT, *CHAT.values(), *(planted(f"{s}.defense.1.jsonl") for s in SLOT_IDS)]
+    allow = [PROMPT, *CHAT.values(), *(planted(f"{s}.defense.1.jsonl") for s in BRIDGE_SLOTS)]
     for req in desk.requests:
         assert find_identity_leaks(req["text"], allow) == [], req["purpose"]
 
@@ -307,12 +307,12 @@ async def test_bridge_unavailable_when_no_desktop_is_connected(client, web_env):
     r, events = await stream(client, f"/api/conversations/{cid}/send", {"prompt": PROMPT})
     assert r.status_code == 200
     assert_send_stream_invariants(events)
-    for slot in SLOT_IDS:
+    for slot in BRIDGE_SLOTS:
         err = one(events, "slot_error", slot)
         assert err["code"] == "bridge_unavailable" and err["error_type"] == "triplex"
     conv = await get(client, cid)
-    assert all(conv["threads"][s] == [] for s in SLOT_IDS)
-    assert set(conv["turns"][0]["errors"]) == set(SLOT_IDS)
+    assert all(conv["threads"][s] == [] for s in BRIDGE_SLOTS)
+    assert set(conv["turns"][0]["errors"]) == set(BRIDGE_SLOTS)
     assert mock.calls == []
 
 

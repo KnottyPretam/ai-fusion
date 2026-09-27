@@ -1,4 +1,6 @@
-/* W9 (send-ui). Three live columns + composers. Palette tokens come from the frozen index.css. */
+/* W9 (send-ui). One live column per council member + composers. Palette tokens come from the frozen
+   index.css; a column is coloured through `--slot-color`, set inline by slotStyle(slot) (send/slice.js),
+   so there is one rule per element rather than one per vendor. */
 .pane {
   display: flex;
   flex-direction: column;
@@ -10,7 +12,10 @@
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* by count: 2..5 columns share the width; below 220px each the grid scrolls sideways */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  overflow-x: auto;
   gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
@@ -25,9 +30,7 @@
   background: var(--bg);
   border-top: 3px solid var(--border);
 }
-.column[data-slot='claude'] { border-top-color: var(--claude); }
-.column[data-slot='chatgpt'] { border-top-color: var(--chatgpt); }
-.column[data-slot='grok'] { border-top-color: var(--grok); }
+.column { border-top-color: var(--slot-color, var(--border)); }
 
 .header {
   flex: 0 0 auto;
@@ -44,10 +47,19 @@
   gap: 6px;
   font-weight: 600;
 }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.column[data-slot='claude'] .dot { background: var(--claude); }
-.column[data-slot='chatgpt'] .dot { background: var(--chatgpt); }
-.column[data-slot='grok'] .dot { background: var(--grok); }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--slot-color, var(--border)); }
+/* transport badge: web (a site session) / OpenRouter (token) / local (Ollama) */
+.transport {
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
 .controls { display: flex; gap: 4px; min-width: 0; }
 .controls select { flex: 1 1 auto; min-width: 0; font-size: 12px; padding: 2px 4px; }
 .controls select.effort { flex: 0 0 auto; }

@@ -19,7 +19,7 @@ import pytest
 from backend.config import FORBIDDEN_IDENTITY_STRINGS
 from backend.llm import mock
 from backend.prompts import fusion as fusion_prompts
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL, SLOT_IDS
 from tests.conftest import DEFAULT_PROMPT
 from tests.e2e.conftest import (
     ALL_SCENARIOS,
@@ -31,6 +31,7 @@ from tests.e2e.conftest import (
     delimited_blocks,
     fixture_text,
     leak_report,
+    scenario_council,
     scope_allow,
     served_reply_texts,
     strip_delimited,
@@ -53,12 +54,15 @@ async def test_no_identity_leak_in_any_triplex_authored_message(run_flow, api, n
     f = await run_flow(name, grounded=(name == "grounded"), fusion=False)
     prompts = [f.prompt]
     analyzed = f.analyze is not None and f.analyze.status_code == 200
+    # The slot the follow-up goes to: the first of the scenario's council (claude for the three;
+    # a council scenario may not seat claude at all, and a continue outside the council is 404).
+    first = scenario_council(name)[0]
     if analyzed:
         # A vendor-naming follow-up on one slot BEFORE Fusion: the continue payload is that
         # slot's own thread + prompt (nothing Triplex-authored), and every later challenge to
-        # claude replays that user turn and the sticky reply as history -- so the scope rule
+        # that slot replays that user turn and the sticky reply as history -- so the scope rule
         # (user prompts and a slot's own replies are out of scope) is exercised, not assumed.
-        await api.cont(f.cid, "claude", CONTINUE_PROMPT)
+        await api.cont(f.cid, first, CONTINUE_PROMPT)
         prompts.append(CONTINUE_PROMPT)
     r, events = await api.fusion(f.cid, {"max_iterations": f.max_iterations})
     if r.status_code != 200:
@@ -71,9 +75,9 @@ async def test_no_identity_leak_in_any_triplex_authored_message(run_flow, api, n
     assert leak_report(scope_allow(prompts, served_reply_texts())) == {}
     if f.expectations["exit_reason"] is not None:
         assert r.status_code == 200 and events[-1]["type"] == "fusion_done"
-        # The claude defense payloads really carry the vendor-naming continue turn as history
+        # That slot's defense payloads really carry the vendor-naming continue turn as history
         # (and its sticky reply), i.e. the allow list excised something that was there.
-        history = [m for m in authored if m.role == "claude" and m.purpose == "defense"]
+        history = [m for m in authored if m.role == first and m.purpose == "defense"]
         assert any(m.message_role == "user" and m.content == CONTINUE_PROMPT for m in history)
         # The Triplex-authored challenge text itself is clean with NOTHING allowed.
         for c in calls("defense"):
@@ -134,7 +138,7 @@ async def test_vendor_names_in_analyst_text_reach_later_prompts_only_scrubbed(ap
     assert r.status_code == 200 and events[-1]["type"] == "fusion_done"
     assert events[-1]["exit_reason"] == "converged"  # R2's justified revise still passes
 
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         challenge = challenge_of(calls("defense", slot)[0])
         blocks = delimited_blocks(challenge)
         assert blocks[fusion_prompts.TOPIC_LABEL] == SCRUBBED_TOPIC, slot

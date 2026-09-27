@@ -1,0 +1,19 @@
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_details":[{"type":"reasoning.text","id":"rs-0272216b-0","index":0,"text":"Fast-mode rise-time limit is 300 ns; R = t_r / (0.8473 * C_b). For 100-200 pF that gives roughly 1.8-3.5 kOhm minimum-safe values, so 2.2-4.7 kOhm.","signature":null}]},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"Use something in the "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"2.2 kOhm to 4.7 kOhm range. "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"At 400 kHz "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"the bus has to rise "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"within 300 ns, so the pull-up must "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"be small "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"enough for the RC formed "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"with the bus capacitance: "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"4.7 kOhm works for a short "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"bus of a "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"few devices, and 2.2 kOhm "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"is the safer choice once the capacitance "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"approaches 200 "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"pF. Check that the strongest "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"pull-up still keeps the "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"sink current under 3 mA at "},"finish_reason":null}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"content":"3.3 V."},"finish_reason":"stop"}]}
+{"id":"gen-0272216b0465c39f","object":"chat.completion.chunk","created":1757260800,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}],"usage":{"prompt_tokens":69,"completion_tokens":132,"total_tokens":201,"cost":0.001458,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":37}}}

@@ -4,17 +4,21 @@
 // the session cost-cap notice — live and after refetch. The cost-cap notice mirrors the meter
 // slice's session-wide `costCapExceeded` flag (read-only, optional: the column also derives it
 // from its own slot_error / persisted error, so it renders without the meter registered).
+// Council (2026-09-27): `solo={false}` drops the Continue box (a renderer column inside the desktop
+// deck, where the unified prompt bar is the composer — solo continue there is Stage 2); the header
+// carries a `slot-<slot>-transport` badge (web / OpenRouter / local, from the configured model),
+// and the column is coloured through `--slot-color` (slotStyle) rather than a rule per vendor.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { saveSlotConfig } from '../../api/http.js'
-import { SLOT_LABELS, citationUrl, effortsFor, emptySlot, isCostCapError, mergeCitations, nearestEffort, safeCitationHref, slotTurns, threadItems, vendorModels } from './slice.js'
+import { SLOT_LABELS, TRANSPORT_LABELS, citationUrl, effortsFor, emptySlot, isCostCapError, mergeCitations, nearestEffort, safeCitationHref, slotStyle, slotTurns, threadItems, transportOf, vendorModels } from './slice.js'
 import styles from './send.module.css'
 
 const STREAM_KEYS = ['send', 'analyze', 'fusion']
 const EMPTY_THREAD = [] // stable identity: the scroll effect keys on the thread object
-// The latest per-column config save, shared by the three columns: every PUT carries the full
+// The latest per-column config save, shared by every column: every PUT carries the full
 // merged SlotConfig, so a slow PUT from one column must not revert a later PUT from another.
 let saveSeq = 0
 
@@ -226,7 +230,13 @@ function Chip({ slot, status, usage, model, effort, coerced }) {
   )
 }
 
-export default function SlotColumn({ slot, pendingPrompt = null, onContinue, busy = false }) {
+export const TRANSPORT_TITLES = {
+  web: 'Subscription: this agent answers in its own site session (a native pane in the desktop app).',
+  openrouter: 'Token based: this agent is called through OpenRouter with the configured key; tokens and cost are metered.',
+  ollama: 'Local: this agent runs on the local Ollama server; no key, no cost.',
+}
+
+export default function SlotColumn({ slot, pendingPrompt = null, onContinue, busy = false, solo = true }) {
   const dispatch = useDispatch()
   const conversation = useSlice('conversation')
   const slotConfig = useSlice('slotConfig')
@@ -330,13 +340,19 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
       : { status: null, usage: null, model, effort: null, coerced: false }
 
   const controlsDisabled = !conversation || !slotConfig
+  const transport = transportOf(model)
 
   return (
-    <div className={styles.column} data-testid={`slot-${slot}`} data-slot={slot} data-status={live.status}>
+    <div className={styles.column} data-testid={`slot-${slot}`} data-slot={slot} data-status={live.status} style={slotStyle(slot)}>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <span className={styles.dot} aria-hidden="true" />
           <span data-testid={`slot-${slot}-label`}>{SLOT_LABELS[slot]}</span>
+          {transport ? (
+            <span className={styles.transport} data-testid={`slot-${slot}-transport`} data-transport={transport} title={TRANSPORT_TITLES[transport]}>
+              {TRANSPORT_LABELS[transport]}
+            </span>
+          ) : null}
           {grounded ? (
             <span className={styles.groundedBadge} data-testid={`slot-${slot}-grounded`} title={GROUNDED_TITLE}>
               grounded
@@ -442,27 +458,29 @@ export default function SlotColumn({ slot, pendingPrompt = null, onContinue, bus
         ) : null}
       </div>
 
-      <form
-        className={styles.solo}
-        onSubmit={(e) => {
-          e.preventDefault()
-          submitContinue()
-        }}
-      >
-        <textarea
-          data-testid={`slot-${slot}-composer`}
-          aria-label={`Continue ${SLOT_LABELS[slot]} thread`}
-          placeholder={conversation ? `Continue ${SLOT_LABELS[slot]} only… (Enter to send)` : 'Send a prompt first'}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onDraftKey}
-          disabled={anyStreaming || !conversation}
-          rows={1}
-        />
-        <button type="submit" data-testid={`slot-${slot}-continue`} disabled={anyStreaming || !conversation || !draft.trim()} title={`Ask ${SLOT_LABELS[slot]} alone. The other two threads are left byte-for-byte as they were.`}>
-          Continue
-        </button>
-      </form>
+      {solo ? (
+        <form
+          className={styles.solo}
+          onSubmit={(e) => {
+            e.preventDefault()
+            submitContinue()
+          }}
+        >
+          <textarea
+            data-testid={`slot-${slot}-composer`}
+            aria-label={`Continue ${SLOT_LABELS[slot]} thread`}
+            placeholder={conversation ? `Continue ${SLOT_LABELS[slot]} only… (Enter to send)` : 'Send a prompt first'}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onDraftKey}
+            disabled={anyStreaming || !conversation}
+            rows={1}
+          />
+          <button type="submit" data-testid={`slot-${slot}-continue`} disabled={anyStreaming || !conversation || !draft.trim()} title={`Ask ${SLOT_LABELS[slot]} alone. The other threads are left byte-for-byte as they were.`}>
+            Continue
+          </button>
+        </form>
+      ) : null}
     </div>
   )
 }

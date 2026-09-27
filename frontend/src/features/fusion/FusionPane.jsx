@@ -2,7 +2,7 @@
 // from `fusion.rounds`, final report (exit reason, standing items with both sides' latest
 // justifications) and the usage summary. Bench instrument, not a product demo.
 // The toolbar also carries the Export control (features/export, test id `export-fusion`): it writes
-// the fusion turn shown here out as Markdown / HTML / PDF, R1/R2/R3 only.
+// the fusion turn shown here out as Markdown / HTML / PDF, R-labels only.
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'

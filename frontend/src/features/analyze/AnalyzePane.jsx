@@ -1,5 +1,6 @@
 // Analyze pane (W10): Analyze / Re-run buttons + the Similar / Differs report. Labels are
-// R1/R2/R3 only — the pane never renders a slot name or the anon map (it never sees one).
+// R1..Rn only (n = the analyzed send turn's council size, `labelsFor(councilSize(send))`) — the
+// pane never renders a slot name or the anon map (it never sees one).
 //
 // data-testids (for Playwright):
 //   analyze                      pane root (data-status, data-of-turn)
@@ -7,7 +8,7 @@
 //   analyze-rerun                Re-run button (POST {force:true}); rendered once a turn exists
 //   analyze-hint                 why the buttons are disabled
 //   analyze-cached               "cached" chip (analyze_done.cached)
-//   export-analyze               the Export control (features/export; R1/R2/R3 documents only)
+//   export-analyze               the Export control (features/export; R-labelled documents only)
 //   analyze-status               running indicator
 //   analyze-retry                retry indicator (analyze_retry): a progress narration shown as
 //                                itself, a failed attempt with its error tucked away
@@ -24,7 +25,7 @@ import ExportControl from '../export/ExportControl.jsx'
 import { loadConversation } from '../../api/http.js'
 import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { LABELS, NOT_CAPTURED_MESSAGE_PREFIX, RANK, initial, isSendTurnComplete, latestSendTurn } from './slice.js'
+import { NOT_CAPTURED_MESSAGE_PREFIX, RANK, councilSize, councilSizeFor, countWord, initial, isSendTurnComplete, labelsFor, latestSendTurn, sendTurnFor } from './slice.js'
 import RefactorView from './RefactorView.jsx'
 import { initial as refactorInitial } from './refactorSlice.js'
 import css from './analyze.module.css'
@@ -74,6 +75,7 @@ export default function AnalyzePane() {
 
   const send = latestSendTurn(conversation)
   const complete = isSendTurnComplete(send)
+  const councilN = countWord(councilSizeFor(send, slotConfig)) // the open config before the first Send
   const streaming = Object.values(streams).some((st) => st && st.status === 'streaming')
   const canRun = !!conversation && complete && !streaming
 
@@ -131,7 +133,7 @@ export default function AnalyzePane() {
     hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
   } else if (errored.length) {
     hint = `no reply came back from ${reasons(errored)}${notCaptured.length ? ` (and capture was off for ${list(notCaptured)})` : ''}. This turn cannot be analyzed — Send again.`
-  } else if (!complete) hint = 'waiting for all three responses'
+  } else if (!complete) hint = `waiting for all ${councilN} responses`
 
   return (
     <div className={css.pane} data-testid="analyze" data-status={analyze.status} data-of-turn={analyze.ofTurn || ''}>
@@ -147,8 +149,8 @@ export default function AnalyzePane() {
           onClick={() => startRefactor(refactorTurn ? { force: true } : {})}
           title={
             refactorTurn
-              ? 'Refactor again: map the question and reduce all three answers afresh. Analyze will compare the new version.'
-              : 'Map the question into a knowledge graph, restate it concisely, and reduce all three answers to their claims. Analyze then compares that instead of the whole answers.'
+              ? `Refactor again: map the question and reduce all ${councilN} answers afresh. Analyze will compare the new version.`
+              : `Map the question into a knowledge graph, restate it concisely, and reduce all ${councilN} answers to their claims. Analyze then compares that instead of the whole answers.`
           }
         >
           {refactorTurn ? 'Re-refactor' : 'Refactor'}
@@ -195,7 +197,7 @@ export default function AnalyzePane() {
 
       {(refactor.status === 'running' || refactor.status === 'working') && (
         <div className={css.status} data-testid="refactor-status">
-          {refactor.notice || 'mapping the question and reducing the three responses…'}
+          {refactor.notice || `mapping the question and reducing the ${councilN} responses…`}
         </div>
       )}
       {refactor.status === 'error' && (
@@ -246,7 +248,7 @@ export default function AnalyzePane() {
       )}
       {analyze.status === 'degraded' && turn && <Degraded turn={turn} />}
 
-      {extraction && <Report extraction={extraction} materialityMin={materialityMin} minRank={minRank} />}
+      {extraction && <Report extraction={extraction} labels={labelsFor(councilSize(sendTurnFor(conversation, turn && turn.of_turn)))} materialityMin={materialityMin} minRank={minRank} />}
     </div>
   )
 }
@@ -286,7 +288,7 @@ function Degraded({ turn }) {
   )
 }
 
-function Report({ extraction, materialityMin, minRank }) {
+function Report({ extraction, labels, materialityMin, minRank }) {
   const agreements = Array.isArray(extraction.agreements) ? extraction.agreements : []
   const divergences = Array.isArray(extraction.divergences) ? extraction.divergences : []
   return (
@@ -330,7 +332,7 @@ function Report({ extraction, materialityMin, minRank }) {
               <thead>
                 <tr>
                   <th>topic</th>
-                  {LABELS.map((l) => (
+                  {labels.map((l) => (
                     <th key={l}>{l}</th>
                   ))}
                   <th>materiality</th>
@@ -345,7 +347,7 @@ function Report({ extraction, materialityMin, minRank }) {
                         <span className={css.divId}>{d.id}</span>
                         {d.topic}
                       </td>
-                      {LABELS.map((l) => {
+                      {labels.map((l) => {
                         const p = (d.positions || []).find((x) => x && x.model === l)
                         return (
                           <td key={l} data-testid={`analyze-cell-${d.id}-${l}`}>

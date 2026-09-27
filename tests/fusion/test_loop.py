@@ -13,12 +13,12 @@ import json
 from backend import anon
 from backend.config import DEFAULT_SLOT_CONFIG, MAX_TOKENS_STAGE
 from backend.llm import client, mock
-from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE
 from backend.llm.client import structured_response_format
+from backend.llm.reasoning import REASONING_TOKEN_ALLOWANCE
 from backend.prompts import delimited
 from backend.prompts import fusion as prompts
 from backend.schemas import (
-    SLOT_IDS,
+    DEFAULT_COUNCIL,
     ConvergenceCheck,
     DefenseReply,
     FusionTurn,
@@ -46,7 +46,7 @@ from tests.fusion.conftest import (
 )
 from tests.helpers import find_identity_leaks
 
-CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in SLOT_IDS]
+CHAT_FILES = [f"{slot}.chat.1.jsonl" for slot in DEFAULT_COUNCIL]
 EXTRACTION = "analyst.extraction.1.jsonl"
 CONVERGENCE_1 = "analyst.convergence.1.jsonl"
 
@@ -164,7 +164,7 @@ async def test_challenge_and_reply_land_in_the_right_slot_thread_with_meta(prepa
     turn_id = events[0]["turn_id"]
     after = await store.load(p.cid)
     assert after is not None
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         before = p.conv.threads[slot]
         assert [m.kind for m in before] == ["chat", "chat"]
         thread = after.threads[slot]
@@ -204,7 +204,7 @@ async def test_defense_and_convergence_payloads_carry_model_effort_schema_and_ca
     monkeypatch.setattr(client, "complete_json", spy)
     await fusion(p.cid, {"max_iterations": 1})
     assert sorted(seen) == [("convergence", 1), ("defense", 1), ("defense", 1), ("defense", 1)]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         c = calls("defense", slot)[0]
         spec = p.conv.slot_config.slots[slot]
         assert c["model"] == spec.model
@@ -249,7 +249,7 @@ async def test_round_one_challenge_is_built_from_the_extraction_positions(prepar
         for pos in d1.positions
     ]
     positions = {pos.model: pos for pos in d1.positions}
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         label = LABEL_OF[slot]
         expected = prompts.challenge_prompt(
             topic=d1.topic,
@@ -286,7 +286,7 @@ async def test_max_iterations_one_is_a_single_cross_exam_round(prepare, fusion):
     assert turn.rounds[0].changed is True
     assert len(mock.calls) == 4 + 4  # send + analyze, then 3 defenses + 1 convergence, no more
     files = served_all()
-    assert sorted(files[4:7]) == sorted(f"{slot}.defense.1.jsonl" for slot in SLOT_IDS)
+    assert sorted(files[4:7]) == sorted(f"{slot}.defense.1.jsonl" for slot in DEFAULT_COUNCIL)
     assert files[7] == CONVERGENCE_1
     for c in calls("defense"):
         assert "This is round 1 of at most 1." in challenge_of(c)
@@ -330,12 +330,12 @@ async def test_stalemate_exits_after_round_one_without_a_convergence_call(prepar
     assert served("grok", "defense") == ["grok.defense.1.jsonl"]
     # Both sides' justifications are on the exchanges of the standing divergence.
     by_label = {e.model: e for e in turn.rounds[0].exchanges}
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert by_label[LABEL_OF[slot]].justification == defense_of("stalemate", slot).justification
     # A defend is still a successful exchange: challenge + reply are in every thread.
     after = await store.load(p.cid)
     assert after is not None
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m.kind for m in after.threads[slot]] == [
             "chat",
             "chat",
@@ -561,7 +561,7 @@ async def test_two_divergences_resolves_d1_and_never_rechallenges_it(prepare, fu
     # README's 11-file sequence: send (3) + extraction (1), then per slot `.1` (d1) and `.2`
     # (d2) in round 1, sticky `.2` in round 2; convergence `.1` served twice.
     _assert_prefix_is_send_and_analyze()
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert served(slot, "defense") == [
             f"{slot}.defense.1.jsonl",
             f"{slot}.defense.2.jsonl",
@@ -576,7 +576,7 @@ async def test_two_divergences_resolves_d1_and_never_rechallenges_it(prepare, fu
     assert first_conv == 6 and fusion_calls[-1]["purpose"] == "convergence"
 
     d1_topic, d2_topic = (d.topic for d in extraction_of("two_divergences").divergences)
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         c1, c2, c3 = calls("defense", slot)
         assert d1_topic in challenge_of(c1) and d2_topic not in challenge_of(c1)
         assert d2_topic in challenge_of(c2) and d1_topic not in challenge_of(c2)
@@ -638,7 +638,7 @@ async def test_fusion_done_usage_covers_fusion_calls_only_with_wall_clock(prepar
     assert usage.totals.latency_ms >= 1
     assert all(u.latency_ms >= 0 for u in usage.calls)
     expected_cost = round(
-        sum(fixture_cost("planted_factual", f"{s}.defense.1.jsonl") for s in SLOT_IDS)
+        sum(fixture_cost("planted_factual", f"{s}.defense.1.jsonl") for s in DEFAULT_COUNCIL)
         + fixture_cost("planted_factual", CONVERGENCE_1),
         8,
     )
@@ -717,7 +717,7 @@ async def test_unavailable_exchange_error_is_scrubbed_in_the_event_and_the_persi
     assert r3["error"] == "no fixture r3_defense_missing/[model].defense.1"
     assert calls("defense", "grok")[0]["fixture"] is None  # it really was a mock_miss
     event_text = json.dumps(r3).lower()
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert slot not in event_text
     assert find_identity_leaks(json.dumps(r3)) == []
     assert ex[("d1", "R1")]["stance"] == "defend" and ex[("d1", "R2")]["stance"] == "revise"
@@ -737,7 +737,7 @@ async def test_unavailable_exchange_error_is_scrubbed_in_the_event_and_the_persi
     for e in stored.rounds[0].exchanges:
         if e.error is not None:
             assert "[model]" in e.error and find_identity_leaks(e.error) == []
-            for slot in SLOT_IDS:
+            for slot in DEFAULT_COUNCIL:
                 assert slot not in e.error.lower()
     assert after.threads["grok"] == p.conv.threads["grok"], "nothing appended on error"
     assert all(u.role != "grok" for u in turn.usage.calls)

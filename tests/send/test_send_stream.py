@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from backend.config import MAX_TOKENS_STAGE
 from backend.llm import mock
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.helpers import assert_no_identity_leak, messages_text
 from tests.send.conftest import (
@@ -33,7 +33,7 @@ async def test_each_slot_request_carries_its_own_model_and_reasoning(client, cid
 
     assert len(mock.calls) == 3
     by_role = {c["role"]: c for c in mock.calls}
-    assert set(by_role) == set(SLOT_IDS)
+    assert set(by_role) == set(DEFAULT_COUNCIL)
     assert all(c["purpose"] == "chat" for c in mock.calls)
     assert by_role["claude"]["model"] == "anthropic/claude-sonnet-5"
     assert by_role["claude"]["reasoning"] == {"effort": "high"}
@@ -48,7 +48,7 @@ async def test_each_slot_request_carries_its_own_model_and_reasoning(client, cid
         assert c["response_format"] is None and c["plugins"] is None
         assert c["fixture"] == f"planted_factual/{c['role']}.chat.1.jsonl"
 
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         start = one(events, "slot_start", slot)
         assert start["model"] == cfg["slots"][slot]["model"]
         assert start["effort"] == cfg["slots"][slot]["effort"]
@@ -62,8 +62,8 @@ async def test_three_outputs_stream_in_contract_order(send, cid):
     assert types(events)[0] == "turn_start" and types(events)[-1] == "turn_done"
     start = events[0]
     assert set(start) == {"type", "turn_id", "feature", "slots"}
-    assert start["feature"] == "send" and start["slots"] == list(SLOT_IDS)
-    for slot in SLOT_IDS:
+    assert start["feature"] == "send" and start["slots"] == list(DEFAULT_COUNCIL)
+    for slot in DEFAULT_COUNCIL:
         mine = for_slot(events, slot)
         assert set(mine[0]) == {"type", "slot", "model", "effort", "effort_coerced"}
         deltas = [e for e in mine if e["type"] == "slot_delta"]
@@ -88,8 +88,8 @@ async def test_slots_stream_in_parallel_and_interleave(send, cid, monkeypatch):
     assert_stream_invariants(events)
     kinds = types(events)
     first_done = kinds.index("slot_done")
-    assert {e["slot"] for e in events[1:first_done] if e["type"] == "slot_start"} == set(SLOT_IDS)
-    for slot in SLOT_IDS:
+    assert {e["slot"] for e in events[1:first_done] if e["type"] == "slot_start"} == set(DEFAULT_COUNCIL)
+    for slot in DEFAULT_COUNCIL:
         assert slot_text(events, slot) == DEFAULT_RESPONSES[slot]
 
 
@@ -114,15 +114,15 @@ async def test_send_turn_and_threads_are_persisted(send, cid, get_conv):
     assert turn["prompt"] == DEFAULT_PROMPT
     assert turn["responses"] == DEFAULT_RESPONSES
     assert turn["errors"] == {} and turn["partial"] == {}
-    assert turn["truncated"] == dict.fromkeys(SLOT_IDS, False)
+    assert turn["truncated"] == dict.fromkeys(DEFAULT_COUNCIL, False)
     assert turn["effort_applied"] == {
-        s: conv["slot_config"]["slots"][s]["effort"] for s in SLOT_IDS
+        s: conv["slot_config"]["slots"][s]["effort"] for s in DEFAULT_COUNCIL
     }
     assert turn["slot_config"] == conv["slot_config"]
     assert turn["usage"] == events[-1]["usage"]
     assert set(turn["citations"]) == set()
 
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         thread = conv["threads"][slot]
         assert [(m["role"], m["content"]) for m in thread] == [
             ("user", DEFAULT_PROMPT),
@@ -144,7 +144,7 @@ async def test_turn_ids_are_unique_uuid4_and_turns_accumulate(send, cid, get_con
     assert uuid.UUID(id1).version == 4 and uuid.UUID(id2).version == 4
     conv = await get_conv(cid)
     assert [t["id"] for t in conv["turns"]] == [id1, id2]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert [m["turn_id"] for m in conv["threads"][slot]] == [id1, id1, id2, id2]
     # the second send carried the first pair as history
     for c in mock.calls[3:]:
@@ -157,7 +157,7 @@ async def test_usage_per_slot_and_totals_with_wall_clock(send, cid, monkeypatch)
     events = await send(cid)
     calls = {c["role"]: c for c in mock.calls}
     slot_usages = {}
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         u = one(events, "slot_done", slot)["usage"]
         slot_usages[slot] = u
         assert u["role"] == slot and u["purpose"] == "chat"
@@ -167,7 +167,7 @@ async def test_usage_per_slot_and_totals_with_wall_clock(send, cid, monkeypatch)
     total = events[-1]["usage"]
     assert set(total) == {"calls", "totals"}
     assert len(total["calls"]) == 3
-    assert {c["role"] for c in total["calls"]} == set(SLOT_IDS)
+    assert {c["role"] for c in total["calls"]} == set(DEFAULT_COUNCIL)
     t = total["totals"]
     assert t["calls"] == 3
     for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
@@ -205,7 +205,7 @@ async def test_send_payload_is_only_thread_history_plus_prompt(
     events = await send(cid, prompt)
     assert_stream_invariants(events)
     conv = await get_conv(cid)
-    replies = [conv["turns"][0]["responses"][s] for s in SLOT_IDS]
+    replies = [conv["turns"][0]["responses"][s] for s in DEFAULT_COUNCIL]
     assert all(replies)
 
     follow_up = "Thanks Claude; and the I2C limit?"

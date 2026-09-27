@@ -1,8 +1,32 @@
 // W11: pure derivations for the Fusion pane (no React). Rules duplicated from
 // docs/api-contract.md "Derived rules for panes" and docs/semantics.md "Fusion".
 
-export const SLOT_IDS = ['claude', 'chatgpt', 'grok']
-export const LABELS = ['R1', 'R2', 'R3']
+export const LABELS = ['R1', 'R2', 'R3', 'R4', 'R5']
+
+// Council (2026-09-27): a conversation seats 2..5 of the 7-vendor catalog and uses the label prefix
+// of its size (R1..Rn). Mirrored per feature (features never import each other): the same three
+// helpers live in analyze/refactorSlice.js and fusion/derive.js.
+export const SLOT_IDS = ['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo']
+export const DEFAULT_COUNCIL_SIZE = 3
+
+/** R1..Rn for a council of n (clamped to the five labels; below 2 reads as the classic three). */
+export function labelsFor(n) {
+  const size = Number.isInteger(n) && n >= 2 ? Math.min(n, LABELS.length) : DEFAULT_COUNCIL_SIZE
+  return LABELS.slice(0, size)
+}
+
+/** The council a persisted turn was run for, in catalog order (its `slot_config.slots` keys, else its `responses` keys); [] for anything else. */
+export function councilOfTurn(turn) {
+  const cfg = turn && turn.slot_config && turn.slot_config.slots
+  const source = cfg && typeof cfg === 'object' ? cfg : turn && turn.responses && typeof turn.responses === 'object' ? turn.responses : null
+  return source ? SLOT_IDS.filter((s) => s in source) : []
+}
+
+/** How many agents a send turn seats (the label prefix its Analyze / Fusion use); 3 when unknown. */
+export function councilSize(turn) {
+  const n = councilOfTurn(turn).length
+  return n >= 2 ? n : DEFAULT_COUNCIL_SIZE
+}
 // Duplicated locally on purpose (state/* is frozen).
 export const RANK = { low: 0, medium: 1, high: 2 }
 export const MIN_ITERATIONS = 1
@@ -21,10 +45,12 @@ export function latestSendTurn(conversation) {
   return null
 }
 
-// Complete when every slot in `responses` is non-null.
+// Complete when every slot of the turn's OWN council has a non-null response (a two-agent turn
+// used to be "incomplete" for ever against a fixed three — the one functional bug of the council work).
 export function isSendComplete(turn) {
   if (!turn || !turn.responses) return false
-  return SLOT_IDS.every((s) => turn.responses[s] !== null && turn.responses[s] !== undefined)
+  const council = councilOfTurn(turn)
+  return council.length > 0 && council.every((s) => turn.responses[s] !== null && turn.responses[s] !== undefined)
 }
 
 // Newest analyze turn with status ok for `sendTurnId` (what the backend defaults `of_analyze` to).

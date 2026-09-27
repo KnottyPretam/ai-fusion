@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 from backend.llm import metering
-from backend.schemas import SLOT_IDS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.conftest import DEFAULT_PROMPT, DEFAULT_RESPONSES
 from tests.helpers import parse_sse_text
 from tests.llm import test_scripts as scripts_tests
@@ -71,7 +71,7 @@ async def test_send_with_cap_zero_yields_cost_cap_exceeded_for_every_slot(
     events = await send(cid)
     assert_stream_invariants(events)
     assert not of_type(events, "slot_delta", "slot_reasoning", "slot_citations", "slot_done")
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         err = one(events, "slot_error", slot)
         assert err["code"] == "cost_cap_exceeded" and err["error_type"] == "triplex"
         assert err["partial"] == ""
@@ -82,11 +82,11 @@ async def test_send_with_cap_zero_yields_cost_cap_exceeded_for_every_slot(
 
     conv = await get_conv(cid)
     turn = conv["turns"][0]
-    assert turn["type"] == "send" and turn["responses"] == dict.fromkeys(SLOT_IDS)
-    assert set(turn["errors"]) == set(SLOT_IDS)
+    assert turn["type"] == "send" and turn["responses"] == dict.fromkeys(DEFAULT_COUNCIL)
+    assert set(turn["errors"]) == set(DEFAULT_COUNCIL)
     assert all("cost cap" in m for m in turn["errors"].values())
-    assert turn["partial"] == dict.fromkeys(SLOT_IDS, "")
-    for slot in SLOT_IDS:
+    assert turn["partial"] == dict.fromkeys(DEFAULT_COUNCIL, "")
+    for slot in DEFAULT_COUNCIL:
         assert conv["threads"][slot] == []  # no orphan user message
     status = metering.session_cost_status()
     assert status["exceeded"] is True and status["enforced"] is True
@@ -135,8 +135,8 @@ async def test_cap_is_checked_against_the_running_total_before_each_call(
     assert live_capped.call_count == 3  # no further request
     conv = await get_conv(cid)
     assert [t["type"] for t in conv["turns"]] == ["send", "send"]
-    assert conv["turns"][1]["responses"] == dict.fromkeys(SLOT_IDS)
-    for slot in SLOT_IDS:  # only the first send's pair is in the threads
+    assert conv["turns"][1]["responses"] == dict.fromkeys(DEFAULT_COUNCIL)
+    for slot in DEFAULT_COUNCIL:  # only the first send's pair is in the threads
         assert [m["content"] for m in conv["threads"][slot]] == [DEFAULT_PROMPT, "ok"]
 
 
@@ -214,7 +214,7 @@ async def test_fusion_with_cap_zero_marks_every_exchange_unavailable_and_exits_e
     assert _cost_capped(events)
     conv = (await client.get(f"/api/conversations/{cid}")).json()
     assert [t["type"] for t in conv["turns"]] == ["send", "analyze", "fusion"]
-    for slot in SLOT_IDS:  # no challenge/reply pair was appended
+    for slot in DEFAULT_COUNCIL:  # no challenge/reply pair was appended
         assert [m["content"] for m in conv["threads"][slot]] == [
             DEFAULT_PROMPT,
             DEFAULT_RESPONSES[slot],

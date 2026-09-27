@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, SlotSpec
+from backend.schemas import DEFAULT_COUNCIL, SlotSpec
 from backend.store import conversations as store
 from tests.conftest import DEFAULT_PROMPT
 from tests.send.conftest import assert_stream_invariants, of_type, one, slot_text
@@ -17,8 +17,8 @@ async def test_reasoning_events_stream_and_are_persisted_per_slot(send, cid, get
     assert_stream_invariants(events)
     conv = await get_conv(cid)
     turn = conv["turns"][0]
-    assert set(turn["reasoning"]) == set(SLOT_IDS)
-    for slot in SLOT_IDS:
+    assert set(turn["reasoning"]) == set(DEFAULT_COUNCIL)
+    for slot in DEFAULT_COUNCIL:
         fragments = [e for e in of_type(events, "slot_reasoning") if e["slot"] == slot]
         assert fragments, f"{slot} streamed no reasoning"
         assert all(set(e) == {"type", "slot", "text"} for e in fragments)
@@ -39,7 +39,7 @@ async def test_reasoning_events_stream_and_are_persisted_per_slot(send, cid, get
         for m in c["messages"]:
             assert turn["reasoning"][c["role"]] not in m["content"]
     assert conv2["turns"][1]["reasoning"] == {
-        s: slot_text(events2, s, "slot_reasoning") for s in SLOT_IDS
+        s: slot_text(events2, s, "slot_reasoning") for s in DEFAULT_COUNCIL
     }
 
 

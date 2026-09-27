@@ -46,12 +46,30 @@
 // carries `theme` and `panes:theme` is replayed with health / zoom / bridge / analyst, so a change
 // made anywhere (the deck button, the menu, another window) reaches the renderer.
 //
+// Council + key (2026-09-27, plan "A council anyone can assemble" Part C): `panes:getCouncil` /
+// `panes:setCouncil(spec)` read and write main's DEFAULT council for new conversations
+// (settings.json `council`, validated by council.js BEFORE anything is persisted — 2..5 members of
+// the 7-vendor catalog, one transport each; a bad spec is a bad_request and changes nothing) and
+// answer + replay it as `panes:council`. `panes:getOpenRouterKey` / `panes:setOpenRouterKey(key|null)`
+// carry the OpenRouter key INTO main (printable ASCII 20..512, validated here and never logged) and
+// only a status `{configured, prefix, length, pushed, error?}` back out: openrouter-key.js encrypts
+// and persists it, the injected `syncKey()` pushes it (and the default council) to the backend, and
+// the renderer hears `panes:openRouterKey` twice — once from here, as soon as the key is stored
+// (`pushed:false`), and again from main's `syncKey()` itself when the push settles (main announces
+// EVERY settled push, whoever asked for it; this handler does not announce it a second time). A
+// missing payload is a bad_request, not a clear: only an explicit `null` forgets the key.
+// `panes:active` accepts any catalog member as the active tab: a
+// token / local agent is a renderer COLUMN, not a site view, and shortcuts.js / menu.js treat it as
+// "no pane" for the pane-only actions. `panes:openChats` is unchanged (it navigates the three sites).
+//
 // No electron import: `ipcMain`, the view managers, settings, chats, `fs` and the timers are injected.
 
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SLOTS, publicSites } from './sites.js'
 import { THEMES, DEFAULT_THEME } from './settings.js'
+import { parseCouncil, isCouncilSlot } from './council.js'
+import { isKeyShape } from './openrouter-key.js'
 import { normalizeLayout } from './layout.js'
 import { isExternalUrl } from './policy.js'
 import { requireExportRequest } from './export.js'
@@ -116,11 +134,31 @@ export function requireConvId(v) {
   return v
 }
 
-/** `{mode, active}` for 'panes:active' (both required). */
+/** `{mode, active}` for 'panes:active' (both required); `active` is any catalog member — a site pane OR a renderer column. */
 export function requireActive(state) {
   if (state === null || typeof state !== 'object' || Array.isArray(state)) throw badRequest()
   if (typeof state.mode !== 'string' || !MODES.includes(state.mode)) throw badRequest()
-  return { mode: state.mode, active: requireSlot(state.active) }
+  if (!isCouncilSlot(state.active)) throw badRequest()
+  return { mode: state.mode, active: state.active }
+}
+
+/** A council spec for `panes:setCouncil`: council.js's strict parse, re-keyed in catalog order. */
+export function requireCouncil(spec) {
+  const council = parseCouncil(spec)
+  if (council === null) throw badRequest()
+  return council
+}
+
+/**
+ * The payload of `panes:setOpenRouterKey`: null (forget the key) or a printable-ASCII string of
+ * 20..512 characters. The value is validated by shape only and never logged or echoed. `undefined`
+ * is NOT a clear — a caller that forgot its argument must not forget the user's key (and DELETE it
+ * on the backend) for it; the renderer sends an explicit null.
+ */
+export function requireOpenRouterKey(key) {
+  if (key === null) return null
+  if (!isKeyShape(key)) throw badRequest()
+  return key
 }
 
 /** Stamp the selectors loader's error into a health object's `matched.error` when the adapter reported none. */
@@ -238,8 +276,10 @@ export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep, { fail
  *   layoutState         mutable {mode, active} shared with shortcuts (updated from 'panes:active')
  *   orchestrator        {inflight(slot)} (Stage 2: `run` is driven by the bridge client, not IPC)
  *   selectors           {current, reload, lastError}
- *   settings            {getCapture, setCapture, getTheme, setTheme}
+ *   settings            {getCapture, setCapture, getTheme, setTheme, getCouncil, setCouncil}
  *   applyTheme(theme)   nativeTheme.themeSource = theme (main owns the electron import)
+ *   openRouterKey       openrouter-key.js's module {set, clear, status} (optional; the key channels answer openrouter_key_unavailable without it)
+ *   syncKey()           push the key + default council to the backend now (main binds the URL and token); optional
  *   chats               {get(convId, slot)}
  *   exportTurn(req)     export.js's exportTurn, already bound to the backend URL / dialog / BrowserWindow
  *   sites               the resolved site table
@@ -262,6 +302,8 @@ export function registerIpc({
   selectors,
   settings = null,
   applyTheme = null,
+  openRouterKey = null,
+  syncKey = null,
   chats = null,
   exportTurn = null,
   sites,
@@ -308,6 +350,12 @@ export function registerIpc({
 
   /** settings.theme, or the default when this launch has no settings object (tests, Stage 1 wiring). */
   const currentTheme = () => (settings && typeof settings.getTheme === 'function' ? settings.getTheme() : DEFAULT_THEME)
+  /** settings.council, or null when this launch has no council-aware settings object. */
+  const currentCouncil = () => (settings && typeof settings.getCouncil === 'function' ? settings.getCouncil() : null)
+  /** The key status main answers with, or null when no key module is wired. */
+  const keyStatus = () => (openRouterKey && typeof openRouterKey.status === 'function' ? openRouterKey.status() : null)
+  /** A failure's identity for a log line: a code or a name, never a message (the key module's errors are codes already). */
+  const codeOf = (e) => (e && (e.code || e.name)) || 'error'
 
   /** Cached health + zoom of every view, the bridge state, the analyst state and the theme, re-sent to the renderer. */
   const replayState = () => {
@@ -329,6 +377,10 @@ export function registerIpc({
     }
     if (analystViews && typeof analystViews.state === 'function') emit('panes:analyst', analystViews.state())
     emit('panes:theme', { theme: currentTheme() })
+    const council = currentCouncil()
+    if (council) emit('panes:council', council)
+    const key = keyStatus()
+    if (key) emit('panes:openRouterKey', key)
   }
 
   const inflight = (slot) => !!(orchestrator && typeof orchestrator.inflight === 'function' && orchestrator.inflight(slot))
@@ -406,7 +458,7 @@ export function registerIpc({
       const b = getBackend()
       if (b && typeof b.url === 'string' && Number.isInteger(b.port)) backend = { port: b.port, url: b.url }
     }
-    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend, layout, theme: currentTheme() }
+    return { version: String(version || ''), dev: !!dev, sites: publicSites(sites), backend, layout, theme: currentTheme(), council: currentCouncil(), openRouterKey: keyStatus() }
   })
 
   on('panes:layout', (event, layout) => {
@@ -539,6 +591,45 @@ export function registerIpc({
     if (typeof applyTheme === 'function') applyTheme(next)
     emit('panes:theme', { theme: next })
     return { theme: next }
+  })
+
+  // --- council + OpenRouter key ------------------------------------------------------------------
+  // Validate, THEN persist, THEN announce — a refused call changed nothing (as panes:setTheme).
+  handle('panes:getCouncil', (event) => {
+    requireRenderer(event)
+    if (!settings || typeof settings.getCouncil !== 'function') throw new Error('council_unavailable')
+    return settings.getCouncil()
+  })
+
+  handle('panes:setCouncil', async (event, spec) => {
+    requireRenderer(event)
+    const council = requireCouncil(spec)
+    if (!settings || typeof settings.setCouncil !== 'function') throw new Error('council_unavailable')
+    const next = settings.setCouncil(council) // main's settings subscription re-pushes the defaults
+    emit('panes:council', next)
+    return next
+  })
+
+  handle('panes:getOpenRouterKey', (event) => {
+    requireRenderer(event)
+    if (!openRouterKey || typeof openRouterKey.status !== 'function') throw new Error('openrouter_key_unavailable')
+    return openRouterKey.status()
+  })
+
+  handle('panes:setOpenRouterKey', async (event, key) => {
+    requireRenderer(event)
+    const value = requireOpenRouterKey(key)
+    if (!openRouterKey || typeof openRouterKey.set !== 'function' || typeof openRouterKey.clear !== 'function') throw new Error('openrouter_key_unavailable')
+    // `set` throws `encryption_unavailable` (a fixed code) when there is no keyring: nothing stored.
+    const status = value === null ? openRouterKey.clear() : openRouterKey.set(value)
+    emit('panes:openRouterKey', status)
+    if (typeof syncKey === 'function') {
+      // The push runs on (retries, coalescing); main's syncKey announces the settled status itself.
+      Promise.resolve()
+        .then(() => syncKey())
+        .catch((e) => warn(`key sync failed: ${codeOf(e)}`))
+    }
+    return status
   })
 
   // --- export ----------------------------------------------------------------------------------

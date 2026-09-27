@@ -114,7 +114,7 @@ export default function Sidebar() {
     <div className={css.sidebar} data-testid="conversations">
       <div className={css.header}>
         <span className={css.brand}>{APP_NAME}</span>
-        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew} disabled={busy} title="Start an empty conversation with its own three threads. Disabled while a stream is running.">
+        <button type="button" className={css.newBtn} data-testid="conv-new" onClick={onNew} disabled={busy} title="Start an empty conversation with its own thread per agent. Disabled while a stream is running.">
           + New conversation
         </button>
       </div>
@@ -164,7 +164,7 @@ export default function Sidebar() {
                 ) : isConfirming ? (
                   <div className={css.confirm} data-testid="conv-delete-prompt">
                     <span>Delete?</span>
-                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)} disabled={busy} title="Delete this conversation, its three threads and every report on it. This cannot be undone.">
+                    <button type="button" className={css.danger} data-testid="conv-delete-confirm" onClick={() => onDelete(c.id)} disabled={busy} title="Delete this conversation, its threads and every report on it. This cannot be undone.">
                       Delete
                     </button>
                     <button type="button" data-testid="conv-delete-cancel" onClick={() => setConfirming(null)} title="Keep it.">
@@ -207,7 +207,7 @@ export default function Sidebar() {
       {/* The mark, in the bottom-left corner of the window (user request). It sits in the sidebar
           footer rather than floating: the site views are native surfaces painted OVER the renderer,
           so anything overlapping a pane would be behind a page. The sidebar is never under one. */}
-      <footer className={css.mark} data-testid="brand-mark" title={`${APP_NAME} — three model subscriptions in one window`}>
+      <footer className={css.mark} data-testid="brand-mark" title={`${APP_NAME} — your model subscriptions, keys and local models in one window`}>
         <img src={logoUrl} alt="" width="28" height="28" />
         <span>{APP_NAME}</span>
       </footer>

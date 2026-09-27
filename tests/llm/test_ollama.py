@@ -412,7 +412,8 @@ async def test_desktop_mode_allows_ollama_and_refuses_openrouter_models(respx_ro
     for model in ("openai/gpt-5", "x-ai/grok-4.6", "anthropic/claude-opus-5"):
         deltas = await collect(_call(model=model))
         assert kinds(deltas) == ["error"]
-        assert deltas[0].code == "transport_disabled" and deltas[0].error_type == "triplex"
+        # 2026-09-27: no session key pushed -> `missing_api_key` (tests/llm/test_dispatch.py)
+        assert deltas[0].code == "missing_api_key" and deltas[0].error_type == "triplex"
     assert route.call_count == 1 and mock.calls == []
     assert respx_router.calls.call_count == 1
 

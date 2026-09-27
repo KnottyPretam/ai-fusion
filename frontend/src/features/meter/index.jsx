@@ -9,7 +9,11 @@
 // Triplex, and a local Ollama call is free. Tokens stay: `ollama.sanitize_payload` asks for usage,
 // so an Ollama analyst reports real prompt / completion counts (a web session reports 0 / 0), and
 // hiding them would hide the only context-pressure figure the desktop app has. The web app is
-// byte-identical.
+// byte-identical. Council (2026-09-27): the cost column, the multiplier and the cap alert come
+// BACK in desktop mode as soon as any council member (or the analyst) of the open conversation is
+// on OpenRouter — a token agent is metered like the web app's — read from the frozen `slotConfig`
+// slice (`transportOf` on each model: not `web:`, not `ollama:`); `data-cost="true|false"` says
+// which. `showCost` (a prop) overrides for callers that know better.
 import { Fragment } from 'react'
 import { registerSlice } from '../../state/registry.js'
 import { useSlice } from '../../state/store.jsx'
@@ -30,6 +34,22 @@ export function isDesktop() {
   return typeof window !== 'undefined' && !!window.triplex
 }
 
+/** 'web' | 'ollama' | 'openrouter' for a model string; null for '' / null (mirrored from features/send/slice.js). */
+export function transportOf(model) {
+  if (typeof model !== 'string' || !model) return null
+  if (model.startsWith('web:')) return 'web'
+  if (model.startsWith('ollama:')) return 'ollama'
+  return 'openrouter'
+}
+
+/** True when a council member or the analyst of this SlotConfig is called through OpenRouter (metered cost). */
+export function anyOnOpenRouter(slotConfig) {
+  if (!slotConfig || typeof slotConfig !== 'object') return false
+  const slots = slotConfig.slots && typeof slotConfig.slots === 'object' ? Object.values(slotConfig.slots) : []
+  if (slots.some((s) => s && transportOf(s.model) === 'openrouter')) return true
+  return transportOf(slotConfig.analyst_model) === 'openrouter'
+}
+
 export function fmtInt(n) {
   return Math.round(n || 0).toLocaleString('en-US')
 }
@@ -45,8 +65,9 @@ export function fmtMs(ms) {
   return v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`
 }
 
-// The four cells of one group (three in desktop mode: no cost). Test ids: meter-<row>-<col>
-// for the last-invocation group and meter-<row>-conv-<col> for the conversation group.
+// The four cells of one group (three without cost: desktop mode with no OpenRouter member). Test
+// ids: meter-<row>-<col> for the last-invocation group and meter-<row>-conv-<col> for the
+// conversation group.
 function Cells({ name, group, row, badge, desktop = false }) {
   const id = group === 'last' ? `meter-${name}` : `meter-${name}-conv`
   const first = group === 'conv' ? css.groupStart : undefined
@@ -88,18 +109,23 @@ function FeatureRow({ name, last, conv, mult, fusedSendCost, desktop = false }) 
   )
 }
 
-export default function CostMeter({ desktop = isDesktop() }) {
+export default function CostMeter({ desktop = isDesktop(), showCost = null }) {
   const meter = useSlice('meter') || initialMeter()
+  const slotConfig = useSlice('slotConfig')
   const fallback = initialMeter()
   const last = meter.last || fallback.last
   const fusedSendCost = meter.fusedSendCost || 0
   const lastFusion = last.fusion || fallback.last.fusion
   const mult = lastFusion.calls > 0 && fusedSendCost > 0 ? lastFusion.cost_usd / fusedSendCost : null
   const total = meter.total || fallback.total
-  const cols = desktop ? 3 : 4
+  // `Cells` / `FeatureRow` take "no cost" as their `desktop` flag: it is false again whenever a
+  // token agent is seated, so the web columns come back as they are.
+  const cost = typeof showCost === 'boolean' ? showCost : !desktop || anyOnOpenRouter(slotConfig)
+  const noCost = !cost
+  const cols = noCost ? 3 : 4
   return (
-    <div className={css.meter} data-testid="meter" data-mode={desktop ? 'desktop' : 'web'}>
-      {!desktop && meter.costCapExceeded && (
+    <div className={css.meter} data-testid="meter" data-mode={desktop ? 'desktop' : 'web'} data-cost={cost ? 'true' : 'false'}>
+      {cost && meter.costCapExceeded && (
         <div className={css.warn} role="alert" data-testid="meter-cost-cap">
           Session cost cap exceeded (SESSION_COST_CAP_USD): live model calls are being refused.
         </div>
@@ -121,7 +147,7 @@ export default function CostMeter({ desktop = isDesktop() }) {
                 <th scope="col" className={g.key === 'conv' ? css.groupStart : undefined}>
                   tokens in / out
                 </th>
-                {desktop ? null : <th scope="col">cost</th>}
+                {noCost ? null : <th scope="col">cost</th>}
                 <th scope="col">latency</th>
                 <th scope="col">calls</th>
               </Fragment>
@@ -130,12 +156,12 @@ export default function CostMeter({ desktop = isDesktop() }) {
         </thead>
         <tbody>
           {FEATURE_ROWS.map((name) => (
-            <FeatureRow key={name} name={name} last={last[name] || fallback.last[name]} conv={meter[name] || fallback[name]} mult={mult} fusedSendCost={fusedSendCost} desktop={desktop} />
+            <FeatureRow key={name} name={name} last={last[name] || fallback.last[name]} conv={meter[name] || fallback[name]} mult={mult} fusedSendCost={fusedSendCost} desktop={noCost} />
           ))}
           <tr data-testid="meter-row-total" className={css.total}>
             <td className={css.feature}>{LABELS.total}</td>
             <td colSpan={cols} className={css.blank} />
-            <Cells name="total" group="conv" row={total} desktop={desktop} />
+            <Cells name="total" group="conv" row={total} desktop={noCost} />
           </tr>
         </tbody>
       </table>
@@ -145,7 +171,7 @@ export default function CostMeter({ desktop = isDesktop() }) {
         </span>
         <span>
           {desktop
-            ? `last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · a web session reports no tokens and is billed by the site, not by ${APP_NAME}; a local Ollama analyst reports its tokens at no cost`
+            ? `last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock · a web session reports no tokens and is billed by the site, not by ${APP_NAME}; a local Ollama analyst reports its tokens at no cost${cost ? '; an OpenRouter agent is metered with the saved key' : ''}`
             : 'last = the most recent run of each feature · this conversation = every persisted turn · latency = feature wall clock'}
         </span>
       </div>

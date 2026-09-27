@@ -8,10 +8,14 @@
 // `rectsFor` emits that key only when the caller passes an `analyst` option (the analyst pane is
 // mounted), so a layout without it is byte-identical to Stage 1/2 and main (whose normalizeLayout
 // treats an absent key as hidden) hides the view.
-import { SLOT_IDS, isSlotId } from './slice.js'
+// Council (2026-09-27): only the three SITES have a view, so the layout ranges over SITES; a site
+// outside the council has no viewport element and reports null (hidden). A renderer COLUMN (a
+// token/local member) active in tabs mode hides every site: `active` is then not a site, so no
+// site is `shown`.
+import { SITES, isSiteId } from './slice.js'
 
-/** Every key a layout may carry (main's LAYOUT_KEYS): the three panes plus the analyst view. */
-export const LAYOUT_KEYS = [...SLOT_IDS, 'analyst']
+/** Every key a layout may carry (main's LAYOUT_KEYS): the three site panes plus the analyst view. */
+export const LAYOUT_KEYS = [...SITES, 'analyst']
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
@@ -46,14 +50,14 @@ export function rectOf(target) {
  *               present the map gains `analyst: rect|null`, shown in both modes (the analyst pane
  *               is an extra pane, not a slot); when absent the key is omitted (= hidden for main).
  * Unknown modes are treated as 'split' (everything measurable is shown) so a corrupt persisted
- * value never hides all three views.
+ * value never hides every view.
  */
 export function rectsFor(mode, active, viewports, options) {
   const views = viewports && typeof viewports === 'object' ? viewports : {}
   const tabs = mode === 'tabs'
-  const shown = tabs && isSlotId(active) ? active : null
+  const shown = tabs && isSiteId(active) ? active : null
   const out = {}
-  for (const slot of SLOT_IDS) {
+  for (const slot of SITES) {
     out[slot] = tabs && slot !== shown ? null : rectOf(views[slot])
   }
   if (options && typeof options === 'object' && 'analyst' in options) out.analyst = rectOf(options.analyst)

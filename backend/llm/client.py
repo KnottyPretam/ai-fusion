@@ -29,8 +29,12 @@ Transports (docs/desktop-contract.md section 6, bridge-backend S2): `transport_k
 `web:<slot>[:analyst]` models to `bridge.stream` BEFORE the mock branch (a desktop session is
 never replayed from fixtures, and the root conftest's `MOCK_OPENROUTER=1` keeps the fixed
 R1/R2/R3 map for bridge tests); under `TRIPLEX_DESKTOP=1` every other model is refused with
-`transport_disabled` before the cost-cap / key checks so nothing can reach OpenRouter from the
-desktop. The `ollama:` branch (Stage 3, desktop-catalog-and-ollama) reuses `_live_stream` with
+`missing_api_key` (`DESKTOP_NO_KEY_MESSAGE`) before the cost-cap / key checks UNLESS the desktop has
+pushed a session key (`session_key`, 2026-09-27 -- "a council anyone can assemble": an OpenRouter
+agent in the desktop runs on that one key). The live path's key is `api_key()`: in desktop mode
+ONLY the session key, never `settings().openrouter_api_key`, so a developer `.env` next to the
+checkout can never make the e2e backend place paid calls. The `ollama:` branch (Stage 3,
+desktop-catalog-and-ollama) reuses `_live_stream` with
 `base_url=ollama.base_url()` (`OLLAMA_BASE_URL`, default `http://127.0.0.1:11434/v1`),
 `headers=ollama.headers()` (no Authorization) and `cost_lookup=False`, sending
 `ollama.sanitize_payload(...)` (bare model name, `stream_options.include_usage`, no
@@ -92,7 +96,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..config import settings
 from ..schemas import Delta, Effort, FeatureUsage, canonical_request_key, strict_json_schema
-from . import bridge, catalog, metering, mock, ollama
+from . import bridge, catalog, metering, mock, ollama, session_key
 from . import reasoning as reasoning_mod
 from .errors import (
     COST_CAP_EXCEEDED,
@@ -185,15 +189,37 @@ def web_retry_suppressed(model: str, raw_text: str) -> bool:
     return transport_kind(model) == "web" and not raw_text.strip()
 
 
-def structured_response_format(purpose: str, schema_model: type[BaseModel]) -> dict[str, Any]:
+def structured_response_format(
+    purpose: str, schema_model: type[BaseModel], schema: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The strict `response_format` for `schema_model`; `schema` (2026-09-27) replaces the
+    generated JSON Schema when a caller has narrowed it -- Analyze passes the Extraction schema
+    with the label enum cut to the conversation's council, so a three-council payload carries
+    exactly the R1/R2/R3 enum it always did."""
     return {
         "type": "json_schema",
         "json_schema": {
             "name": purpose,
             "strict": True,
-            "schema": strict_json_schema(schema_model),
+            "schema": schema if schema is not None else strict_json_schema(schema_model),
         },
     }
+
+
+def api_key() -> str | None:
+    """The OpenRouter key for a live call: in desktop mode ONLY the session key the desktop pushed
+    (`session_key`, `PUT /api/session/openrouter_key`), never the environment's -- a developer
+    `.env` beside the checkout must not let the e2e backend place paid calls; otherwise
+    `settings().openrouter_api_key` as always."""
+    if desktop_mode():
+        return session_key.get_key()
+    return settings().openrouter_api_key
+
+
+DESKTOP_NO_KEY_MESSAGE = (
+    "desktop mode: no OpenRouter key is configured, so an OpenRouter model cannot be called; "
+    "enter an OpenRouter key in Settings, or choose a web:<slot> or ollama:<name> model"
+)
 
 
 def _messages_text(messages: list[dict[str, Any]]) -> str:
@@ -605,28 +631,26 @@ async def stream_completion(
                 headers=ollama.headers(),
                 cost_lookup=False,
             )
-        elif desktop_mode():  # Stage 2 guard: never OpenRouter from the desktop
+        elif desktop_mode() and not session_key.get_key():
+            # The desktop guard (Stage 2, relaxed 2026-09-27): OpenRouter from the desktop ONLY on
+            # the key the desktop pushed. Without one nothing reaches the network -- not the mock
+            # either, so an e2e backend with no pushed key cannot spend a developer's .env key --
+            # and the slot reports `missing_api_key` with the wording that names the fix.
             terminal = True
-            msg = (
-                "desktop mode: only web:<slot> and ollama:<name> models are allowed; "
-                "choose an analyst in the config bar"
-            )
+            msg = DESKTOP_NO_KEY_MESSAGE
             log.warning(
                 metering.format_error_log_line(
                     role=role,
                     purpose=purpose,
                     model=model,
-                    code=bridge.TRANSPORT_DISABLED,
+                    code=MISSING_API_KEY,
                     error_type=ERROR_TYPE_TRIPLEX,
                     message=msg,
                     latency_ms=0,
                 )
             )
             yield Delta(
-                kind="error",
-                code=bridge.TRANSPORT_DISABLED,
-                message=msg,
-                error_type=ERROR_TYPE_TRIPLEX,
+                kind="error", code=MISSING_API_KEY, message=msg, error_type=ERROR_TYPE_TRIPLEX
             )
             return
         elif is_mock:
@@ -664,7 +688,8 @@ async def stream_completion(
                     kind="error", code=COST_CAP_EXCEEDED, message=msg, error_type=ERROR_TYPE_TRIPLEX
                 )
                 return
-            if not s.openrouter_api_key:
+            key = api_key()  # the session key in desktop mode, the environment's otherwise
+            if not key:
                 terminal = True
                 msg = "OPENROUTER_API_KEY is not set; live calls are impossible"
                 yield Delta(
@@ -678,6 +703,7 @@ async def stream_completion(
                 messages=messages,
                 payload=payload,
                 trace=trace,
+                headers=build_headers(key, s.http_referer, s.app_title),
             )
 
         async for d in gen:
@@ -950,8 +976,13 @@ async def complete_json(
     max_tokens: int | None,
     retries: int = 1,
     on_partial: Callable[[str], None] | None = None,
+    response_schema: dict[str, Any] | None = None,
 ) -> tuple[BaseModel | None, str, FeatureUsage, str | None]:
     """Returns (parsed, raw_text, usage, error). Streams internally (docs/semantics.md).
+
+    `response_schema` (2026-09-27, append-only) replaces the JSON Schema of the strict
+    `response_format` when the model lists `structured_outputs`; None keeps
+    `strict_json_schema(schema_model)`. It never changes what pydantic validates.
 
     `on_partial(text)` is called on the transport-error path only, at most once per call, with the
     text that had streamed before the error delta -- and only when there is some. The tuple still
@@ -964,7 +995,7 @@ async def complete_json(
     returned as it is (a broken recorder must not turn a degrade into a terminal `error`)."""
     meta = catalog.get_meta(model)
     response_format = (
-        structured_response_format(purpose, schema_model)
+        structured_response_format(purpose, schema_model, response_schema)
         if meta is not None and meta.structured_outputs
         else None
     )
@@ -1102,7 +1133,9 @@ async def complete_json(
 
 
 __all__ = [
+    "DESKTOP_NO_KEY_MESSAGE",
     "RETRY_USER_MESSAGE",
+    "api_key",
     "build_headers",
     "build_payload",
     "complete_json",

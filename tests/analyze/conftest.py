@@ -21,7 +21,7 @@ import httpx
 import pytest
 
 from backend.llm import mock
-from backend.schemas import SLOT_IDS, Conversation, SlotId
+from backend.schemas import DEFAULT_COUNCIL, Conversation, SlotId
 from backend.store import conversations as store
 from tests.helpers import parse_sse_text
 
@@ -63,7 +63,7 @@ def scenario_send(scenario: str) -> tuple[str, dict[SlotId, str | None]]:
     """(prompt, responses) of the scenario's send turn; an errored slot maps to None."""
     prompt = scenario_expectations(scenario)["prompt"]
     responses: dict[SlotId, str | None] = {}
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         text, errored = fixture_text(SCENARIOS_DIR / scenario / f"{slot}.chat.1.jsonl")
         responses[slot] = None if errored else text
     return prompt, responses

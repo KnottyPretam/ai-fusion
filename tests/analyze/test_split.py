@@ -18,7 +18,6 @@ the label and both numbers -- never a silent truncation.
 from __future__ import annotations
 
 import json
-
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +68,7 @@ def responses_of(total: int) -> dict[str, str]:
 # --------------------------------------------------------------------------- pure helpers
 def test_quoted_chars_counts_every_label_and_nothing_else():
     assert feature.quoted_chars({"R1": "abc", "R2": "de", "R3": ""}) == 5
-    assert feature.quoted_chars(dict.fromkeys(LABELS, "")) == 0
+    assert feature.quoted_chars(dict.fromkeys(LABELS[:3], "")) == 0
 
 
 def test_the_threshold_and_the_budget_leave_room_for_the_scaffold():
@@ -82,7 +81,7 @@ def test_the_threshold_and_the_budget_leave_room_for_the_scaffold():
 
 
 def test_needs_split_is_the_total_over_the_threshold():
-    under = {label: "x" * (feature.SPLIT_MIN_CHARS // 3) for label in LABELS}
+    under = {label: "x" * (feature.SPLIT_MIN_CHARS // 3) for label in LABELS[:3]}
     assert feature.quoted_chars(under) <= feature.SPLIT_MIN_CHARS
     assert not feature.needs_split(under)
     over = {**under, "R3": "x" * (feature.SPLIT_MIN_CHARS // 3 + 1)}
@@ -90,7 +89,7 @@ def test_needs_split_is_the_total_over_the_threshold():
 
 
 def test_oversize_reply_names_the_first_label_over_the_budget():
-    ok = dict.fromkeys(LABELS, "x" * feature.REPLY_BUDGET_CHARS)  # exactly at the budget is fine
+    ok = dict.fromkeys(LABELS[:3], "x" * feature.REPLY_BUDGET_CHARS)  # exactly at the budget is fine
     assert feature.oversize_reply(ok) is None
     big = {**ok, "R2": "x" * (feature.REPLY_BUDGET_CHARS + 1)}
     assert feature.oversize_reply(big) == ("R2", feature.REPLY_BUDGET_CHARS + 1)
@@ -141,7 +140,7 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
         "analyze_retry",
         "analyze_done",
     ]
-    for label, event in zip(LABELS, events[1:4], strict=True):
+    for label, event in zip(LABELS[:3], events[1:4], strict=True):
         assert event["error"].startswith(feature.SPLIT_NOTICE_PREFIX)  # progress, not a failure
         assert label in event["error"]
         assert f"{feature.SPLIT_MIN_CHARS:,}" in event["error"]
@@ -149,7 +148,7 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
     calls = extraction_calls()
     assert len(calls) == 4  # three condensations, then the comparison
     expected = {"R1": responses["claude"], "R2": responses["chatgpt"], "R3": responses["grok"]}
-    for label, call in zip(LABELS, calls[:3], strict=True):
+    for label, call in zip(LABELS[:3], calls[:3], strict=True):
         system, user = call["messages"]
         assert system["content"] == prompts.CONDENSE_SYSTEM
         assert blocks_of(user["content"]) == {label: expected[label]}  # exactly one reply quoted
@@ -159,8 +158,8 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
     system, user = calls[3]["messages"]
     assert system["content"] == prompts.SYSTEM
     condensed = blocks_of(user["content"])
-    assert list(condensed) == list(LABELS)
-    for label in LABELS:
+    assert list(condensed) == list(LABELS[:3])
+    for label in LABELS[:3]:
         assert "2000 dps" in condensed[label] or "1000 dps" in condensed[label]
         assert expected[label] not in user["content"]  # the raw reply never reaches the comparison
     assert prompts.CONDENSED_RESPONSES_HEADER in user["content"]
@@ -170,7 +169,7 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
     assert turn["status"] == "ok" and turn["extraction"] is not None
     # Each sub-call's raw text is narrated through raw_attempts (a plain list[str]).
     assert len(turn["raw_attempts"]) == 4
-    assert turn["raw_attempts"][:3] == [condensed[label] for label in LABELS]
+    assert turn["raw_attempts"][:3] == [condensed[label] for label in LABELS[:3]]
     assert turn["usage"]["totals"]["calls"] == 4  # every condensation is metered
 
 
@@ -389,8 +388,8 @@ async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then
     system, user = calls[12]["messages"]
     assert system["content"] == prompts.SYSTEM
     condensed = blocks_of(user["content"])
-    assert list(condensed) == list(LABELS)
-    assert all("pass-2 piece" in condensed[label] for label in LABELS)
+    assert list(condensed) == list(LABELS[:3])
+    assert all("pass-2 piece" in condensed[label] for label in LABELS[:3])
     assert sum(len(v) for v in condensed.values()) <= feature.CONDENSED_MAX_CHARS
     turn = events[-1]["turn"]
     assert turn["status"] == "ok" and turn["extraction"] is not None
@@ -444,7 +443,7 @@ async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the
     system, user = calls[5]["messages"]
     assert system["content"] == prompts.SYSTEM
     condensed = blocks_of(user["content"])
-    assert list(condensed) == list(LABELS)
+    assert list(condensed) == list(LABELS[:3])
     assert "piece 1" in condensed["R1"] and "piece 2" in condensed["R1"] and "piece 3" in condensed["R1"]
     assert big not in user["content"]  # the raw reply never reaches the comparison
 
@@ -557,11 +556,11 @@ async def test_the_split_runs_as_four_fresh_analyst_chats_on_a_web_session(
     assert _types(events)[-1] == "analyze_done"
     requests = desk.of(*ANALYST)
     assert len(requests) == 4
-    for req, label in zip(requests[:3], LABELS, strict=True):
+    for req, label in zip(requests[:3], LABELS[:3], strict=True):
         assert req["fresh"] is True  # one condensation per chat: nothing else is in it
         assert f"<<<{label}>>>" in req["text"]
         assert len(req["text"]) <= feature.REPLY_BUDGET_CHARS + 2_768
-        for other in LABELS:
+        for other in LABELS[:3]:
             if other != label:
                 assert f"<<<{other}>>>" not in req["text"]
     last = requests[3]

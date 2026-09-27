@@ -1,6 +1,7 @@
 """`stream_completion` dispatch (bridge-backend S2): `web:*` reaches the hub before the mock
-branch, `TRIPLEX_DESKTOP=1` refuses everything but web:/ollama: with `transport_disabled`, the OpenRouter
-branch (cost cap, key check, `_live_stream` defaults) is unchanged."""
+branch, `TRIPLEX_DESKTOP=1` refuses an OpenRouter model with `missing_api_key` unless the desktop
+pushed a session key (2026-09-27; the environment's key is never consulted in that mode), the
+OpenRouter branch (cost cap, key check, `_live_stream` defaults) is unchanged."""
 
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import httpx
 import pytest
 
 from backend.config import settings
-from backend.llm import bridge, metering, mock
+from backend.llm import bridge, metering, mock, session_key
 from backend.llm import client as client_mod
 from backend.llm.client import stream_completion, transport_kind
 from backend.schemas import Extraction
@@ -189,14 +190,25 @@ def test_validation_summary_is_loc_and_type_only():
 
 
 # --------------------------------------------------------------------------- desktop guard
+@pytest.fixture(autouse=True)
+def _no_session_key():
+    session_key.clear_key()
+    yield
+    session_key.clear_key()
+
+
 @pytest.mark.parametrize("model", ["openai/gpt-5", "anthropic/claude-opus-5"])
-async def test_desktop_mode_refuses_non_web_models(monkeypatch, model):
+async def test_desktop_mode_without_a_session_key_refuses_openrouter_models(monkeypatch, model):
+    """2026-09-27: the desktop guard is "no session key", not "no OpenRouter at all". Without a
+    pushed key the slot reports `missing_api_key` with the wording that names the fix, and nothing
+    reaches the mock or the network."""
     monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
     deltas = await collect(_call(model=model))
     assert kinds(deltas) == ["error"]
     e = deltas[0]
-    assert e.code == "transport_disabled" and e.error_type == "triplex"
-    assert "config bar" in e.message and "web:<slot>" in e.message
+    assert e.code == "missing_api_key" and e.error_type == "triplex"
+    assert e.message == client_mod.DESKTOP_NO_KEY_MESSAGE
+    assert "Settings" in e.message and "web:<slot>" in e.message and "ollama:<name>" in e.message
     assert mock.calls == []
 
 
@@ -206,8 +218,63 @@ async def test_desktop_guard_precedes_the_cost_cap_and_key_checks(monkeypatch, r
     monkeypatch.setenv("OPENROUTER_API_KEY", "")
     monkeypatch.setenv("SESSION_COST_CAP_USD", "0")
     deltas = await collect(_call(model="openai/gpt-5"))
-    assert kinds(deltas) == ["error"] and deltas[0].code == "transport_disabled"
+    assert kinds(deltas) == ["error"] and deltas[0].code == "missing_api_key"
+    assert deltas[0].message == client_mod.DESKTOP_NO_KEY_MESSAGE
     assert respx_router.calls.call_count == 0
+
+
+async def test_desktop_mode_ignores_the_environment_key(monkeypatch, live_transport, respx_router):
+    """The one rule that keeps a developer `.env` from spending money through the e2e backend: in
+    desktop mode the environment's key is never consulted, only the session key."""
+    monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
+    monkeypatch.setenv("MOCK_OPENROUTER", "0")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-from-the-developer-dotenv")
+    route = respx_router.post(CHAT_URL).mock(return_value=httpx.Response(200, content=b""))
+    deltas = await collect(_call(model="openai/gpt-5"))
+    assert kinds(deltas) == ["error"] and deltas[0].code == "missing_api_key"
+    assert route.call_count == 0 and client_mod.api_key() is None
+
+
+async def test_desktop_mode_with_a_session_key_takes_the_mock_path(monkeypatch, mini_fixtures):
+    monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
+    session_key.set_key("sk-or-v1-pushed-by-the-desktop")
+    deltas = await collect(_call())
+    assert deltas[-1].kind == "done"
+    assert mock.calls[-1]["fixture"] == "mini/claude.chat.1.jsonl"
+
+
+async def test_desktop_mode_with_a_session_key_calls_openrouter_with_that_key(
+    monkeypatch, live_transport, respx_router
+):
+    monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
+    monkeypatch.setenv("MOCK_OPENROUTER", "0")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-from-the-developer-dotenv")
+    session_key.set_key("sk-or-v1-pushed-by-the-desktop")
+    route = respx_router.post(CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            content=sse_body(chunk(content="x", finish="stop"), chunk(usage=usage_obj(cost=0.2))),
+        )
+    )
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["text", "done"] and route.call_count == 1
+    auth = route.calls.last.request.headers["Authorization"]
+    assert auth == "Bearer sk-or-v1-pushed-by-the-desktop"
+    assert metering.session_cost_usd() == pytest.approx(0.2)
+    # ...and the cap still applies to a keyed desktop session.
+    monkeypatch.setenv("SESSION_COST_CAP_USD", "0")
+    deltas = await collect(_call())
+    assert kinds(deltas) == ["error"] and deltas[0].code == "cost_cap_exceeded"
+    assert route.call_count == 1
+
+
+def test_api_key_outside_desktop_mode_is_the_environment_key(monkeypatch):
+    monkeypatch.setenv("TRIPLEX_DESKTOP", "0")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-env")
+    session_key.set_key("sk-or-v1-session")
+    assert client_mod.api_key() == "sk-or-v1-env"
+    monkeypatch.setenv("TRIPLEX_DESKTOP", "1")
+    assert client_mod.api_key() == "sk-or-v1-session"
 
 
 async def test_desktop_mode_still_routes_web_models(monkeypatch):

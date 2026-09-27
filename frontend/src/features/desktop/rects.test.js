@@ -44,7 +44,9 @@ describe('rectsFor', () => {
   })
 
   test('tabs with an unknown active hides everything; an unknown mode shows everything measurable', () => {
-    expect(rectsFor('tabs', 'gemini', viewports)).toEqual({ claude: null, chatgpt: null, grok: null })
+    expect(rectsFor('tabs', 'bing', viewports)).toEqual({ claude: null, chatgpt: null, grok: null })
+    // a renderer column (a token/local council member) as the active tab hides every site view
+    expect(rectsFor('tabs', 'qwen', viewports)).toEqual({ claude: null, chatgpt: null, grok: null })
     expect(rectsFor('stack', 'chatgpt', viewports)).toEqual(RECTS)
   })
 

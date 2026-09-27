@@ -604,6 +604,765 @@
         "tools",
         "top_p"
       ]
+    },
+    {
+      "id": "google/gemini-3.8-flash",
+      "canonical_slug": "google/gemini-3.8-flash-20260902",
+      "hugging_face_id": null,
+      "name": "Google: Gemini 3.8 Flash",
+      "created": 1788362056,
+      "description": "Gemini 3.8 Flash is Google's most intelligent Flash model with significant gains from 3.7 Flash across software engineering, agentic tasks, and multi-step reasoning.",
+      "context_length": 1048576,
+      "architecture": {
+        "modality": "text+image+file+audio+video->text",
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "file",
+          "audio"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Gemini",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.00000075",
+        "completion": "0.00000375",
+        "image": "0.00000075",
+        "audio": "0.00000075",
+        "input_audio_cache": "0.000000075",
+        "web_search": "0.014",
+        "internal_reasoning": "0.00000375",
+        "input_cache_read": "0.000000075",
+        "input_cache_write": "0.0000000416666666666667"
+      },
+      "top_provider": {
+        "context_length": 1048576,
+        "max_completion_tokens": 65536,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "default_parameters": {},
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/google/gemini-3.8-flash-20260902/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "agents",
+            "category": "androidnative",
+            "elo": 1104,
+            "win_rate": 34.5,
+            "rank": 29
+          },
+          {
+            "arena": "agents",
+            "category": "fullstack",
+            "elo": 1243,
+            "win_rate": 48.2,
+            "rank": 11
+          },
+          {
+            "arena": "agents",
+            "category": "godotgamedev",
+            "elo": 1273,
+            "win_rate": 53,
+            "rank": 5
+          },
+          {
+            "arena": "agents",
+            "category": "mobileapps",
+            "elo": 1258,
+            "win_rate": 55.5,
+            "rank": 8
+          },
+          {
+            "arena": "agents",
+            "category": "python-pptxslides",
+            "elo": 1178,
+            "win_rate": 39.8,
+            "rank": 19
+          },
+          {
+            "arena": "agents",
+            "category": "webapps",
+            "elo": 1240,
+            "win_rate": 46.4,
+            "rank": 11
+          },
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1316,
+            "win_rate": 51.5,
+            "rank": 14
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1315,
+            "win_rate": 52.7,
+            "rank": 10
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1272,
+            "win_rate": 50.1,
+            "rank": 23
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1326,
+            "win_rate": 54,
+            "rank": 10
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1328,
+            "win_rate": 53.8,
+            "rank": 8
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1307,
+            "win_rate": 52.3,
+            "rank": 11
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 40.9,
+          "coding_index": 76.3,
+          "agentic_index": 40.2
+        }
+      },
+      "reasoning": {
+        "mandatory": true,
+        "default_enabled": true,
+        "supported_efforts": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "default_effort": "medium"
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "canonical_slug": "deepseek/deepseek-v4-pro-20260423",
+      "hugging_face_id": "deepseek-ai/DeepSeek-V4-Pro",
+      "name": "DeepSeek: DeepSeek V4 Pro 0423",
+      "created": 1777000679,
+      "description": "DeepSeek V4 Pro is a large-scale Mixture-of-Experts model from DeepSeek with 1.6T total parameters and 49B activated parameters, supporting a 1M-token context window. It is designed for advanced reasoning, coding,...",
+      "context_length": 1048576,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "DeepSeek",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.000000348",
+        "completion": "0.000000696",
+        "input_cache_read": "0.000000029"
+      },
+      "top_provider": {
+        "context_length": 1024000,
+        "max_completion_tokens": 384000,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": 1,
+        "top_p": 1
+      },
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/deepseek/deepseek-v4-pro-20260423/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "agents",
+            "category": "fullstack",
+            "elo": 948,
+            "win_rate": 22.1,
+            "rank": 43
+          },
+          {
+            "arena": "agents",
+            "category": "godotgamedev",
+            "elo": 1059,
+            "win_rate": 34,
+            "rank": 32
+          },
+          {
+            "arena": "agents",
+            "category": "webapps",
+            "elo": 1000,
+            "win_rate": 26.4,
+            "rank": 41
+          },
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1272,
+            "win_rate": 56.8,
+            "rank": 24
+          },
+          {
+            "arena": "models",
+            "category": "asciiart",
+            "elo": 1161,
+            "win_rate": 46.4,
+            "rank": 38
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1249,
+            "win_rate": 51.9,
+            "rank": 36
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1214,
+            "win_rate": 48.7,
+            "rank": 48
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1243,
+            "win_rate": 52.3,
+            "rank": 35
+          },
+          {
+            "arena": "models",
+            "category": "svg",
+            "elo": 1149,
+            "win_rate": 45.4,
+            "rank": 45
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1230,
+            "win_rate": 50.6,
+            "rank": 42
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1242,
+            "win_rate": 50.6,
+            "rank": 41
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 30.4,
+          "coding_index": 59.4,
+          "agentic_index": 26.3
+        }
+      },
+      "reasoning": {
+        "mandatory": false,
+        "supported_efforts": [
+          "xhigh",
+          "high"
+        ],
+        "default_effort": "high"
+      }
+    },
+    {
+      "id": "qwen/qwen3.7-max",
+      "canonical_slug": "qwen/qwen3.7-max-20260520",
+      "hugging_face_id": null,
+      "name": "Qwen: Qwen3.7 Max",
+      "created": 1779376861,
+      "description": "Qwen3.7-Max is the flagship model in Alibaba's Qwen3.7 series. It supports text input and output and is designed for agent-centric workloads, with particular strengths in coding, office and productivity tasks,...",
+      "context_length": 1000000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Qwen",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.000001475",
+        "completion": "0.000004425",
+        "input_cache_read": "0.000000295",
+        "input_cache_write": "0.00000184375"
+      },
+      "top_provider": {
+        "context_length": 1000000,
+        "max_completion_tokens": 131072,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "top_k": null,
+        "frequency_penalty": null,
+        "presence_penalty": null,
+        "repetition_penalty": null
+      },
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/qwen/qwen3.7-max-20260520/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "agents",
+            "category": "agenticgamedev",
+            "elo": 1161,
+            "win_rate": 46.6,
+            "rank": 18
+          },
+          {
+            "arena": "agents",
+            "category": "androidnative",
+            "elo": 1171,
+            "win_rate": 48.6,
+            "rank": 23
+          },
+          {
+            "arena": "agents",
+            "category": "fullstack",
+            "elo": 1190,
+            "win_rate": 47.8,
+            "rank": 20
+          },
+          {
+            "arena": "agents",
+            "category": "godotgamedev",
+            "elo": 1186,
+            "win_rate": 55.7,
+            "rank": 16
+          },
+          {
+            "arena": "agents",
+            "category": "htmlslides",
+            "elo": 1158,
+            "win_rate": 43.5,
+            "rank": 15
+          },
+          {
+            "arena": "agents",
+            "category": "mobileapps",
+            "elo": 1176,
+            "win_rate": 45.2,
+            "rank": 27
+          },
+          {
+            "arena": "agents",
+            "category": "python-pptxslides",
+            "elo": 1194,
+            "win_rate": 47.2,
+            "rank": 17
+          },
+          {
+            "arena": "agents",
+            "category": "webapps",
+            "elo": 1209,
+            "win_rate": 49.6,
+            "rank": 17
+          },
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1285,
+            "win_rate": 54.9,
+            "rank": 20
+          },
+          {
+            "arena": "models",
+            "category": "asciiart",
+            "elo": 1227,
+            "win_rate": 53.9,
+            "rank": 17
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1285,
+            "win_rate": 54.6,
+            "rank": 20
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1289,
+            "win_rate": 54.7,
+            "rank": 16
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1281,
+            "win_rate": 53.7,
+            "rank": 21
+          },
+          {
+            "arena": "models",
+            "category": "svg",
+            "elo": 1230,
+            "win_rate": 56.9,
+            "rank": 17
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1280,
+            "win_rate": 54.2,
+            "rank": 24
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1282,
+            "win_rate": 54.9,
+            "rank": 21
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 29.5,
+          "coding_index": 66,
+          "agentic_index": 22.5
+        }
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": true
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "canonical_slug": "xiaomi/mimo-v2.6-pro-20260921",
+      "hugging_face_id": "XiaomiMiMo/MiMo-V2.6-Pro-RL",
+      "name": "Xiaomi: MiMo-V2.6-Pro",
+      "created": 1790021259,
+      "description": "MiMo-V2.6-Pro is the flagship foundation model developed by Xiaomi. Built at a scale of over 1T parameters, it is designed to push the ceiling of capability for the most demanding...",
+      "context_length": 1050000,
+      "architecture": {
+        "modality": "text+image+audio+video->text",
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.000000435",
+        "completion": "0.00000087",
+        "input_cache_read": "0.0000000036"
+      },
+      "top_provider": {
+        "context_length": 1048576,
+        "max_completion_tokens": 131072,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": 1,
+        "top_p": 0.95,
+        "frequency_penalty": 0
+      },
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/xiaomi/mimo-v2.6-pro-20260921/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "agents",
+            "category": "webapps",
+            "elo": 1290,
+            "win_rate": 58.3,
+            "rank": 5
+          },
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1341,
+            "win_rate": 58.7,
+            "rank": 8
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1328,
+            "win_rate": 56.8,
+            "rank": 5
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1332,
+            "win_rate": 59,
+            "rank": 7
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1305,
+            "win_rate": 53.8,
+            "rank": 15
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1355,
+            "win_rate": 60.4,
+            "rank": 4
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1329,
+            "win_rate": 57.2,
+            "rank": 4
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 46.3,
+          "coding_index": null,
+          "agentic_index": null
+        }
+      },
+      "reasoning": {
+        "mandatory": false
+      }
+    },
+    {
+      "id": "mistralai/mistral-large-2512",
+      "canonical_slug": "mistralai/mistral-large-2512",
+      "hugging_face_id": "",
+      "name": "Mistral: Mistral Large 3 2512",
+      "created": 1764624472,
+      "description": "Mistral Large 3 2512 is Mistral’s most capable model to date, featuring a sparse mixture-of-experts architecture with 41B active parameters (675B total), and released under the Apache 2.0 license.",
+      "context_length": 262144,
+      "architecture": {
+        "modality": "text+image+file->text",
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Mistral",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.0000005",
+        "completion": "0.0000015",
+        "input_cache_read": "0.00000005"
+      },
+      "top_provider": {
+        "context_length": 262144,
+        "max_completion_tokens": 209715,
+        "is_moderated": false
+      },
+      "per_request_limits": null,
+      "supported_parameters": [
+        "frequency_penalty",
+        "max_tokens",
+        "presence_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "default_parameters": {
+        "temperature": 0.0645,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "supported_voices": null,
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/mistralai/mistral-large-2512/endpoints"
+      },
+      "benchmarks": {
+        "design_arena": [
+          {
+            "arena": "models",
+            "category": "3d",
+            "elo": 1118,
+            "win_rate": 46.9,
+            "rank": 79
+          },
+          {
+            "arena": "models",
+            "category": "asciiart",
+            "elo": 1082,
+            "win_rate": 40.3,
+            "rank": 62
+          },
+          {
+            "arena": "models",
+            "category": "codecategories",
+            "elo": 1151,
+            "win_rate": 47.6,
+            "rank": 78
+          },
+          {
+            "arena": "models",
+            "category": "dataviz",
+            "elo": 1147,
+            "win_rate": 45.7,
+            "rank": 76
+          },
+          {
+            "arena": "models",
+            "category": "gamedev",
+            "elo": 1094,
+            "win_rate": 41.5,
+            "rank": 90
+          },
+          {
+            "arena": "models",
+            "category": "svg",
+            "elo": 1001,
+            "win_rate": 38,
+            "rank": 82
+          },
+          {
+            "arena": "models",
+            "category": "uicomponent",
+            "elo": 1110,
+            "win_rate": 43,
+            "rank": 82
+          },
+          {
+            "arena": "models",
+            "category": "website",
+            "elo": 1170,
+            "win_rate": 49.5,
+            "rank": 76
+          }
+        ],
+        "artificial_analysis": {
+          "intelligence_index": 9.3,
+          "coding_index": 20.1,
+          "agentic_index": 1
+        }
+      }
     }
   ]
 }

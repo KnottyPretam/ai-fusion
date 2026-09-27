@@ -30,7 +30,13 @@
 // convergence on the analyst view and reaches fusion-exit-reason converged; Pre-parse (prompt-preparse)
 // rewrites the composer from the hidden analyst view (the fake site's "Question to restate:" key) while
 // the panes type nothing, and the Send that follows types the composer text byte for byte; navigating
-// the analyst view to ?state=challenge auto-reveals it as deck-tab-analyst.
+// the analyst view to ?state=challenge auto-reveals it as deck-tab-analyst. Council + key rows
+// (describe 'desktop council (2–5 agents, OpenRouter key)', 2026-09-27): a council of two web sites →
+// the third view hidden with a null rect and no pane-grok; a mixed council → a renderer column for
+// qwen, views.slots() still three, a Send that persists the chatgpt echo and a key error for qwen (the
+// key check precedes any network call); the key round trip through __triplexTest.openRouterKey and
+// GET /api/session/openrouter_key with `Bearer e2e`, settings.json holding a base64 blob that never
+// contains the key, DELETE in afterEach.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -971,5 +977,228 @@ test.describe('window bounds persistence', () => {
       }
       if (app) await app.close().catch(() => {})
     }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Council + key: 2–5 agents from the 7-vendor catalog, one transport each, the OpenRouter key
+// ---------------------------------------------------------------------------------------------
+//
+// The council is per conversation (`slot_config.slots`), so — as the Stage 3 block does for the
+// analyst — each row POSTs its conversation to `/api/conversations` with the council it needs and
+// selects it in the sidebar, rather than driving the Agents page (its own test ids are covered by
+// the renderer's vitest specs). What is asserted here is the Electron side of the plan: the three
+// site views always exist (`views.slots()`), a site outside the council gets a NULL rect and is
+// hidden, a token / local member is a renderer COLUMN (`pane-<slot>[data-kind=column]`), a Send
+// over a mixed council persists the web echo and — with no key pushed — a key error for the
+// OpenRouter member without any network call, and the key round trip: stored through main
+// (`window.triplex.setOpenRouterKey`), pushed to the backend under the bridge token, never written
+// in the clear. The backend is the config's (frozen playwright.config.js): TRIPLEX_DESKTOP=1, no
+// OPENROUTER_API_KEY, BRIDGE_TOKEN=e2e — the same token the app attaches with.
+
+test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
+  test.describe.configure({ mode: 'serial', timeout: 240_000 })
+  const logs = []
+  const PROMPT_TWO = 'two seats'
+  const PROMPT_MIXED = 'three seats, one on a key'
+  /** 73 chars in the real format; never a working key. */
+  const KEY = `sk-or-v1-${'e'.repeat(64)}`
+  const AUTH = { authorization: `Bearer ${BRIDGE_TOKEN}` }
+  let userData
+  let app
+  let page
+
+  const agent = (model, effort = 'off') => ({ model, effort })
+  const councilConfig = (slots) => ({ slots, analyst_model: 'web:chatgpt:analyst', max_iterations: 1, materiality_min: 'medium', grounded: false })
+  const TWO_SITES = councilConfig({ chatgpt: agent('web:chatgpt'), claude: agent('web:claude') })
+  const MIXED = councilConfig({ chatgpt: agent('web:chatgpt'), claude: agent('web:claude'), qwen: agent('qwen/qwen3-235b-a22b', 'low') })
+
+  /** POST a conversation with `slot_config`, reload the shell and select it in the sidebar. */
+  async function createAndSelect(title, slot_config) {
+    const created = await backend('/api/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title, slot_config }) })
+    expect(Object.keys(created.slot_config.slots).sort()).toEqual(Object.keys(slot_config.slots).sort())
+    await page.reload()
+    await page.waitForSelector('[data-testid="desktop-shell"]', { timeout: 45_000 })
+    const row = page.getByTestId('sidebar').getByTestId('conv-row').filter({ hasText: title }).first()
+    await expect(row).toBeVisible({ timeout: 20_000 })
+    await row.getByTestId('conv-select').click()
+    return created.id
+  }
+
+  /** The key status as main reports it (never the key). */
+  const keyStatus = () => app.evaluate(() => globalThis.__triplexTest.openRouterKey.status())
+  /** The backend's view of the session key, under the bridge token. */
+  const backendKey = () => backend('/api/session/openrouter_key', { headers: AUTH })
+
+  test.beforeAll(async () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-council-'))
+    const override = {}
+    for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
+    fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+    ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150') }))
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+  })
+
+  test.afterAll(async () => {
+    if (app) await app.close().catch(() => {})
+  })
+
+  test.afterEach(async ({}, testInfo) => {
+    // never leave a key behind for the next block or the next run: main forgets it (and DELETEs it
+    // on the backend on the way), and the backend is asked directly too
+    try {
+      if (app) await page.evaluate(() => window.triplex.setOpenRouterKey(null))
+    } catch (_e) {
+      /* the app is gone */
+    }
+    await fetch(`${BACKEND_URL}/api/session/openrouter_key`, { method: 'DELETE', headers: AUTH }).catch(() => {})
+    if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+      await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+    }
+  })
+
+  test('the default council reaches the renderer and the backend: getCouncil() is the classic three and the session defaults carry them', async () => {
+    const council = await page.evaluate(() => window.triplex.getCouncil())
+    expect(Object.keys(council.slots)).toEqual(['claude', 'chatgpt', 'grok'])
+    for (const slot of SLOTS) expect(council.slots[slot]).toEqual({ model: `web:${slot}`, effort: 'off' })
+    expect(readSettings(userData).council).toEqual(council)
+    // pushed on the bridge's connected edge: the backend's in-process default is the same council
+    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['claude', 'chatgpt', 'grok'])
+    expect((await keyStatus()).configured).toBe(false)
+    expect((await backendKey()).configured).toBe(false)
+  })
+
+  test('a council of two web sites: the third view is hidden with a null rect, the renderer shows no pane-grok, and a Send reaches the two panes only', async () => {
+    await createAndSelect('two sites', TWO_SITES)
+    await page.getByTestId('deck-mode-split').click()
+    for (const slot of ['claude', 'chatgpt']) {
+      await expect(page.getByTestId(`pane-${slot}`)).toBeVisible({ timeout: 15_000 })
+      await expect.poll(() => boundsMatch(app, page, slot), { timeout: 15_000 }).toBe('ok')
+    }
+    await expect(page.getByTestId('pane-grok')).toHaveCount(0)
+    // the view still exists (views.slots() is always the three sites) but sits hidden on a null rect
+    expect(await app.evaluate(() => globalThis.__triplexTest.views.slots())).toEqual(SLOTS)
+    await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
+    const grok = await viewState(app, 'grok')
+    expect([grok.bounds.width, grok.bounds.height]).toEqual([0, 0])
+
+    const before = {}
+    for (const slot of SLOTS) before[slot] = (await fakeState(app, slot)).submitted.length
+    for (const slot of ['claude', 'chatgpt']) await ensureTargetChecked(page, slot)
+    await expect(page.getByTestId('prompt-target-grok')).toHaveCount(0)
+    await sendFromPromptBar(page, PROMPT_TWO)
+    for (const slot of ['claude', 'chatgpt']) {
+      await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted.slice(before[slot])), { timeout: 45_000 }).toEqual([PROMPT_TWO])
+    }
+    let conv = null
+    await expect
+      .poll(async () => {
+        conv = await conversationByFirstPrompt(PROMPT_TWO)
+        const turn = conv && lastSendTurn(conv)
+        return turn ? Object.keys(turn.responses).sort().join(',') : 'no turn yet'
+      }, { timeout: 60_000 })
+      .toBe('chatgpt,claude')
+    expect(Object.keys(conv.threads).sort()).toEqual(['chatgpt', 'claude'])
+    expect((await fakeState(app, 'grok')).submitted.length, 'the hidden grok page typed nothing').toBe(before.grok)
+  })
+
+  test('a mixed council: qwen is a renderer column, views.slots() stays three, and a Send echoes on chatgpt while qwen fails on the missing key before any network call', async () => {
+    const convId = await createAndSelect('mixed', MIXED)
+    await page.getByTestId('deck-mode-split').click()
+    const column = page.getByTestId('pane-qwen')
+    await expect(column).toBeVisible({ timeout: 15_000 })
+    await expect(column).toHaveAttribute('data-kind', 'column')
+    await expect(page.getByTestId('slot-qwen-transport')).toContainText(/openrouter/i)
+    for (const slot of ['claude', 'chatgpt']) await expect.poll(() => boundsMatch(app, page, slot), { timeout: 15_000 }).toBe('ok')
+    expect(await app.evaluate(() => globalThis.__triplexTest.views.slots())).toEqual(SLOTS)
+    await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
+
+    // the chatgpt pane captures its echo; claude stays not_captured; qwen never leaves the machine
+    const sw = page.getByTestId('pane-chatgpt-capture')
+    await expect(sw).toBeVisible({ timeout: 10_000 })
+    if ((await toggleState(sw)) === 'off') await sw.click()
+    await expect.poll(() => readSettings(userData).capture.chatgpt, { timeout: 10_000 }).toBe(true)
+    for (const slot of ['claude', 'chatgpt', 'qwen']) await ensureTargetChecked(page, slot)
+    await sendFromPromptBar(page, PROMPT_MIXED)
+    await expect.poll(() => fakeState(app, 'chatgpt').then((s) => s && s.submitted.at(-1)), { timeout: 45_000 }).toBe(PROMPT_MIXED)
+    let conv = null
+    await expect
+      .poll(async () => {
+        conv = await backend(`/api/conversations/${convId}`)
+        const turn = lastSendTurn(conv)
+        if (!turn || turn.prompt !== PROMPT_MIXED) return 'no turn yet'
+        const qwenDone = turn.responses.qwen !== null || (turn.errors && turn.errors.qwen)
+        return turn.responses.chatgpt !== null && qwenDone ? 'done' : 'pending'
+      }, { timeout: 120_000 })
+      .toBe('done')
+    const turn = lastSendTurn(conv)
+    expect(turn.responses.chatgpt).toBe(`Echo: ${PROMPT_MIXED}`)
+    expect(turn.responses.qwen).toBeNull()
+    // no session key was pushed: the desktop backend refuses the OpenRouter call itself (the code
+    // is missing_api_key today; the message names the key so the column can say what to do)
+    expect(turn.errors.qwen).toMatch(/key/i)
+    expect(conv.threads.qwen).toEqual([])
+    expect(Object.keys(conv.threads).sort()).toEqual(['chatgpt', 'claude', 'qwen'])
+    await expect(page.getByTestId('prompt-result-qwen')).toBeVisible({ timeout: 15_000 })
+  })
+
+  test('the key round trip: set through window.triplex, encrypted in settings.json, pushed under the bridge token (and announced), cleared with a DELETE', async () => {
+    expect(readSettings(userData).openrouterKey).toBeNull()
+    // a missing payload is refused, not taken as a clear
+    await expect(page.evaluate(() => window.triplex.setOpenRouterKey())).rejects.toThrow(/bad_request/)
+    // the renderer follows panes:openRouterKey after its mount-time read: record what it hears
+    await page.evaluate(() => {
+      window.__keyEvents = []
+      window.triplex.onOpenRouterKey((s) => window.__keyEvents.push(s))
+    })
+    const stored = await page.evaluate((k) => window.triplex.setOpenRouterKey(k), KEY)
+    expect(stored).toEqual({ configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false })
+    await expect.poll(() => keyStatus(), { timeout: 15_000 }).toEqual({ configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true })
+    // the settled push reached the renderer as an event (stored, then pushed — exactly those two)
+    await expect.poll(() => page.evaluate(() => window.__keyEvents), { timeout: 15_000 }).toEqual([
+      { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: false },
+      { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true },
+    ])
+    // the renderer only ever sees the status; the backend holds the key in memory and answers the same
+    const remote = await backendKey()
+    expect(remote.configured).toBe(true)
+    expect(remote.length).toBe(73)
+    expect(String(remote.prefix)).toMatch(/^sk-or-v1/)
+    expect(JSON.stringify(remote)).not.toContain(KEY)
+    // at rest: base64 ciphertext only (TRIPLEX_E2E_APP=1 uses Electron's plaintext backend, and even
+    // that blob is not the key), never the key itself
+    const blob = readSettings(userData).openrouterKey
+    expect(typeof blob).toBe('string')
+    expect(blob).toMatch(/^[A-Za-z0-9+/]+=*$/)
+    expect(blob).not.toContain(KEY)
+    expect(fs.readFileSync(path.join(userData, 'settings.json'), 'utf8')).not.toContain(KEY)
+    // without the bridge token the backend answers nothing about it
+    const anon = await fetch(`${BACKEND_URL}/api/session/openrouter_key`)
+    expect([401, 403]).toContain(anon.status)
+    // the log never carries it
+    expect(logs.join('')).not.toContain(KEY)
+
+    // clear: main forgets it and the backend is told
+    const cleared = await page.evaluate(() => window.triplex.setOpenRouterKey(null))
+    expect(cleared).toEqual({ configured: false, prefix: '', length: 0, pushed: false })
+    await expect.poll(() => keyStatus().then((s) => s.pushed), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => page.evaluate(() => window.__keyEvents.at(-1)), { timeout: 15_000 }).toEqual({ configured: false, prefix: '', length: 0, pushed: true })
+    expect((await backendKey()).configured).toBe(false)
+    expect(readSettings(userData).openrouterKey).toBeNull()
+  })
+
+  test('a bad council spec is refused by main and changes nothing; a valid one persists and reaches the backend defaults', async () => {
+    const before = await page.evaluate(() => window.triplex.getCouncil())
+    await expect(page.evaluate(() => window.triplex.setCouncil({ slots: { claude: { model: 'web:claude', effort: 'off' } } }))).rejects.toThrow(/bad_request/)
+    await expect(page.evaluate(() => window.triplex.setCouncil({ slots: { qwen: { model: 'web:chatgpt', effort: 'off' }, claude: { model: 'web:claude', effort: 'off' } } }))).rejects.toThrow(/bad_request/)
+    expect(await page.evaluate(() => window.triplex.getCouncil())).toEqual(before)
+    const two = { slots: { qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' }, chatgpt: { model: 'web:chatgpt', effort: 'off' } } }
+    const set = await page.evaluate((c) => window.triplex.setCouncil(c), two)
+    expect(Object.keys(set.slots)).toEqual(['chatgpt', 'qwen'])
+    expect(readSettings(userData).council).toEqual(set)
+    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['chatgpt', 'qwen'])
+    // restore the default so the sidebar's "New conversation" keeps seating the classic three
+    await page.evaluate((c) => window.triplex.setCouncil(c), before)
+    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['claude', 'chatgpt', 'grok'])
   })
 })

@@ -4,11 +4,13 @@ docs/semantics.md "Send/continue" (+ addendum), docs/api-contract.md send events
 
 Pre-checks (all BEFORE the first yield, so the router's `sse_response` turns them into plain JSON
 errors): `store.load` -> 404 not_found; blank prompt -> 422 empty_prompt; unknown slot -> 404
-not_found(slot); Send's `slots` subset (desktop addendum: omitted / None = all three, an unknown
-slot -> 404 not_found(slot), an empty list -> 422 empty_slots, duplicates removed and the list
-ordered as SLOT_IDS); then `busy_guard` LAST -> 409 busy. A subset Send runs exactly those slots:
-`turn_start.slots` lists them and the persisted SendTurn holds only their entries, so Analyze
-reports the others as `incomplete_send_turn{missing}`.
+not_found(slot); Send's `slots` subset (desktop addendum: omitted / None = the whole council, a
+slot the council did not seat -> 404 not_found(slot), an empty list -> 422 empty_slots, duplicates
+removed and the list in council order); then `busy_guard` LAST -> 409 busy. A subset Send runs
+exactly those slots: `turn_start.slots` lists them and the persisted SendTurn holds only their
+entries, so Analyze reports the others as `incomplete_send_turn{missing}`. The council is the
+conversation's own (`schemas.council_of(conv.slot_config)`, 2..5 slots since 2026-09-27); a
+continue on a slot outside it is 404 not_found(slot) too.
 
 Producer model: ONE coordinator `asyncio.Task` per turn owns every LLM call and every persistence
 write, pushes event dicts into one `asyncio.Queue`, and releases the busy guard in its `finally`
@@ -63,7 +65,7 @@ from ..llm.errors import EMPTY_REPLY
 from ..prompts.preparse import strip_format
 from ..prompts.send import PURPOSE, title_from_prompt, user_message, web_plugins
 from ..schemas import (
-    SLOT_IDS,
+    DEFAULT_COUNCIL,
     ContinueTurn,
     Conversation,
     Delta,
@@ -74,6 +76,7 @@ from ..schemas import (
     ThreadMessage,
     Turn,
     Usage,
+    council_of,
     new_id,
     to_openai,
 )
@@ -118,15 +121,16 @@ async def run_send(
 ) -> AsyncIterator[dict[str, Any]]:
     started = time.monotonic()
     conv = await _precheck(conv_id, prompt)
-    chosen = resolve_slots(slots)  # 404 not_found(slot) / 422 empty_slots, before the guard
-    async for ev in _stream_turn(conv, prompt, "send", chosen or SLOT_IDS, started):
+    council = council_of(conv.slot_config)
+    chosen = resolve_slots(slots, council)  # 404 not_found(slot) / 422 empty_slots, before the guard
+    async for ev in _stream_turn(conv, prompt, "send", chosen, started):
         yield ev
 
 
 async def run_continue(conv_id: str, slot: SlotId, prompt: str) -> AsyncIterator[dict[str, Any]]:
     started = time.monotonic()
     conv = await _precheck(conv_id, prompt)
-    if slot not in SLOT_IDS:
+    if slot not in council_of(conv.slot_config):  # a catalog vendor this council did not seat too
         raise api_errors.not_found("slot")
     async for ev in _stream_turn(conv, prompt, "continue", (slot,), started):
         yield ev
@@ -150,17 +154,20 @@ async def _precheck(conv_id: str, prompt: str) -> Conversation:
     return conv
 
 
-def resolve_slots(slots: Sequence[str] | None) -> tuple[SlotId, ...]:
-    """The Send subset: None -> every slot; an unknown entry -> 404 not_found("slot"); an empty
-    list -> 422 empty_slots; duplicates dropped; SLOT_IDS order."""
+def resolve_slots(
+    slots: Sequence[str] | None, council: Sequence[SlotId] = DEFAULT_COUNCIL
+) -> tuple[SlotId, ...]:
+    """The Send subset: None -> the whole council; an entry the council did not seat (an unknown
+    id, or a catalog vendor outside this conversation) -> 404 not_found("slot"); an empty list ->
+    422 empty_slots; duplicates dropped; council (catalog) order."""
     if slots is None:
-        return SLOT_IDS
+        return tuple(council)
     if isinstance(slots, str | bytes) or not isinstance(slots, Sequence):
         raise api_errors.not_found("slot")
     for slot in slots:
-        if slot not in SLOT_IDS:
+        if slot not in council:
             raise api_errors.not_found("slot")
-    chosen = tuple(slot for slot in SLOT_IDS if slot in slots)
+    chosen = tuple(slot for slot in council if slot in slots)
     if not chosen:
         raise api_errors.unprocessable("empty_slots")
     return chosen

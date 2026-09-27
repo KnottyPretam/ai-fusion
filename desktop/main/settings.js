@@ -5,13 +5,21 @@
 //    "zoom":{"claude":1,"chatgpt":1,"grok":1},
 //    "capture":{"claude":false,"chatgpt":false,"grok":false},
 //    "analyst":"chatgpt","analystVisible":false,
-//    "theme":"dark"}
+//    "theme":"dark",
+//    "council":{"slots":{"claude":{"model":"web:claude","effort":"off"}, …}},
+//    "openrouterKey":"<base64 safeStorage ciphertext>"|null}
 //
-// Main owns these keys (window bounds / zoom / capture / analyst / theme; the renderer mirrors
-// layout, active tab and targets in localStorage). `theme` is the ONE source of truth for the
+// Main owns these keys (window bounds / zoom / capture / analyst / theme / council / openrouterKey;
+// the renderer mirrors layout, active tab and targets in localStorage). `theme` is the ONE source of truth for the
 // desktop app: main applies it to `nativeTheme.themeSource` (so the three site pages use their own
 // dark themes) and reports it to the renderer, which paints its own palette from it; the
-// renderer's `triplex.theme` localStorage entry is only a first-paint mirror.
+// renderer's `triplex.theme` localStorage entry is only a first-paint mirror. `council` (2026-09-27)
+// is the DEFAULT council for new conversations — 2..5 members of the 7-vendor catalog, validated by
+// council.js (a malformed member is dropped on load, fewer than two survivors fall back to the classic
+// three — each said in the log by name, never silently). `openrouterKey` is only ever safeStorage CIPHERTEXT (base64; openrouter-key.js encrypts and
+// decrypts, this module never sees the key): the sanitiser keeps a base64 string and drops anything
+// else, so a plaintext key can never be read back out of this file — an OpenRouter key carries `-`,
+// which base64 does not.
 //
 // Writes are tmp-in-same-dir + rename. Window bounds are
 // debounced (`queueWindowBounds`) and clamped at launch to the work area of the display that
@@ -21,6 +29,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SLOTS } from './sites.js'
+import { DEFAULT_COUNCIL, parseCouncil, sanitizeCouncil, sanitizeCouncilReport } from './council.js'
 
 export const SETTINGS_VERSION = 1
 export const SETTINGS_FILE = 'settings.json'
@@ -40,6 +49,13 @@ export function asTheme(value, fallback = null) {
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isFiniteNumber = (v) => typeof v === 'number' && Number.isFinite(v)
+/** Strict base64 (the alphabet, `=` padding, non-empty): what safeStorage ciphertext looks like and a key never does. */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/
+
+/** `value` when it is a non-empty base64 string (ciphertext), else null. */
+export function asCiphertext(value) {
+  return typeof value === 'string' && BASE64_RE.test(value) ? value : null
+}
 
 function perSlot(value) {
   const o = {}
@@ -57,6 +73,8 @@ export function defaultSettings() {
     analyst: 'chatgpt',
     analystVisible: false,
     theme: DEFAULT_THEME,
+    council: DEFAULT_COUNCIL(),
+    openrouterKey: null,
   }
 }
 
@@ -123,6 +141,8 @@ export function sanitizeSettings(raw) {
   if (raw.analyst === null || SLOTS.includes(raw.analyst)) out.analyst = raw.analyst
   if (typeof raw.analystVisible === 'boolean') out.analystVisible = raw.analystVisible
   out.theme = asTheme(raw.theme, out.theme)
+  out.council = sanitizeCouncil(raw.council)
+  out.openrouterKey = asCiphertext(raw.openrouterKey) // never plaintext: anything that is not base64 is dropped
   return out
 }
 
@@ -137,6 +157,8 @@ export function sanitizeSettings(raw) {
  *   getAnalyst() / setAnalyst(slot|null)                             Stage 3 callers; save immediately
  *   getAnalystVisible() / setAnalystVisible(bool)                    the analyst view's fourth-tab mirror
  *   getTheme() / setTheme('light'|'dark'|'system')                   the shell + nativeTheme choice; saves immediately
+ *   getCouncil() / setCouncil(council)                               the default council (council.js parseCouncil; a copy out, a copy in); saves immediately
+ *   getOpenRouterKeyCiphertext() / setOpenRouterKeyCiphertext(b64|null)   safeStorage ciphertext only (openrouter-key.js); notify carries {configured}
  *   windowBoundsForLaunch()        {x?, y?, width, height, maximized} clamped to screen.getDisplayMatching(...).workArea
  *   queueWindowBounds(bounds, maximized)   debounced save of the (normal) window bounds
  *   flushWindowBounds()            write a pending bounds update now (window close / before-quit)
@@ -193,11 +215,25 @@ export function createSettings({
         warn(`${file} has version ${JSON.stringify(parsed.version)}; expected ${SETTINGS_VERSION} (keeping what fits)`)
       }
       doc = sanitizeSettings(parsed)
+      reportCouncil(parsed)
     } catch (e) {
       warn(`${file} is not valid JSON (${(e && e.message) || e}); using defaults`)
       doc = defaultSettings()
     }
     return get()
+  }
+
+  /**
+   * The council sanitiser is tolerant; this is where that tolerance is heard. A member dropped from
+   * the file, or the whole council replaced by the default, is the user's configuration going away
+   * — without a line here the next "New conversation" seats a council they did not choose and the
+   * log says nothing.
+   */
+  function reportCouncil(parsed) {
+    if (!isPlainObject(parsed) || parsed.council === undefined) return
+    const { council, dropped, fallback } = sanitizeCouncilReport(parsed.council)
+    if (dropped.length) warn(`council: dropped ${dropped.join(', ')} (malformed or unknown member)`)
+    if (fallback) warn(`council: fell back to the default council (${Object.keys(council.slots).join(', ')}) — ${fallback}`)
   }
 
   function get() {
@@ -285,6 +321,32 @@ export function createSettings({
     return doc.theme
   }
 
+  function getCouncil() {
+    return JSON.parse(JSON.stringify(doc.council))
+  }
+
+  function setCouncil(council) {
+    const parsed = parseCouncil(council)
+    if (parsed === null) throw new Error('settings: invalid council')
+    doc.council = parsed
+    save()
+    notify('council', getCouncil())
+    return getCouncil()
+  }
+
+  function getOpenRouterKeyCiphertext() {
+    return doc.openrouterKey
+  }
+
+  /** The ciphertext, or null to forget the key. A value that is not base64 is refused — this file never holds a plaintext key. */
+  function setOpenRouterKeyCiphertext(ciphertext) {
+    if (ciphertext !== null && asCiphertext(ciphertext) === null) throw new Error('settings: openrouterKey must be base64 ciphertext or null')
+    doc.openrouterKey = ciphertext
+    save()
+    notify('openrouterKey', { configured: ciphertext !== null })
+    return doc.openrouterKey
+  }
+
   function workAreaFor(bounds) {
     if (!screen || typeof screen.getDisplayMatching !== 'function') return null
     try {
@@ -359,6 +421,10 @@ export function createSettings({
     setAnalystVisible,
     getTheme,
     setTheme,
+    getCouncil,
+    setCouncil,
+    getOpenRouterKeyCiphertext,
+    setOpenRouterKeyCiphertext,
     windowBoundsForLaunch,
     queueWindowBounds,
     flushWindowBounds,

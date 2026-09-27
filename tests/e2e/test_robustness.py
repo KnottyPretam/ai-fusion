@@ -31,7 +31,7 @@ from backend.llm import mock
 from backend.main import create_app
 from backend.prompts import analyze as analyze_prompts
 from backend.schemas import (
-    SLOT_IDS,
+    DEFAULT_COUNCIL,
     AnalyzeTurn,
     DefenseReply,
     Extraction,
@@ -219,7 +219,7 @@ def assert_fusion_outcome(
     available: dict[str, Reply] = {}
     flags: list[bool] = []
     metered = 0
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         label = LABEL_OF[slot]
         first, second = defenses[slot]
         attempts = attempts_of(first, second)
@@ -374,7 +374,7 @@ async def test_committed_fusion_scenarios(local_fixtures, client, name):
     out = await drive(client, fusion=True, max_iterations=1)
     turn = assert_fusion_outcome(
         out,
-        {slot: pair(slot, "defense") for slot in SLOT_IDS},
+        {slot: pair(slot, "defense") for slot in DEFAULT_COUNCIL},
         pair("analyst", "convergence")
         if "analyst.convergence.1.jsonl" in files
         else (
@@ -386,7 +386,7 @@ async def test_committed_fusion_scenarios(local_fixtures, client, name):
     assert turn.exit_reason == exit_reason
     assert {e.model: e.stance for e in turn.rounds[0].exchanges} == stances
     assert [s.status for s in turn.final] == ["standing"]
-    for slot in SLOT_IDS:
+    for slot in DEFAULT_COUNCIL:
         assert len(calls("defense", slot)) == counts[slot], slot
     assert len(calls("convergence")) == counts["convergence"]
     assert len(calls("extraction")) == 1
@@ -426,7 +426,7 @@ def test_fuzz_analyze_json_path_never_500s_or_hangs(first, second, tmp_path, mon
 
 @given(
     defenses=st.fixed_dictionaries(
-        {slot: st.tuples(defense_replies, defense_replies) for slot in SLOT_IDS}
+        {slot: st.tuples(defense_replies, defense_replies) for slot in DEFAULT_COUNCIL}
     ),
     convergence=st.tuples(convergence_replies, convergence_replies),
 )

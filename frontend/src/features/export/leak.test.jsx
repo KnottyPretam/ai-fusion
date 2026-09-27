@@ -20,7 +20,9 @@ import { exportPath } from './runExport.js'
 
 // tests/helpers.py find_identity_leaks in spirit: vendors, products, slot ids and the slug code
 // names the backend also forbids.
-const IDENTITY = /\b(claude|chatgpt|gpt|grok|anthropic|openai|x-?ai|gemini|google)\b|-(luna|sol|astra)\b|anon_?map/i
+// Council (2026-09-27): the four new vendors and their companies; `google` is an ordinary word in
+// claims ("Google's TPU"), so like the backend it counts only as a slug prefix (`google/`).
+const IDENTITY = /\b(claude|chatgpt|gpt|grok|anthropic|openai|x-?ai|gemini|deepseek|qwen|mimo|alibaba|xiaomi)\b|\bgoogle\/|-(luna|sol|astra)\b|anon_?map/i
 
 const ANON_MAP = { R1: 'claude', R2: 'chatgpt', R3: 'grok' }
 const PLANTED = { anon_map: ANON_MAP } // a document shaped like the PRIVATE conversation, never served
@@ -99,6 +101,12 @@ describe('the export control never reveals which slot is which', () => {
       expect(path).not.toMatch(IDENTITY)
       expect(path).toBe(`/api/conversations/c1/export/${turn}?format=${format}`)
     }
+  })
+
+  test('the gate knows the four council vendors and their companies; google only as a slug prefix', () => {
+    for (const word of ['Gemini', 'DeepSeek', 'qwen', 'MiMo', 'Alibaba', 'xiaomi', 'google/gemini-2.5-pro', 'openai/gpt-5']) expect(word).toMatch(IDENTITY)
+    // an ordinary claim naming the company is user / model text, never a slot leak
+    for (const text of ["Google's TPU is faster", 'qwenish', 'mimosa']) expect(text).not.toMatch(IDENTITY)
   })
 
   test('the default file name derives from title + feature + turn — never from a slot', () => {

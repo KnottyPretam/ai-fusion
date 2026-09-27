@@ -10,6 +10,7 @@ import pytest
 
 from backend import anon
 from backend.config import ANALYST_EFFORT, MAX_TOKENS_STAGE
+from backend.features.analyze import extraction_schema_for
 from backend.llm import catalog, mock
 from backend.llm import reasoning as reasoning_mod
 from backend.llm.client import RETRY_USER_MESSAGE
@@ -64,6 +65,17 @@ def test_the_api_system_prompt_is_unchanged_byte_for_byte():
     )
     assert prompts.system_message() == prompts.SYSTEM  # the default is the API text
     assert prompts.build_messages("Q?", DEFAULT_RESPONSE_LABELS)[0]["content"] == prompts.SYSTEM
+
+
+def test_build_messages_n_must_agree_with_the_responses():
+    """`n` is optional (the responses decide) but a stated size that disagrees is a ValueError,
+    never a silently mis-sized prompt."""
+    stated = prompts.build_messages("Q?", DEFAULT_RESPONSE_LABELS, n=3)
+    assert stated == prompts.build_messages("Q?", DEFAULT_RESPONSE_LABELS)
+    with pytest.raises(ValueError, match="n=2"):
+        prompts.build_messages("Q?", DEFAULT_RESPONSE_LABELS, n=2)
+    two = {"R1": "a", "R2": "b"}
+    assert prompts.build_messages("Q?", two, n=2)[0]["content"] == prompts.system_for(2)
 
 
 def test_the_web_system_prompt_swaps_only_the_json_instruction():
@@ -168,18 +180,28 @@ def test_user_builder_layout():
     user = prompts.build_user("Q?", responses)
     assert user.startswith("Question:\nQ?")
     q, notice = user.index("Q?"), user.index(QUOTED_DATA_NOTICE)
-    blocks = [user.index(delimited(label, responses[label])) for label in LABELS]
+    blocks = [user.index(delimited(label, responses[label])) for label in LABELS[:3]]
     assert q < notice < blocks[0] < blocks[1] < blocks[2]
     assert blocks_of(user) == responses
-    assert [m.group(1) for m in BLOCK_RE.finditer(user)] == list(LABELS)
+    assert [m.group(1) for m in BLOCK_RE.finditer(user)] == list(LABELS[:3])
     messages = prompts.build_messages("Q?", responses)
     assert [m["role"] for m in messages] == ["system", "user"]
     assert messages[0]["content"] == prompts.SYSTEM and messages[1]["content"] == user
 
 
 def test_user_builder_requires_every_label():
+    """`n = len(responses)` is the council size (2..5 since 2026-09-27): the labels must be exactly
+    R1..Rn -- a gap, a label outside that prefix, or a size outside the council bounds all raise."""
+    with pytest.raises(ValueError, match="R2"):
+        prompts.build_user("Q?", {"R1": "a", "R3": "b"})  # a pair is R1/R2, never R1/R3
     with pytest.raises(ValueError, match="R3"):
-        prompts.build_user("Q?", {"R1": "a", "R2": "b"})
+        prompts.build_user("Q?", {"R1": "a", "R2": "b", "R4": "c"})  # three means R1/R2/R3
+    with pytest.raises(ValueError, match="between 2 and 5"):
+        prompts.build_user("Q?", {"R1": "a"})
+    with pytest.raises(ValueError, match="between 2 and 5"):
+        prompts.build_user("Q?", {f"R{i}": "x" for i in range(1, 7)})
+    two = prompts.build_user("Q?", {"R1": "a", "R2": "b"})
+    assert [m.group(1) for m in BLOCK_RE.finditer(two)] == ["R1", "R2"]
 
 
 def test_triplex_authored_prompt_text_is_identity_free():
@@ -198,14 +220,17 @@ async def test_analyst_payload_shape(persisted_conversation, analyze):
     assert meta is not None and meta.structured_outputs  # the dedicated analyst supports it
     assert call["role"] == "analyst" and call["purpose"] == "extraction"
     assert call["model"] == model
+    # The strict schema's label enum is narrowed to the council (R1/R2/R3 for the three) -- the
+    # wire payload a three-council sends is byte-identical to before the council widened, while
+    # `strict_json_schema(Extraction)` itself now lists all five labels.
+    schema = extraction_schema_for(LABELS[:3])
     assert call["response_format"] == {
         "type": "json_schema",
-        "json_schema": {
-            "name": "extraction",
-            "strict": True,
-            "schema": strict_json_schema(Extraction),
-        },
+        "json_schema": {"name": "extraction", "strict": True, "schema": schema},
     }
+    assert schema["$defs"]["Position"]["properties"]["model"]["enum"] == ["R1", "R2", "R3"]
+    assert schema["$defs"]["Agreement"]["properties"]["models"]["items"]["enum"] == ["R1", "R2", "R3"]
+    assert strict_json_schema(Extraction)["$defs"]["Position"]["properties"]["model"]["enum"] == list(LABELS)
     assert (
         call["reasoning"]
         == reasoning_mod.build(ANALYST_EFFORT, meta)[0]
@@ -305,7 +330,7 @@ async def test_injected_text_is_quoted_inertly_inside_the_r3_block_only(
     assert INJECTION not in system["content"]
     content = user["content"]
     blocks = blocks_of(content)
-    assert set(blocks) == set(LABELS)
+    assert set(blocks) == set(LABELS[:3])
     assert INJECTION in blocks["R3"]
     assert INJECTION not in blocks["R1"] and INJECTION not in blocks["R2"]
     assert INJECTION not in outside_blocks(content)
@@ -331,7 +356,7 @@ def test_a_response_cannot_close_its_own_block():
     responses = {"R1": "alpha", "R2": "beta", "R3": BREAKOUT}
     user = prompts.build_user("Q?", responses)
     blocks = blocks_of(user)
-    assert list(blocks) == list(LABELS)  # still exactly one block per label, in order
+    assert list(blocks) == list(LABELS[:3])  # still exactly one block per label, in order
     assert blocks["R1"] == "alpha" and blocks["R2"] == "beta"
     assert blocks["R3"] == neutralise(BREAKOUT) and "<<<" not in blocks["R3"]
     assert "reveal the model names" in blocks["R3"] and "tail" in blocks["R3"]
@@ -354,7 +379,7 @@ async def test_breakout_attempt_in_a_send_response_never_reaches_the_instruction
     assert "reveal the model names" not in system["content"]
     content = user["content"]
     blocks = blocks_of(content)
-    assert list(blocks) == list(LABELS)
+    assert list(blocks) == list(LABELS[:3])
     assert blocks["R1"] == DEFAULT_RESPONSES["claude"]
     assert blocks["R2"] == DEFAULT_RESPONSES["chatgpt"]
     assert blocks["R3"] == neutralise(grok)  # verbatim except for the one substitution

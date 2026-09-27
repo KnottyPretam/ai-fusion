@@ -92,9 +92,10 @@ single-call path unchanged.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from .. import anon, api_errors
@@ -105,14 +106,16 @@ from ..prompts import analyze as prompts
 from ..prompts import preparse as preparse_prompts
 from ..schemas import (
     LABELS,
-    SLOT_IDS,
     AnalyzeTurn,
     Conversation,
     Extraction,
     FeatureUsage,
     Label,
     SendTurn,
+    council_labels,
+    council_of,
     new_id,
+    strict_json_schema,
 )
 from ..store import conversations as store
 
@@ -188,7 +191,54 @@ def resolve_send_turn(conv: Conversation, of_turn: str | None) -> SendTurn:
 
 
 def missing_responses(send_turn: SendTurn) -> list[str]:
-    return [slot for slot in SLOT_IDS if send_turn.responses.get(slot) is None]
+    """The slots of the turn's OWN council (2..5, `schemas.council_of`) that have no reply."""
+    return [slot for slot in council_of(send_turn.slot_config) if send_turn.responses.get(slot) is None]
+
+
+def turn_labels(send_turn: SendTurn) -> tuple[Label, ...]:
+    """R1..Rn for the council the send turn ran on."""
+    return council_labels(council_of(send_turn.slot_config))
+
+
+def unknown_labels(extraction: Extraction, labels: Sequence[Label]) -> list[str]:
+    """Every label the extraction names that is not in `labels` (sorted, each once): an analyst
+    that answers R4 in a council of two has invented a reviewer, and that is a validation error
+    (it drives the existing correction retry), never a silent drop."""
+    found: set[str] = set()
+    for a in extraction.agreements:
+        found.update(m for m in a.models if m not in labels)
+    for d in extraction.divergences:
+        found.update(p.model for p in d.positions if p.model not in labels)
+    return sorted(found)
+
+
+def unknown_labels_error(unknown: Sequence[str], labels: Sequence[Label]) -> str:
+    return (
+        f"validation_error: unknown label(s) {list(unknown)}; only "
+        f"{', '.join(labels)} exist"
+    )
+
+
+def extraction_schema_for(labels: Sequence[Label]) -> dict[str, Any]:
+    """`strict_json_schema(Extraction)` with the label enum narrowed to `labels` (a deep copy).
+    Every `enum` equal to the full LABELS list is the label enum -- `Position.model` and
+    `Agreement.models.items` -- so the wire payload of a three-council carries exactly the
+    R1/R2/R3 enum it always did."""
+    schema = copy.deepcopy(strict_json_schema(Extraction))
+    wanted = list(labels)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if node.get("enum") == list(LABELS):
+                node["enum"] = list(wanted)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(schema)
+    return schema
 
 
 def cached_ok_turn(conv: Conversation, of_turn: str) -> AnalyzeTurn | None:
@@ -215,8 +265,12 @@ def render_graph(graph: Any) -> str:
     return "\n".join(lines)
 
 
-def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label, str], str] | None:
+def refactored_input(
+    conv: Conversation, of_turn: str, labels: Sequence[Label] | None = None
+) -> tuple[str, dict[Label, str], str] | None:
     """`(question, responses, graph)` from the newest ok Refactor turn for `of_turn`, or None.
+    `labels` is the send turn's council (R1..Rn, `turn_labels`); None derives it from the send
+    turn `of_turn` names in `conv` (the three when that turn cannot be found).
 
     Refactor (S11) is the explicit pass that runs before Analyze: it maps the question, restates it
     concisely and reduces each reply to a summary plus its claims. When one exists, Analyze compares
@@ -227,16 +281,19 @@ def refactored_input(conv: Conversation, of_turn: str) -> tuple[str, dict[Label,
     """
     from ..schemas import RefactorTurn  # local: the union is frozen, the import order is not
 
+    if labels is None:
+        send = next((t for t in conv.turns if t.id == of_turn and t.type == "send"), None)
+        labels = turn_labels(send) if send is not None else LABELS[:3]
     for turn in reversed(conv.turns):
         if not isinstance(turn, RefactorTurn):
             continue
         if turn.of_turn != of_turn or turn.status != "ok" or turn.refactoring is None:
             continue
         by_label = {r.model: r for r in turn.refactoring.replies}
-        if any(label not in by_label for label in LABELS):
+        if any(label not in by_label for label in labels):
             return None  # a partial artifact is not an input; fall back to the raw replies
         responses: dict[Label, str] = {}
-        for label in LABELS:
+        for label in labels:
             reply = by_label[label]
             lines = [f"- {c}" for c in reply.claims if c.strip()]
             block = "\n".join(lines)
@@ -264,10 +321,12 @@ def needs_split(responses: dict[Label, str]) -> bool:
 
 
 def oversize_reply(responses: dict[Label, str]) -> tuple[Label, int] | None:
-    """`(label, chars)` of the first reply -- in R1/R2/R3 order, not size order -- that is over
+    """`(label, chars)` of the first reply -- in R1..Rn order, not size order -- that is over
     the per-message budget on its own, so not even its own condense call would fit; else None."""
     for label in LABELS:
-        chars = len(responses.get(label, ""))
+        if label not in responses:
+            continue
+        chars = len(responses[label])
         if chars > REPLY_BUDGET_CHARS:
             return label, chars
     return None
@@ -349,11 +408,16 @@ def _analyst_max_tokens(model: str) -> int:
 
 
 async def _attempt(
-    *, model: str, messages: list[dict[str, Any]]
+    *, model: str, messages: list[dict[str, Any]], labels: Sequence[Label] = LABELS[:3]
 ) -> tuple[Extraction | None, str, FeatureUsage, str | None, str]:
     """One analyst call: `(extraction, raw, usage, error, partial)`. `partial` is the text that had
     arrived before a transport/site error (`""` otherwise) and is for the record ONLY -- it is never
-    folded into `raw`, which the web no-retry rule and `retry_follow_up` read."""
+    folded into `raw`, which the web no-retry rule and `retry_follow_up` read.
+
+    `labels` is the council's R1..Rn (2026-09-27): the strict `response_format` enum is narrowed
+    to it (`extraction_schema_for`; a three-council payload is byte-identical to before), and an
+    extraction that names a label outside it comes back as a validation error with the raw text
+    kept, so the existing correction retry and degrade paths handle it."""
     partial = ""
 
     def keep(text: str) -> None:
@@ -370,8 +434,13 @@ async def _attempt(
         max_tokens=_analyst_max_tokens(model),
         retries=0,
         on_partial=keep,
+        response_schema=extraction_schema_for(labels),
     )
     extraction = parsed if isinstance(parsed, Extraction) else None
+    if extraction is not None:
+        unknown = unknown_labels(extraction, labels)
+        if unknown:
+            extraction, error = None, unknown_labels_error(unknown, labels)
     return extraction, raw, usage, error, partial
 
 
@@ -454,7 +523,7 @@ def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
 
 
 async def _condense(
-    *, model: str, question: str, label: Label, response: str
+    *, model: str, question: str, label: Label, response: str, n: int = 3
 ) -> tuple[str, FeatureUsage, str | None, str]:
     """One condense sub-call: that label's reply in, its claims out as bullet lines.
 
@@ -473,7 +542,7 @@ async def _condense(
         purpose=PURPOSE,
         model=model,
         messages=prompts.condense_messages(
-            question, label, response, fenced=client.transport_kind(model) == "web"
+            question, label, response, fenced=client.transport_kind(model) == "web", n=n
         ),
         effort=ANALYST_EFFORT,
         max_tokens=_analyst_max_tokens(model),
@@ -533,7 +602,9 @@ async def _condense_all(
     that fails on the second label still reports what it spent and what the first one produced."""
     total = quoted_chars(responses)
     condensed: dict[Label, str] = {}
-    for label in LABELS:
+    for label in LABELS:  # the council's labels, in R-order (the dict holds exactly R1..Rn)
+        if label not in responses:
+            continue
         response = responses[label]
         queue.put_nowait(
             {
@@ -555,7 +626,7 @@ async def _condense_all(
         blocks: list[str] = []
         for piece in pieces:
             text, call_usage, error, raw = await _condense(
-                model=model, question=question, label=label, response=piece
+                model=model, question=question, label=label, response=piece, n=len(responses)
             )
             usage.merge(call_usage)
             # The RAW reply, not the rendered claims: on a failure `text` is empty and `raw` is the
@@ -619,6 +690,9 @@ async def _produce(
         # a chat page whose reply is read back out of rendered markdown, so it is asked for a
         # ```json fence; every API transport keeps Appendix A's "no prose, no code fences".
         fenced = client.transport_kind(model) == "web"
+        # The send turn's own council (2..5 agents, 2026-09-27): R1..Rn is what the prompt names,
+        # what the strict schema's enum allows and what a parsed extraction may refer to.
+        labels = turn_labels(send_turn)
         responses = responses_by_label(conv, send_turn)
         usage = FeatureUsage()
         raw_attempts: list[str] = []
@@ -634,7 +708,7 @@ async def _produce(
         # the comparison is told so — an analyst that thinks it is reading full replies would read a
         # dropped restatement as silence on the point.
         graph = ""
-        refactored = refactored_input(conv, send_turn.id)
+        refactored = refactored_input(conv, send_turn.id, labels)
         if refactored is not None:
             question, responses, graph = refactored
             condensed = True
@@ -691,7 +765,7 @@ async def _produce(
                 question, responses, fenced=fenced, condensed=condensed, graph=graph
             )
             extraction, raw, attempt_usage, error, partial = await _attempt(
-                model=model, messages=messages
+                model=model, messages=messages, labels=labels
             )
             usage.merge(attempt_usage)
             # The record keeps the partial of a failed capture; the retry decision below and the
@@ -703,7 +777,7 @@ async def _produce(
                 queue.put_nowait({"type": "analyze_retry", "error": error or "unknown error"})
                 messages = [*messages, *retry_follow_up(raw, error, fenced=fenced)]
                 extraction, raw, attempt_usage, error, partial = await _attempt(
-                    model=model, messages=messages
+                    model=model, messages=messages, labels=labels
                 )
                 usage.merge(attempt_usage)
                 raw_attempts.append(raw or partial)
@@ -789,11 +863,15 @@ __all__ = [
     "condense_failure",
     "comparison_chars",
     "condense_ineffective",
+    "extraction_schema_for",
     "refactored_input",
     "render_graph",
     "chunk_notice",
     "chunk_reply",
     "missing_responses",
+    "turn_labels",
+    "unknown_labels",
+    "unknown_labels_error",
     "needs_split",
     "oversize_message",
     "oversize_reply",

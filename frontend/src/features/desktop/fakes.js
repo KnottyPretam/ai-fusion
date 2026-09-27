@@ -3,7 +3,10 @@
 // fakeTriplex()  — the `window.triplex` surface of desktop/preload/renderer.cjs (contract §2,
 //                  Stage 1 + Stage 2: getCapture/setCapture/onBridge/onTurn/openChats/signOut/
 //                  saveDomSnapshot; `sendPrompt` is gone; Stage 3: setAnalyst/showAnalyst/onAnalyst;
-//                  Theme: setTheme/onTheme)
+//                  Theme: setTheme/onTheme; Council (2026-09-27): sites, getCouncil/setCouncil/
+//                  onCouncil, getOpenRouterKey/setOpenRouterKey/onOpenRouterKey — `getCouncil` answers
+//                  the three web panes, `getOpenRouterKey` "not configured"; `emit.council(spec)` /
+//                  `emit.openRouterKey(status)` drive the subscriptions)
 //                  with vi.fn() methods; `emit.health(slot, h)`
 //                  / `emit.shortcut(name)` / `emit.zoom({slot, factor})` / `emit.bridge({connected})`
 //                  / `emit.turn({slot, phase})` / `emit.analyst({slot, visible, health})` drive the
@@ -30,7 +33,12 @@ export const RECTS = {
   grok: { x: 1000, y: 40, width: 500, height: 600 },
 }
 
-export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst', 'theme']
+export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst', 'theme', 'council', 'openRouterKey']
+
+/** Main's key status when no key is stored (the shape of `getOpenRouterKey` / `panes:openRouterKey`). */
+export const KEY_UNSET = { configured: false, prefix: '', length: 0, pushed: false }
+/** …and when one is (a 73-char `sk-or-v1-…` key, pushed to the backend). */
+export const KEY_SET = { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }
 
 /** A rect for the analyst viewport (tests pass `{...RECTS, analyst: ANALYST_RECT}` to pinViewportRects). */
 export const ANALYST_RECT = { x: 1500, y: 40, width: 400, height: 600 }
@@ -53,6 +61,7 @@ export function fakeTriplex(over = {}) {
   const api = {
     version: '0.1.0',
     slots: ['claude', 'chatgpt', 'grok'],
+    sites: ['claude', 'chatgpt', 'grok'],
     getInfo: vi.fn(async () => ({ version: '0.1.0', dev: true, sites: {}, backend: null, layout: null })),
     setLayout: vi.fn(),
     setActive: vi.fn(),
@@ -82,6 +91,13 @@ export function fakeTriplex(over = {}) {
     // Theme (main's settings.json is authoritative; getInfo carries it, onTheme announces changes)
     setTheme: vi.fn(async (theme) => ({ theme })),
     onTheme: subscribe('theme'),
+    // Council (2026-09-27): main's default council for new conversations and the key status.
+    getCouncil: vi.fn(async () => ({ slots: { ...CFG.slots } })),
+    setCouncil: vi.fn(async (spec) => spec),
+    onCouncil: subscribe('council'),
+    getOpenRouterKey: vi.fn(async () => KEY_UNSET),
+    setOpenRouterKey: vi.fn(async (key) => (key ? KEY_SET : KEY_UNSET)),
+    onOpenRouterKey: subscribe('openRouterKey'),
     ...over,
   }
   api.listeners = listeners
@@ -107,6 +123,12 @@ export function fakeTriplex(over = {}) {
     },
     theme: (msg) => {
       for (const cb of [...listeners.theme]) cb(msg)
+    },
+    council: (msg) => {
+      for (const cb of [...listeners.council]) cb(msg)
+    },
+    openRouterKey: (msg) => {
+      for (const cb of [...listeners.openRouterKey]) cb(msg)
     },
   }
   return api
@@ -204,15 +226,74 @@ export const CFG = {
   grounded: false,
 }
 
+/** A five-member council: the three web panes plus Gemini on OpenRouter and Qwen on local Ollama (mixed transports). */
+export const CFG5 = {
+  slots: {
+    claude: { model: 'web:claude', effort: 'off' },
+    chatgpt: { model: 'web:chatgpt', effort: 'off' },
+    grok: { model: 'web:grok', effort: 'off' },
+    gemini: { model: 'google/gemini-2.5-pro', effort: 'medium' },
+    qwen: { model: 'ollama:qwen3', effort: 'off' },
+  },
+  analyst_model: 'web:chatgpt:analyst',
+  max_iterations: 2,
+  materiality_min: 'medium',
+  grounded: false,
+}
+
+/** A two-member council with no site at all: two token agents. */
+export const CFG2 = {
+  slots: {
+    chatgpt: { model: 'openai/gpt-5', effort: 'medium' },
+    qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'off' },
+  },
+  analyst_model: 'openai/gpt-5',
+  max_iterations: 2,
+  materiality_min: 'medium',
+  grounded: false,
+}
+
+/**
+ * The desktop `GET /api/models` catalog with `raw.transport` (backend/llm/webmodels.py): the web
+ * panes and hidden analyst pages, a local Ollama model, and — once a key is configured — OpenRouter
+ * entries whose vendor is the slug prefix.
+ */
+export const DESKTOP_CATALOG = [
+  { id: 'web:claude', name: 'Claude (web session)', vendor: 'anthropic', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:chatgpt', name: 'ChatGPT (web session)', vendor: 'openai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:grok', name: 'Grok (web session)', vendor: 'x-ai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:claude:analyst', name: 'Claude web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:chatgpt:analyst', name: 'ChatGPT web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:grok:analyst', name: 'Grok web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'ollama:hermes3', name: 'hermes3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
+  { id: 'ollama:qwen3', name: 'qwen3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
+  { id: 'openai/gpt-5', name: 'GPT-5', vendor: 'openai', efforts: ['low', 'medium', 'high'], structured_outputs: true, raw: { transport: 'openrouter' } },
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', vendor: 'anthropic', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', vendor: 'google', efforts: ['low', 'medium', 'high'], structured_outputs: true, raw: { transport: 'openrouter' } },
+  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', vendor: 'deepseek', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B', vendor: 'qwen', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'xiaomi/mimo-v2-flash', name: 'MiMo V2 Flash', vendor: 'xiaomi', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+]
+
+/** The `models` slice loaded with DESKTOP_CATALOG (or any item list). */
+export function modelsState(items = DESKTOP_CATALOG) {
+  const byId = {}
+  for (const m of items) byId[m.id] = m
+  return { items, byId, loaded: true, error: null }
+}
+
 export function conv(over = {}) {
+  const cfg = over.slot_config || CFG
+  const threads = {}
+  for (const slot of Object.keys(cfg.slots)) threads[slot] = []
   return {
     schema_version: 1,
     id: 'c1',
     title: 'New conversation',
     created_at: '2026-09-16T00:00:00.000Z',
     updated_at: '2026-09-16T00:00:00.000Z',
-    slot_config: CFG,
-    threads: { claude: [], chatgpt: [], grok: [] },
+    slot_config: cfg,
+    threads,
     turns: [],
     ...over,
   }
