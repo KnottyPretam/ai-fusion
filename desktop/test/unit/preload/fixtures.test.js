@@ -220,12 +220,15 @@ test('the composer fixtures are insertable: the composer is a contenteditable Pr
 
 test('chatgpt-effort-streaming: the finished turn carries the "Rate response" done marker after its body, the streaming turn does not', () => {
   const { doc, adapter } = adapterFor('chatgpt-effort-streaming')
-  const bodies = [...doc.querySelectorAll("div[class*='block-'] > div.text-size-chat.relative.overflow-visible")]
-  assert.equal(bodies.length, 2)
-  const done = adapter.findDone(bodies[0]) // a {el, selector} match record, as every cascade lookup answers
-  assert.ok(done, 'the first (finished) reply has its action bar')
+  const groups = [...doc.querySelectorAll("div.group.flex.flex-col.pb-2.pt-2")]
+  assert.equal(groups.length, 2)
+  const done = adapter.findDone(groups[0]) // a {el, selector} match record, as every cascade lookup answers
+  assert.ok(done, 'the first (finished) exchange has its action bar')
   assert.equal(done.selector, "button[aria-label='Rate response']")
   assert.equal(done.el.getAttribute('aria-label'), 'Rate response')
-  assert.equal(adapter.findDone(bodies[1]), null, 'the second reply is still streaming: no action bar yet')
+  assert.equal(adapter.findDone(groups[1]), null, 'the second reply is still streaming: no action bar yet')
+  // the text of a finished exchange is the ANSWER root only — never the user message or the thinking header
+  const blocks = adapter.replyBlocks ? adapter.replyBlocks(groups[0]) : null
+  if (blocks) assert.equal(blocks.length, 1)
 })
 

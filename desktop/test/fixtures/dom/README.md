@@ -230,9 +230,10 @@ not another rule here.
 
 Two failed captures' own snapshots (`snapshots/chatgpt-failed-<ts>.html`, Part 0) of the layout
 chatgpt.com ships with its composer effort picker. There are no `data-message-*` attributes any
-more: a user turn is `group/user-message`, an assistant turn is the reply body
-`div[class*='block-'] > div.text-size-chat.relative.overflow-visible` (the direct-child rule is what excludes the same
-class combination nested inside a body), the stop control is `button[aria-label='Stop']`, and the
+more: a user turn is `group/user-message`, an assistant turn is the exchange's turn group
+`div.group.flex.flex-col.pb-2.pt-2` (there from the submit on; its `block-<hash>` children are the user
+message, a thinking header that only ever reads "Worked for Ns", and — once the answer starts — the
+answer block whose `div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']` is the reply text), the stop control is `button[aria-label='Stop']`, and the
 finished turn's action bar carries `Rate response`, the done marker. `thinking` is 108 s into the
 first reply of a fresh chat: the body is mounted and EMPTY while the site works (the S10 shape).
 `effort-streaming` is one turn later: the first reply finished, the second streaming, six message

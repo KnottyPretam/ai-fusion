@@ -857,3 +857,54 @@ test('S11 review: the incompleteGrace DEFAULT is 20 s, not merely "something und
   assert.equal(state.done, true, '…and has by 25 s')
   assert.equal(state.error.code, 'timeout')
 })
+
+test('Part 0: chatgpt effort-picker layout — the turn group is followed from the submit on, the thinking header is never the reply, and the answer root ends by Rate response', async () => {
+  const { doc, clock, adapter, thread, stop } = setup()
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 600000, firstTokenMs: 90000, quietMs: 2500, settleMs: 1200 }))
+  // the exchange mounts with the user message and the thinking header; the site's stop control is up
+  const group = mount(doc, thread, '<div class="group flex flex-col pb-2 pt-2"><div class="flex flex-col gap-3"><div class="block-aa"><h4 class="sr-only">You said</h4><div class="group/user-message flex flex-col"><p>my question</p></div></div><div class="block-aa"><span></span><div class="min-w-0 text-size-chat relative overflow-visible py-0"><p>Worked for 27s</p></div></div></div></div>')
+  await clock.advance(120000) // two minutes of thinking: past firstTokenMs, and the capture is still waiting
+  assert.equal(state.done, false)
+  assert.equal(adapter.countAssistant(), 1)
+  // the answer arrives: its markdown root under the answer block, then the action bar, then the stop control goes
+  const gap3 = group.querySelector('div.flex.flex-col.gap-3')
+  mount(doc, gap3, '<div class="block-aa"><div><h4 class="sr-only">ChatGPT said</h4><div class="group flex min-w-0 flex-col"><div class="MarkdownRoot-zz"><p>The gyroscope range is selectable up to 2000 deg/s.</p></div></div></div></div>')
+  await clock.advance(3000)
+  mount(doc, group, '<div><div class="flex min-h-5"><button aria-label="Copy">c</button><button aria-label="Rate response">r</button></div></div>')
+  stop.remove()
+  await clock.advance(5000)
+  assert.equal(state.done, true, state.error && state.error.message)
+  assert.equal(state.value.doneBy, 'done_selector')
+  assert.equal(state.value.text, 'The gyroscope range is selectable up to 2000 deg/s.')
+})
+
+test('Part 0: a stop control that vanishes mid-reply and comes back within the site\'s stopGoneGraceMs does not end the capture; one that stays gone does', async () => {
+  const PAGE_CLAUDE = `<html><head><title>Claude</title></head><body><div id="app"><main class="thread"></main><form><div contenteditable="true" class="ProseMirror" role="textbox"><p></p></div><button aria-label="Stop response">Stop</button></form></div></body></html>`
+  const doc = parseHtml(PAGE_CLAUDE)
+  const clock = fakeClock()
+  const adapter = createAdapter({ document: doc, site: 'claude', selectors: DEFAULT_SELECTORS, now: clock.now, timers: clock.timers })
+  const thread = doc.querySelector('main.thread')
+  const form = doc.querySelector('form')
+  const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 300000, firstTokenMs: 90000, quietMs: 2500, settleMs: 400 }))
+  mount(doc, thread, '<div class="font-claude-response"><div class="prose"><p>Searched the web</p></div></div>')
+  await clock.advance(1000)
+  // the web search: the stop control disappears for 8 s, then generation resumes and it is back
+  const stop1 = form.querySelector("button[aria-label='Stop response']")
+  stop1.remove()
+  await clock.advance(8000)
+  assert.equal(state.done, false, 'a vanished stop control is not yet the end: the grace is 15 s')
+  mount(doc, form, '<button aria-label="Stop response">Stop</button>')
+  const prose = thread.querySelector('.prose')
+  mount(doc, prose, '<p>The accelerometer range is selectable up to 16 g.</p>')
+  await clock.advance(3000)
+  assert.equal(state.done, false)
+  // the real end: the stop control goes and stays gone
+  form.querySelector("button[aria-label='Stop response']").remove()
+  await clock.advance(14000)
+  assert.equal(state.done, false, 'still inside the grace')
+  await clock.advance(3000)
+  assert.equal(state.done, true, state.error && state.error.message)
+  assert.equal(state.value.doneBy, 'stop_gone')
+  assert.ok(state.value.text.includes('16 g'), state.value.text)
+})
+

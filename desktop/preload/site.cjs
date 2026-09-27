@@ -283,7 +283,7 @@
   const MESSAGE_SELECTORS = Object.freeze([
     '[data-message-author-role]', // chatgpt (and the fake site): user + assistant turns
     "[class~='group/user-message']", // chatgpt, effort-picker layout (2026-09-27): user turns
-    "div[class*='block-'] > div.text-size-chat.relative.overflow-visible", // chatgpt, effort-picker layout: assistant reply bodies
+    "div.group.flex.flex-col.pb-2.pt-2", // chatgpt, effort-picker layout: one turn group per exchange
     "[data-testid='user-message']", // claude user turns
     '.font-claude-message', // claude assistant turns (older markup)
     '.font-claude-response', // claude assistant turns
@@ -291,6 +291,8 @@
     '.message-bubble', // grok user/assistant bubbles
   ])
   const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
+  /** The user's OWN turn, per site — what tells an exchange-shaped container apart from a single reply (2026-09-27). */
+  const USER_TURN_SELECTORS = Object.freeze(["[data-message-author-role='user']", "[data-testid='user-message']", "[class~='group/user-message']"])
 
   /**
    * What `countAssistant()` counts: assistant-role containers only (+ a v2 `assistant` cascade).
@@ -299,7 +301,7 @@
    */
   const ASSISTANT_SELECTORS = Object.freeze([
     "[data-message-author-role='assistant']", // chatgpt
-    "div[class*='block-'] > div.text-size-chat.relative.overflow-visible", // chatgpt, effort-picker layout (2026-09-27)
+    "div.group.flex.flex-col.pb-2.pt-2", // chatgpt, effort-picker layout (2026-09-27): the exchange's turn group
     '.font-claude-response', // claude
     '.font-claude-message', // claude (older markup)
     "div[id^='response-']", // grok
@@ -361,15 +363,19 @@
       // control just "Stop" — a failed capture's own snapshot showed it, 108 s into a reply the site was
       // still "Working" on. The older labels stay for accounts that have not been moved yet.
       stop: ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"],
-      // 2026-09-27 (Part 0, second snapshot chatgpt-failed-1790534993854): the effort-picker layout carries NO
-      // data-* turn attributes at all. One assistant turn = the reply body `div.text-size-chat.relative.overflow-
-      // visible` that is a direct child of a `block-<hash>` wrapper (the direct-child rule is what excludes the
-      // same class combination nested INSIDE a body — measured: 2 bodies for 2 turns, 5 matches without it);
-      // its markdown lives in the body's own `div.flex.min-w-0.flex-col`; the finished turn's action bar
-      // (Copy · Rate response · Share · Read aloud · Sources) sits after the body, so "Rate response" is the
-      // done marker — unlike "Copy", which a code block or a table also carries. Older entries stay first.
-      assistant: ["[data-message-author-role='assistant']", "div[class*='block-'] > div.text-size-chat.relative.overflow-visible"],
-      assistantText: ['.markdown', "div[class*='block-'] > div.text-size-chat.relative.overflow-visible > div.flex.min-w-0.flex-col", '.whitespace-pre-wrap'],
+      // 2026-09-27 (Part 0, snapshots chatgpt-failed-1790534206722 / -1790534993854, and the live capture that
+      // read "Worked for 27s"): the effort-picker layout carries NO data-* turn attributes. One EXCHANGE is a
+      // `div.group.flex.flex-col.pb-2.pt-2` turn group holding, in `block-<hash>` wrappers, the user message
+      // (`group/user-message`), a THINKING header (`div.text-size-chat…`, mounted at once and holding only
+      // "Worked for Ns"), and — only once the answer starts — the answer block, whose markdown is the
+      // `MarkdownRoot-<hash>` child of `div.group.flex.min-w-0.flex-col`. The turn group is the container
+      // because it is there from the submit on (the answer block is not, and a container that appears only
+      // after minutes of thinking would read as `reply_not_found`); the answer root is the text, so the
+      // thinking header is never captured. The finished turn's action bar (Copy · Rate response · Share ·
+      // Read aloud · Sources) sits after the blocks inside the group, so "Rate response" is the done marker —
+      // unlike "Copy", which a code block or a table also carries. Older entries stay first.
+      assistant: ["[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"],
+      assistantText: ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", '.whitespace-pre-wrap'],
       done: ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"],
       quietMs: 2500,
       // S10: three times the 400 ms every other site uses. A chosen value, not a measurement, and the
@@ -383,6 +389,7 @@
       // and nothing else on the page; 300 s ended such captures mid-thought. 600 s is the pane grant
       // (BRIDGE_TIMEOUT_S), the most a pane capture can be given without a backend change.
       captureTimeoutMs: 600000,
+      stopGoneGraceMs: 0, // chatgpt ends by its done marker; a vanished stop control counts at once (contract §4, 2026-09-27)
     },
     claude: {
       chatUrlPattern: '^https://claude\\.ai/chat/[0-9a-f-]+',
@@ -420,7 +427,11 @@
       assistantText: ['.prose'],
       done: [],
       quietMs: 2500,
-      settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
+      settleMs: 400,
+      // 2026-09-27: claude.ai drops its stop control while a web search runs mid-reply, and the capture
+      // ended there with the two "Searched the web" cards as the answer (34 chars). A vanished stop
+      // control now has to STAY gone this long before it ends a capture; a reappearing one withdraws it.
+      stopGoneGraceMs: 15000, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
       captureTimeoutMs: 300000,
     },
@@ -458,6 +469,7 @@
       settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
       captureTimeoutMs: 300000,
+      stopGoneGraceMs: 0, // grok's stop control has not been seen to flicker; a vanished one counts at once (contract §4, 2026-09-27)
     },
   }
 
@@ -1914,7 +1926,14 @@
      */
     function replyText(container) {
       const blocks = replyBlocks(container)
-      return blocks.length > 0 ? blocks.map(blockText).join('\n\n') : blockText(container)
+      if (blocks.length > 0) return blocks.map(blockText).join('\n\n')
+      // 2026-09-27: a container that is a whole EXCHANGE (it holds the user's own turn — chatgpt.com's
+      // effort-picker layout) whose reply body has NOT appeared while the site's stop control is still
+      // up has not started its reply: its own text is the user's message and a thinking header (a live
+      // capture read "Worked for 27s" as the answer). A turn-level container (every older layout) still
+      // reads as itself, and so does an exchange once the site has stopped signalling.
+      if (findStop() && holdsUserTurn(container)) return ''
+      return blockText(container)
     }
 
     /**
@@ -1930,6 +1949,12 @@
         return hits.filter((el) => !hits.some((other) => other !== el && containsDeep(other, el)))
       }
       return []
+    }
+
+    /** Whether `container` holds a user turn of its own — i.e. it is an exchange, not a single reply. */
+    function holdsUserTurn(container) {
+      for (const selector of USER_TURN_SELECTORS) if (deepQuerySelectorAll(container, selector).length > 0) return true
+      return false
     }
 
     function cascadeText(cascade) {
@@ -2295,6 +2320,8 @@
       const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
+      // per site (contract §4, 2026-09-27): how long a vanished stop control must stay gone before `stop_gone` counts
+      const stopGoneGrace = nonNegativeInt(sel.stopGoneGraceMs, 0)
       const SETTLE = Symbol('settle') // the end was seen; take one more sample before resolving
       const REREAD = Symbol('reread') // the budget is spent on an incomplete answer: one last look at the page first
       // How long the text must hold still after an end signal. Four throttle ticks, not one (S9): a
@@ -2527,7 +2554,8 @@
           if (endSeen !== null) {
             // settling: resolve once a settle window has passed since the end signal AND since the last
             // text change (two samples a few ms apart never count as "held still"), or the budget is spent
-            const still = now - endSeenAt >= settleWindow && now - lastChangeAt >= settleWindow
+            const settleFor = endSeen === 'stop_gone' ? Math.max(settleWindow, stopGoneGrace) : settleWindow
+            const still = now - endSeenAt >= settleFor && now - lastChangeAt >= settleWindow
             // …and, when the caller said what kind of answer this is, once the answer actually has that
             // shape (S10): an end signal over half a JSON document resolves nothing, it just keeps
             // sampling. The budget always wins in the end, so a reply that is genuinely prose — or one

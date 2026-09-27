@@ -12,7 +12,7 @@ const LIST_KEYS = ['composer', 'send', 'loggedOut', 'loggedOutUrl', 'challenge',
 const MS_KEYS = ['composerWaitMs', 'sendWaitMs', 'submitVerifyMs']
 /** Selectors v2 (Stage 2, contract §4), additive per site; the list keys may be empty (empty stop + done ⇒ quiet detection). */
 const V2_LIST_KEYS = ['stop', 'assistant', 'assistantText', 'done']
-const V2_MS_KEYS = ['quietMs', 'settleMs', 'firstTokenMs', 'captureTimeoutMs']
+const V2_MS_KEYS = ['quietMs', 'settleMs', 'firstTokenMs', 'captureTimeoutMs', 'stopGoneGraceMs']
 const V1_KEYS = ['chatUrlPattern', ...LIST_KEYS, ...MS_KEYS]
 const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS]
 const SAMPLE_CHAT_URL = {
@@ -49,7 +49,8 @@ for (const site of SLOTS) {
     for (const k of LIST_KEYS) assert.ok(isStringList(s[k]), `${site}.${k} must be a non-empty-string list`)
     for (const k of V2_LIST_KEYS) assert.ok(Array.isArray(s[k]) && s[k].every((x) => typeof x === 'string' && x !== ''), `${site}.${k} must be a list of non-empty strings`)
     assert.ok(s.composer.length >= 1 && s.send.length >= 1, `${site}: composer and send must have entries`)
-    for (const k of [...MS_KEYS, ...V2_MS_KEYS]) assert.ok(Number.isInteger(s[k]) && s[k] > 0, `${site}.${k} must be a positive integer`)
+    // every window is a positive integer; `stopGoneGraceMs` alone may be 0 (no grace: the vanished stop control counts at once)
+    for (const k of [...MS_KEYS, ...V2_MS_KEYS]) assert.ok(Number.isInteger(s[k]) && (s[k] > 0 || (k === 'stopGoneGraceMs' && s[k] === 0)), `${site}.${k} must be a positive integer`)
     assert.ok(s.assistant.length >= 1, `${site}: the assistant cascade must have entries (the observe baseline)`)
     assert.equal(new Set(s.composer).size, s.composer.length, `${site}.composer has duplicates`)
     assert.equal(new Set(s.send).size, s.send.length, `${site}.send has duplicates`)
@@ -141,10 +142,10 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"])
   // 2026-09-27 (Part 0): the effort-picker layout has no data-* turn attributes; the reply body is the
   // direct child of a `block-<hash>` wrapper (fixtures chatgpt-thinking / chatgpt-effort-streaming)
-  assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']", "div[class*='block-'] > div.text-size-chat.relative.overflow-visible"])
+  assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"])
   // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
   // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
-  assert.deepEqual(chatgpt.assistantText, ['.markdown', "div[class*='block-'] > div.text-size-chat.relative.overflow-visible > div.flex.min-w-0.flex-col", '.whitespace-pre-wrap'])
+  assert.deepEqual(chatgpt.assistantText, ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", '.whitespace-pre-wrap'])
   assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"])
   assert.deepEqual(claude.stop, ["button[aria-label='Stop response']", "button[aria-label*='Stop']"])
   assert.deepEqual(claude.assistant, ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'])
