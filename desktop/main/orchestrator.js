@@ -148,6 +148,8 @@ export const INCOMPLETE_GRACE_MS = 20000
 export const SETTLED_REREAD_MS = 60000
 /** The failure codes a settled re-read may follow: the two that say "the capture did not read it", never one that says the site refused. */
 export const REREAD_CODES = Object.freeze(['timeout', 'reply_not_found'])
+/** Insert-phase failures on a pane whose DOM is saved for the next calibration (2026-09-27). */
+export const SUBMIT_EVIDENCE_CODES = Object.freeze(['not_submitted', 'send_not_found'])
 
 /**
  * What the settled re-read needs of the grant, worst case: the reload wait, `ready`, the re-read
@@ -684,7 +686,13 @@ export function createOrchestrator({
       const message = code === f.code ? f.message : `${f.code}: ${f.message}`
       warn(`${label}: ${code} — ${message}`)
       const failure = { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
-      if (!observing || !REREAD_CODES.includes(code)) return failure
+      // A submit that did not land on a pane is worth a snapshot too (2026-09-27): the composer with the
+      // prompt still in it is where a changed layout's send control is measured from.
+      if (!observing) {
+        if (entry.view === 'pane' && SUBMIT_EVIDENCE_CODES.includes(code)) await saveFailureEvidence(entry, slot, label, e)
+        return failure
+      }
+      if (!REREAD_CODES.includes(code)) return failure
       // Part 0 (2026-09-27): a PANE capture that did not read its reply saves the failing DOM too —
       // chatgpt.com changed its turn markup under the selectors and the only honest fix is measured
       // from the page as the failure left it. No reload, no re-read: the pane is the user's own chat.

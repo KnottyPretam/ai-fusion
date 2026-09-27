@@ -1075,3 +1075,31 @@ test('S11 review: a submit that carried no baseline still snapshots, but skips t
   assert.deepEqual(analyst.loads, ['https://x.test/new-chatgpt'], 'no reload without a baseline')
   assert.ok(warnLines(log).some((m) => m.includes('carried no baseline')), warnLines(log).join('\n'))
 })
+
+test('2026-09-27: a pane whose submit did not land (not_submitted / send_not_found) saves its DOM; the analyst view does not', async () => {
+  for (const code of ['not_submitted', 'send_not_found']) {
+    const t = setup({ capture: { claude: true } })
+    const { panes, snapshots, emit } = t
+    const done = t.orch.run(paneRequest('claude'), emit)
+    await settleAll()
+    panes.claude.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+    await settleAll()
+    panes.claude.fail('insertAndSubmit', new AdapterRequestError(code, 'pressed Enter twice, nothing confirmed', { op: 'insertAndSubmit' }))
+    const res = await done
+    assert.equal(res.ok, false)
+    assert.equal(res.code, code)
+    assert.deepEqual(snapshots, [['pane', 'claude']], `${code}: the composer with the prompt in it is the evidence`)
+    assert.deepEqual(panes.claude.ops(), ['ready', 'insertAndSubmit'])
+  }
+  const t = setup()
+  const { analystClient, snapshots, emit } = t
+  const done = t.orch.run(analystRequest(), emit)
+  await settleAll()
+  analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  analystClient.fail('insertAndSubmit', new AdapterRequestError('not_submitted', 'nothing confirmed', { op: 'insertAndSubmit' }))
+  const res = await done
+  assert.equal(res.ok, false)
+  assert.deepEqual(snapshots, [], 'the analyst re-read path owns its own snapshots; a failed submit there is not one')
+})
+

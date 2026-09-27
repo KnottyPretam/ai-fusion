@@ -2162,11 +2162,21 @@
      * The third signal keeps its contract name `assistant_count` (§2 `confirmedBy`) although it is
      * the message count (user turns included) that grows when a submission lands.
      */
-    function confirmSubmission(verifyMs, baseline, signal) {
+    /** Whether the composer still holds `text` (whitespace-insensitive, as the insert verification is). */
+    function composerHolds(text) {
+      const c = findComposer()
+      return !!c && squash(readText(c.el)).includes(squash(text))
+    }
+
+    function confirmSubmission(verifyMs, baseline, signal, text) {
       return poll(
         () =>
           sampled(() => {
-            if (findStop()) return 'stop_button'
+            // 2026-09-27: a stop control alone is not a submission while the prompt is STILL in the
+            // composer — chatgpt.com's effort-picker layout showed one after an Enter that had not sent
+            // (the user had to press Enter by hand two minutes later). With the prompt known, the stop
+            // control confirms only once the composer has let go of it.
+            if (findStop() && !(typeof text === 'string' && text !== '' && composerHolds(text))) return 'stop_button'
             const c = findComposer()
             if (c && isBlank(readText(c.el))) return 'composer_cleared'
             if (countMessages() > baseline) return 'assistant_count'
@@ -2192,7 +2202,7 @@
      * sample can only LOWER the baseline (a container unmounted while the first attempt was being
      * confirmed must not keep the baseline high either), never lift it.
      */
-    async function submit(timeoutMs, { signal } = {}) {
+    async function submit(timeoutMs, { signal, text } = {}) {
       const waitMs = nonNegativeInt(timeoutMs, nonNegativeInt(sel.sendWaitMs, 18000))
       const verifyMs = nonNegativeInt(sel.submitVerifyMs, 5000)
       const button = await poll(() => findSendButton(), { intervalMs: SEND_POLL_MS, timeoutMs: waitMs, signal })
@@ -2200,7 +2210,7 @@
       if (button) {
         const baseline = countMessages()
         clickEl(button.el)
-        const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
+        const confirmedBy = await confirmSubmission(verifyMs, baseline, signal, text)
         if (confirmedBy) return { method: 'click', sendSelector: button.selector, confirmedBy, assistantCount }
       }
       const composer = findComposer()
@@ -2208,7 +2218,14 @@
         assistantCount = Math.min(assistantCount, countAssistant()) // only ever lower, never raise
         const baseline = countMessages()
         pressEnter(composer.el)
-        const confirmedBy = await confirmSubmission(verifyMs, baseline, signal)
+        let confirmedBy = await confirmSubmission(verifyMs, baseline, signal, text)
+        // 2026-09-27: an Enter the site ignored leaves the prompt in the composer — measured on
+        // chatgpt.com's effort-picker layout. ONE more Enter, and only while the prompt is provably
+        // still there, so a slow first submit can never become two (the text is never typed again).
+        if (!confirmedBy && typeof text === 'string' && text !== '' && composerHolds(text)) {
+          pressEnter(composer.el)
+          confirmedBy = await confirmSubmission(verifyMs, countMessages(), signal, text)
+        }
         if (confirmedBy) return { method: 'enter', sendSelector: button ? button.selector : null, confirmedBy, assistantCount }
       }
       if (!button) {
@@ -2248,7 +2265,7 @@
       if (typeof text !== 'string' || text === '') throw new AdapterError('site_error', 'insertAndSubmit: text must be a non-empty string')
       const composer = await requireSessionOk({ signal })
       await insertText(text, { signal })
-      const s = await submit(undefined, { signal })
+      const s = await submit(undefined, { signal, text })
       return {
         submitted: true,
         composerSelector: composer.selector,

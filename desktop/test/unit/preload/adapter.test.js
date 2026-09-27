@@ -1425,3 +1425,37 @@ test('createAdapter / setSelectors re-merge a full config onto the defaults (eve
   a.setSelectors(['#list'])
   assert.equal(a.findComposer().selector, '#other')
 })
+
+test('submit: a stop control seen while the prompt is STILL in the composer does not confirm; one more Enter is pressed, and the emptied composer confirms (2026-09-27)', async () => {
+  const composer = fakeComposer({ text: 'hello there' })
+  let enters = 0
+  composer.addEventListener = composer.addEventListener || (() => {})
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, "button[aria-label='Stop']": {} } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: { ...fastSelectors('chatgpt'), send: ['button.never'] } })
+  const origDispatch = doc.dispatchEvent
+  // count the Enters the adapter presses on the composer; the site "accepts" only the second one
+  const el = composer
+  const seen = []
+  el.dispatchEvent = (ev) => {
+    seen.push(ev.type)
+    if (ev.type === 'keydown') {
+      enters += 1
+      if (enters === 2) el._text = '' // the second Enter lands: the composer empties
+    }
+    return true
+  }
+  const r = await a.submit(0, { text: 'hello there' })
+  assert.equal(enters, 2, 'the first Enter was not taken as a submission (the prompt was still there)')
+  // once the composer has let go of the prompt, the stop control — checked first — is the confirmation
+  assert.equal(r.confirmedBy, 'stop_button')
+  assert.equal(r.method, 'enter')
+})
+
+test('submit: without a known prompt the stop control still confirms on its own (the pre-2026-09-27 contract for callers of the bare op)', async () => {
+  const composer = fakeComposer({ text: 'hello there' })
+  const doc = fakeDocument({ match: { '#prompt-textarea': composer, "button[aria-label='Stop']": {} } })
+  const a = createAdapter({ document: doc, site: 'chatgpt', selectors: { ...fastSelectors('chatgpt'), send: ['button.never'] } })
+  const r = await a.submit(0)
+  assert.equal(r.confirmedBy, 'stop_button')
+})
+
