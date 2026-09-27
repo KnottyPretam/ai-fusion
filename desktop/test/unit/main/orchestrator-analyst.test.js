@@ -896,7 +896,7 @@ test('S11: a pane turn, a `chat` purpose on the analyst view, and a code that is
     const result = await done
     assert.equal(result.code, 'timeout')
     assert.equal(result.partial, 'p')
-    assert.deepEqual(snapshots, [])
+    assert.deepEqual(snapshots, [['pane', 'chatgpt']], 'Part 0: the pane leaves its DOM behind, and still never recovers')
     assert.deepEqual(panes.chatgpt.ops(), ['ready', 'insertAndSubmit', 'observe'])
   }
   // the analyst view asked for prose
@@ -1001,7 +1001,7 @@ test('S11 review: a timeout whose diag says the stop control was still UP is not
   assertValid(emitted)
 })
 
-test('S11 review: a PANE turn on a structured purpose never recovers — the VIEW is what refuses, not the purpose', async () => {
+test('S11 review / Part 0: a PANE turn on a structured purpose never recovers — but its failing DOM is saved — the VIEW is what refuses the re-read, not the purpose', async () => {
   const t = setup({ capture: { chatgpt: true } })
   const { panes, snapshots, emit } = t
   const done = t.orch.run(paneRequest('chatgpt', { purpose: 'defense' }), emit)
@@ -1017,8 +1017,50 @@ test('S11 review: a PANE turn on a structured purpose never recovers — the VIE
   await settleAll()
   const res = await done
   assert.equal(res.ok, false)
-  assert.deepEqual(snapshots, [], 'no snapshot for a pane')
+  assert.deepEqual(snapshots, [['pane', 'chatgpt']], 'Part 0: the pane saves the DOM the failure left behind')
   assert.deepEqual(panes.chatgpt.ops(), ['ready', 'insertAndSubmit', 'observe'], 'no reload, no ready, no second observe')
+})
+
+test('Part 0: a pane CHAT capture that ends reply_not_found saves its DOM (after the cancel ack) and reports the original failure untouched', async () => {
+  const t = setup({ capture: { claude: true } })
+  const { panes, snapshots, emit, log } = t
+  const done = t.orch.run(paneRequest('claude'), emit)
+  await settleAll()
+  panes.claude.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+  await settleAll()
+  panes.claude.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, confirmedBy: 'composer_cleared', ms: 3 })
+  await settleAll()
+  assert.equal(panes.claude.last().op, 'observe')
+  // main's own timer sent a cancel: the snapshot must not be asked for before the adapter has answered it
+  let acked = false
+  const cancelResult = new Promise((resolve) => setTimeout(() => { acked = true; resolve({ ok: true, op: 'cancel', cancelled: true }) }, 5))
+  const msg = "no assistant container beyond 0 within 90000 ms (tried: [data-message-author-role='assistant']) [containers=0 followed=- connected=false stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=553×390]"
+  panes.claude.fail('observe', new AdapterRequestError('reply_not_found', msg, { op: 'observe', cancelResult }))
+  const res = await done
+  assert.equal(res.ok, false)
+  assert.equal(res.code, 'reply_not_found')
+  assert.equal(res.message, msg, 'the failure frame is the original one')
+  assert.equal(acked, true, 'the cancel was answered before the snapshot was taken')
+  assert.deepEqual(snapshots, [['pane', 'claude']])
+  assert.deepEqual(panes.claude.ops(), ['ready', 'insertAndSubmit', 'observe'], 'no reload, no second observe for a pane')
+  assert.ok(log.lines.some(([, m]) => /DOM snapshot of the failed capture saved to/.test(String(m))), 'one log line names the file')
+})
+
+test('Part 0: only a capture that did not READ its reply leaves evidence — a session refusal or a non-capture failure never snapshots', async () => {
+  for (const [code, message] of [['logged_out', 'signed out mid-reply'], ['site_error', 'boom']]) {
+    const t = setup({ capture: { claude: true } })
+    const { panes, snapshots, emit } = t
+    const done = t.orch.run(paneRequest('claude'), emit)
+    await settleAll()
+    panes.claude.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
+    await settleAll()
+    panes.claude.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, confirmedBy: 'stop_button', ms: 3 })
+    await settleAll()
+    panes.claude.fail('observe', new AdapterRequestError(code, message, { op: 'observe' }))
+    const res = await done
+    assert.equal(res.ok, false)
+    assert.deepEqual(snapshots, [], `${code}: nothing to calibrate from`)
+  }
 })
 
 test('S11 review: a submit that carried no baseline still snapshots, but skips the re-read and says why', async () => {

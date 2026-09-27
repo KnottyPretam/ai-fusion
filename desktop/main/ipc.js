@@ -142,19 +142,32 @@ export function publicBridgeState(b) {
 /** The names a DOM snapshot may be written under: the three panes and the hidden analyst page (S11). */
 export const SNAPSHOT_NAMES = Object.freeze([...SLOTS, 'analyst'])
 /**
- * How many `analyst-*.html` snapshots are kept (the newest). They are written by a failure path, not
- * by a person, so they would pile up; a pane snapshot is the user's own act and is never pruned.
+ * How many failure-path snapshots are kept per name (the newest): `analyst-*.html`, and — since the
+ * Part 0 calibration work of 2026-09-27 — a pane capture that ended `timeout` / `reply_not_found`
+ * under `<slot>-failed-<ts>.html`. They are written by a failure path, not by a person, so they would
+ * pile up; a pane snapshot the user saves from the Site menu (`<slot>-<ts>.html`) is never pruned.
  */
 export const ANALYST_SNAPSHOTS_KEPT = 20
+export const FAILURE_SNAPSHOTS_KEPT = ANALYST_SNAPSHOTS_KEPT
+
+/** The file-name prefix a name's FAILURE snapshots share: the analyst's whole namespace, a pane's `-failed` suffix. */
+export function failurePrefix(name) {
+  return requireSnapshotName(name) === 'analyst' ? 'analyst' : `${name}-failed`
+}
 
 export function requireSnapshotName(name) {
   if (typeof name !== 'string' || !SNAPSHOT_NAMES.includes(name)) throw badRequest()
   return name
 }
 
-/** The file name a DOM snapshot is written under: `<name>-<ts>.html` (name ∈ SNAPSHOT_NAMES, ts = integer ms). */
-export function snapshotFileName(name, ts) {
-  return `${requireSnapshotName(name)}-${Math.round(Number(ts) || 0)}.html`
+/**
+ * The file name a DOM snapshot is written under: `<name>-<ts>.html` (name ∈ SNAPSHOT_NAMES, ts = integer
+ * ms); a pane's failure snapshot is `<slot>-failed-<ts>.html` so it never collides with — and is never
+ * pruned alongside — the snapshots the user saves by hand.
+ */
+export function snapshotFileName(name, ts, { failed = false } = {}) {
+  const stem = failed ? failurePrefix(name) : requireSnapshotName(name)
+  return `${stem}-${Math.round(Number(ts) || 0)}.html`
 }
 
 /**
@@ -166,16 +179,16 @@ export function snapshotFileName(name, ts) {
  * Shared by `panes:snapshot`, the Site menu and the orchestrator's failure snapshot. After an
  * `analyst` write the `analyst-*.html` files are pruned to the newest ANALYST_SNAPSHOTS_KEPT.
  */
-export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs, now = Date.now }) {
+export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs, now = Date.now, failed = false }) {
   requireSnapshotName(name)
   if (!client) throw new Error('view_crashed')
   if (!snapshotsDir) throw new Error('snapshots_unavailable')
   const res = await client.request('snapshot', {}, { timeoutMs: SNAPSHOT_TIMEOUT_MS })
   if (!res || typeof res.html !== 'string') throw new Error('site_error')
   fs.mkdirSync(snapshotsDir, { recursive: true })
-  const file = path.join(snapshotsDir, snapshotFileName(name, now()))
+  const file = path.join(snapshotsDir, snapshotFileName(name, now(), { failed }))
   fs.writeFileSync(file, res.html, 'utf8')
-  if (name === 'analyst') pruneSnapshots({ fs, snapshotsDir }, name, ANALYST_SNAPSHOTS_KEPT)
+  if (name === 'analyst' || failed) pruneSnapshots({ fs, snapshotsDir }, name, FAILURE_SNAPSHOTS_KEPT, { failed: true })
   return { path: file }
 }
 
@@ -184,19 +197,20 @@ export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs,
  * `ts` in the name, which is what the writer stamps; mtime would move with a copy). Returns the names
  * removed. Never throws: a directory that cannot be listed, or a file already gone, is pruned enough.
  */
-export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep) {
+export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep, { failed = false } = {}) {
   requireSnapshotName(name) // throws bad_request for a name outside SNAPSHOT_NAMES; never throws on fs errors
-  // Only the failure-path prefix is ever pruned. A pane snapshot is the user's own act from the Site
-  // menu and is never touched — the invariant lives here, with the code that could break it, not at
-  // a call site (review 2026-09-22).
-  if (name !== 'analyst') return []
+  // Only a failure-path prefix is ever pruned: the analyst's namespace, or a pane's `-failed` files.
+  // A pane snapshot the user saved from the Site menu is never touched — the invariant lives here,
+  // with the code that could break it, not at a call site (review 2026-09-22).
+  if (name !== 'analyst' && !failed) return []
+  const prefix = failurePrefix(name)
   let names = []
   try {
     names = fs.readdirSync(snapshotsDir)
   } catch (_e) {
     return []
   }
-  const re = new RegExp(`^${name}-(\\d+)\\.html$`)
+  const re = new RegExp(`^${prefix}-(\\d+)\\.html$`)
   const stamped = []
   for (const n of names) {
     const m = re.exec(n)

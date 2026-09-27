@@ -453,13 +453,18 @@ function start() {
     onNavigate: (slot, cb) => views.onNavigate(slot, cb),
     newChatUrl: (slot) => sites[slot].newChatUrl,
     onTurn: (slot, phase, code) => sendToRenderer('panes:turn', code === undefined ? { slot, phase } : { slot, phase, code }),
-    // S11: the failing DOM, scrubbed, before a settled re-read reloads it — the hidden analyst's client
-    // for an analyst turn, the pane's otherwise, under `analyst-<ts>.html` / `<slot>-<ts>.html`.
-    // Only the hidden analyst view is ever snapshotted on a failure (the orchestrator gates it on
-    // `view === 'analyst'`); a pane branch here was dead code that would have written un-pruned files
-    // into the user's own snapshot namespace (review 2026-09-22).
-    saveFailureSnapshot: async (_view, slot) => {
-      const { path: file } = await saveDomSnapshot({ client: analystViews.adapterFor(slot), name: 'analyst', snapshotsDir })
+    // S11: the failing DOM, scrubbed — the hidden analyst's client for an analyst turn (before the
+    // settled re-read reloads it), under `analyst-<ts>.html`; since 2026-09-27 (Part 0) also a PANE
+    // whose capture ended `timeout` / `reply_not_found`, under `<slot>-failed-<ts>.html` — a name the
+    // user's own Site-menu snapshots never use, so pruning the failure files never touches theirs.
+    saveFailureSnapshot: async (view, slot) => {
+      const analyst = view === 'analyst'
+      const { path: file } = await saveDomSnapshot({
+        client: analyst ? analystViews.adapterFor(slot) : views.adapterFor(slot),
+        name: analyst ? 'analyst' : slot,
+        snapshotsDir,
+        failed: !analyst,
+      })
       return file
     },
   })

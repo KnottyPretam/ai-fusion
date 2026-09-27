@@ -707,3 +707,27 @@ test('S11 review: pruneSnapshots never touches a pane snapshot, whatever it is a
   assert.equal(pruned.length, 1, 'the oldest analyst snapshot beyond the cap goes')
   assert.ok(removed.every((p) => p.includes('analyst-')), 'and only analyst files are ever removed')
 })
+
+test('Part 0: a pane FAILURE snapshot is `<slot>-failed-<ts>.html`, pruned among its own kind only — the user\'s `<slot>-<ts>.html` files are never touched', async () => {
+  const dir = '/snap'
+  const files = ['chatgpt-1.html', 'chatgpt-2.html', 'chatgpt-failed-1.html', 'chatgpt-failed-2.html', 'chatgpt-failed-3.html', 'analyst-1.html']
+  const removed = []
+  const written = []
+  const fs = {
+    readdirSync: () => files,
+    unlinkSync: (p) => removed.push(p),
+    mkdirSync: () => {},
+    writeFileSync: (p, html) => written.push([p, html]),
+  }
+  assert.equal(snapshotFileName('chatgpt', 42, { failed: true }), 'chatgpt-failed-42.html')
+  assert.equal(snapshotFileName('analyst', 42, { failed: true }), 'analyst-42.html', 'the analyst namespace is failure-only already')
+  assert.throws(() => snapshotFileName('bing', 1, { failed: true }), /bad_request/)
+  const pruned = pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 2, { failed: true })
+  assert.deepEqual(pruned, ['chatgpt-failed-1.html'], 'the oldest failure snapshot beyond the cap goes')
+  assert.ok(removed.every((p) => p.includes('-failed-')), 'never a manual one')
+  assert.deepEqual(pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 0), [], 'without the flag a pane name is still a no-op')
+  const client = { request: async (op) => (op === 'snapshot' ? { html: '<html>…</html>' } : null) }
+  const { path: file } = await saveDomSnapshot({ client, name: 'chatgpt', snapshotsDir: dir, fs, now: () => 7, failed: true })
+  assert.equal(file, '/snap/chatgpt-failed-7.html')
+  assert.deepEqual(written, [['/snap/chatgpt-failed-7.html', '<html>…</html>']])
+})

@@ -684,11 +684,44 @@ export function createOrchestrator({
       const message = code === f.code ? f.message : `${f.code}: ${f.message}`
       warn(`${label}: ${code} — ${message}`)
       const failure = { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
-      if (!observing || !rereadable(request, entry, code)) return failure
+      if (!observing || !REREAD_CODES.includes(code)) return failure
+      // Part 0 (2026-09-27): a PANE capture that did not read its reply saves the failing DOM too —
+      // chatgpt.com changed its turn markup under the selectors and the only honest fix is measured
+      // from the page as the failure left it. No reload, no re-read: the pane is the user's own chat.
+      if (!rereadable(request, entry, code)) {
+        if (entry.view === 'pane') await saveFailureEvidence(entry, slot, label, e)
+        return failure
+      }
       // S11: the answer is usually in the chat by now (see the header). Never throws; null = the
       // original failure stands.
       const recovered = await settledReread(request, entry, e, submitted, b, elapsed)
       return recovered || failure
+    }
+  }
+
+  /**
+   * What a failed capture leaves behind for the next reader: (1) wait for the adapter to answer main's
+   * own cancel — the preload frees its one in-flight slot only once it has, and would answer `busy` to
+   * a snapshot before then; (2) the DOM exactly as the failure left it, scrubbed, through the
+   * `saveFailureSnapshot` dep. A snapshot that fails is a line in the log, never a reason to fail the
+   * turn or to skip what follows. Never rejects.
+   */
+  async function saveFailureEvidence(entry, slot, label, error) {
+    const ack = error && error.cancelResult
+    if (ack && typeof ack.then === 'function') {
+      info(`${label}: waiting for the adapter to answer the cancel before reading the page again`)
+      try {
+        await ack
+      } catch (_e) {
+        /* never rejects by contract; nothing to do if it did */
+      }
+    }
+    if (typeof saveFailureSnapshot !== 'function') return
+    try {
+      const file = await saveFailureSnapshot(entry.view, slot)
+      if (file) info(`${label}: DOM snapshot of the failed capture saved to ${file}`)
+    } catch (e) {
+      warn(`${label}: DOM snapshot of the failed capture failed: ${(e && e.message) || e}`)
     }
   }
 
@@ -716,27 +749,8 @@ export function createOrchestrator({
     const client = seam.client
     const signal = entry.controller.signal
     const convId = typeof request.conversation_id === 'string' ? request.conversation_id : ''
-    // (1) main's timer fired and sent a cancel: the preload frees its one in-flight slot only once it
-    // has answered that cancel, and would answer `busy` to a snapshot or a ready before then.
-    const ack = error && error.cancelResult
-    if (ack && typeof ack.then === 'function') {
-      info(`${label}: waiting for the adapter to answer the cancel before reading the page again`)
-      try {
-        await ack
-      } catch (_e) {
-        /* never rejects by contract; nothing to do if it did */
-      }
-    }
-    // (2) the DOM exactly as the failure left it, BEFORE the reload replaces it; a snapshot that fails
-    // is a line in the log, never a reason to skip the re-read.
-    if (typeof saveFailureSnapshot === 'function') {
-      try {
-        const file = await saveFailureSnapshot(entry.view, slot)
-        if (file) info(`${label}: DOM snapshot of the failed capture saved to ${file}`)
-      } catch (e) {
-        warn(`${label}: DOM snapshot of the failed capture failed: ${(e && e.message) || e}`)
-      }
-    }
+    // (1)+(2): the cancel ack, then the DOM exactly as the failure left it, BEFORE the reload replaces it.
+    await saveFailureEvidence(entry, slot, label, error)
     // (2b) a capture that ended with the site's stop control UP is the S10 reasoning shape: the model is
     // still writing and the answer is provably not on the page yet (measured 570 s of it). Reloading
     // now would destroy the in-progress turn. The diag line says so; the snapshot above is still worth
