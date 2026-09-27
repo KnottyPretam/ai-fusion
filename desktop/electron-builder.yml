@@ -57,11 +57,12 @@ linux:
     - pacman
   category: Development
   icon: assets/icon.png
-  synopsis: Three model subscriptions in one window
+  synopsis: A council of AI agents in one window
   description: >
-    Claude, ChatGPT and Grok side by side under your own logins, with one prompt bar that asks all
-    three, an Analyze pass that reports where they agree and differ as R1/R2/R3, and a Fusion pass
-    that puts each difference back to the models that hold it.
+    Two to five AI agents side by side — your own ChatGPT, Claude and Grok logins, OpenRouter models
+    on one key, local Ollama models — with one prompt bar that asks them all, an Analyze pass that
+    reports where they agree and differ as R1…Rn, and a Fusion pass that puts each difference back
+    to the models that hold it.
   desktop:
     # A FLAT map of Desktop Entry keys (electron-builder 25). Nesting these under `entry:` writes a
     # literal `entry=[object Object]` line into the .desktop file — seen, then fixed.
@@ -94,6 +95,7 @@ pacman:
     - libxss
     - libxtst
     - xdg-utils
+    - libsecret
 
 win:
   target:

@@ -45,7 +45,8 @@ derived from the package name — see the note at the end.
 **Verified on Ubuntu 20.04 (glibc 2.31)**: AppImage and deb build and install, the packaged app
 starts its bundled backend (`[backend] spawned … via bundled`), serves its renderer from
 `resources/app`, and comes up with the three panes signed in — checked on the window itself, not
-just in the logs.
+just in the logs. (Since 2026-09-27 the default council is those three web panes; a council of 2–5
+agents, OpenRouter and local Ollama members included, is assembled on the Agents page.)
 
 > The first packaged build opened as a **black window**. The renderer loads before the backend has
 > finished binding its port, and the retry that is supposed to cover that was dying on the first
@@ -110,6 +111,23 @@ Start Menu and desktop shortcut.
 > **Not verified**: built by CI on `windows-latest`, never on this machine. The one piece most
 > likely to need a nudge is the PyInstaller hidden-import list in `packaging/backend.spec` if a
 > dependency resolves differently on Windows.
+
+## The OpenRouter key and the keyring
+
+Since 2026-09-27 the app can seat OpenRouter agents on one key, entered on the Agents page. Electron
+stores it with `safeStorage` — the OS keyring — as ciphertext in `settings.json` (`openrouterKey`,
+base64) and pushes it to the bundled backend over the bridge token on every connect; it is never
+written to `.env`, never passed in the environment, never shown again. That needs a keyring:
+
+- **Linux**: `libsecret` plus a running secret service (gnome-keyring or kwallet). The deb depends on
+  `libsecret-1-0` and the pacman package on `libsecret`; an AppImage relies on the host having them.
+  Without a keyring, saving a key is **refused** (`encryption_unavailable`, naming the `safeStorage`
+  backend) — the key is never stored in plaintext. A keyring that is only unlocked after launch is
+  re-checked every 15 s and the key is pushed the moment it decrypts.
+- **Windows / macOS**: DPAPI / the Keychain — nothing to install.
+
+The E2E app spec runs on a box without a keyring, so `safeStorage.setUsePlainTextEncryption(true)` is
+called under `TRIPLEX_E2E_APP=1` only, beside the other E2E relaxations.
 
 ## CI
 

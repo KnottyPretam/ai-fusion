@@ -21,6 +21,8 @@ is unchanged; its desktop addendum is at the end of `docs/api-contract.md`.
 
 ### 1. Bridge WebSocket protocol v1 — `ws://127.0.0.1:<PORT>/api/bridge`, JSON text frames, one client
 
+Council (2026-09-27): the slot vocabulary of every frame below is `bridge_protocol.BridgeSlot = Literal["claude","chatgpt","grok"]` (`BRIDGE_SLOTS`) — the sites with a Stage-1 adapter — decoupled from the seven-vendor `schemas.SlotId` (`claude, chatgpt, grok, gemini, deepseek, qwen, mimo`) a council of 2..5 is drawn from. `bridge-v1.json` is unchanged (`gemini` stays invalid on the wire until a protocol v2); `parse_web_model` refuses `web:gemini` with "unknown site … sites with an adapter: claude, chatgpt, grok", `status().sites` lists the three sites, and an OpenRouter or Ollama council member never crosses the bridge.
+
 Electron → backend
 - `{"type":"hello","protocol":1,"token":"<hex>","version":"0.1.0","sites":["claude","chatgpt","grok"],"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":null|{"slot":"chatgpt"}}`
   — MUST be the first frame within 10 s (else close 4004); bad token, or a browser `Origin` header whose host is not loopback (127.0.0.1 / localhost / ::1; a missing Origin is fine — Electron's Node WebSocket sends none) → close 4003 before any ack; malformed → 4001.
@@ -66,18 +68,18 @@ as `error_type:"triplex"`. `max_tokens`, `response_format`, `plugins`, `reasonin
 ### 2. Electron IPC — `desktop/preload/renderer.cjs` exposes `window.triplex` via `contextBridge`
 
 Main validates every payload (`slot ∈ SLOTS`, `text` string ≤ 32768 chars, `targets ⊆ SLOTS`,
-sender is the renderer webContents AND the sender frame's origin is the renderer origin; violations reject `Error('bad_request')`). `panes:getInfo` also re-emits the cached `panes:health` and the current `panes:zoom` for every slot, and main replays both on the renderer's `did-finish-load`.
+sender is the renderer webContents AND the sender frame's origin is the renderer origin; violations reject `Error('bad_request')`). Council (2026-09-27): `panes:active.active` is any member of the 7-vendor catalog (`council.js` `isCouncilSlot` — a renderer column may be the active tab), `panes:setCouncil` is `council.js` `parseCouncil` (strict: 2..5 catalog members, one transport each, `web:` only for a site and only under its own key; anything off → `bad_request`, nothing persisted), `panes:setOpenRouterKey` is `null` (forget the key) or printable ASCII of 20..512 characters (`isKeyShape`; `undefined` is a `bad_request`, never a clear) and the value is never logged or echoed. `panes:getInfo` also re-emits the cached `panes:health` and the current `panes:zoom` for every slot, and main replays both on the renderer's `did-finish-load`.
 
 ```ts
-triplex.version: string; triplex.slots: ['claude','chatgpt','grok']
-getInfo(): Promise<{version, dev, sites:{[slot]:{url,newChatUrl,partition}}, backend:{port:number,url:string}|null, layout:{mode:'tabs'|'split',active:slot}|null, theme:'light'|'dark'|'system'}>   // invoke 'panes:getInfo'
+triplex.version: string; triplex.slots: ['claude','chatgpt','grok']; triplex.sites: the same three   // 2026-09-27: slots/sites = the SITES with a native view; the council a conversation seats is slot_config.slots (2..5 of the 7-vendor catalog) and lives in the backend
+getInfo(): Promise<{version, dev, sites:{[slot]:{url,newChatUrl,partition}}, backend:{port:number,url:string}|null, layout:{mode:'tabs'|'split',active:slot}|null, theme:'light'|'dark'|'system', council:{slots:{[slot]:{model,effort}}}|null, openRouterKey:KeyStatus|null}>   // invoke 'panes:getInfo' (council + openRouterKey since 2026-09-27; both are also replayed as panes:council / panes:openRouterKey with health/zoom/bridge/theme)
 setLayout(layout:{[slot|'analyst']: {x,y,width,height}|null}): void       // send 'panes:layout' (CSS px = DIP at zoomFactor 1; main rounds, min 1; null = hidden)
-setActive({mode, active}): void                                          // send 'panes:active'
+setActive({mode, active}): void                                          // send 'panes:active' (2026-09-27: `active` may be any catalog member — a renderer column for a token / local agent — not only a site)
 newChat(targets: slot[]): Promise<void>                                  // invoke 'panes:newChat' → loadURL(newChatUrl)
 reload(slot) | openExternal(slot) | inspect(slot) | focusPane(slot): Promise<void>   // invoke 'panes:reload'|'panes:openExternal'|'panes:inspect' (no-op unless dev)|'panes:focus'
 zoom(slot, 'in'|'out'|'reset'): Promise<{factor:number}>                 // invoke 'panes:zoom' (0.5..2.0, step 0.1, persisted)
 onHealth(cb:(slot, Health)=>void): ()=>void                               // on 'panes:health'
-onShortcut(cb:({name})=>void): ()=>void                                  // on 'panes:shortcut'  name ∈ tab-1|tab-2|tab-3|toggle-mode|focus-prompt|new-chat-all
+onShortcut(cb:({name})=>void): ()=>void                                  // on 'panes:shortcut'  name ∈ tab-1|tab-2|tab-3|tab-4|tab-5|toggle-mode|focus-prompt|new-chat-all (tab-4/5 since 2026-09-27: the n-th council member)
 onZoom(cb:({slot,factor})=>void): ()=>void                               // on 'panes:zoom'
 // Stage 1 only (removed in Stage 2):
 sendPrompt({targets, text}): Promise<{results:{[slot]:{ok, code?, message?, ms, url?, composerSelector?, sendSelector?}}}>   // invoke 'prompt:send'
@@ -96,14 +98,21 @@ setTheme(theme:'light'|'dark'|'system'): Promise<{theme}>                       
 onTheme(cb:({theme})=>void): ()=>void                                                  // on 'panes:theme' (main emits the CURRENT theme on did-finish-load and after getInfo, like health/zoom/bridge)
 // Export (a step → files):
 exportTurn({conversationId, turnId, formats, title?, turnType?}): Promise<{cancelled, formats, files, paths, defaultName}>   // invoke 'panes:export'; formats is a non-empty subset of ['md','html','pdf'] — ONE save dialog per call, so all three are one dialog and three files beside each other. md/html come from GET /api/conversations/{id}/export/{turnId}?format=…; the PDF is printed from that HTML in an offscreen window (`show:false`, scripting off, A4, never added to the deck). That window is torn down with `close()` and only `destroy()`ed if it fails to close within 3 s: measured on Electron 44.4.1 / Chromium 152 on 2026-09-18, `destroy()` on an offscreen window that loaded a `file://` URL makes the NEXT `file://` load in the process fail with `ERR_FAILED (-2)` and takes the browser process down with SIGTRAP on the third — but only while that window is the LAST one in the process, so the app's own main window masks it. The graceful close is there so the export does not depend on that, and so teardown matches the two view managers.
+// Council + OpenRouter key (2026-09-27; main owns both, the renderer mirrors):
+getCouncil(): Promise<{slots:{[slot]:{model,effort}}}>; setCouncil(spec): Promise<same>   // invoke 'panes:getCouncil'|'panes:setCouncil' — main's DEFAULT council for NEW conversations (settings.json `council`; validated by council.js BEFORE persisting, re-keyed in catalog order; a bad spec → bad_request and nothing changes); a change re-pushes the session defaults to the backend (syncKey)
+onCouncil(cb:(council)=>void): ()=>void                                                    // on 'panes:council' (replayed with health/zoom/bridge/theme)
+getOpenRouterKey(): Promise<KeyStatus>; setOpenRouterKey(key|null): Promise<KeyStatus>    // invoke 'panes:getOpenRouterKey'|'panes:setOpenRouterKey' — KeyStatus = {configured, prefix:'sk-or-v1-'|'', length, pushed, error?}; the key goes INTO main only (safeStorage ciphertext in settings.json, pushed to the backend under the bridge token) and never comes back; `set` rejects Error('encryption_unavailable') (with `.backend`) when no keyring exists — never plaintext on disk
+onOpenRouterKey(cb:(KeyStatus)=>void): ()=>void                                            // on 'panes:openRouterKey': once from the IPC handler as soon as the key is stored (pushed:false) and again from main's syncKey() when EVERY settled push lands (whoever caused it: the bridge's connected edge, a council / analyst change, set / clear, a late decrypt)
 ```
 
 Shortcuts (`desktop/main/shortcuts.js`, `before-input-event` on every site view and the
-renderer + a hidden `Menu` with accelerators): `Ctrl+1/2/3` → `tab-n` (tabs: activate; split:
-`focusPane`), `Ctrl+\` → `toggle-mode`, `Ctrl+L` → `focus-prompt` (main focuses the renderer
+renderer + a hidden `Menu` with accelerators): `Ctrl+1…5` → `tab-n` (tabs: activate; split:
+`focusPane`; since 2026-09-27 the n-th council member — a site pane or a renderer column, a number past the council a no-op), `Ctrl+\` → `toggle-mode`, `Ctrl+L` → `focus-prompt` (main focuses the renderer
 first), `Ctrl+Shift+N` → `new-chat-all`, `Ctrl+=`/`Ctrl+-`/`Ctrl+0` → zoom of the active pane
 applied in main then `panes:zoom`, `Ctrl+R` → reload active pane, `F12` (dev) → inspect active
-pane; `Enter`/`Shift+Enter` are renderer-local.
+pane; `Enter`/`Shift+Enter` are renderer-local. When the active tab is a renderer column (a token / local
+council member) zoom / reload / inspect and the menu's *Save DOM snapshot* are handled no-ops with one
+`[shortcuts]` / `[menu]` warning — never an action on some other pane (2026-09-27).
 
 Main ↔ site preload (`desktop/preload/site.cjs`, `sandbox:true`, `contextIsolation:true`):
 ```
@@ -220,17 +229,17 @@ Desktop env: `TRIPLEX_RENDERER_URL` (dev; default `http://127.0.0.1:<backend>/ap
 (default `<userData>/data`), `TRIPLEX_USER_DATA_DIR` (→ `app.setPath('userData')` before
 ready), `TRIPLEX_SITES_JSON`, `TRIPLEX_GROK_SURFACE`, `TRIPLEX_SELECTORS_FILE`,
 `TRIPLEX_CHROMIUM_FLAGS`, `TRIPLEX_DISABLE_GPU`, `TRIPLEX_THEME` (a launch-time OVERRIDE for dev and screenshots: when a launch sets it to light|dark|system it is written into `settings.theme` before anything reads the theme, replacing the stored choice for that launch and the ones after it until the user picks again; it is never read again at runtime — `settings.theme` is the only source for the window, the site views and the renderer. The resolved theme is also the GROUND Electron paints before any page does: the window's `backgroundColor` and every site view's `setBackgroundColor` are `--bg` (`#ffffff` / `#0d1117`), set at creation and repainted when the theme changes), `TRIPLEX_E2E_APP=1` (exposes
-`global.__triplexTest = {views, orchestrator, settings}` and refuses non-loopback site URLs),
+`global.__triplexTest = {views, orchestrator, settings}` — and since 2026-09-27 `openRouterKey: {status(), sync()}`, status and a push only, never the plaintext — and refuses non-loopback site URLs),
 `TRIPLEX_FAKE_PORT` (5199), `TRIPLEX_OLLAMA=1` (export `OLLAMA_*` to the backend).
 Files under `userData` (`~/.config/triplex-desktop/`): `settings.json`
-`{"version":1,"window":{"x","y","width","height","maximized"},"zoom":{"claude":1,"chatgpt":1,"grok":1},"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":"chatgpt","analystVisible":false,"theme":"dark"}`,
+`{"version":1,"window":{"x","y","width","height","maximized"},"zoom":{"claude":1,"chatgpt":1,"grok":1},"capture":{"claude":false,"chatgpt":false,"grok":false},"analyst":"chatgpt","analystVisible":false,"theme":"dark","council":{"slots":{"claude":{"model":"web:claude","effort":"off"},…}},"openrouterKey":"<base64 safeStorage ciphertext>"|null}` (`council` and `openrouterKey` since 2026-09-27: `council` is main's DEFAULT council for new conversations — 2..5 of the 7-vendor catalog, `council.js` `sanitizeCouncil` on load drops a malformed member and falls back to the classic three below two survivors, each said in the log by name; `openrouterKey` is ONLY ever `safeStorage` ciphertext, base64 — the sanitiser drops anything that is not base64, so a plaintext key can never be read back out of this file; `safeStorage.setUsePlainTextEncryption(true)` is called under `TRIPLEX_E2E_APP=1` ONLY, beside the other E2E relaxations, because the E2E box has no keyring; `SETTINGS_VERSION` stays 1),
 `chats.json` `{"<convId>":{"claude":"https://claude.ai/chat/…","chatgpt":"…","grok":"…"}}` (a link is stored, loaded or navigated only when it is an https URL on `sites[slot].hosts` — plain http only on a loopback host, i.e. the fake site; anything else is dropped with a warning and `views.loadUrl` refuses it with code `navigation`, since `loadURL` bypasses `will-navigate`),
 `selectors.json`, `snapshots/`, `logs/backend.log`, `Partitions/`. Renderer `localStorage`:
-`triplex.panes.mode|active|targets|drawerOpen`, `triplex.desktop.analyst`, `triplex.theme` (a FIRST-PAINT MIRROR only — `settings.json.theme` in main is authoritative; the renderer applies what `getInfo()`/`onTheme` reports and only proposes changes through `setTheme`).
+`triplex.panes.mode|active|targets|drawerOpen`, `triplex.desktop.analyst`, `triplex.theme` (a FIRST-PAINT MIRROR only — `settings.json.theme` in main is authoritative; the renderer applies what `getInfo()`/`onTheme` reports and only proposes changes through `setTheme`). The council default and the key ciphertext are main's (`settings.json`); the renderer holds `panes.council` / `panes.openRouterKey` as mirrors only (2026-09-27).
 
 `desktop/package.json`: `{"name":"triplex-desktop","private":true,"version":"0.1.0","type":"module","main":"main/main.js","scripts":{"start":"electron .","test":"node --test 'test/unit/**/*.test.js'","test:adapters":"playwright test --project adapters","test:app":"TRIPLEX_E2E_APP=1 playwright test --project app"},"devDependencies":{"electron":"^44.4.1","@playwright/test":"^1.63.0"},"overrides":{"@electron-internal/extract-zip":">=1.0.4"}}`.
 Worktree agents run `cd desktop && ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci`; only the
-integrator has the binary. `playwright.config.js`: project `adapters` (`channel:'chrome'`,
+integrator has the binary. `desktop/electron-builder.yml`: `deb.depends` carries `libsecret-1-0` and `pacman.depends` `libsecret` (2026-09-27) — `safeStorage` needs a keyring for the OpenRouter key. `playwright.config.js`: project `adapters` (`channel:'chrome'`,
 `testDir:'test/adapters'`, webServer `node test/fake-site/serve.js` on 5199 with `/health`),
 project `app` (`testDir:'test/app'`, `test.skip(!process.env.TRIPLEX_E2E_APP)`, webServers:
 fake site 5199, Vite `BACKEND_PORT=8021 VITE_PORT=5184` from `../frontend`, backend
@@ -246,6 +255,8 @@ WARNING), `BRIDGE_TIMEOUT_S`=600, `BRIDGE_ANALYST_TIMEOUT_S`=1800 (floored at
 `OLLAMA_BASE_URL`=`http://127.0.0.1:11434/v1`, `OLLAMA_MODELS`=`hermes3`. Electron spawn env:
 `PORT=8021 HOST=127.0.0.1 DATA_DIR=<userData>/data TRIPLEX_DESKTOP=1 BRIDGE_TOKEN=<random> MOCK_OPENROUTER=0 SLOT_CLAUDE_MODEL=web:claude SLOT_CHATGPT_MODEL=web:chatgpt SLOT_GROK_MODEL=web:grok SLOT_*_EFFORT=off ANALYST_MODEL=web:<settings.analyst>:analyst TRIPLEX_APP_DIR=<repo>/frontend/dist LOG_LEVEL`
 (+ `OLLAMA_*` when `TRIPLEX_OLLAMA=1`; `ANALYST_MODEL` is pinned to the empty string when `settings.analyst` is null and `OPENROUTER_API_KEY` is pinned to the empty string — dotenv never overrides a present variable, so the repo `.env` cannot re-supply either; the backend reads '' as no key / no analyst).
+
+Council + key (2026-09-27). The pins above are UNCHANGED: `OPENROUTER_API_KEY` stays empty in the spawn env and `client.api_key()` never reads the environment in desktop mode. The user's key takes an HTTP path instead: main keeps it as `safeStorage` ciphertext (`openrouter-key.js`) and `syncKey()` PUTs it — or DELETEs it when none is configured, or sends NOTHING for the key while a stored ciphertext cannot be read right now — and then PUTs the default council (`PUT /api/session/defaults {slot_config}` = the council's slots + `analyst_model` = `web:<settings.analyst>:analyst` or `''` + the frozen defaults `max_iterations 2` / `materiality medium` / `grounded false`) to `/api/session/openrouter_key` / `/api/session/defaults` with `Authorization: Bearer <BRIDGE_TOKEN>` (the same token for a spawn and an attach), a 10 s abort per request, to a LOOPBACK backend only (a remote `TRIPLEX_BACKEND_URL` attach never receives the key: `sync_refused_remote`), on every bridge `connected` rising edge (the first hello_ack, a backend restart, a reconnect), on a council or analyst change (the settings subscription) and after the renderer stores or clears the key. 401/403 stop at once (`sync_unauthorized`), another non-2xx stops (`sync_rejected` — a 4xx from the defaults PUT means the pushed council was refused, e.g. `web_slot_mismatch`), a transport failure retries 5 × 2 s (`sync_unreachable`); calls coalesce. A ciphertext the keyring cannot read yet keeps `pushed:false` with `encryption_unavailable`, is re-checked every 15 s, and is pushed by `onDecrypted` the moment it reads; an undecryptable one is cleared (`undecryptable`). Status strings are fixed codes (`KEY_ERRORS`); the key never appears in a log line, an error, a frame or an IPC reply. Backend routes (`backend/routers/session.py`, Bearer `BRIDGE_TOKEN`: 403 `bridge_token_unset` / 401 `missing_token` / 403 `bad_token`): `GET|PUT|DELETE /api/session/openrouter_key` → `{configured, prefix, length}` (the PUT body must be `{key: <non-blank str>}`, read by hand so no validation 422 echoes it; anything else → 422 `empty_key`; `prefix` is `sk-or-v1-` only for a key that starts with it), `GET|PUT|DELETE /api/session/defaults {slot_config}` (validated as a PUT: 422 `web_slot_mismatch` / `unsupported_effort`); `POST /api/conversations {}` seats the pushed default. `GET /api/ollama/models` → `{base_url, loopback, models}` (loopback `/api/tags` only, 2 s, `[]` on any failure) feeds the Agents page's local list. `GET /api/models` under `TRIPLEX_DESKTOP=1` = the desktop catalog (`web:<site>` ×3, `web:<site>:analyst` ×3, `ollama:*`) plus, ONLY while a session key is pushed, the OpenRouter models a council row can seat (`vendors.openrouter_filter`) as copies tagged `raw.transport == "openrouter"`. The guard in `client.py` is now `desktop_mode() and not session_key.get_key()` → `missing_api_key` (`DESKTOP_NO_KEY_MESSAGE`; `transport_disabled` is no longer minted, the constant stays in `bridge.py`); with a key the OpenRouter branch runs on the session key under the cost cap. `validate_slot_config` (PUT slot_config, POST /api/conversations with a config, PUT /api/session/defaults) refuses a `web:` model on another slot's site, on a site without a Stage-1 adapter (`web:gemini`) or malformed with 422 `web_slot_mismatch{slot, model}` before `unsupported_effort`; a council change on a non-empty or busy conversation is 409 `council_changed{current, requested}` (`docs/api-contract.md`, Council addendum).
 
 `backend/llm/client.py` (the only edit; everything after `async for d in gen` untouched):
 ```python
@@ -267,6 +278,7 @@ def transport_kind(model: str) -> Literal["web", "ollama", "openrouter"]:   # "w
         elif is_mock:   ...unchanged...
         else:           ...unchanged (cost cap, key check, _live_stream)...
 ```
+(2026-09-27: the `elif` guard reads `elif desktop_mode() and not session_key.get_key():` and yields `code="missing_api_key"` with `DESKTOP_NO_KEY_MESSAGE`; the key of the live branch is `api_key()` — in desktop mode the session key only.)
 `_live_stream(*, role, purpose, model, messages, payload, trace=None, base_url: str | None = None, headers: dict[str, str] | None = None, cost_lookup: bool = True)`;
 defaults reproduce today (`base_url=None` → `settings().openrouter_base_url`, `headers=None`
 → `build_headers(...)`, `cost_lookup=False` skips `_fetch_generation_cost`).
@@ -304,8 +316,8 @@ Endpoints: `WS /api/bridge` (`routers/bridge.py`: accept → Origin check → fi
 `GET /api/bridge/status` → `hub.status()`; `GET /app`, `/app/`, `/app/{path:path}`
 (`routers/desktop_app.py`: serves `TRIPLEX_APP_DIR`, resolved-path containment, `index.html`
 for extension-less paths, 404 otherwise/unset); `POST /api/conversations/{id}/send` body
-`{prompt: str, slots?: list[str] | None}` (omitted/null = all three; unknown slot → 404
-`not_found("slot")`; `[]` → 422 `empty_slots`; de-duplicated in `SLOT_IDS` order;
+`{prompt: str, slots?: list[str] | None}` (omitted/null = the conversation's council, all three for the classic one; a slot the council did not seat → 404
+`not_found("slot")`; `[]` → 422 `empty_slots`; de-duplicated in council = `SLOT_IDS` order — 2026-09-27;
 `turn_start.slots` lists the subset; `SendTurn.responses` holds only those slots);
 `GET /api/models` desktop catalog under `TRIPLEX_DESKTOP=1`. `docs/api-contract.md` addendum:
 `slot_error.code` gains `not_captured, bridge_unavailable, bridge_disconnected, bridge_no_ack,
@@ -318,17 +330,17 @@ view_crashed, cancelled` (`error_type` `triplex` or `site`).
 `features/desktop/slice.js`, key `panes`: `{mode:'tabs'|'split', active:slot, targets:{slot:bool},
 health:{slot:Health|null}, lastSend:{slot:{ok,code,message,ms,composerSelector,sendSelector}},
 sending:false, zoom:{slot:number}, capture:{slot:bool} (S2), bridge:{connected:bool} (S2),
-turn:{slot:phase} (S2), drawerOpen:bool (S3), analyst:{slot|null, visible, health} (S3)}`;
+turn:{slot:phase} (S2), drawerOpen:bool (S3), analyst:{slot|null, visible, health} (S3), council:{slots:{[slot]:{model,effort}}}|null (2026-09-27), openRouterKey:{configured, prefix, length, pushed, error?}|null (2026-09-27)}` — since 2026-09-27 `health` / `zoom` / `capture` / `turn` are per-SITE maps (the three sites; the frozen `desktop-smoke.test.jsx` pins their three-key literals) while `active` and `targets` range over the 7-vendor catalog (`targets[k] !== false` means on, so a freshly seated member is targeted by default; `selectedTargets(targets, council)` intersects with the council);
 from Stage 2 `lastSend[slot]` is `{ok, code?, message?, ms}` recorded by the panes reducer from the send stream (`slot_done` → ok with `usage.latency_ms`; `slot_error{not_captured}` → ok:true with the code; other codes → ok:false), `turn_start{slots}` clears the listed slots, the tabs-mode auto-reveal on `logged_out|challenge|blocked` is a reducer transition (`panes/active`), and `lastSend` describes the last unified send regardless of the open conversation; actions `panes/mode`, `panes/active`, `panes/target`, `panes/health`, `panes/sendStart`,
 `panes/sendResult`, `panes/zoom`, `panes/capture`, `panes/bridge`, `panes/turn`, `panes/drawer`,
-`panes/analyst`. Test ids: `desktop-shell`, `pane-deck`, `deck-mode-tabs`, `deck-mode-split`,
+`panes/analyst`, `panes/council {council}` (validated 2..5 known slots, null clears, an invalid spec is ignored) and `panes/openRouterKey {status}` (2026-09-27). Test ids: `desktop-shell`, `pane-deck`, `deck-mode-tabs`, `deck-mode-split`,
 `deck-tab-<slot>`, `deck-tab-analyst` (S3), `pane-<slot>`, `pane-<slot>-viewport`,
 `pane-<slot>-health`, `pane-<slot>-session`, `pane-<slot>-reload`, `pane-<slot>-newchat`,
 `pane-<slot>-open`, `pane-<slot>-zoom-in|out|reset`, `pane-<slot>-inspect` (dev only), `pane-<slot>-capture` (S2),
 `pane-<slot>-phase` (S2), `prompt-bar`, `prompt-composer`, `prompt-send`, `prompt-target-<slot>`, `prompt-banner` (S2: role=alert for a pre-stream failure of a Send or of New chat everywhere),
 `prompt-newchat`, `prompt-result-<slot>`, `prompt-preparse`, `prompt-preparse-cancel`, `prompt-preparse-undo`, `prompt-preparse-status[data-state=running|done|cancelled]` and `prompt-bar[data-preparsing|data-preparsed]` (Pre-parse, 2026-09-23; slice `preparse` `{status, notice, prompt, original, question, error, rawAttempts, seq}`, action `preparse/clear`), `bridge-banner` (S2), `capture-notice` (S2),
-`desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|settings` (S3),
-`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8), `tooltip` (S9: the one delegated hover description, portalled to `document.body`; `data-placement` names the side it chose).  Renderer chrome never overlaps a
+`desk-drawer`, `drawer-toggle`, `drawer-tab-analyze|fusion|captured|agents|settings` (S3; `agents` and `drawer-panel-agents` 2026-09-27),
+`drawer-capture-hint` (S3), `sidebar` (S2, DesktopApp), `export-send` / `export-analyze` / `export-fusion` with `export-format-md|html|pdf|all` inside the opened menu (S8), `tooltip` (S9: the one delegated hover description, portalled to `document.body`; `data-placement` names the side it chose). Council (2026-09-27): `pane-<slot>[data-kind=site|column]` and `deck-tab-<slot>[data-kind]` (a member on `web:<site>` is a native SITE pane; any other member — an OpenRouter or Ollama agent, a site vendor seated on OpenRouter included, since the KIND is decided by transport — is a renderer COLUMN wrapping the Send feature's `SlotColumn` with `solo={false}`; a site outside the council is not rendered, so its rect is null and main hides the view), the panes container's `data-council-size`, `slot-<slot>-transport[data-transport=web|openrouter|ollama]` (the Send column's badge), and the Agents page: `agents-page[data-source=conversation|default]`, `agents-source`, `agents-row-<slot>[data-transport]`, `agents-vendor-<slot>`, `agents-transport-<slot>-<web|openrouter|ollama>` (only what the vendor supports: a site has all three, the others openrouter / ollama), `agents-model-<slot>`, `agents-model-custom-<slot>` (an unlisted slug or Ollama name; `ollama:` auto-prefixed), `agents-effort-<slot>`, `agents-remove-<slot>`, `agents-add`, `agents-summary`, `agents-error`, `agents-apply` (PUT the FULL `slot_config` to the open conversation; disabled without a conversation, with invalid rows, while any stream runs and once the conversation has turns — the backend answers 409 `council_changed` then), `agents-default` (`triplex.setCouncil` → `panes/council`), `agents-key-row`, `agents-key` (a password field, cleared once main holds the key), `agents-key-save`, `agents-key-clear`, `agents-key-status[data-configured]` (`not configured` | `configured · sk-or-v1-… (73 chars)` + ` · stored, not yet pushed` + ` · <error>`), `agents-key-error`, `agents-key-hint` (a row on OpenRouter without a key); `meter[data-cost]` (the cost column returns in desktop mode when a member or the analyst is on OpenRouter); `send-grid[data-council-size]`.  Renderer chrome never overlaps a
 view rect (deck bar above, headers above viewports, prompt bar/drawer below; no modals). The ONE thing the
 renderer paints that floats is the tooltip, and it is placed against those same viewport rects: it
 tries below, above, right, left and takes the first side clear of every `[data-testid$="-viewport"]`
@@ -346,7 +358,7 @@ the integrator in stage pre-work: `frontend/src/main.jsx`, `frontend/vite.config
 `frontend/{package.json,playwright.config.js}`, `tests/{conftest,helpers}.py`. Previously
 untouched but now owned (not frozen) in the stages listed: `backend/features/send.py`,
 `backend/routers/{send,analyze,fusion,models}.py`, `backend/llm/client.py`,
-`frontend/src/features/{send/SendPane.jsx,meter/index.jsx,config/index.jsx}`.
+`frontend/src/features/{send/SendPane.jsx,meter/index.jsx,config/index.jsx}`. Council (2026-09-27): the integrator's pre-work commit `1fae192` edited the frozen `backend/{schemas,config}.py`, `backend/llm/bridge_protocol.py`, `desktop/preload/renderer.cjs`, `frontend/src/index.css` and `tests/{helpers,test_schemas}.py` — they stay frozen; newly owned (not frozen): `backend/vendors.py`, `backend/prompts/council.py`, `backend/llm/session_key.py`, `backend/routers/{session,ollama}.py`, `tests/council/`, `frontend/src/features/desktop/{council.js,AgentsPage.jsx}`, `desktop/main/{council.js,openrouter-key.js}`; the workstreams also edited their owned `backend/routers/{conversations,config}.py`, `backend/store/*`, `backend/export.py`, `backend/llm/{ollama,webmodels}.py` and `desktop/main/{settings,ipc,shortcuts,menu,main,backend,sites,views}.js`; `desktop/package.json` and `desktop/electron-builder.yml` (descriptions, pacman `libsecret`) are integrator edits.
 
 ---
 
@@ -376,6 +388,7 @@ untouched but now owned (not frozen) in the stages listed: `backend/features/sen
 │ send/analyze/fusion/store/anon/prompts byte-identical (send.py gains `slots=`)            │
 └───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
+(2026-09-27: `transport_disabled` → `missing_api_key`, minted only while no session key was pushed; token / local council members are renderer columns beside the three views; the drawer gains an Agents tab.)
 
 Unified prompt flow (Stage 2+): optionally PromptBar → `POST /api/conversations/{id}/preparse {prompt}` (Pre-parse: the reply's `prompt` replaces the composer text for review; a conversation is created adopting the panes' chats when none exists) → PromptBar → `POST /api/conversations/{id}/send {prompt, slots?}`
 → `run_send` → `stream_completion(model="web:chatgpt", …)` → bridge `request` → Electron
@@ -451,3 +464,5 @@ conversation (the site is the thread).
     pure modules with injected fakes, no extra npm deps; bridge flow tests use an in-loop fake
     connection (never `TestClient` websockets mixed with the async `client` fixture); the app
     Playwright project has its own ports (Vite 5184, backend 8021, fake site 5199).
+
+Council amendments (2026-09-27, plan "A council anyone can assemble", stage 1) to the decisions above: 4 — the picker also offers OpenRouter analysts (structured-outputs first) once a key is configured; 9 — `TRIPLEX_DESKTOP=1` refuses an OpenRouter model with `missing_api_key` only while no session key was pushed, and the live path then uses ONLY that key, never the environment's; 15 — the default council (`council`) and the key ciphertext (`openrouterKey`) join main's `settings.json`; the three site views stay whatever council a conversation seats (a site outside it is hidden with a null rect) — lazy views and `openChats(convId, sites?)` are Stage 2 of that plan.

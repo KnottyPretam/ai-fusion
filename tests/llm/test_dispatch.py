@@ -208,7 +208,7 @@ async def test_desktop_mode_without_a_session_key_refuses_openrouter_models(monk
     e = deltas[0]
     assert e.code == "missing_api_key" and e.error_type == "triplex"
     assert e.message == client_mod.DESKTOP_NO_KEY_MESSAGE
-    assert "Settings" in e.message and "web:<slot>" in e.message and "ollama:<name>" in e.message
+    assert "Agents page" in e.message and "web:<slot>" in e.message and "ollama:<name>" in e.message
     assert mock.calls == []
 
 

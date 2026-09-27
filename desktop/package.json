@@ -22,7 +22,7 @@
   "overrides": {
     "@electron-internal/extract-zip": ">=1.0.4"
   },
-  "description": "Solomon's Judgment \u2014 Claude, ChatGPT and Grok in one window under your own logins",
+  "description": "Solomon's Judgment \u2014 a council of two to five AI agents in one window: your own ChatGPT, Claude and Grok logins, OpenRouter models on one key, local Ollama models",
   "homepage": "https://github.com/KnottyPretam/ai-fusion",
   "author": {
     "name": "KnottyPretam",

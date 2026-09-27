@@ -218,7 +218,7 @@ def api_key() -> str | None:
 
 DESKTOP_NO_KEY_MESSAGE = (
     "desktop mode: no OpenRouter key is configured, so an OpenRouter model cannot be called; "
-    "enter an OpenRouter key in Settings, or choose a web:<slot> or ollama:<name> model"
+    "enter an OpenRouter key on the Agents page, or choose a web:<slot> or ollama:<name> model"
 )
 
 
