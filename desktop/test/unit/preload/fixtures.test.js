@@ -222,9 +222,10 @@ test('chatgpt-effort-streaming: the finished turn carries the "Rate response" do
   const { doc, adapter } = adapterFor('chatgpt-effort-streaming')
   const bodies = [...doc.querySelectorAll("div[class*='block-'] > div.text-size-chat.relative.overflow-visible")]
   assert.equal(bodies.length, 2)
-  const done = adapter.findDone(bodies[0])
+  const done = adapter.findDone(bodies[0]) // a {el, selector} match record, as every cascade lookup answers
   assert.ok(done, 'the first (finished) reply has its action bar')
-  assert.equal(done.getAttribute('aria-label'), 'Rate response')
+  assert.equal(done.selector, "button[aria-label='Rate response']")
+  assert.equal(done.el.getAttribute('aria-label'), 'Rate response')
   assert.equal(adapter.findDone(bodies[1]), null, 'the second reply is still streaming: no action bar yet')
 })
 
