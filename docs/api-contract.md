@@ -545,7 +545,7 @@ never logged. `backend/llm/fixtures/models.json` gains `google/gemini-3.8-flash`
 `web:` nor `ollama:` is refused BEFORE the cost-cap and key checks ONLY while no session key has been
 pushed: `slot_error{code:"missing_api_key", error_type:"triplex", message: DESKTOP_NO_KEY_MESSAGE}`
 ("desktop mode: no OpenRouter key is configured, so an OpenRouter model cannot be called; enter an
-OpenRouter key in Settings, or choose a web:<slot> or ollama:<name> model"); nothing reaches the mock
+OpenRouter key on the Agents page, or choose a web:<slot> or ollama:<name> model"); nothing reaches the mock
 or the network. `transport_disabled` is NO LONGER MINTED (the constant stays in `bridge.py`). With a
 session key the OpenRouter branch runs as always — the cost cap first, then the key — with
 `client.api_key()`: in desktop mode ONLY `session_key.get_key()`, never `settings().openrouter_api_key`
