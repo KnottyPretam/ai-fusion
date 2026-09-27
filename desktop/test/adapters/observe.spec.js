@@ -887,7 +887,10 @@ test.describe('S9: a fenced reply, its code block’s copy control, and a stop b
       const r = await replyState(page)
       expect(res.ok).toBe(true)
       expect(res.doneBy).toBe(DONE_BY[site])
-      expect(res.ms).toBeLessThan(8000) // no hang: an open fence is not a veto on the end signal
+      // no hang: an open fence is not a veto on the end signal. claude ends by stop_gone, and since
+      // 2026-09-27 a vanished stop control has to stay gone for its stopGoneGraceMs (15 s — claude.ai
+      // drops it during a mid-reply web search) before that counts, so its bound carries the grace.
+      expect(res.ms).toBeLessThan(8000 + (site === 'claude' ? DEFAULT_SELECTORS.claude.stopGoneGraceMs : 0))
       expect(res.text).toContain('Here is the extraction:')
       expect(res.text).toContain('"divergences": []')
       // WHY no fence-parity rule: the reply's fence is unterminated (ONE marker), the capture's is
