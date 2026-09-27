@@ -90,7 +90,8 @@ test('watch(): a debounced change to the override reloads and reports {config, e
 
 test('captureTimeoutsFor / chatUrlPatternFor read the v2 keys with the contract defaults', () => {
   // S10: chatgpt's settle window is its own (1200 ms); every other site keeps the 400 ms default
-  assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'chatgpt'), { quietMs: 2500, settleMs: 1200, firstTokenMs: 90000, captureTimeoutMs: 300000 })
+  // 2026-09-27: chatgpt's capture budget is the whole pane grant (its effort picker thinks for minutes)
+  assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'chatgpt'), { quietMs: 2500, settleMs: 1200, firstTokenMs: 90000, captureTimeoutMs: 600000 })
   assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'claude'), { quietMs: 2500, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 300000 })
   assert.deepEqual(captureTimeoutsFor({ grok: { quietMs: 100, settleMs: 900, captureTimeoutMs: -5 } }, 'grok'), { quietMs: 100, settleMs: 900, firstTokenMs: 90000, captureTimeoutMs: 300000 })
   // a config that predates the key (or carries a bad one) falls back to the contract default, not to chatgpt's

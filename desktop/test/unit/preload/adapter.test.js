@@ -210,7 +210,7 @@ test('countAssistant(): assistant-role containers only — a user turn is never 
   doc.match['.font-claude-message'] = [shared]
   doc.match["div[id^='response-']"] = [{}]
   assert.equal(a.countAssistant(), 3) // de-duplicated across the assistant selectors
-  assert.deepEqual([...ASSISTANT_SELECTORS], ["[data-message-author-role='assistant']", '.font-claude-response', '.font-claude-message', "div[id^='response-']"])
+  assert.deepEqual([...ASSISTANT_SELECTORS], ["[data-message-author-role='assistant']", "div[class*='block-'] > div.text-size-chat.relative.overflow-visible", '.font-claude-response', '.font-claude-message', "div[id^='response-']"])
   assert.ok(ASSISTANT_SELECTORS.every((s) => !MESSAGE_SELECTORS.includes(s) || s !== '[data-message-author-role]'))
   const b = createAdapter({ document: doc, site: 'chatgpt', selectors: { ...DEFAULT_SELECTORS.chatgpt, assistant: ['.custom-turn'] } })
   doc.match['.custom-turn'] = [{}, {}]
