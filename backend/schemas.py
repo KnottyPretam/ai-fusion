@@ -13,19 +13,37 @@ import re
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
+from collections.abc import Sequence
 
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 SCHEMA_VERSION = 1
 
 # --------------------------------------------------------------------------- vocabularies
-SlotId = Literal["claude", "chatgpt", "grok"]
-SLOT_IDS: tuple[SlotId, ...] = ("claude", "chatgpt", "grok")
+# The vendor CATALOG (2026-09-27, "a council anyone can assemble"): the classic three FIRST, in the
+# order every existing document, fixture README and subset rule was written against, then the four
+# vendors a council may also seat. A conversation's COUNCIL is the 2..5 keys of its
+# `slot_config.slots` (`council_of`), never the whole catalog; `DEFAULT_COUNCIL` names the three.
+SlotId = Literal["claude", "chatgpt", "grok", "gemini", "deepseek", "qwen", "mimo"]
+SLOT_IDS: tuple[SlotId, ...] = ("claude", "chatgpt", "grok", "gemini", "deepseek", "qwen", "mimo")
+DEFAULT_COUNCIL: tuple[SlotId, ...] = SLOT_IDS[:3]
+COUNCIL_MIN = 2
+COUNCIL_MAX = 5
 # Slot -> OpenRouter slug vendor prefix (the part before the first "/"). Frozen; the frontend
-# duplicates it inside features/send because state/* is frozen.
-SLOT_VENDORS: dict[SlotId, str] = {"claude": "anthropic", "chatgpt": "openai", "grok": "x-ai"}
-Label = Literal["R1", "R2", "R3"]
-LABELS: tuple[Label, ...] = ("R1", "R2", "R3")
+# duplicates it inside features/send because state/* is frozen. Verified against the live
+# OpenRouter /models on 2026-09-27 (google 41, deepseek 16, qwen 54, xiaomi 5 models).
+SLOT_VENDORS: dict[SlotId, str] = {
+    "claude": "anthropic",
+    "chatgpt": "openai",
+    "grok": "x-ai",
+    "gemini": "google",
+    "deepseek": "deepseek",
+    "qwen": "qwen",
+    "mimo": "xiaomi",
+}
+# R1..R5: a conversation uses the prefix of its council's size (`council_labels`); R1..R3 for the three.
+Label = Literal["R1", "R2", "R3", "R4", "R5"]
+LABELS: tuple[Label, ...] = ("R1", "R2", "R3", "R4", "R5")
 Effort = Literal["off", "low", "medium", "high"]
 EFFORTS: tuple[Effort, ...] = ("off", "low", "medium", "high")
 Materiality = Literal["high", "medium", "low"]
@@ -59,10 +77,12 @@ class SlotConfig(BaseModel):
 
     @field_validator("slots")
     @classmethod
-    def _all_slots_present(cls, v: dict[str, SlotSpec]) -> dict[str, SlotSpec]:
-        missing = [s for s in SLOT_IDS if s not in v]
-        if missing:
-            raise ValueError(f"slot_config.slots missing {missing}")
+    def _council_size(cls, v: dict[str, SlotSpec]) -> dict[str, SlotSpec]:
+        # 2026-09-27: a council is any 2..5 of the catalog (the key literal already rejects an unknown
+        # id); before, every one of the classic three had to be present. Every document valid then is
+        # valid now.
+        if not COUNCIL_MIN <= len(v) <= COUNCIL_MAX:
+            raise ValueError(f"slot_config.slots must name between {COUNCIL_MIN} and {COUNCIL_MAX} slots, got {sorted(v)}")
         return v
 
 
@@ -350,16 +370,29 @@ def to_public(conv: Conversation) -> ConversationPublic:
     return ConversationPublic.model_validate(conv.model_dump(exclude={"anon_map"}))
 
 
-def new_anon_map(rng: random.Random | None = None) -> dict[Label, SlotId]:
-    """A random, per-conversation R-label -> slot permutation. Stamped once by store.create in
-    LIVE mode (mock mode stamps store.MOCK_ANON_MAP), persisted, never re-derived from position."""
-    slots = list(SLOT_IDS)
+def council_of(cfg: SlotConfig) -> tuple[SlotId, ...]:
+    """The slots this configuration seats, in catalog (`SLOT_IDS`) order — the ORDER is what every
+    subset rule, export meta line and mock anon map is written against, so it never follows the
+    dict's own key order."""
+    return tuple(s for s in SLOT_IDS if s in cfg.slots)
+
+
+def council_labels(council: Sequence[SlotId]) -> tuple[Label, ...]:
+    """R1..Rn for a council of n."""
+    return LABELS[: len(council)]
+
+
+def new_anon_map(rng: random.Random | None = None, council: Sequence[SlotId] = DEFAULT_COUNCIL) -> dict[Label, SlotId]:
+    """A random, per-conversation R-label -> slot permutation over the COUNCIL. Stamped once by
+    store.create in LIVE mode (mock mode stamps store.mock_anon_map), persisted, never re-derived
+    from position."""
+    slots = list(council)
     (rng or random).shuffle(slots)
-    return dict(zip(LABELS, slots, strict=True))
+    return dict(zip(LABELS[: len(slots)], slots, strict=True))
 
 
-def empty_threads() -> dict[SlotId, list[ThreadMessage]]:
-    return {s: [] for s in SLOT_IDS}
+def empty_threads(council: Sequence[SlotId] = DEFAULT_COUNCIL) -> dict[SlotId, list[ThreadMessage]]:
+    return {s: [] for s in council}
 
 
 # --------------------------------------------------------------------------- LLM layer types

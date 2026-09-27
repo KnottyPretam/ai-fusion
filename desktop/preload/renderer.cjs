@@ -60,6 +60,10 @@ function subscribe(channel) {
 const api = Object.freeze({
   version: VERSION,
   slots: SLOTS,
+  // 2026-09-27: `slots` is the list of SITES with a native view in this build (the same three); the
+  // council a conversation seats is `slot_config.slots` (2..5 of the 7-vendor catalog) and lives in
+  // the backend, with main's DEFAULT for new conversations under `getCouncil`/`setCouncil`.
+  sites: SLOTS,
   getInfo: () => ipcRenderer.invoke('panes:getInfo'),
   setLayout: (layout) => {
     ipcRenderer.send('panes:layout', layout)
@@ -92,6 +96,16 @@ const api = Object.freeze({
   // Theme (settings.json is authoritative; the renderer mirrors it into localStorage for the first paint):
   setTheme: (theme) => ipcRenderer.invoke('panes:setTheme', theme),
   onTheme: subscribe('panes:theme'),
+  // Council (2026-09-27): main's default council for NEW conversations — {slots: {[slot]: {model, effort}}},
+  // 2..5 of the 7-vendor catalog, validated and persisted by main; `panes:council` replays it.
+  getCouncil: () => ipcRenderer.invoke('panes:getCouncil'),
+  setCouncil: (spec) => ipcRenderer.invoke('panes:setCouncil', spec),
+  onCouncil: subscribe('panes:council'),
+  // The OpenRouter key never reaches the renderer: main encrypts it (safeStorage), pushes it to the
+  // backend over the bridge token, and answers only {configured, prefix, length, pushed, error?}.
+  getOpenRouterKey: () => ipcRenderer.invoke('panes:getOpenRouterKey'),
+  setOpenRouterKey: (key) => ipcRenderer.invoke('panes:setOpenRouterKey', key),
+  onOpenRouterKey: subscribe('panes:openRouterKey'),
 })
 
 contextBridge.exposeInMainWorld('triplex', api)

@@ -31,6 +31,10 @@
   --claude: #d97757;
   --chatgpt: #10a37f;
   --grok: #1d1d1f;
+  --gemini: #1a73e8;
+  --deepseek: #3b5bdb;
+  --qwen: #7048e8;
+  --mimo: #c2255c;
   --on-accent: #ffffff;
   /* A filled --warn ground carrying small bold text: the light --warn is too pale for white
      (3.6:1), so badges use --warn-fill with --on-warn ink. Dark keeps --warn with dark ink. */
@@ -62,6 +66,10 @@
   --claude: #e08a68;
   --chatgpt: #19c99b;
   --grok: #f0f0f0;
+  --gemini: #8ab4f8;
+  --deepseek: #91a7ff;
+  --qwen: #b197fc;
+  --mimo: #f783ac;
   --on-accent: #0d1117;
   --warn-fill: #d29922;
   --on-warn: #0d1117;
@@ -87,6 +95,10 @@
     --claude: #e08a68;
     --chatgpt: #19c99b;
     --grok: #f0f0f0;
+    --gemini: #8ab4f8;
+    --deepseek: #91a7ff;
+    --qwen: #b197fc;
+    --mimo: #f783ac;
   --on-accent: #0d1117;
   --warn-fill: #d29922;
   --on-warn: #0d1117;

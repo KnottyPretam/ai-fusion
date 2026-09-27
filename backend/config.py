@@ -57,7 +57,19 @@ FORBIDDEN_IDENTITY_STRINGS: tuple[str, ...] = (
     "opus",
     "sonnet",
     "fable",
+    # 2026-09-27, the four catalog vendors: their model/product names are identities like the rest.
+    # "google" is NOT here on purpose: it is an ordinary word in claims ("Google's TPU") and would be
+    # scrubbed to [model]; it is matched in slug context only (FORBIDDEN_VENDOR_PREFIXES).
+    "gemini",
+    "deepseek",
+    "qwen",
+    "mimo",
+    "alibaba",
+    "xiaomi",
 )
+# Vendor org names that are also everyday words: matched only as an OpenRouter slug prefix, i.e.
+# followed by "/" (google/gemini-3.8-pro).
+FORBIDDEN_VENDOR_PREFIXES: tuple[str, ...] = ("google",)
 # Model code names that collide with ordinary vocabulary ("Luna 9", "per sol", "ad astra"):
 # matched only in slug context, i.e. preceded by "-" (gpt-5.6-luna, gpt-6-astra).
 FORBIDDEN_MODEL_CODENAMES: tuple[str, ...] = ("luna", "sol", "astra")

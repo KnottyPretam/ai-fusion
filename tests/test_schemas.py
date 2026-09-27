@@ -7,6 +7,12 @@ from pydantic import ValidationError
 
 from backend.config import DEFAULT_SLOT_CONFIG
 from backend.schemas import (
+    COUNCIL_MAX,
+    COUNCIL_MIN,
+    DEFAULT_COUNCIL,
+    council_labels,
+    council_of,
+    empty_threads,
     LABELS,
     SLOT_IDS,
     AnalyzeTurn,
@@ -147,13 +153,13 @@ def test_to_public_strips_anon_map():
         anon_map=new_anon_map(random.Random(0)),
     )
     pub = to_public(conv).model_dump()
-    assert "anon_map" not in pub and set(pub["threads"]) == set(SLOT_IDS)
+    assert "anon_map" not in pub and set(pub["threads"]) == set(DEFAULT_COUNCIL)
 
 
 def test_new_anon_map_is_a_permutation():
     for seed in range(20):
         m = new_anon_map(random.Random(seed))
-        assert tuple(m) == LABELS and sorted(m.values()) == sorted(SLOT_IDS)
+        assert tuple(m) == LABELS[:3] and sorted(m.values()) == sorted(DEFAULT_COUNCIL)
 
 
 def test_thread_message_projection():
@@ -213,7 +219,7 @@ def test_strict_json_schema(cls):
 def test_slot_vendors_and_turn_extras():
     from backend.schemas import SLOT_VENDORS, ContinueTurn
 
-    assert SLOT_VENDORS == {"claude": "anthropic", "chatgpt": "openai", "grok": "x-ai"}
+    assert SLOT_VENDORS == {"claude": "anthropic", "chatgpt": "openai", "grok": "x-ai", "gemini": "google", "deepseek": "deepseek", "qwen": "qwen", "mimo": "xiaomi"}
     t = SendTurn(
         prompt="q",
         responses={"claude": "a", "chatgpt": "b", "grok": "c"},
@@ -337,3 +343,69 @@ def test_sse_frame_and_request_key():
         canonical_request_key("m", [{"role": "user", "content": "a"}], {"type": "json_schema"})
         != k1
     )
+
+
+# --------------------------------------------------------------------------- council (2026-09-27)
+
+
+def test_council_bounds_two_to_five_of_the_catalog():
+    spec = {"model": "m"}
+    with pytest.raises(ValidationError):
+        SlotConfig(slots={"claude": spec}, analyst_model="a")
+    assert council_of(SlotConfig(slots={"claude": spec, "qwen": spec}, analyst_model="a")) == ("claude", "qwen")
+    five = {s: spec for s in ("claude", "chatgpt", "grok", "gemini", "deepseek")}
+    assert len(council_of(SlotConfig(slots=five, analyst_model="a"))) == 5
+    with pytest.raises(ValidationError):
+        SlotConfig(slots={s: spec for s in SLOT_IDS[:6]}, analyst_model="a")
+    with pytest.raises(ValidationError):
+        SlotConfig(slots={"claude": spec, "bing": spec}, analyst_model="a")
+    assert (COUNCIL_MIN, COUNCIL_MAX) == (2, 5) and DEFAULT_COUNCIL == ("claude", "chatgpt", "grok")
+
+
+def test_council_of_follows_the_catalog_order_not_the_dict_order():
+    cfg = SlotConfig(slots={"qwen": {"model": "m"}, "chatgpt": {"model": "m"}, "gemini": {"model": "m"}}, analyst_model="a")
+    assert council_of(cfg) == ("chatgpt", "gemini", "qwen")
+    assert council_labels(council_of(cfg)) == ("R1", "R2", "R3")
+    assert council_labels(("claude", "qwen")) == ("R1", "R2")
+
+
+def test_new_anon_map_is_a_bijection_onto_the_council_for_two_and_five():
+    for council in (("claude", "qwen"), ("claude", "chatgpt", "grok", "gemini", "deepseek")):
+        for seed in range(20):
+            m = new_anon_map(random.Random(seed), council)
+            assert tuple(m) == LABELS[: len(council)]
+            assert sorted(m.values()) == sorted(council)
+    assert set(empty_threads(("grok", "mimo"))) == {"grok", "mimo"}
+    assert set(empty_threads()) == set(DEFAULT_COUNCIL)
+
+
+def test_a_schema_v1_three_slot_document_still_validates_unchanged():
+    # The on-disk shape of every conversation written before 2026-09-27: three slots, R1..R3, no council field.
+    raw = {
+        "schema_version": 1,
+        "id": "8a4c6d2e-1f3b-4c5d-9e7f-0a1b2c3d4e5f",
+        "title": "old",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+        "slot_config": {
+            "slots": {"claude": {"model": "anthropic/x", "effort": "medium"}, "chatgpt": {"model": "openai/y", "effort": "medium"}, "grok": {"model": "x-ai/z", "effort": "medium"}},
+            "analyst_model": "openai/a",
+            "max_iterations": 2,
+            "materiality_min": "medium",
+            "grounded": False,
+        },
+        "threads": {"claude": [], "chatgpt": [], "grok": []},
+        "turns": [],
+        "anon_map": {"R1": "grok", "R2": "claude", "R3": "chatgpt"},
+    }
+    conv = Conversation.model_validate(raw)
+    assert council_of(conv.slot_config) == DEFAULT_COUNCIL
+    assert conv.anon_map == raw["anon_map"]
+
+
+def test_r5_is_a_label_and_r6_is_not():
+    from backend.schemas import Position
+
+    assert Position(model="R5", claim="c", justification="j").model == "R5"
+    with pytest.raises(ValidationError):
+        Position(model="R6", claim="c", justification="j")

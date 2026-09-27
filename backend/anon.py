@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES
+from .config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES, FORBIDDEN_VENDOR_PREFIXES
 from .prompts import QUOTED_DATA_NOTICE, delimited
 from .schemas import LABELS, SLOT_IDS, Conversation, Label, PeerState, SlotId
 
@@ -42,6 +42,11 @@ _IDENTITY_RE = re.compile(
 # Code names collide with ordinary vocabulary ("Luna 9", "per sol", "ad astra"): slug context only.
 _CODENAME_RE = re.compile(
     r"-(" + "|".join(re.escape(s) for s in FORBIDDEN_MODEL_CODENAMES) + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+# Vendor org names that are everyday words ("google") only count as an OpenRouter slug prefix: "google/".
+_VENDOR_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(" + "|".join(re.escape(s) for s in FORBIDDEN_VENDOR_PREFIXES) + r")/",
     re.IGNORECASE,
 )
 _LABEL_ORDER: dict[str, int] = {label: i for i, label in enumerate(LABELS)}
@@ -115,7 +120,7 @@ def scrub(text: str) -> str:
     a match is returned unchanged."""
     if not text:
         return ""
-    return _CODENAME_RE.sub(REDACTED, _IDENTITY_RE.sub(REDACTED, text))
+    return _VENDOR_PREFIX_RE.sub(REDACTED + "/", _CODENAME_RE.sub(REDACTED, _IDENTITY_RE.sub(REDACTED, text)))
 
 
 def find_leaks(text: str) -> list[str]:
@@ -126,6 +131,7 @@ def find_leaks(text: str) -> list[str]:
         return []
     found = {m.group(1).lower() for m in _IDENTITY_RE.finditer(text)}
     found |= {"-" + m.group(1).lower() for m in _CODENAME_RE.finditer(text)}
+    found |= {m.group(1).lower() + "/" for m in _VENDOR_PREFIX_RE.finditer(text)}
     leaks = sorted(found)
     if leaks:
         log.warning("identity leak in Triplex-authored text: %s", leaks)

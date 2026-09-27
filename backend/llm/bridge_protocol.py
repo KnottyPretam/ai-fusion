@@ -40,7 +40,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..schemas import Purpose, SlotId
+from ..schemas import Purpose
 
 PROTOCOL_VERSION = 1
 
@@ -49,6 +49,11 @@ SessionState = Literal["ok", "logged_out", "challenge", "blocked", "unknown"]
 SESSION_STATES: tuple[str, ...] = get_args(SessionState)
 View = Literal["pane", "analyst"]
 DoneBy = Literal["done_selector", "stop_gone", "quiet"]
+# The sites with a Stage-1 adapter — the bridge's OWN vocabulary, decoupled from the council catalog
+# (`schemas.SlotId`, 7 vendors since 2026-09-27): an OpenRouter or Ollama agent never crosses the bridge,
+# and `gemini` stays an invalid slot on the wire exactly as bridge-v1.json says, until a protocol v2.
+BridgeSlot = Literal["claude", "chatgpt", "grok"]
+BRIDGE_SLOTS: tuple[str, ...] = get_args(BridgeSlot)
 BridgeRole = Literal["chatgpt", "claude", "grok", "analyst"]
 RejectCode = Literal[
     "view_busy",
@@ -101,7 +106,7 @@ class CaptureMap(_Frame):
 class AnalystChoice(_Frame):
     """The site whose hidden page acts as the analyst (``null`` = no analyst chosen)."""
 
-    slot: SlotId
+    slot: BridgeSlot
 
 
 class Matched(_Frame):
@@ -135,7 +140,7 @@ class Hello(_Frame):
     protocol: Literal[1]
     token: str = Field(min_length=1)
     version: str
-    sites: list[SlotId] = Field(min_length=1, max_length=3)
+    sites: list[BridgeSlot] = Field(min_length=1, max_length=3)
     capture: CaptureMap
     analyst: AnalystChoice | None
 
@@ -159,7 +164,7 @@ class AnalystFrame(_Frame):
 
 class HealthFrame(_Frame):
     type: Literal["health"]
-    slot: SlotId
+    slot: BridgeSlot
     health: Health
 
 
@@ -169,7 +174,7 @@ class Accepted(_Frame):
     type: Literal["accepted"]
     req_id: ReqId
     view: View
-    slot: SlotId
+    slot: BridgeSlot
 
 
 class Rejected(_Frame):
@@ -255,7 +260,7 @@ class Request(_Frame):
     type: Literal["request"]
     req_id: ReqId
     model: str
-    slot: SlotId
+    slot: BridgeSlot
     view: View
     fresh: bool
     text: str

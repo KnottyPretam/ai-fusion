@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Iterable
 
-from backend.config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES
+from backend.config import FORBIDDEN_IDENTITY_STRINGS, FORBIDDEN_MODEL_CODENAMES, FORBIDDEN_VENDOR_PREFIXES
 
 _FORBIDDEN_RE = re.compile(
     r"(?<![A-Za-z0-9])("
@@ -17,6 +17,11 @@ _FORBIDDEN_RE = re.compile(
 # Code names only count in slug context: "gpt-5.6-luna", "gpt-6-astra".
 _CODENAME_RE = re.compile(
     r"-(" + "|".join(re.escape(s) for s in FORBIDDEN_MODEL_CODENAMES) + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+# Vendor org names that are everyday words ("google") only count as an OpenRouter slug prefix: "google/".
+_VENDOR_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(" + "|".join(re.escape(s) for s in FORBIDDEN_VENDOR_PREFIXES) + r")/",
     re.IGNORECASE,
 )
 
@@ -39,6 +44,7 @@ def find_identity_leaks(text: str, allow: Iterable[str] = ()) -> list[str]:
             text = text.replace(a, " ")
     found = {m.group(1).lower() for m in _FORBIDDEN_RE.finditer(text)}
     found |= {"-" + m.group(1).lower() for m in _CODENAME_RE.finditer(text)}
+    found |= {m.group(1).lower() + "/" for m in _VENDOR_PREFIX_RE.finditer(text)}
     return sorted(found)
 
 

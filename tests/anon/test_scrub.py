@@ -116,6 +116,18 @@ def test_module_regexes_mirror_the_test_helper():
     assert anon._IDENTITY_RE.flags == helpers._FORBIDDEN_RE.flags
     assert anon._CODENAME_RE.pattern == helpers._CODENAME_RE.pattern
     assert anon._CODENAME_RE.flags == helpers._CODENAME_RE.flags
+    assert anon._VENDOR_PREFIX_RE.pattern == helpers._VENDOR_PREFIX_RE.pattern
+    assert anon._VENDOR_PREFIX_RE.flags == helpers._VENDOR_PREFIX_RE.flags
+
+
+def test_google_counts_only_as_a_slug_prefix():
+    # "Google's TPU" is an ordinary claim and must survive; "google/gemini-3.8-pro" is a model identity.
+    assert anon.scrub("Google's TPU beats the rest") == "Google's TPU beats the rest"
+    assert anon.scrub("served by google/gemini-3.8-pro") == "served by [model]/[model]-3.8-pro"
+    from tests.helpers import find_identity_leaks
+
+    assert find_identity_leaks("Google's TPU") == []
+    assert find_identity_leaks("google/gemini-3.8-pro and Qwen") == ["gemini", "google/", "qwen"]
 
 
 # --------------------------------------------------------------------------- properties
