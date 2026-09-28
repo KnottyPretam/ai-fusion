@@ -5,7 +5,7 @@ import FusionPane from './index.jsx'
 import { applyEvents, renderWithStore } from '../../state/testing.jsx'
 import { initialState } from '../../state/registry.js'
 import { useDispatch } from '../../state/store.jsx'
-import { ANALYZE_PREFIX, EXTRACTION, ROUND1, SLOT_CONFIG, analyzeTurn, conversation, exchange, fakeResponse, fullRun, fusionStart, fusionTurnFromEvents, roundDone, sendTurn, sseText } from './fixtures.js'
+import { ANALYZE_PREFIX, EXTRACTION, ROUND1, SLOT_CONFIG, analyzeTurn, conversation, exchange, fakeResponse, fullRun, fusionStart, fusionTurnFromEvents, plannedConversation, roundDone, sendTurn, sseText } from './fixtures.js'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -489,4 +489,30 @@ describe('FusionPane: running a stream', () => {
 
 test('the registry knows the fusion slice with its initial shape', () => {
   expect(initialState().fusion.status).toBe('idle')
+})
+
+describe('FusionPane: the Plan section (2026-09-27)', () => {
+  test('appears right after the final report, under the same condition, and not with a notice or mid-run', () => {
+    const s = loaded(conversation(), [start, ...fullRun(), endOk])
+    const { unmount } = renderWithStore(<FusionPane />, { preloaded: s })
+    const final = screen.getByTestId('fusion-final')
+    const plan = screen.getByTestId('plan-root')
+    expect(final.nextElementSibling).toBe(plan)
+    expect(screen.getByTestId('plan-run')).toHaveTextContent('Make a plan')
+    unmount()
+    const notice = loaded(conversation([sendTurn()]), [start, ...ANALYZE_PREFIX, { type: 'error', message: 'nothing_to_fuse' }, { type: 'sse/end', feature: 'fusion', ok: false, error: 'nothing_to_fuse' }])
+    const { unmount: u2 } = renderWithStore(<FusionPane />, { preloaded: notice })
+    expect(screen.queryByTestId('plan-root')).toBeNull()
+    u2()
+    const running = loaded(conversation(), [start, fusionStart(), ...ROUND1])
+    renderWithStore(<FusionPane />, { preloaded: running })
+    expect(screen.queryByTestId('plan-root')).toBeNull()
+  })
+
+  test('hydrates the plan made for the fusion turn shown from a reloaded conversation', () => {
+    renderWithStore(<FusionPane />, { preloaded: loaded(plannedConversation()) })
+    expect(screen.getByTestId('fusion-exit-reason')).toHaveAttribute('data-exit-reason', 'max_iterations')
+    expect(screen.getByTestId('plan-root')).toHaveAttribute('data-status', 'done')
+    expect(screen.getByTestId('plan-run')).toHaveTextContent('Re-plan')
+  })
 })

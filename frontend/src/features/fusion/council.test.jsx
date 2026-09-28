@@ -66,6 +66,12 @@ describe('FusionPane over a five-council', () => {
     }
     expect(screen.getByTestId('fusion-side-d1-R5')).toHaveTextContent('Not selectable.')
     expect(screen.getByTestId('fusion-trace-d1')).toHaveTextContent('R1 defends → R2 defends → R3 defends → R4 defends → R5 defends → standing, round 1')
-    expect(screen.getByTestId('fusion-root').textContent).not.toMatch(/\b(claude|chatgpt|grok|gemini|mimo|xiaomi)\b/i)
+    // Plan (2026-09-27): the section under the report carries the ONE control that names agents by
+    // design — the picker of who writes the plan (and the "made by" echo of that pick), like the
+    // Send columns and the analyst picker; it cannot say which R-label is which. Everything else
+    // in the pane stays label-free.
+    const root = screen.getByTestId('fusion-root').cloneNode(true)
+    for (const n of root.querySelectorAll('[data-testid="plan-model"], [data-testid="plan-model-used"]')) n.remove()
+    expect(root.textContent).not.toMatch(/\b(claude|chatgpt|grok|gemini|mimo|xiaomi)\b/i)
   })
 })

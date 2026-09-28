@@ -41,8 +41,15 @@ import { APP_TITLE, logoDataUri } from './branding.js'
 /** The formats a step can be written as, in the order files are written. */
 export const FORMATS = Object.freeze(['md', 'html', 'pdf'])
 export const EXTENSIONS = Object.freeze({ md: '.md', html: '.html', pdf: '.pdf' })
-/** The turn kinds the UI can export (`schemas.Turn`); anything else is a bad_request. */
-export const TURN_TYPES = Object.freeze(['send', 'continue', 'analyze', 'fusion'])
+/**
+ * The turn kinds the UI can export (`schemas.Turn`); anything else is a bad_request. The renderer's
+ * `ExportControl` forwards its `turnType` verbatim (`runExport` → `triplex.exportTurn`), so every kind a
+ * pane exports must be listed here or that export is refused before the backend is asked: `refactor`
+ * (the Analyze pane's second control has sent it since S11 — it was missing here until 2026-09-27,
+ * so a desktop Refactor export was a `bad_request`) and `plan` (2026-09-27, the Fusion pane's Plan
+ * section). Pipeline order; the order only shapes the tests.
+ */
+export const TURN_TYPES = Object.freeze(['send', 'continue', 'refactor', 'analyze', 'fusion', 'plan'])
 export const MAX_ID_CHARS = 200
 export const MAX_TITLE_CHARS = 200
 /** Bounds for the generated stem: the whole stem, and the title slug inside it. */

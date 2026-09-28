@@ -50,7 +50,7 @@ import logging
 import math
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from pydantic import BaseModel
@@ -152,6 +152,9 @@ async def validated_call(
     messages: list[dict[str, str]],
     schema_model: type[BaseModel],
     fenced: bool,
+    max_tokens: int | None = None,
+    on_attempt: Callable[[str], None] | None = None,
+    on_retry: Callable[[str], None] | None = None,
 ) -> tuple[BaseModel | None, str, FeatureUsage, str | None]:
     """One validated call plus Analyze's own retry rule, driven here: `retries=0` on the client and
     at most `ATTEMPTS` tries, the second one carrying the correction message — and not at all when
@@ -160,9 +163,23 @@ async def validated_call(
 
     The partial of a failed capture is recorded in the attempts (`on_partial`) and NEVER folded
     into `raw`: the gate below and the correction message read `raw`, and after a site error the
-    only safe thing to do with what the site half-typed is to keep it."""
+    only safe thing to do with what the site half-typed is to keep it.
+
+    `max_tokens` (2026-09-27, append-only) is the completion budget for BOTH attempts; None keeps
+    this module's own `_max_tokens(model)` (the extraction stage), which is what every Refactor
+    and Pre-parse call wants. Plan (`features/plan.py`) borrows this primitive for its one call
+    and passes its own stage budget, because a whole procedure is a Send-sized answer, not a
+    4,000-token extraction.
+
+    `on_attempt` / `on_retry` (2026-09-27, append-only; Plan's review fixes): `on_attempt(text)`
+    is called once per attempt with exactly what is recorded for it (`raw or partial`), so a
+    caller can keep ONE entry per attempt instead of the joined `raw`; `on_retry(error)` is
+    called with the validation error right before the correction attempt is sent, so the text
+    it typed — `prompts.retry_message(error, fenced=)` — is reproducible from it. Refactor and
+    Pre-parse pass neither and are byte-identical to before."""
     usage = FeatureUsage()
     partial = ""
+    budget = _max_tokens(model) if max_tokens is None else max_tokens
 
     def keep(text: str) -> None:
         nonlocal partial
@@ -175,12 +192,14 @@ async def validated_call(
         messages=messages,
         schema_model=schema_model,
         effort=ANALYST_EFFORT,
-        max_tokens=_max_tokens(model),
+        max_tokens=budget,
         retries=0,
         on_partial=keep,
     )
     usage.merge(call_usage)
     attempts = [raw or partial]
+    if on_attempt is not None:
+        on_attempt(attempts[-1])
     for _ in range(ATTEMPTS - 1):
         if isinstance(parsed, schema_model):
             break
@@ -192,6 +211,8 @@ async def validated_call(
         follow_up.append(
             {"role": "user", "content": prompts.retry_message(error or "unknown error", fenced=fenced)}
         )
+        if on_retry is not None:
+            on_retry(error or "unknown error")
         partial = ""  # per attempt: a second call that fails clean must not inherit the first's
         parsed, raw, call_usage, error = await client.complete_json(
             role=ROLE,
@@ -200,12 +221,14 @@ async def validated_call(
             messages=[*messages, *follow_up],
             schema_model=schema_model,
             effort=ANALYST_EFFORT,
-            max_tokens=_max_tokens(model),
+            max_tokens=budget,
             retries=0,
             on_partial=keep,
         )
         usage.merge(call_usage)
         attempts.append(raw or partial)
+        if on_attempt is not None:
+            on_attempt(attempts[-1])
     value = parsed if isinstance(parsed, schema_model) else None
     return value, "\n\n".join(a for a in attempts if a), usage, error
 

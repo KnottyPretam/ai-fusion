@@ -158,9 +158,14 @@ function Extras({ slot, extras, withTestIds }) {
 
 function Message({ slot, msg, extras, isLatest }) {
   const fusion = msg.kind === 'fusion_challenge' || msg.kind === 'fusion_reply'
-  const cls = [styles.msg, msg.role === 'user' ? styles.user : styles.assistant, fusion ? styles.fusion : ''].filter(Boolean).join(' ')
+  // Plan (2026-09-27): a plan typed into this site's own chat through the pane is mirrored into the
+  // thread as plan_request / plan_reply, labelled the way the fusion exchange is (same marker, its
+  // own label) — the reply is JSON (fenced over the web transport), shown re-indented like a fusion reply.
+  const plan = msg.kind === 'plan_request' || msg.kind === 'plan_reply'
+  const json = msg.kind === 'fusion_reply' || msg.kind === 'plan_reply'
+  const cls = [styles.msg, msg.role === 'user' ? styles.user : styles.assistant, fusion || plan ? styles.fusion : ''].filter(Boolean).join(' ')
   let body
-  if (msg.kind === 'fusion_reply') body = <pre className={styles.raw}>{prettyJson(msg.content || '')}</pre>
+  if (json) body = <pre className={styles.raw}>{prettyJson(msg.content || '')}</pre>
   else if (msg.role === 'assistant') body = <Markdown text={msg.content || ''} />
   else body = <div className={styles.plain}>{msg.content}</div>
   return (
@@ -171,8 +176,14 @@ function Message({ slot, msg, extras, isLatest }) {
           <span className={styles.fusionKind}>{msg.kind === 'fusion_challenge' ? 'challenge' : 'reply'}</span>
         </div>
       ) : null}
+      {plan ? (
+        <div className={styles.fusionLabel} data-testid={`slot-${slot}-plan-label`}>
+          <span>Plan</span>
+          <span className={styles.fusionKind}>{msg.kind === 'plan_request' ? 'request' : 'reply'}</span>
+        </div>
+      ) : null}
       {body}
-      {msg.role === 'assistant' && msg.kind !== 'fusion_reply' ? <Extras slot={slot} extras={extras} withTestIds={isLatest} /> : null}
+      {msg.role === 'assistant' && !json ? <Extras slot={slot} extras={extras} withTestIds={isLatest} /> : null}
     </div>
   )
 }

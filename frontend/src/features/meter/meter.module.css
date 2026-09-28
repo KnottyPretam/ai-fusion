@@ -11,6 +11,7 @@
 .send { color: var(--primary); }
 .analyze { color: var(--fg); }
 .fusion { color: var(--fusion); }
+.plan { color: var(--fusion); }
 .total td { border-top: 1px solid var(--border); font-weight: 600; }
 .muted { color: var(--fg-muted); font-weight: 400; }
 .mult { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 3px; background: var(--fusion); color: var(--on-accent); font-weight: 700; font-size: 13px; }

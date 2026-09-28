@@ -98,6 +98,32 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   `exit_reason:"error"`. On the auto-run path the stream may instead end after `analyze_done` /
   `analyze_degraded` with the terminal `error{message:"nothing_to_fuse"|"analyze_degraded"}` (no
   fusion turn persisted); the fusion pane treats these as normal, non-crash end states.
+- `POST …/plan {of_fusion?, force?, model?}` → `plan_start{turn_id, of_fusion, model}`,
+  `plan_retry{error}`, `plan_done{turn, cached}` | `plan_degraded{turn}`. Added 2026-09-27 (Plan,
+  "one agent after Fusion"). ONE call to ONE agent turns a Fusion report into an executable
+  procedure (`Plan`: objective, prerequisites, numbered steps with action / why / inputs / outputs /
+  verify, a decision point for every divergence left standing or resolved only through unjustified
+  revisions, risks, done-when). `model` resolves `body.model` → `slot_config.plan_model` →
+  `web:claude` in desktop mode, `anthropic/claude-opus-5.5` otherwise, is stamped on
+  `PlanTurn.model` and carried in `plan_start`; the only validation is non-blank (422 `empty_model`)
+  — a `web:<site>` pane, `web:<site>:analyst`, `ollama:<name>` or an OpenRouter slug all pass, and
+  the transport's own refusal (`missing_api_key`, `not_captured`, a bridge code) is a DEGRADED turn,
+  as for Refactor. Pre-stream errors in order: 404 `not_found/conversation` → the fusion turn
+  (`of_fusion` omitted → the newest fusion turn, none → 409 `no_fusion_turn`; an unknown id → 404
+  `not_found/turn`; another type → 422 `not_a_fusion_turn`) → 422 `empty_model` (a `model` given
+  but blank) → 422 `plan_input_too_large{chars, max}`
+  when the rendered input exceeds `PLAN_INPUT_MAX_CHARS` (= `analyze.CONDENSE_CHUNK_CHARS`, the
+  measured one-message bound; nothing called, nothing persisted, never truncated) → cache: unless
+  `force`, the newest ok PlanTurn for that fusion turn replays `plan_start` (with the model that made
+  it) + `plan_done{cached:true}`, no guard, no call → 409 `busy` LAST. `plan_retry` is PROGRESS: one
+  narration while the agent writes, then — only when the one correction attempt runs (the web
+  no-retry rule applies) — a second `plan_retry` whose `error` is the validation error the
+  correction message carries. The call is `role="analyst"`,
+  `purpose="extraction"` (the frozen `Purpose` literal has no room, as for Refactor and Pre-parse;
+  the meter books it under its own `Plan` row); `plan_done` / `plan_degraded` is the last event and
+  follows the persisted turn. The whole prompt is ONE user message on every transport, and a
+  SUCCESSFUL plan typed into a council member's pane (`web:<slot>`, not `:analyst`) mirrors
+  `[plan_request, plan_reply]` into that slot's thread (`docs/semantics.md`, "Plan").
 
 
 ### `backend/schemas.py` (pydantic v2, `SCHEMA_VERSION = 1`)
@@ -138,6 +164,18 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   final: list[RoundStatus], exit_reason:"converged"|"stalemate"|"max_iterations"|"error"}`;
   `Turn = Annotated[Union[...], Field(discriminator="type")]`. `of_turn`/`of_analyze` are turn
   ids, never indexes. `store.append_turn` never assigns ids and rejects duplicates.
+- Plan (2026-09-27, append-only; `SCHEMA_VERSION` stays 1 and every earlier document validates
+  unchanged): `SlotConfig.plan_model: str|None = None` (a per-conversation default for the plan agent;
+  the picker's choice is otherwise per run); `ThreadMessage.kind` += `"plan_request"|"plan_reply"`
+  (the exchanges a pane-typed plan mirrors into that site's thread — one pair per attempt,
+  `meta={"plan_turn": <turn id>, "attempt": n}`, only when that member is seated on `web:<slot>`);
+  `PlanStep{number:int, title, action, why="", inputs=[], outputs=[], verify=""}`,
+  `PlanDecision{divergence_id: str|None=None, topic, options=[], recommendation="", rationale=""}`,
+  `PlanRisk{risk, mitigation=""}`, `Plan{objective, prerequisites=[], steps=[], decisions=[],
+  risks=[], done_when=[]}` (the agent's response schema, purpose `extraction`);
+  `PlanTurn{type:"plan", of_fusion: str, model: str, plan: Plan|None, status:"ok"|"degraded",
+  error: str|None, raw_attempts: list[str]}`; `Turn` += `PlanTurn`. `of_fusion` is a turn id, never
+  an index. `backend/config.py`: `MAX_TOKENS_STAGE["plan"] = 8000`.
 - `Conversation{schema_version, id, title, created_at, updated_at, slot_config, threads:
   dict[SlotId, list[ThreadMessage]], turns: list[Turn], anon_map: dict[Label, SlotId]}`;
   `ConversationPublic` = same minus `anon_map`; `to_public(conv)`; `ConversationSummary{id,
@@ -229,7 +267,9 @@ it, or null), `conversations` (list of ConversationSummary), `slotConfig`, `mode
 'done'|'error'|'aborted', error, httpStatus}` for `send`, `analyze`, `fusion` — disable buttons on
 `streaming`). **Feature slices** registered from `features/<x>/index.jsx` at module scope via
 `registerSlice(key, reducer, initial)`: `slots` (W9), `analyze` (W10), `fusion` (W11), `meter`
-(W12). Every slice receives every action (combineReducers semantics); untouched slices keep
+(W12) — and, later, `refactor` (S11, `features/analyze/index.jsx`), `panes` / `preparse` (desktop,
+`features/desktop/index.jsx`) and `plan` (2026-09-27, `features/fusion/index.jsx`; its shape is in
+the Plan addendum). Every slice receives every action (combineReducers semantics); untouched slices keep
 identity.
 
 **Actions** (frozen names): `sse/start{feature}`, `sse{feature, event}`,
@@ -413,7 +453,8 @@ web app never sends the new field.
 
 `GET /api/conversations/{conv_id}/export/{turn_id}?format=md|html` (`backend/routers/export.py`) → 200
 `text/markdown; charset=utf-8` or `text/html; charset=utf-8`: ONE self-contained document for that one
-turn (`send`, `continue`, `analyze`, `fusion`), built by the pure `backend/export.py` (`build_document`
+turn (`send`, `continue`, `analyze`, `fusion`, `refactor` since S11, `plan` since 2026-09-27 — Plan
+addendum), built by the pure `backend/export.py` (`build_document`
 → `render_markdown_doc` / `render_html_doc`, one document model rendered twice so the formats cannot
 drift). `format` accepts `md`/`markdown`/`html`/`htm` in any case and defaults to `md`; an unknown value
 is 422 `unknown_format`, an unknown conversation or turn is 404 `not_found`. Headers carry a suggested
@@ -588,3 +629,68 @@ exports `SlotColumn` by name (the desktop feature composes it). The Differs tabl
 `labelsFor(councilSize(sendTurn))`; the meter's cost column, multiplier and cap alert return in
 desktop mode when any member or the analyst is on OpenRouter (`meter[data-cost]`); the config bar's
 desktop analyst picker adds two OpenRouter groups (structured-outputs first) once a key is configured.
+
+## Plan addendum (2026-09-27 — "one agent after Fusion")
+
+**Endpoint and turn.** `POST …/plan` and `PlanTurn` are above (the endpoint list and the schemas
+section). One agent, one call, ONE user message: the rules, the JSON instruction (fenced for a
+`web:` model, Refactor's wording), the `Plan` schema and the rendered Fusion outcome go out as a
+single user message, because `bridge.text_for` types only the last user message into a pane — and the
+same message goes to an analyst page, Ollama or OpenRouter (one code path). The rendered input quotes
+the question, the agreements, every divergence with each side's latest claim and justification and
+its status, and the Fusion exit, each in its own `prompts.delimited()` block behind one
+`QUOTED_DATA_NOTICE`, every model-authored string `anon.scrub`bed — the agent sees R-labels only
+(`docs/semantics.md`, "Plan").
+
+**Export.** `GET …/export/{turn_id}` renders a `plan` turn titled `Plan`: header extras `planned
+fusion turn` and `status` — NEVER the model string (it can name a vendor; no Analyze / Fusion /
+Refactor document carries `analyst_model` either, and `tests/export/test_anonymity.py` is the
+standing gate) — then Objective, Prerequisites (or "(none)"), the Procedure as a `#` / step / action
+/ verify table followed by one heading per step with its action, why, inputs, outputs and verify
+(empty ones skipped), Decision points (`{id} — topic`, or the topic alone when the id is null;
+options, recommendation, rationale), Risks (`risk — mitigation`), Done when as a GFM task list
+(`- [ ] …` in Markdown, disabled checkboxes in HTML), a degraded turn's error and raw attempts, the
+usage last. Desktop: `desktop/main/export.js TURN_TYPES` lists `plan` — and `refactor`, which the
+Analyze pane's second `ExportControl` had been sending as `turnType` since S11 while main rejected it
+`bad_request`; `features/export/formats.js FEATURE_TURN_LABEL.plan = 'plan'`; `ExportControl
+feature="plan" turnType="plan"` → `export-plan`.
+
+**Frontend contract addendum.** The Plan section lives INSIDE `features/fusion/` (the S11 precedent:
+Refactor lives inside `features/analyze/`; `App.jsx` is frozen with six regions), rendered by
+`FusionPane` right after the final report under the same condition (a persisted fusion turn on
+screen, no notice) — not a drawer tab. Slice `plan`, registered from `features/fusion/index.jsx`:
+`{status: 'idle'|'running'|'working'|'done'|'degraded'|'error', turn, cached, notice, error,
+ofFusion, model}`; `plan_start` → running (`ofFusion`, `model`), `plan_retry` → working (`notice`),
+`plan_done` → done (`turn`, `cached`), `plan_degraded` → degraded (`error` = `turn.error`);
+`error` / `sse/end{ok:false}` / `sse/abort` on feature key `'plan'` exactly as
+`analyze/refactorSlice.js`; `conversation/loaded` hydrates from the newest fusion turn → the newest
+ok plan turn for it (an in-flight or just-settled state for the same `ofFusion` is kept, as
+`refactorSlice` keeps its `ofTurn`); `conversation/cleared` → initial. Pure helpers:
+`newestFusionTurn` (imported from `fusion/slice.js`), `newestOkPlanTurn(conversation, ofFusion)`,
+`planGate({fusion, streams})` → `{enabled, reason}` (enabled iff `fusion.status === 'done'` with a
+`fusion.turnId`, no `fusion.notice` and no stream `streaming`), `defaultPlanModel(desktop)`
+(`web:claude` | `anthropic/claude-opus-5.5`), `loadPlanModel(storage, desktop)` /
+`persistPlanModel(storage, model)` (`localStorage 'triplex.plan.model'`), `planModelOptions({items,
+desktop, keyConfigured})` → `[{label, options:[{id, name}]}]` (desktop: "your web sessions (typed
+into this conversation's chat)" = `web:claude` "Claude — this conversation's chat" FIRST, then
+`web:chatgpt`, `web:grok`; "hidden analyst pages" = the three `web:<site>:analyst`; "local (Ollama)"
+= catalog items with `raw.transport === 'ollama'`; "OpenRouter" = `raw.transport === 'openrouter'`,
+structured-outputs first, only when `keyConfigured`; browser: the OpenRouter catalog, structured
+first, with the default id present even when the catalog lacks it; the three site names come from a
+local `SITE_LABELS`, mirrored, never imported from another feature), `checkedSteps(storage, turnId)`
+/ `toggleStep(storage, turnId, n)` (`localStorage 'triplex.plan.checked.<turnId>'`, every access in
+try/catch). Test ids: `plan-root`, `plan-run` ("Make a plan" / "Re-plan" = `force:true`; the body
+carries `{model, of_fusion: fusion.turnId}` so the plan is for the report on screen), `plan-model`
+(a `<select>` of `<optgroup>`s), `plan-status[data-status]`, `plan-notice`, `plan-error`,
+`plan-cached`, `plan-stale` (the plan is for another fusion turn than the one shown),
+`plan-objective`, `plan-prerequisites`, `plan-steps` (the table: a `plan-step-<n>-done` checkbox,
+`#`, title, action, verify; a `plan-step-<n>-details` row with why / inputs / outputs; the row's
+`data-done`), `plan-decisions` (`plan-decision-<i>`), `plan-risks`, `plan-done-when` (read-only
+checkboxes), `plan-model-used` ("made by <model>" — the raw string is fine ON SCREEN, the user picked
+it), `plan-degraded` (error + `<details>` raw attempts), `plan-usage`, `export-plan`. The run is
+`run('plan', url, body)` then `loadConversation(dispatch, id, {isCurrent})`, as `FusionPane.onRun`;
+every button carries a `title`; styles are `plan*` classes in `fusion.module.css` on the existing
+tokens. `send/slice.js threadItems` / `SlotColumn` label a `plan_request` / `plan_reply` message
+"plan", as fusion messages are labelled. Meter: a `Plan` row (`FEATURE_ROWS` += `plan`; `plan_start`
+resets the last-invocation row, `plan_done` books the turn's totals unless `cached`, `plan_degraded`
+books); the cost-cap flag keys on the code in any event, as before.

@@ -42,6 +42,17 @@ function scan(el) {
   return el.innerHTML
 }
 
+// Plan (2026-09-27): the section under the Fusion report carries ONE control that names agents by
+// design — the picker of the model that writes the plan, and the "made by" line that echoes the
+// user's pick — the way the Send columns and the analyst picker name theirs. Neither can say which
+// R-label is which (the renderer never holds the map), so the gate scans the pane WITHOUT those two
+// nodes and everything else in it — the plan's own text, every title, the request — stays label-free.
+function withoutAgentPick(el) {
+  const clone = el.cloneNode(true)
+  for (const n of clone.querySelectorAll('[data-testid="plan-model"], [data-testid="plan-model-used"]')) n.remove()
+  return clone
+}
+
 async function runFrom(feature, format = 'all') {
   await userEvent.click(screen.getByTestId(`export-${feature}`))
   const menuHtml = scan(screen.getByTestId(`export-menu-${feature}`))
@@ -74,11 +85,32 @@ describe('the export control never reveals which slot is which', () => {
 
     const { menuHtml, payload } = await runFrom('fusion')
     expect(menuHtml).not.toMatch(IDENTITY)
-    expect(scan(container)).not.toMatch(IDENTITY)
+    expect(scan(withoutAgentPick(container))).not.toMatch(IDENTITY)
     expect(JSON.stringify(payload)).not.toMatch(IDENTITY)
     expect(payload).toMatchObject({ conversationId: 'c1', turnId: 'f1', formats: ['md', 'html', 'pdf'] })
     expect(scan(screen.getByTestId('export-fusion').parentElement)).not.toMatch(IDENTITY)
     expect(screen.getByTestId('fusion-timeline').textContent).toMatch(/R1|R2|R3/)
+  })
+
+  test('Plan: the section, its control, its menu and the request are label-free; only the agent pick names a vendor, by design', async () => {
+    const conv = { ...fusionFx.plannedConversation(), ...PLANTED }
+    const state = applyEvents('plan', [{ type: 'conversation/loaded', conversation: conv }])
+    const { container } = renderWithStore(<FusionPane />, { preloaded: state })
+
+    const { menuHtml, payload } = await runFrom('plan')
+    expect(menuHtml).not.toMatch(IDENTITY)
+    expect(scan(withoutAgentPick(container))).not.toMatch(IDENTITY)
+    expect(scan(withoutAgentPick(screen.getByTestId('plan-root')))).not.toMatch(IDENTITY)
+    expect(JSON.stringify(payload)).not.toMatch(IDENTITY)
+    expect(Object.keys(payload).sort()).toEqual(['conversationId', 'formats', 'title', 'turnId', 'turnType'])
+    expect(payload).toMatchObject({ conversationId: 'c1', turnId: 'p1', turnType: 'plan', formats: ['md', 'html', 'pdf'] })
+    // the plan's decision points speak of divergences, never of a slot
+    expect(screen.getByTestId('plan-decisions').textContent).toMatch(/d2/)
+    expect(scan(withoutAgentPick(screen.getByTestId('plan-report')))).not.toMatch(IDENTITY)
+    // the agent pick is the one place a vendor appears — as the user's own choice of who writes
+    // the plan (the desktop lists the web panes), like the Send columns name theirs
+    expect(scan(screen.getByTestId('plan-model'))).toMatch(/Claude/)
+    expect(screen.getByTestId('plan-model-used')).toHaveTextContent('made by web:claude')
   })
 
   test('the result line names files, never models', async () => {
@@ -110,7 +142,7 @@ describe('the export control never reveals which slot is which', () => {
   })
 
   test('the default file name derives from title + feature + turn — never from a slot', () => {
-    for (const feature of ['analyze', 'fusion']) {
+    for (const feature of ['analyze', 'fusion', 'plan']) {
       const base = defaultBaseName({ title: 'Gyro range question', feature, turnId: 'a1' })
       expect(base).not.toMatch(IDENTITY)
       expect(fileNameFor(base, 'pdf')).not.toMatch(IDENTITY)

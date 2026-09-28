@@ -362,3 +362,66 @@ the cost cap and before any network; with one it runs on that key under the same
 `transport_disabled` is no longer minted. The key is never logged, never echoed by a response (`status()`
 shows `sk-or-v1-` and the length, and no prefix at all for a key of another shape) and never a
 validation 422's `input` (the PUT body is read by hand).
+
+## Plan addendum (2026-09-27)
+
+**Plan.** `POST …/plan {of_fusion?, force?, model?}` turns ONE Fusion report into ONE executable
+procedure with ONE agent — the user's own Claude chat by default. `of_fusion` defaults to the newest
+`fusion` turn whatever its exit reason (`final` says what stood; a stalemate is still an outcome to
+act on); none → `409 {detail:{error:"no_fusion_turn"}}`; explicit but unknown → `404
+{detail:{error:"not_found", what:"turn"}}`; explicit but not a fusion turn → `422
+{detail:{error:"not_a_fusion_turn"}}`. The model is resolved `body.model` → `slot_config.plan_model`
+→ the default (`web:claude` under `TRIPLEX_DESKTOP=1`, `anthropic/claude-opus-5.5` otherwise),
+stamped on `PlanTurn.model` and announced in `plan_start`; the only validation is non-blank (422
+`empty_model`) — what the string can reach is decided by the transport at call time, and a transport
+refusal (`missing_api_key`, `not_captured`, a bridge code) is a DEGRADED turn with the message in
+`PlanTurn.error`, exactly as for Refactor. **The pane-typed default.** `web:claude` is the Claude
+PANE, not the hidden analyst page: the plan prompt is typed into THIS conversation's Claude chat (the
+site's own model setting applies — the user's Opus selection there) and the reply is read back
+through that site's capture, which therefore has to be ON (`not_captured` degrades the turn). Because
+the site's chat then holds that exchange, a SUCCESSFUL pane-typed plan appends ONE `[user plan_request,
+assistant plan_reply]` pair PER ATTEMPT (the typed prompt and its raw reply; then, after a
+correction, the retry message exactly as typed and the raw reply the parse read — `turn_id` = the
+PlanTurn id, `meta={"plan_turn": <id>, "attempt": n}`; `raw_attempts` holds the same raws, one entry
+per attempt) to `threads[<slot>]` in one write — the thread mirrors the chat, as Fusion's challenge
+and reply do — and ONLY then: nothing is appended on a degrade, for `web:<site>:analyst`, Ollama or
+OpenRouter, or unless the conversation seats that site's member ON that pane (`slots[<slot>].model ==
+"web:<slot>"` — a member seated on an OpenRouter slug never saw the exchange; a site the council does
+not seat would make `append_to_thread` raise; the plan is still made and persisted either way). **One message.** `bridge.text_for` types only the last user
+message into a pane, so the whole prompt — the rules, the JSON instruction (fenced iff
+`transport_kind(model) == "web"`, Refactor's wording), the `Plan` schema and the rendered input — is
+one user message on every transport (`prompts/plan.py`, count-aware through `prompts/council.py`:
+"Three anonymous experts answered the same question", `n = len(council_of(fusion_turn.slot_config))`);
+the correction attempt is Refactor's `retry_message`, and the call is `refactor.validated_call(...,
+schema_model=Plan, max_tokens=reasoning.token_budget(MAX_TOKENS_STAGE["plan"], meta, ANALYST_EFFORT))`
+— `role="analyst"`, `purpose="extraction"` (the frozen `Purpose` literal has no room), `retries=0`
+plus the one correction attempt, the web no-retry rule, `on_partial` into `raw_attempts`; two
+failures → `status="degraded"`, `plan_degraded` the last event (no `error` after it). **The input**
+(`plan.render_input`, pure): the question (the newest ok Refactor's restatement for that send turn,
+else `strip_format(send.prompt)`); the agreements as `topic: statement (R1, R2)` lines, or "(none)";
+every divergence of the Analyze turn as `id — topic — materiality — status`, where status reads
+`resolved` / `resolved only through unjustified revisions` / `still standing` from
+`fusion_turn.final` and `not fused (below the materiality floor)` for a divergence the extraction has
+but `final` does not, then each label's latest claim and justification (`export.latest_claim` /
+`export.latest_justification` — imported, never re-derived); and the Fusion exit (`converged` /
+`stalemate` / `max iterations reached` / `error`) with `len(rounds)` of `max_iterations` rounds. An
+Analyze turn no longer in the conversation renders "(the Analyze turn is no longer part of this
+conversation)" with no agreements or divergences — never a crash. `QUOTED_DATA_NOTICE` sits ONCE
+at the top, before the question block, and each section is its own `prompts.delimited()` block.
+EVERY analyst- or model-authored string (a divergence's id, topic, statement, claim, justification,
+and a Refactor's restated question) goes through `anon.scrub`; the USER's own prompt is quoted
+verbatim (out of scope, as everywhere else): the agent learns R-labels and nothing about who wrote
+what — the firewall holds for a fourth reader as it does for the analyst, and
+`tests/helpers.find_identity_leaks` over every message is the gate. **Size bound.** A rendered input
+over `PLAN_INPUT_MAX_CHARS` (= `analyze.CONDENSE_CHUNK_CHARS`, 6,000 — the measured one-message
+bound) is `422 {detail:{error:"plan_input_too_large", chars, max}}` before anything is called or
+persisted; never truncated, never condensed — a plan built on half the outcome is worse than no plan.
+**Cache rule.** Without `force`, the newest plan turn with `status=="ok"` for that fusion turn is
+replayed as `plan_start{turn_id:<existing>, of_fusion, model:<the model that made it>}` +
+`plan_done{turn, cached:true}` with no guard and no call, whatever the picker now shows; degraded
+turns are never served from cache — a new attempt is appended; `force` bypasses an ok turn. The
+pre-checks run before the first yield in this order: 404 → the fusion turn (409 / 404 / 422) → 422
+`empty_model` → 422 `plan_input_too_large` → cache → `busy_guard` LAST (409 `busy`); then ONE
+producer task owns the call
+and the writes and releases the guard in its `finally` before the final event is enqueued (the
+Refactor shape: a client disconnect never cancels the plan or releases the guard early).

@@ -136,3 +136,74 @@ export function fakeResponse(text, { ok = true, status = 200 } = {}) {
     body: { getReader: () => ({ read: async () => (i < chunks.length ? { value: chunks[i++], done: false } : { done: true }), releaseLock() {}, cancel: async () => {} }) },
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Plan (2026-09-27): a PlanTurn made from the fusion turn above (`fullRun().at(-1).turn`, id f1),
+// the events of one `POST …/plan` stream in the shapes backend/features/plan.py sends, and a
+// loaded conversation carrying send + analyze + fusion + plan turns. Identity-free content: the
+// section renders inside the Fusion pane, which the export leak gate scans.
+// ---------------------------------------------------------------------------------------------
+
+export const PLAN_USAGE = { calls: [], totals: { prompt_tokens: 2100, completion_tokens: 900, reasoning_tokens: 0, cost_usd: 0.0456, latency_ms: 30000, calls: 1 } }
+
+export const PLAN = {
+  objective: 'Configure the BMI088 gyroscope for the 2000 deg/s range over SPI and confirm the setting on the device.',
+  prerequisites: ['the BMI088 datasheet, revision 1.9', 'SPI access to the sensor from the host'],
+  steps: [
+    { number: 1, title: 'Select the interface', action: 'Wire the sensor for SPI.', why: 'SPI is what the rest of the procedure assumes; both interfaces are supported.', inputs: ['host SPI bus'], outputs: ['sensor on SPI'], verify: 'The chip id register reads 0x0F.' },
+    { number: 2, title: 'Set the gyroscope range', action: 'Write the range register for 2000 deg/s.', why: 'The range settled on in the comparison.', inputs: ['range register address'], outputs: ['range = 2000 deg/s'], verify: 'Reading the register back returns the 2000 deg/s code.' },
+    { number: 3, title: 'Choose the accelerometer bandwidth', action: 'Set the bandwidth per decision d2.', why: '', inputs: [], outputs: [], verify: 'The bandwidth register reads the chosen value.' },
+  ],
+  decisions: [{ divergence_id: 'd2', topic: 'accelerometer bandwidth', options: ['280 Hz, as one side holds', '145 Hz, as the register map cited by the other side gives'], recommendation: '145 Hz', rationale: 'The only cited evidence is the register map.' }],
+  risks: [{ risk: 'The range register code differs between datasheet revisions.', mitigation: 'Read the register back after writing it.' }],
+  done_when: ['the gyroscope reports 2000 deg/s full scale', 'the accelerometer bandwidth matches the decision taken'],
+}
+
+export function planTurn(id = 'p1', of_fusion = 'f1', { plan = PLAN, status = 'ok', model = 'web:claude', error = null, raw_attempts = [], usage = PLAN_USAGE } = {}) {
+  return { type: 'plan', id, ts: '2026-09-07T00:00:04.000Z', slot_config: SLOT_CONFIG, usage, of_fusion, model, plan: status === 'ok' ? plan : null, status, error, raw_attempts }
+}
+
+export const planEvents = {
+  start: ({ turn_id = 'p1', of_fusion = 'f1', model = 'web:claude' } = {}) => ({ type: 'plan_start', turn_id, of_fusion, model }),
+  retry: (error = 'asking the agent for a plan') => ({ type: 'plan_retry', error }),
+  done: (turn = planTurn(), cached = false) => ({ type: 'plan_done', turn, cached }),
+  degraded: (turn = planTurn('p2', 'f1', { status: 'degraded', error: 'parse_error: no JSON object found', raw_attempts: ['not json', 'still not json'] })) => ({ type: 'plan_degraded', turn }),
+  /** start → the narration → done: one whole successful stream. */
+  stream: (turn = planTurn(), { cached = false } = {}) => [planEvents.start({ turn_id: turn.id, of_fusion: turn.of_fusion, model: turn.model }), planEvents.retry(), planEvents.done(turn, cached)],
+}
+
+/** send + analyze + fusion (f1, max_iterations) + plan (p1 for f1): the whole chain persisted. */
+export function plannedConversation({ plan = planTurn(), id = 'c1' } = {}) {
+  const fusion = fullRun().at(-1).turn
+  return conversation([sendTurn(), analyzeTurn(), fusion, ...(plan ? [plan] : [])], id)
+}
+
+/**
+ * The desktop `GET /api/models` catalog with `raw.transport` (backend/llm/webmodels.py): the web
+ * panes and hidden analyst pages, local Ollama models and — once a key is configured — OpenRouter
+ * entries. The shape of features/desktop/fakes.js DESKTOP_CATALOG, copied here because features
+ * never import each other's internals, tests included.
+ */
+export const DESKTOP_CATALOG = [
+  { id: 'web:claude', name: 'Claude (web session)', vendor: 'anthropic', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:chatgpt', name: 'ChatGPT (web session)', vendor: 'openai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:grok', name: 'Grok (web session)', vendor: 'x-ai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:claude:analyst', name: 'Claude web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:chatgpt:analyst', name: 'ChatGPT web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:grok:analyst', name: 'Grok web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'ollama:hermes3', name: 'hermes3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
+  { id: 'ollama:qwen3', name: 'qwen3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
+  { id: 'openai/gpt-5', name: 'GPT-5', vendor: 'openai', efforts: ['low', 'medium', 'high'], structured_outputs: true, raw: { transport: 'openrouter' } },
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', vendor: 'anthropic', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', vendor: 'google', efforts: ['low', 'medium', 'high'], structured_outputs: true, raw: { transport: 'openrouter' } },
+  { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1', vendor: 'deepseek', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'qwen/qwen3-235b-a22b', name: 'Qwen3 235B', vendor: 'qwen', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+  { id: 'xiaomi/mimo-v2-flash', name: 'MiMo V2 Flash', vendor: 'xiaomi', efforts: ['off', 'low', 'medium', 'high'], structured_outputs: false, raw: { transport: 'openrouter' } },
+]
+
+/** The `models` slice loaded with a catalog (the desktop one by default). */
+export function modelsState(items = DESKTOP_CATALOG) {
+  const byId = {}
+  for (const m of items) byId[m.id] = m
+  return { items, byId, loaded: true, error: null }
+}

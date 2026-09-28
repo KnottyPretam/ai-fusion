@@ -3,6 +3,9 @@
 // justifications) and the usage summary. Bench instrument, not a product demo.
 // The toolbar also carries the Export control (features/export, test id `export-fusion`): it writes
 // the fusion turn shown here out as Markdown / HTML / PDF, R-labels only.
+// Plan (2026-09-27): under the final report sits the Plan section (./PlanSection.jsx) — ONE agent
+// turns the report into an executable procedure. It renders under the same condition as the report
+// itself (a persisted fusion turn shown, no notice) and never as a pane or drawer tab of its own.
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -10,6 +13,7 @@ import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useRunStream } from '../../api/runStream.js'
 import { loadConversation } from '../../api/http.js'
 import ExportControl from '../export/ExportControl.jsx'
+import PlanSection from './PlanSection.jsx'
 import {
   MAX_ITERATIONS,
   MIN_ITERATIONS,
@@ -379,7 +383,12 @@ export default function FusionPane() {
         </div>
       ) : null}
 
-      {fusion.status === 'done' && !fusion.notice && fusion.turnId ? <FinalPanel fusion={fusion} divs={divs} /> : null}
+      {fusion.status === 'done' && !fusion.notice && fusion.turnId ? (
+        <>
+          <FinalPanel fusion={fusion} divs={divs} />
+          <PlanSection conversation={conversation} fusion={fusion} />
+        </>
+      ) : null}
     </div>
   )
 }

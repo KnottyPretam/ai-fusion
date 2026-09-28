@@ -59,7 +59,10 @@ async def test_council_flow(run_flow, name):
     assert_send_persisted(f)
     prompt, responses = scenario_send(name)
     assert tuple(responses) == council and all(responses.values())
-    assert f.conv["slot_config"] == exp["slot_config"]
+    # The README block predates `SlotConfig.plan_model` (2026-09-27): a key it omits reads as the
+    # field's default, so the shipped scenario stays byte-identical.
+    expected_config = {"plan_model": None, **exp["slot_config"]}
+    assert f.conv["slot_config"] == expected_config
 
     # ---- Analyze: the prompt counts THIS council, the enum is R1..Rn ---------------------
     assert f.analyze is not None and f.analyze.status_code == 200

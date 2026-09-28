@@ -126,6 +126,40 @@ describe('SlotColumn: persisted thread', () => {
     expect(messages[1].querySelector('.markdown-content strong')).toHaveTextContent('2000')
   })
 
+  test('a plan typed into this chat (2026-09-27) is mirrored as plan_request / plan_reply, labelled like the fusion exchange', () => {
+    const c = conv({
+      threads: {
+        claude: [
+          msg('user', 'What is the gyro range?'),
+          msg('assistant', 'Up to **2000** deg/s.'),
+          msg('user', 'You are turning the outcome of a structured comparison into an executable plan.', { kind: 'plan_request', turn_id: 'p1', meta: { plan_turn: 'p1' } }),
+          msg('assistant', '```json\n{"objective":"Set the 2000 deg/s range","prerequisites":[],"steps":[],"decisions":[],"risks":[],"done_when":[]}\n```', { kind: 'plan_reply', turn_id: 'p1', meta: { plan_turn: 'p1' } }),
+        ],
+        chatgpt: [],
+        grok: [],
+      },
+    })
+    renderWithStore(<SlotColumn slot="claude" onContinue={() => {}} />, { preloaded: preloadedWith(c) })
+    const messages = screen.getAllByTestId('slot-claude-message')
+    expect(messages).toHaveLength(4)
+    expect(messages[2]).toHaveAttribute('data-kind', 'plan_request')
+    expect(messages[2].className).toContain('fusion') // the same marker as a fusion exchange
+    expect(messages[3]).toHaveAttribute('data-kind', 'plan_reply')
+    expect(messages[3].className).toContain('fusion')
+    const labels = screen.getAllByTestId('slot-claude-plan-label')
+    expect(labels).toHaveLength(2)
+    expect(labels[0]).toHaveTextContent('Plan')
+    expect(labels[0]).toHaveTextContent('request')
+    expect(labels[1]).toHaveTextContent('Plan')
+    expect(labels[1]).toHaveTextContent('reply')
+    expect(screen.queryAllByTestId('slot-claude-fusion-label')).toHaveLength(0)
+    // the request is plain text; the reply is the JSON, unfenced and pretty-printed
+    expect(messages[2].querySelector('.markdown-content')).toBeNull()
+    expect(messages[3]).toHaveTextContent('"objective": "Set the 2000 deg/s range"')
+    expect(messages[3].textContent).not.toContain('```')
+    expect(messages[1].querySelector('.markdown-content strong')).toHaveTextContent('2000')
+  })
+
   test('a fusion reply that arrived inside a ```json fence (the desktop web transport) is still pretty-printed, and an unparseable one is shown as captured', () => {
     // A web session is asked for a fenced block because a rendered chat page only preserves a
     // fence verbatim (backend prompts/fusion.py); the fence is chrome, the JSON inside is the reply.

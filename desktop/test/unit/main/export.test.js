@@ -226,6 +226,14 @@ test('dateStamp: UTC YYYY-MM-DD, a bad timestamp falls back to now', () => {
   assert.equal(/^\d{4}-\d{2}-\d{2}$/.test(dateStamp('not a date')), true)
 })
 
+test('TURN_TYPES: every kind a pane exports, frozen — refactor and plan included (2026-09-27)', () => {
+  // `ExportControl` sends its `turnType` verbatim, so a kind missing here is a `bad_request` on every
+  // export of that turn: `refactor` had been sent since S11 and rejected until this pin; `plan` is the
+  // Fusion pane's Plan section. The exact list is the contract — a kind must be added on purpose.
+  assert.deepEqual([...TURN_TYPES], ['send', 'continue', 'refactor', 'analyze', 'fusion', 'plan'])
+  assert.equal(Object.isFrozen(TURN_TYPES), true)
+})
+
 test('defaultFileName: <title>-<step>-<date>, safe, bounded, ASCII fallback for emoji / CJK titles', () => {
   assert.equal(defaultFileName({ title: 'Why is the sky blue?', turnType: 'send', ts: TS }), 'why-is-the-sky-blue-send-2026-09-18')
   for (const turnType of TURN_TYPES) {
@@ -278,6 +286,10 @@ test('requireExportRequest: ids, formats, the optional title and turn kind', () 
   assert.deepEqual(requireExportRequest({ conversationId: CONV, turnId: TURN, formats: ['pdf', 'md'] }), { conversationId: CONV, turnId: TURN, formats: ['md', 'pdf'], title: '', turnType: '' })
   assert.deepEqual(requireExportRequest({ conversationId: CONV, turnId: TURN, formats: ['md'], title: 'T', turnType: 'analyze' }).turnType, 'analyze')
   assert.equal(requireExportRequest({ conversationId: CONV, turnId: TURN, formats: ['md'], title: null, turnType: null }).title, '')
+  // 2026-09-27: the two kinds the panes send that were not (`refactor`) or did not yet (`plan`) exist here.
+  for (const turnType of ['refactor', 'plan']) {
+    assert.equal(requireExportRequest({ conversationId: CONV, turnId: TURN, formats: ['md'], turnType }).turnType, turnType)
+  }
   assert.equal(requireExportRequest({ conversationId: 'x'.repeat(MAX_ID_CHARS), turnId: TURN, formats: ['md'] }).conversationId.length, MAX_ID_CHARS)
   const bad = [
     null,

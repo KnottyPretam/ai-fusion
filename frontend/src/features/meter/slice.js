@@ -26,8 +26,13 @@
 //   any event carrying code cost_cap_exceeded -> costCapExceeded, a persistent warning flag
 //                                              (the backend cap is per session, so it is never
 //                                              cleared by switching conversations)
+//   plan_start{turn_id, of_fusion, model}   -> last.plan reset (2026-09-27: one agent's plan made
+//                                              from a Fusion report, a row of its own)
+//   plan_done{turn, cached}                 -> plan + last.plan from turn.usage.totals; a cached
+//                                              hit books nothing, exactly as analyze_done
+//   plan_degraded{turn}                     -> plan + last.plan (the attempts were paid for)
 export const ROW_KEYS = ['prompt_tokens', 'completion_tokens', 'reasoning_tokens', 'cost_usd', 'latency_ms', 'calls', 'truncated']
-export const FEATURE_ROWS = ['send', 'analyze', 'fusion']
+export const FEATURE_ROWS = ['send', 'analyze', 'fusion', 'plan']
 export const COST_CAP_CODE = 'cost_cap_exceeded'
 
 export function emptyRow() {
@@ -35,7 +40,9 @@ export function emptyRow() {
 }
 
 function emptyRows() {
-  return { send: emptyRow(), analyze: emptyRow(), fusion: emptyRow() }
+  const rows = {}
+  for (const k of FEATURE_ROWS) rows[k] = emptyRow()
+  return rows
 }
 
 export function initialMeter() {
@@ -86,6 +93,8 @@ function turnDelta(turn) {
       return { row: 'analyze', delta: { ...t, truncated: 0 } }
     case 'fusion':
       return { row: 'fusion', delta: { ...t, truncated: 0 } }
+    case 'plan':
+      return { row: 'plan', delta: { ...t, truncated: 0 } }
     default:
       return null
   }
@@ -114,7 +123,7 @@ export function meterFromConversation(conversation) {
     if (!turn.id) continue
     if (d.row === 'send') sendCostByTurn[turn.id] = num(totalsOf(turn).cost_usd)
     else if (d.row === 'analyze') analyzeOfTurn[turn.id] = turn.of_turn
-    else newestFusion = turn
+    else if (d.row === 'fusion') newestFusion = turn // a plan turn is booked, but it is not the fusion the multiplier is about
   }
   const out = { ...rows, last, sendCostByTurn, analyzeOfTurn, fusedSendCost: 0 }
   if (newestFusion) out.fusedSendCost = sendCostOfAnalyze(out, newestFusion.of_analyze) || last.send.cost_usd
@@ -122,8 +131,10 @@ export function meterFromConversation(conversation) {
 }
 
 export function rowsFromConversation(conversation) {
-  const { send, analyze, fusion } = meterFromConversation(conversation)
-  return { send, analyze, fusion }
+  const all = meterFromConversation(conversation)
+  const rows = {}
+  for (const k of FEATURE_ROWS) rows[k] = all[k]
+  return rows
 }
 
 function withTotal(s, patch) {
@@ -194,6 +205,13 @@ function reduceEvent(s, feature, ev) {
       const fused = next.fusedSendCost || sendCostOfAnalyze(next, ev.turn && ev.turn.of_analyze) || next.last.send.cost_usd
       return fused === next.fusedSendCost ? next : { ...next, fusedSendCost: fused }
     }
+    case 'plan_start':
+      return resetLast(s, 'plan')
+    case 'plan_done':
+      if (ev.cached) return s
+      return bookAsLast(s, 'plan', { ...totalsOf(ev.turn), truncated: 0 })
+    case 'plan_degraded':
+      return bookAsLast(s, 'plan', { ...totalsOf(ev.turn), truncated: 0 })
     default:
       return s
   }

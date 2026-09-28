@@ -26,8 +26,8 @@ export const FORMAT_TIPS = {
 /** Blob type per format (browser downloads only; the desktop writes the bytes itself). */
 export const FORMAT_MIME = { md: 'text/markdown;charset=utf-8', html: 'text/html;charset=utf-8', pdf: 'application/pdf' }
 
-/** What the pane is exporting, for the trigger's title and the disabled hint. */
-export const FEATURE_TURN_LABEL = { send: 'send turn', refactor: 'refactored view', analyze: 'analyze report', fusion: 'fusion report' }
+/** What the pane is exporting, for the trigger's title and the disabled hint. Plan (2026-09-27): the procedure under the Fusion report. */
+export const FEATURE_TURN_LABEL = { send: 'send turn', refactor: 'refactored view', analyze: 'analyze report', fusion: 'fusion report', plan: 'plan' }
 
 /** Formats available in this shell: PDF only where Electron can render it. */
 export function availableFormats(desktop) {

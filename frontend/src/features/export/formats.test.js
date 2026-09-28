@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { BROWSER_FORMATS, FORMATS, allLabel, availableFormats, baseNameOf, defaultBaseName, fileNameFor, formatsFor, latestChatTurn, latestTurnOfType, shortId, slugify } from './formats.js'
+import { BROWSER_FORMATS, FEATURE_TURN_LABEL, FORMATS, allLabel, availableFormats, baseNameOf, defaultBaseName, fileNameFor, formatsFor, latestChatTurn, latestTurnOfType, shortId, slugify } from './formats.js'
+
+describe('feature labels', () => {
+  test('every exporting feature has a label, the plan (2026-09-27) included, and none names a model', () => {
+    expect(FEATURE_TURN_LABEL).toEqual({ send: 'send turn', refactor: 'refactored view', analyze: 'analyze report', fusion: 'fusion report', plan: 'plan' })
+    expect(defaultBaseName({ title: 'Gyro range', feature: 'plan', turnId: 'p1' })).toBe('triplex-gyro-range-plan-p1')
+  })
+})
 
 describe('export naming', () => {
   test('slugify collapses punctuation, drops diacritics and never returns an empty stem', () => {

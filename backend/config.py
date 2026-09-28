@@ -42,6 +42,7 @@ MAX_TOKENS_STAGE: dict[str, int] = {
     "extraction": 4000,
     "defense": 2000,
     "convergence": 1000,
+    "plan": 8000,  # 2026-09-27 (append-only): one procedure per Fusion report; a Send-sized answer
 }
 # Matched case-insensitively on WORD boundaries in Triplex-authored prompts (semantics.md).
 FORBIDDEN_IDENTITY_STRINGS: tuple[str, ...] = (

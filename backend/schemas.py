@@ -74,6 +74,10 @@ class SlotConfig(BaseModel):
     max_iterations: int = Field(default=2, ge=1, le=5)
     materiality_min: Materiality = "medium"
     grounded: bool = False
+    # Plan (2026-09-27, append-only): the ONE model that turns a Fusion report into a procedure.
+    # None = the feature's own default (`features.plan.default_model`: the user's Claude web session
+    # in the desktop, Claude Opus on OpenRouter otherwise); a request may override it per run.
+    plan_model: str | None = None
 
     @field_validator("slots")
     @classmethod
@@ -87,7 +91,7 @@ class SlotConfig(BaseModel):
 
 
 # --------------------------------------------------------------------------- threads
-MessageKind = Literal["chat", "fusion_challenge", "fusion_reply"]
+MessageKind = Literal["chat", "fusion_challenge", "fusion_reply", "plan_request", "plan_reply"]
 
 
 class ThreadMessage(BaseModel):
@@ -327,8 +331,60 @@ class RefactorTurn(_TurnBase):
     raw_attempts: list[str] = Field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- plan (2026-09-27, append-only)
+class PlanStep(BaseModel):
+    """One step of the procedure. `verify` is how the person doing it knows the step took."""
+
+    number: int
+    title: str
+    action: str
+    why: str = ""
+    inputs: list[str] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    verify: str = ""
+
+
+class PlanDecision(BaseModel):
+    """A decision point the plan leaves to the reader: a divergence Fusion left standing (or
+    resolved only through flagged revisions) becomes a choice with the options and a
+    recommendation, never a silent pick."""
+
+    divergence_id: str | None = None
+    topic: str
+    options: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+    rationale: str = ""
+
+
+class PlanRisk(BaseModel):
+    risk: str
+    mitigation: str = ""
+
+
+class Plan(BaseModel):
+    """The plan model's response schema: an executable procedure distilled from one Fusion report
+    (purpose = "extraction" on the wire — the frozen Purpose literal has no room for a new name)."""
+
+    objective: str
+    prerequisites: list[str] = Field(default_factory=list)
+    steps: list[PlanStep] = Field(default_factory=list)
+    decisions: list[PlanDecision] = Field(default_factory=list)
+    risks: list[PlanRisk] = Field(default_factory=list)
+    done_when: list[str] = Field(default_factory=list)
+
+
+class PlanTurn(_TurnBase):
+    type: Literal["plan"] = "plan"
+    of_fusion: str
+    model: str  # the ONE model that wrote it (a transport string, as in SlotSpec.model)
+    plan: Plan | None = None
+    status: Literal["ok", "degraded"] = "ok"
+    error: str | None = None
+    raw_attempts: list[str] = Field(default_factory=list)
+
+
 Turn = Annotated[
-    SendTurn | ContinueTurn | AnalyzeTurn | FusionTurn | RefactorTurn,
+    SendTurn | ContinueTurn | AnalyzeTurn | FusionTurn | RefactorTurn | PlanTurn,
     Field(discriminator="type"),
 ]
 TurnAdapter: TypeAdapter[Turn] = TypeAdapter(Turn)

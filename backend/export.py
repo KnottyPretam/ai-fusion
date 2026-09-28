@@ -24,7 +24,9 @@ else -- exactly what the panes show. Those two builders never read `slot_config.
 `slot_config.analyst_model` or `SLOT_NAMES`, and `Conversation.anon_map` is never read anywhere in
 this module, so no document can map a label back to a vendor. A SEND (or Continue) document does
 name the slots -- Claude / ChatGPT / Grok -- because the Send columns are labelled that way on
-screen and the export is a copy of what the user is looking at. `tests/export/test_anonymity.py`
+screen and the export is a copy of what the user is looking at. A PLAN document (2026-09-27) quotes
+the procedure and never the model string that wrote it (`PlanTurn.model` can name a vendor, exactly
+as `analyst_model` can, and neither ever reaches a document). `tests/export/test_anonymity.py`
 is the gate. Out of scope for the leak rule, exactly as in `tests/e2e/test_leaks.py`: the verbatim
 user prompt, the conversation title (auto-titled from that prompt) and raw model-authored text
 (replies, analyst claims, justifications) -- a model that names a vendor in its own answer is the
@@ -55,7 +57,7 @@ from html import escape as _html_escape
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from . import api_errors
+from . import anon, api_errors
 from .branding import HTML_LOGO_PX, MARKDOWN_LOGO_PX, logo_data_uri
 from .config import settings
 from .prompts.council import label_or_list, number_word
@@ -72,6 +74,7 @@ from .schemas import (
     FusionRound,
     FusionTurn,
     Label,
+    PlanTurn,
     RefactorTurn,
     SendTurn,
     SlotConfig,
@@ -101,13 +104,14 @@ _FORMAT_ALIASES: dict[str, Format] = {
     "htm": "html",
 }
 
-DocKind = Literal["send", "continue", "analyze", "fusion", "refactor"]
+DocKind = Literal["send", "continue", "analyze", "fusion", "refactor", "plan"]
 KIND_TITLES: dict[str, str] = {
     "send": "Send",
     "continue": "Continue",
     "analyze": "Analyze",
     "fusion": "Fusion",
     "refactor": "Refactor",
+    "plan": "Plan",
 }
 
 #: The app's own three theme states, so an exported document looks like the app it came from (user
@@ -219,6 +223,15 @@ class Bullet:
 @dataclass(frozen=True)
 class Bullets:
     items: tuple[Bullet, ...]
+
+
+@dataclass(frozen=True)
+class Checklist:
+    """A task list (the plan's "done when", 2026-09-27): unticked boxes in both renderings -- a GFM
+    task list in Markdown, disabled checkboxes in HTML -- so a printed copy can be ticked by hand
+    and a Markdown viewer shows boxes rather than bullets. Items are quoted text, inline-escaped."""
+
+    items: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -688,7 +701,9 @@ def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
             )
         )
         if turn.error:
-            out.append(body(turn.error))
+            # A transport's own message can name the SITE ("capture is off for claude; …"):
+            # scrubbed, like every model-authored string the document quotes.
+            out.append(body(anon.scrub(turn.error)))
         attempts = turn.raw_attempts
         inner: list[Any] = []
         for i, attempt in enumerate(attempts, start=1):
@@ -989,6 +1004,115 @@ def _fusion_blocks(conv: Conversation, turn: FusionTurn) -> list[Any]:
     return out
 
 
+# --------------------------------------------------------------------------- plan
+PLAN_DEGRADED_NOTE = (
+    "The plan model did not return a usable procedure after one retry, so this turn carries no plan."
+)
+
+
+def _plan_blocks(conv: Conversation, turn: PlanTurn) -> list[Any]:
+    """The Plan document (2026-09-27): the procedure as a table and a checklist. NEVER `turn.model`
+    (module docstring, "ANONYMITY": the model string can name a vendor, exactly as `analyst_model`
+    can, and the Analyze / Fusion / Refactor documents carry neither)."""
+    out: list[Any] = [
+        _header(
+            conv,
+            turn,
+            (("planned fusion turn", turn.of_fusion), ("status", turn.status)),
+        )
+    ]
+    plan = turn.plan
+    if turn.status == "degraded" or plan is None:
+        out.append(Heading("Degraded", 2))
+        out.append(Para(PLAN_DEGRADED_NOTE))
+        if turn.error:
+            # The bridge's errors name the site the plan was typed into ("capture is off for
+            # claude; …", "site_error on claude"): scrubbed, never verbatim.
+            out.append(body(anon.scrub(turn.error)))
+        attempts = turn.raw_attempts
+        inner: list[Any] = []
+        for i, attempt in enumerate(attempts, start=1):
+            inner.append(Heading(f"attempt {i}", 4))
+            inner.append(body(attempt or "(no output)", code=True))
+        out.append(Details(f"raw attempts ({len(attempts)})", tuple(inner)))
+        out.extend(_usage_blocks(turn))
+        return out
+
+    out.append(Heading("Objective", 2))
+    out.append(body(plan.objective))
+
+    out.append(Heading("Prerequisites", 2))
+    if plan.prerequisites:
+        out.append(Bullets(tuple(Bullet(text=p) for p in plan.prerequisites)))
+    else:
+        out.append(Para("(none)"))
+
+    out.append(Heading("Procedure", 2))
+    if not plan.steps:
+        out.append(Para("(no steps)"))
+    else:
+        out.append(
+            Table(
+                ("#", "step", "action", "verify"),
+                tuple((str(s.number), s.title, s.action, s.verify or NONE_GIVEN) for s in plan.steps),
+            )
+        )
+        for step in plan.steps:
+            out.append(Heading(f"{step.number}. {step.title}", 3))
+            out.append(Caption("action"))
+            out.append(body(step.action))
+            if step.why.strip():
+                out.append(Caption("why"))
+                out.append(body(step.why))
+            if step.inputs:
+                out.append(Caption("inputs"))
+                out.append(Bullets(tuple(Bullet(text=x) for x in step.inputs)))
+            if step.outputs:
+                out.append(Caption("outputs"))
+                out.append(Bullets(tuple(Bullet(text=x) for x in step.outputs)))
+            if step.verify.strip():
+                out.append(Caption("verify"))
+                out.append(body(step.verify))
+
+    out.append(Heading("Decision points", 2))
+    if not plan.decisions:
+        out.append(Para("(none)"))
+    for decision in plan.decisions:
+        title = decision.topic
+        if decision.divergence_id:
+            title = f"{decision.divergence_id} — {decision.topic}"
+        out.append(Heading(title, 3))
+        if decision.options:
+            out.append(Caption("options"))
+            out.append(Bullets(tuple(Bullet(text=o) for o in decision.options)))
+        if decision.recommendation.strip():
+            out.append(Caption("recommendation"))
+            out.append(body(decision.recommendation))
+        if decision.rationale.strip():
+            out.append(Caption("rationale"))
+            out.append(body(decision.rationale))
+
+    out.append(Heading("Risks", 2))
+    if plan.risks:
+        out.append(
+            Bullets(
+                tuple(
+                    Bullet(text=r.mitigation or NONE_GIVEN, lead=r.risk) for r in plan.risks
+                )
+            )
+        )
+    else:
+        out.append(Para("(none)"))
+
+    out.append(Heading("Done when", 2))
+    if plan.done_when:
+        out.append(Checklist(tuple(plan.done_when)))
+    else:
+        out.append(Para("(none)"))
+    out.extend(_usage_blocks(turn))
+    return out
+
+
 # --------------------------------------------------------------------------- public builder
 def build_document(conv: Conversation | None, turn_id: str) -> Document:
     """The shared document model for one turn. 404 for an unknown conversation or turn."""
@@ -1007,6 +1131,8 @@ def build_document(conv: Conversation | None, turn_id: str) -> Document:
         blocks = _fusion_blocks(conv, turn)
     elif isinstance(turn, RefactorTurn):
         blocks = _refactor_blocks(conv, turn)
+    elif isinstance(turn, PlanTurn):
+        blocks = _plan_blocks(conv, turn)
     else:  # unreachable: the Turn union is closed
         raise api_errors.not_found("turn")
     return Document(
@@ -1081,6 +1207,8 @@ def _md_block(block: Any) -> str:
                 line += " [" + ", ".join(_md_inline(t) for t in item.tags) + "]"
             lines.append(line)
         return "\n".join(lines)
+    if isinstance(block, Checklist):
+        return "\n".join(f"- [ ] {_md_inline(item)}" for item in block.items)
     if isinstance(block, Table):
         head = "| " + " | ".join(_md_inline(h) for h in block.headers) + " |"
         rule = "| " + " | ".join("---" for _ in block.headers) + " |"
@@ -1162,6 +1290,8 @@ pre.code {
 ul, ol { margin: 8px 0 16px; padding-left: 22px; }
 li { margin: 4px 0; }
 .tags { color: var(--muted); font-size: 12.5px; }
+ul.checklist { list-style: none; padding-left: 4px; }
+ul.checklist input { margin: 0 6px 0 0; vertical-align: middle; }
 .table-wrap { overflow-x: auto; margin: 8px 0 18px; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
 th, td {
@@ -1244,6 +1374,11 @@ def _html_block(block: Any) -> str:
                 parts.append(f' <span class="tags">[{tags}]</span>')
             items.append("<li>" + "".join(parts) + "</li>")
         return "<ul>\n" + "\n".join(items) + "\n</ul>"
+    if isinstance(block, Checklist):
+        items = [
+            f'<li><input type="checkbox" disabled> {_esc(item)}</li>' for item in block.items
+        ]
+        return '<ul class="checklist">\n' + "\n".join(items) + "\n</ul>"
     if isinstance(block, Table):
         head = "".join(f"<th>{_esc(h)}</th>" for h in block.headers)
         rows = "\n".join(

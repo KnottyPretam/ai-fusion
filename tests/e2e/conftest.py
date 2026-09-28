@@ -536,7 +536,8 @@ def meter_rows(conv: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Python mirror of `meterFromConversation` (frontend/src/features/meter/slice.js): the
     cumulative per-feature rows the UI recomputes from the persisted turns (send AND continue
     both book under Send; `truncated` counts truncated slots)."""
-    rows = {"send": empty_row(), "analyze": empty_row(), "fusion": empty_row()}
+    # `plan` since 2026-09-27: one row per feature the slice books (a Plan turn books like Analyze).
+    rows = {"send": empty_row(), "analyze": empty_row(), "fusion": empty_row(), "plan": empty_row()}
     for turn in conv.get("turns", []):
         totals = dict(turn.get("usage", {}).get("totals", {}))
         kind = turn["type"]
@@ -546,7 +547,7 @@ def meter_rows(conv: dict[str, Any]) -> dict[str, dict[str, Any]]:
         elif kind == "continue":
             totals["truncated"] = 1 if turn.get("truncated") else 0
             rows["send"] = add_row(rows["send"], totals)
-        elif kind in ("analyze", "fusion"):
+        elif kind in ("analyze", "fusion", "plan"):
             totals["truncated"] = 0
             rows[kind] = add_row(rows[kind], totals)
     return rows

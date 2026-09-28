@@ -74,7 +74,7 @@ describe('meter slice: streams', () => {
   test('initial state has the four rows, empty last rows and no warning', () => {
     const s = applyEvents('send', [])
     expect(s.meter).toEqual(initialMeter())
-    expect(s.meter.last).toEqual({ send: emptyRow(), analyze: emptyRow(), fusion: emptyRow() })
+    expect(s.meter.last).toEqual({ send: emptyRow(), analyze: emptyRow(), fusion: emptyRow(), plan: emptyRow() })
   })
 
   test('slot_done events aggregate into the Send row and the last Send; turn_done supplies the wall-clock latency and books the turn cost', () => {
@@ -353,5 +353,63 @@ describe('CostMeter pane', () => {
     renderWithStore(<CostMeter />, { preloaded: { meter: s.meter } })
     expect(screen.getByTestId('meter-cost-cap')).toHaveTextContent(/cost cap exceeded/i)
     expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+})
+
+describe('meter slice: the Plan row (2026-09-27)', () => {
+  const PLAN_USAGE = featureUsage({ prompt_tokens: 2100, completion_tokens: 900, cost_usd: 0.0456, latency_ms: 30000, calls: 1 })
+  const PLAN_TURN = { id: 'p1', type: 'plan', of_fusion: 'f1', model: 'web:claude', status: 'ok', plan: { objective: 'o', prerequisites: [], steps: [], decisions: [], risks: [], done_when: [] }, slot_config: CFG, usage: PLAN_USAGE }
+  const PLAN_ROW = { prompt_tokens: 2100, completion_tokens: 900, reasoning_tokens: 0, cost_usd: 0.0456, latency_ms: 30000, calls: 1, truncated: 0 }
+
+  test('plan_start resets the last Plan row; plan_done books the turn totals; a cached hit books nothing', () => {
+    let s = applyEvents('plan', [{ type: 'plan_start', turn_id: 'p1', of_fusion: 'f1', model: 'web:claude' }, { type: 'plan_done', turn: PLAN_TURN, cached: false }])
+    expect(s.meter.plan).toEqual(PLAN_ROW)
+    expect(s.meter.last.plan).toEqual(PLAN_ROW)
+    expect(s.meter.total.cost_usd).toBe(0.0456)
+    expect(s.meter.fusion).toEqual(emptyRow())
+    s = applyEvents('plan', [{ type: 'plan_start', turn_id: 'p1', of_fusion: 'f1', model: 'web:claude' }, { type: 'plan_done', turn: PLAN_TURN, cached: true }], { state: s })
+    expect(s.meter.plan).toEqual(PLAN_ROW)
+    expect(s.meter.last.plan).toEqual(emptyRow())
+  })
+
+  test('plan_degraded books the paid-for attempts, and a cost-cap error on it raises the flag', () => {
+    const degraded = { ...PLAN_TURN, id: 'p2', status: 'degraded', plan: null, error: 'cost_cap_exceeded', usage: featureUsage({ cost_usd: 0.002, calls: 2 }) }
+    const s = applyEvents('plan', [{ type: 'plan_start', turn_id: 'p2', of_fusion: 'f1', model: 'x/y' }, { type: 'plan_degraded', turn: degraded }])
+    expect(s.meter.plan).toMatchObject({ cost_usd: 0.002, calls: 2 })
+    expect(s.meter.last.plan).toMatchObject({ cost_usd: 0.002, calls: 2 })
+    expect(s.meter.costCapExceeded).toBe(true)
+  })
+
+  test('a reloaded conversation books the plan turn under Plan and leaves the fused Send to the fusion turn', () => {
+    // A second Send sits between the fusion turn and the plan turn on purpose: if the plan turn
+    // were ever taken as the newest fusion, its missing `of_analyze` would fall back to the newest
+    // Send (t2, 0.009) and the multiplier's denominator below would be wrong; the real chain is
+    // f1 -> a1 -> t1 = 0.003. With a single Send the fallback returns the same number and proves nothing.
+    const conv = { id: 'c1', title: 'T', slot_config: CFG, threads: {}, turns: [sendTurn('t1', 0.003), ANALYZE_TURN, FUSION_TURN, sendTurn('t2', 0.009), PLAN_TURN] }
+    const s = applyEvents('plan', [{ type: 'conversation/loaded', conversation: conv }])
+    expect(s.meter.plan).toEqual(PLAN_ROW)
+    expect(s.meter.last.plan).toEqual(PLAN_ROW)
+    expect(s.meter.fusion).toEqual(FUSION_ROW)
+    expect(s.meter.last.send.cost_usd).toBe(0.009) // the newest Send is t2 -- exactly what the fallback would answer
+    expect(s.meter.fusedSendCost).toBe(0.003) // f1 -> a1 -> t1, not disturbed by the plan turn after it
+    expect(s.meter.total).toMatchObject({ cost_usd: 0.0701, calls: 15 })
+    expect(rowsFromConversation(conv).plan).toEqual(PLAN_ROW)
+    expect(Object.keys(rowsFromConversation(conv))).toEqual(['send', 'analyze', 'fusion', 'plan'])
+  })
+
+  test('the pane shows a Plan row in both groups', () => {
+    const s = applyEvents('plan', [{ type: 'plan_start', turn_id: 'p1', of_fusion: 'f1', model: 'web:claude' }, { type: 'plan_done', turn: PLAN_TURN, cached: false }])
+    renderWithStore(<CostMeter />, { preloaded: { meter: s.meter } })
+    expect(screen.getByTestId('meter-row-plan')).toHaveTextContent('Plan')
+    expect(screen.getByTestId('meter-plan-tokens')).toHaveTextContent('2,100 / 900')
+    expect(screen.getByTestId('meter-plan-cost')).toHaveTextContent('$0.0456')
+    expect(screen.getByTestId('meter-plan-latency')).toHaveTextContent('30.0 s')
+    expect(screen.getByTestId('meter-plan-calls')).toHaveTextContent('1')
+    expect(screen.getByTestId('meter-plan-conv-cost')).toHaveTextContent('$0.0456')
+    expect(screen.getByTestId('meter-total-conv-cost')).toHaveTextContent('$0.0456')
+    // a meter shape without the plan row (a pre-plan preload) still renders
+    const { plan, ...rest } = s.meter
+    renderWithStore(<CostMeter />, { preloaded: { meter: { ...rest, last: { ...s.meter.last, plan: undefined } } } })
+    expect(screen.getAllByTestId('meter-row-plan')).toHaveLength(2)
   })
 })

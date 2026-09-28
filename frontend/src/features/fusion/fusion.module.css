@@ -64,3 +64,44 @@
 .sideHead { display: flex; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--bg); }
 .claim { font-weight: 600; }
 .usage { padding: 6px 10px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--fg-muted); background: var(--bg-muted); }
+
+/* Plan (2026-09-27): the section under the final report — one agent's executable procedure made
+   from the Fusion report. Palette tokens only, so light / dark / system follow index.css. */
+.state_working { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.state_degraded { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
+.planRoot { margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.planBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 28px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-muted); }
+.planTitle { font-weight: 600; color: var(--fusion); }
+.planPick { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 12px; }
+.planSelect { max-width: 320px; height: 24px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--fg); font-size: 12px; }
+.planRunBtn { height: 26px; padding: 0 12px; border: 1px solid var(--fusion); border-radius: 4px; background: var(--bg); color: var(--fusion); font-weight: 600; }
+.planRunBtn:disabled { color: var(--fg-muted); border-color: var(--border); background: var(--bg-muted); }
+.planChip { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg-muted); }
+.planBody { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.planH3 { margin: 0; font-size: 13px; color: var(--fg); }
+.planCaption { margin-left: 8px; font-weight: 400; font-size: 11px; color: var(--fg-muted); }
+.planObjective { margin: 0; padding: 6px 8px; border-left: 3px solid var(--fusion); background: var(--fusion-soft); border-radius: 0 4px 4px 0; color: var(--fg); }
+.planList { margin: 0; padding-left: 1.2em; font-size: 12px; }
+.planNone { margin: 0; color: var(--fg-muted); font-size: 12px; }
+.planTable { border-collapse: collapse; width: 100%; font-size: 12px; }
+.planTable th, .planTable td { border: 1px solid var(--border); padding: 4px 6px; text-align: left; vertical-align: top; }
+.planTable th { background: var(--bg-muted); font-weight: 600; color: var(--fg-muted); white-space: nowrap; }
+.planDoneCell { text-align: center; width: 1%; }
+.planNum { font-family: var(--mono); font-weight: 600; color: var(--fusion); white-space: nowrap; width: 1%; }
+.planStepTitle { font-weight: 600; min-width: 120px; }
+.planStepDone td { color: var(--fg-muted); }
+.planStepDone .planStepAction { text-decoration: line-through; }
+.planDetailsRow td { background: var(--bg-muted); border-top: none; }
+.planSummary { cursor: pointer; color: var(--fg-muted); font-size: 11px; }
+.planDl { margin: 4px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
+.planDl dt { color: var(--fg-muted); }
+.planDl dd { margin: 0; }
+.planDecision { margin-bottom: 6px; }
+.planDecisionHead { font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.planChecklist { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.planChecklist label { display: flex; gap: 6px; align-items: flex-start; }
+.planMeta { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--fg-muted); }
+.planUsage { margin-left: auto; }
+.planDegraded { margin: 8px 10px 0; padding: 6px 8px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 4px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; color: var(--fg); }
+.planPre { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px; margin: 4px 0 0; max-height: 200px; overflow: auto; color: var(--fg); }
+.planRoot .progress, .planRoot .error, .planRoot .stale { margin: 8px 10px 0; }

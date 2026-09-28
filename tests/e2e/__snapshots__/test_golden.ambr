@@ -49,6 +49,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -163,6 +164,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -264,6 +266,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -378,6 +381,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -492,6 +496,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -585,6 +590,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -737,6 +743,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -901,6 +908,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -1043,6 +1051,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -1354,6 +1363,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -1762,6 +1772,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',
@@ -1982,6 +1993,7 @@
       'grounded': False,
       'materiality_min': 'medium',
       'max_iterations': 2,
+      'plan_model': None,
       'slots': dict({
         'chatgpt': dict({
           'effort': 'medium',

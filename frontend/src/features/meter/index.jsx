@@ -23,7 +23,8 @@ import { APP_NAME } from '../../branding.js'
 
 registerSlice('meter', meterReducer, initialMeter)
 
-const LABELS = { send: 'Send', analyze: 'Analyze', fusion: 'Fusion', total: 'Total' }
+// Plan (2026-09-27): one agent's plan made from a Fusion report has a row of its own (FEATURE_ROWS).
+const LABELS = { send: 'Send', analyze: 'Analyze', fusion: 'Fusion', plan: 'Plan', total: 'Total' }
 const GROUPS = [
   { key: 'last', label: 'last invocation' },
   { key: 'conv', label: 'this conversation' },

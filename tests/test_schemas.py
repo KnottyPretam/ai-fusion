@@ -409,3 +409,59 @@ def test_r5_is_a_label_and_r6_is_not():
     assert Position(model="R5", claim="c", justification="j").model == "R5"
     with pytest.raises(ValidationError):
         Position(model="R6", claim="c", justification="j")
+
+
+# --------------------------------------------------------------------------- plan (2026-09-27)
+
+
+def test_plan_turn_round_trips_through_the_turn_adapter_and_the_conversation():
+    from backend.schemas import Plan, PlanDecision, PlanRisk, PlanStep, PlanTurn
+
+    plan = Plan(
+        objective="o",
+        prerequisites=["p"],
+        steps=[PlanStep(number=1, title="t", action="a", why="w", inputs=["i"], outputs=["x"], verify="v")],
+        decisions=[PlanDecision(divergence_id="d1", topic="k", options=["1", "2"], recommendation="1", rationale="r")],
+        risks=[PlanRisk(risk="r", mitigation="m")],
+        done_when=["done"],
+    )
+    turn = PlanTurn(of_fusion="f1", model="web:claude", plan=plan, slot_config=DEFAULT_SLOT_CONFIG.model_copy(deep=True))
+    dumped = turn.model_dump(mode="json")
+    assert dumped["type"] == "plan" and dumped["status"] == "ok" and dumped["error"] is None
+    again = TurnAdapter.validate_python(dumped)
+    assert isinstance(again, PlanTurn) and again == turn
+    # The minimal shapes: every list defaults empty, a decision needs no divergence id.
+    assert Plan(objective="o").model_dump() == {
+        "objective": "o", "prerequisites": [], "steps": [], "decisions": [], "risks": [], "done_when": []
+    }
+    assert PlanDecision(topic="k").divergence_id is None
+    with pytest.raises(ValidationError):
+        Plan()  # objective is required
+    with pytest.raises(ValidationError):
+        PlanTurn(of_fusion="f1", slot_config=DEFAULT_SLOT_CONFIG)  # the model that wrote it is required
+    conv = Conversation(slot_config=DEFAULT_SLOT_CONFIG.model_copy(deep=True), threads=empty_threads(), turns=[turn], anon_map={"R1": "claude", "R2": "chatgpt", "R3": "grok"})
+    loaded = Conversation.model_validate_json(conv.model_dump_json())
+    assert isinstance(loaded.turns[0], PlanTurn) and loaded.turns[0].plan == plan
+    degraded = PlanTurn(of_fusion="f1", model="m", status="degraded", error="e", raw_attempts=["a", ""], slot_config=DEFAULT_SLOT_CONFIG)
+    assert degraded.plan is None and TurnAdapter.validate_python(degraded.model_dump()).raw_attempts == ["a", ""]
+
+
+def test_plan_message_kinds_are_valid_and_unknown_kinds_are_not():
+    for kind in ("plan_request", "plan_reply"):
+        msg = ThreadMessage(role="user", content="c", kind=kind, turn_id="t", meta={"plan_turn": "t"})
+        assert msg.kind == kind and to_openai(msg) == {"role": "user", "content": "c"}
+    with pytest.raises(ValidationError):
+        ThreadMessage(role="user", content="c", kind="plan", turn_id="t")
+
+
+def test_a_document_without_plan_model_validates_and_reads_none():
+    # The on-disk shape of every slot_config written before 2026-09-27: no `plan_model` key.
+    cfg = SlotConfig.model_validate(
+        {
+            "slots": {"claude": {"model": "a"}, "chatgpt": {"model": "b"}, "grok": {"model": "c"}},
+            "analyst_model": "openai/a",
+        }
+    )
+    assert cfg.plan_model is None
+    assert "plan_model" in cfg.model_dump()  # written back explicitly from now on
+    assert SlotConfig.model_validate({**cfg.model_dump(), "plan_model": "web:claude"}).plan_model == "web:claude"

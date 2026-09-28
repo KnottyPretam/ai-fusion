@@ -42,7 +42,7 @@ let s = slice.meterReducer(undefined, { type: '@@init' });
 for (const { feature, events } of input.streams) {
   for (const event of events) s = slice.meterReducer(s, { type: 'sse', feature, event });
 }
-process.stdout.write(JSON.stringify({ loaded, live: { send: s.send, analyze: s.analyze, fusion: s.fusion } }));
+process.stdout.write(JSON.stringify({ loaded, live: { send: s.send, analyze: s.analyze, fusion: s.fusion, plan: s.plan } }));
 """
 
 
