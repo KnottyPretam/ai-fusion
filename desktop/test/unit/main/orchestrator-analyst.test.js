@@ -601,7 +601,7 @@ test('the analyst chat is recorded only for a URL that matches the site’s chat
 // document, and is sent the first-token budget main never used to send at all.
 
 test('S10: the analyst view gets every capture window scaled — stillness, first token AND the whole run — and is told to expect JSON', async () => {
-  const { orch, analystClient, emit } = setup()
+  const { orch, analystClient, emit, log } = setup()
   const done = orch.run(analystRequest('chatgpt'), emit)
   await settleAll()
   analystClient.settle('ready', { ok: true, op: 'ready', composerSelector: '#c' })
@@ -628,11 +628,14 @@ test('S10: the analyst view gets every capture window scaled — stillness, firs
     expect: 'json',
     // S11: the "never takes the shape" grace is a lull too, and scaled like one — for the analyst only
     incompleteGraceMs: INCOMPLETE_GRACE_MS * ANALYST_PATIENCE,
+    text: '<<<R1>>> …', // 2026-09-27: the typed text is the reply's anchor on a virtualized transcript
   })
   analystClient.settle('observe', { ok: true, op: 'observe', text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 7 })
   const result = await done
   assert.equal(result.ok, true)
   assert.equal(result.done_by, 'quiet')
+  // the text is a message field and NEVER a log line (every line names lengths and signals only)
+  assert.ok(log.lines.every(([, m]) => !m.includes('<<<R1>>>')), JSON.stringify(log.lines))
 })
 
 test('S10: the analyst capture is logged like any other — length, signal and time, and no reply text', async () => {
@@ -760,7 +763,8 @@ test('S11: an analyst capture that times out on a structured purpose is read aga
   const obs = analystClient.last()
   assert.equal(obs.op, 'observe')
   assert.deepEqual(obs.payload, {
-    baselineCount: 2, // the PRE-SUBMIT count: on a reloaded page every container is "known", and only the count rule finds the answer
+    baselineCount: 2, // the PRE-SUBMIT count, still sent: on a reloaded page it names the oldest containers as earlier turns
+    text: '<<<R1>>> …', // 2026-09-27: and the typed text is what finds this turn's row (the anchor rule; the count rule is retired)
     expect: 'json',
     quietMs: 250 * ANALYST_PATIENCE,
     settleMs: 200 * ANALYST_PATIENCE,
@@ -979,7 +983,7 @@ test('S11: incompleteGraceMs rides the analyst observe ×ANALYST_PATIENCE and is
   await settleAll()
   p.panes.claude.settle('insertAndSubmit', { ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0, confirmedBy: 'stop_button', sendSelector: 'b' })
   await settleAll()
-  assert.deepEqual(p.panes.claude.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, baselineCount: 0 })
+  assert.deepEqual(p.panes.claude.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, baselineCount: 0, text: 'hello' })
   p.panes.claude.settle('observe', { ok: true, op: 'observe', text: 'hi', doneBy: 'quiet', ms: 1 })
   await run
 })

@@ -11,6 +11,7 @@
 
 import { createRequire } from 'node:module'
 import { test, expect } from '@playwright/test'
+import { FAKE_ASSISTANT } from './_harness.js' // the `assistant` entry each look-alike is built around (2026-10-10)
 
 const require = createRequire(import.meta.url)
 const { DEFAULT_SELECTORS, SLOTS } = require('../../preload/site.cjs')
@@ -112,18 +113,18 @@ test.describe('Stage 2 reply options the capture specs lean on', () => {
   test('?twoTurns=1: a finished tool container (its copy marker up, the stop button up) first, the answer container 300 ms later; both stay', async ({ page }) => {
     await page.goto('/?site=chatgpt&replyMs=600&twoTurns=1')
     await submit(page, 'two')
-    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
-    await expect(page.locator(sel.assistant[0]).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveCount(1)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
     await expect(page.locator(sel.done[0])).toHaveCount(1)
     await expect(page.locator(sel.stop[0])).toHaveCount(1)
     expect((await replyState(page)).containers).toBe(1)
-    await expect(page.locator(sel.assistant[0])).toHaveCount(2)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveCount(2)
     await expect.poll(async () => (await replyState(page)).done).toBe(true)
     const end = await replyState(page)
     expect(end.containers).toBe(2)
     expect(end.replyText).toBe('Echo: two')
-    await expect(page.locator(sel.assistant[0]).nth(1).locator(sel.assistantText[0])).toHaveText('Echo: two')
-    await expect(page.locator(sel.assistant[0]).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt).nth(1).locator(sel.assistantText[0])).toHaveText('Echo: two')
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt).first().locator(sel.assistantText[0])).toHaveText('Searching the web…')
     await expect(page.locator(sel.done[0])).toHaveCount(2)
     await expect(page.locator(sel.stop[0])).toHaveCount(0)
   })
@@ -160,19 +161,19 @@ test.describe('the measured chatgpt placeholder/remount lifecycle (?remountMs, ?
     await page.goto('/?site=chatgpt&replyMs=400&placeholderMs=600&remountMs=700')
     await submit(page, 'remount')
     // 1. the placeholder: one assistant container, short, and NO `.markdown` child (the measured shape)
-    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveCount(1)
     await expect(page.locator(sel.stop[0])).toHaveCount(1)
     const placeholder = await lifecycle(page)
     expect(placeholder.placeholderText.length).toBeLessThanOrEqual(16)
-    await expect(page.locator(sel.assistant[0])).toHaveText(placeholder.placeholderText)
-    await expect(page.locator(sel.assistant[0]).locator(sel.assistantText[0])).toHaveCount(0)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveText(placeholder.placeholderText)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt).locator(sel.assistantText[0])).toHaveCount(0)
     expect(placeholder.containers).toBe(1)
     // 2. the gap: the container is unmounted entirely while the stop button stays visible
-    await expect(page.locator(sel.assistant[0])).toHaveCount(0)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveCount(0)
     await expect(page.locator(sel.stop[0])).toHaveCount(1)
     // 3. the real reply: a container with its `.markdown` child, then the end signal
-    await expect(page.locator(sel.assistant[0])).toHaveCount(1)
-    await expect(page.locator(sel.assistant[0]).locator(sel.assistantText[0])).toHaveCount(1)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt)).toHaveCount(1)
+    await expect(page.locator(FAKE_ASSISTANT.chatgpt).locator(sel.assistantText[0])).toHaveCount(1)
     await expect.poll(async () => (await lifecycle(page)).done).toBe(true)
     await expect(page.locator(sel.stop[0])).toHaveCount(0)
     await expect(page.locator(sel.done[0])).toHaveCount(1)
@@ -386,4 +387,111 @@ test('?replyChars pads the reply and ?lulls stalls the stream N times; a bad ?lu
   await page.locator("button[aria-label='Send message']").click()
   await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
   expect(await page.evaluate(() => window.__fake.lulls)).toEqual([])
+})
+
+/**
+ * 2026-09-27 — the virtualized-transcript options (test/fake-site/site.js header): a fixed window of mounted
+ * rows (?keepLast), a newest-first transcript of absolutely positioned slots (?order=reverse, grok.com's
+ * shape), the user turn rendered as markdown (?userMarkdown) and an echo that names its exchange (?echoTurn).
+ * These pin the FAKE's behaviour; what the adapter does with it is test/adapters/virtualized.spec.js.
+ */
+test.describe('the virtualized-transcript options (2026-09-27)', () => {
+  const sel = DEFAULT_SELECTORS.claude
+  const state = (page) =>
+    page.evaluate(() => ({
+      containers: window.__fake.containers,
+      mounted: window.__fake.mountedAssistants(),
+      trimmed: window.__fake.trimmed,
+      exchanges: window.__fake.exchanges,
+      order: window.__fake.order,
+      keepLast: window.__fake.keepLast,
+      done: window.__fake.done,
+      replyText: window.__fake.replyText(),
+    }))
+  const submit = async (page, text) => {
+    await page.locator(sel.composer[0]).click()
+    await page.keyboard.type(text)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
+  }
+
+  test('?keepLast=2 + ?order=reverse + ?echoTurn=1: rows are PREPENDED into slots of a scroller, at most two assistant rows stay mounted, the oldest exchange goes whole (user row included), and each echo names its exchange', async ({ page }) => {
+    await page.goto('/?site=claude&replyMs=0&keepLast=2&order=reverse&echoTurn=1')
+    await expect(page.locator("[data-testid='chat-transcript-scroller']")).toHaveCount(1)
+    for (let i = 1; i <= 3; i += 1) {
+      await submit(page, `q${i}`)
+      const s = await state(page)
+      expect(s.replyText).toBe(`Echo ${i}: q${i}`)
+      expect(s.mounted).toBe(Math.min(i, 2))
+      expect(s.containers).toBe(i)
+      // newest first: the first assistant row in document order is this reply
+      await expect(page.locator(sel.assistant[0]).first()).toHaveText(`Echo ${i}: q${i}`)
+      await expect(page.locator("main.thread.scroller > .slot").first().locator(sel.assistant[0])).toHaveCount(1)
+    }
+    const end = await state(page)
+    expect(end).toMatchObject({ order: 'newest-first', keepLast: 2, trimmed: 1, exchanges: 2, mounted: 2 })
+    await expect(page.locator(sel.assistant[0])).toHaveCount(2)
+    // 2026-10-10: the claude look-alike's user turn is claude.ai's own `[data-testid=user-message]`
+    await expect(page.locator("[data-testid='user-message']")).toHaveCount(2) // the first exchange's user row went with it
+    await expect(page.locator("[data-testid='user-message']").last()).toHaveText('q2') // oldest last
+    await expect(page.locator(sel.assistant[0]).last()).toHaveText('Echo 2: q2')
+  })
+
+  test('?userMarkdown=1: the user turn is rendered as markdown — delimiters cut out, backticks and asterisks gone, the letters kept; without it the turn is the prompt verbatim', async ({ page }) => {
+    // one line: this helper types through the keyboard, and the fake composer submits on Enter
+    const PROMPT = 'Round 1. <<<YOUR CLAIM>>> The `GYRO_RANGE` register selects **up to 2000 deg/s**. <<<END YOUR CLAIM>>>'
+    await page.goto('/?site=claude&replyMs=0&userMarkdown=1')
+    await submit(page, PROMPT)
+    const turn = page.locator("[data-testid='user-message']").last()
+    const shown = await turn.innerText()
+    expect(shown).not.toContain('<<<')
+    expect(shown).not.toContain('YOUR CLAIM')
+    expect(shown).not.toContain('`')
+    expect(shown).not.toContain('**')
+    expect(shown).toContain('Round 1.')
+    expect(shown).toContain('The GYRO_RANGE register selects up to 2000 deg/s.')
+    await expect(turn.locator('code')).toHaveText('GYRO_RANGE')
+    await expect(turn.locator('strong')).toHaveText('up to 2000 deg/s')
+    expect((await state(page)).replyText).toBe('Echo: ' + PROMPT) // the echo is the prompt, byte for byte
+    await page.goto('/?site=claude&replyMs=0')
+    await submit(page, PROMPT)
+    expect(await page.locator("[data-testid='user-message']").last().innerText()).toBe(PROMPT)
+  })
+
+  test('?assistantAtSubmit=1: the reply row is in the DOM, EMPTY, in the submit tick beside the stop button, and holds no text for the hold', async ({ page }) => {
+    await page.goto('/?site=grok&replyMs=100&assistantAtSubmit=1')
+    const GROK = DEFAULT_SELECTORS.grok
+    await page.locator(GROK.composer[0]).click()
+    await page.keyboard.type('pending row')
+    const at = await page.evaluate(() => {
+      // 2026-10-10: the user's row is a `div[id^='response-']` too (grok.com's shape), so the assistant rows are the
+      // ones holding a bubble — the site's own first `assistant` entry
+      const ASSISTANT_ROW = "div[id^='response-']:has([data-testid='assistant-message'])"
+      const before = document.querySelectorAll(ASSISTANT_ROW).length
+      const submit = document.querySelector("button[data-testid='chat-submit']")
+      submit.click()
+      const rows = document.querySelectorAll(ASSISTANT_ROW)
+      const all = document.querySelectorAll("div[id^='response-']")
+      // the grok look-alike is newest-first: the row that just mounted is the FIRST in document order
+      return {
+        before,
+        after: rows.length,
+        text: rows.length ? rows[0].textContent : null,
+        rows: all.length,
+        firstIsAssistant: all.length ? all[0] === rows[0] : null,
+        userRows: document.querySelectorAll("div[id^='response-'] > [data-testid='user-message'].message-bubble > .relative > .response-content-markdown").length,
+        stop: !!document.querySelector("button[aria-label='Stop']"),
+        thinkingAt: window.__fake.thinkingAt,
+        scroller: !!document.querySelector("[data-testid='chat-transcript-scroller']"),
+      }
+    })
+    // two rows in the submit tick — the user's (last, it mounted first) and the empty assistant row prepended after it
+    expect(at).toMatchObject({ before: 0, after: 1, text: '', rows: 2, firstIsAssistant: true, userRows: 1, stop: true, scroller: true })
+    expect(at.thinkingAt).not.toBeNull()
+    await page.waitForFunction(() => window.__fake.done === true, null, { timeout: 15000 })
+    const r = await page.evaluate(() => ({ thinkingAt: window.__fake.thinkingAt, thinkingEndedAt: window.__fake.thinkingEndedAt, replyText: window.__fake.replyText() }))
+    expect(r.thinkingEndedAt - r.thinkingAt).toBeGreaterThanOrEqual(550)
+    expect(r.replyText).toBe('Echo: pending row')
+    await expect(page.locator(GROK.assistant[0])).toHaveCount(1) // the row carries the measured assistant bubble
+  })
 })

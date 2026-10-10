@@ -194,7 +194,7 @@ test('countMessages(): distinct elements over the generic message selectors (+ a
   assert.equal(b.countMessages(), 4)
 })
 
-test('countAssistant(): assistant-role containers only — a user turn is never counted (+ a v2 assistant cascade)', () => {
+test('countAssistant(): assistant-role containers only — a user turn is never counted; the FIRST cascade entry with a match decides (2026-09-27), never a union across entries', () => {
   const userEl = { getAttribute: (n) => (n === 'data-message-author-role' ? 'user' : null) }
   const doc = fakeDocument({ match: { '[data-message-author-role]': [userEl], '.message-bubble': [{}, {}], "[data-testid='user-message']": [{}] } })
   const a = createAdapter({ document: doc, site: 'chatgpt' })
@@ -208,13 +208,41 @@ test('countAssistant(): assistant-role containers only — a user turn is never 
   const shared = {}
   doc.match['.font-claude-response'] = [shared]
   doc.match['.font-claude-message'] = [shared]
-  doc.match["div[id^='response-']"] = [{}]
-  assert.equal(a.countAssistant(), 3) // de-duplicated across the assistant selectors
-  assert.deepEqual([...ASSISTANT_SELECTORS], ["[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2", '.font-claude-response', '.font-claude-message', "div[id^='response-']"])
+  const grokRow = {} // a grok row holding a bubble matches the bare id prefix (countMessages) AND the `:has` entry (countAssistant)
+  doc.match["div[id^='response-']"] = [grokRow]
+  doc.match["div[id^='response-']:has([data-testid='assistant-message'])"] = [grokRow]
+  // 2026-09-27: cascade semantics — the chatgpt entry matched, so no later entry is consulted (a union
+  // used to count grok.com's USER rows through the bare `div[id^='response-']`); countMessages stays a union
+  assert.equal(a.countAssistant(), 1)
+  assert.equal(a.countMessages(), 7)
+  // 2026-10-10: chatgpt's exchange group through the user turn it holds, claude's redesigned `assistant-message`,
+  // and NO bare `div[id^='response-']` any more (a row without a bubble has nothing to capture; the user's own row was
+  // the one thing the bare entry could add)
+  assert.deepEqual(
+    [...ASSISTANT_SELECTORS],
+    [
+      "[data-message-author-role='assistant']",
+      "div.group.flex.flex-col:has([class~='group/user-message'])",
+      "div.group.flex.flex-col.pb-2.pt-2",
+      '.font-claude-response',
+      '.font-claude-message',
+      "[data-testid='assistant-message']",
+      "div[id^='response-']:has([data-testid='assistant-message'])",
+    ],
+  )
   assert.ok(ASSISTANT_SELECTORS.every((s) => !MESSAGE_SELECTORS.includes(s) || s !== '[data-message-author-role]'))
+  // without the chatgpt entry the next entry with a match decides, de-duplicated within it
+  delete doc.match["[data-message-author-role='assistant']"]
+  assert.equal(a.countAssistant(), 1) // `.font-claude-response` (`.font-claude-message` holds the same node, and is not reached anyway)
+  delete doc.match['.font-claude-response']
+  delete doc.match['.font-claude-message']
+  assert.equal(a.countAssistant(), 1) // the grok entry (a row holding a bubble), last
+  delete doc.match["div[id^='response-']:has([data-testid='assistant-message'])"]
+  assert.equal(a.countAssistant(), 0) // 2026-10-10: the bare id prefix alone (a bubble-less row) is no longer a container
+  assert.equal(a.countMessages(), 6) // …while countMessages still counts the row as a message (the two roles, two bubbles, a user turn, the row)
   const b = createAdapter({ document: doc, site: 'chatgpt', selectors: { ...DEFAULT_SELECTORS.chatgpt, assistant: ['.custom-turn'] } })
   doc.match['.custom-turn'] = [{}, {}]
-  assert.equal(b.countAssistant(), 5)
+  assert.equal(b.countAssistant(), 2) // the site's own cascade comes first
 })
 
 test('waitForComposer resolves once the composer appears, rejects composer_not_found on timeout, cancelled on abort', async () => {
@@ -498,7 +526,8 @@ test('submit honours an explicit timeoutMs and the abort signal', async () => {
 
 test('insertAndSubmit end to end over the fake document: integer ms, composerSelector and assistantCount from the samples', async () => {
   const ta = fakeTextarea('')
-  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta, '.message-bubble': [{}, {}, {}], "div[id^='response-']": [{}, {}] } })
+  const rows = [{}, {}] // two assistant rows: each matches the bare id prefix (a message) and the `:has` entry (a container)
+  const doc = fakeDocument({ match: { "textarea[aria-label='Ask Grok anything']": ta, '.message-bubble': [{}, {}, {}], "div[id^='response-']": rows, [GROK_ROW]: rows } })
   doc.match["button[aria-label='Submit']"] = {
     click() {
       doc.match['.message-bubble'].push({})
@@ -808,6 +837,8 @@ test('insertAndSubmit retry after a failed submit sends the prompt exactly once'
 // ---------------------------------------------------------------------------------------------
 
 const GROK_TIPTAP = "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']"
+/** grok's assistant row — the `:has` entry, the only one since 2026-10-10 (a fake document keys its matches by the exact selector string). */
+const GROK_ROW = DEFAULT_SELECTORS.grok.assistant[0]
 const grokDoc = (match) => fakeDocument({ title: 'Grok', href: 'https://grok.com/', hostname: 'grok.com', match })
 
 test('grok: the hidden helper <textarea> is never the composer — the TipTap editor wins, and without it a bare textarea is no fallback', async () => {
@@ -907,6 +938,8 @@ function container(text, { parts = {}, inside = [], parentNode = null } = {}) {
  */
 const CAPTURE = { firstTokenMs: 250, quietMs: 120, settleMs: 400, captureTimeoutMs: 1500 }
 const captureSelectors = (site, extra = {}) => fastSelectors(site, { ...CAPTURE, ...extra })
+/** chatgpt's last `assistantText` entry — scoped out of the user's own turn since 2026-09-27; the fake container keys its parts by the exact string. */
+const PRE_WRAP = DEFAULT_SELECTORS.chatgpt.assistantText[2]
 
 test('observe constants: mutations are throttled to 100 ms and the poll runs every 300 ms', () => {
   assert.equal(OBSERVE_THROTTLE_MS, 100)
@@ -978,7 +1011,7 @@ test('observe: stop_gone — the stop button seen then gone; the text is the con
 test('observe: quiet — with no stop button and no done marker the text unchanged for quietMs ends the capture; blank text never counts as quiet', async () => {
   const md = { innerText: '' }
   const reply = container('', { parts: { '.response-content-markdown': md } })
-  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), "div[id^='response-']": [reply] } })
+  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), [GROK_ROW]: [reply] } })
   const a = createAdapter({ document: doc, site: 'grok', selectors: captureSelectors('grok', { stop: [], done: [] }) })
   setTimeout(() => {
     md.innerText = 'final answer'
@@ -1057,7 +1090,7 @@ test('observe: a banner mid-reply → site_error whose message is ONLY the confi
 
 test('observe: an abort → cancelled with the partial text; an already-aborted signal is answered at once; the poll stops afterwards', async () => {
   const reply = container('partial so far')
-  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), "div[id^='response-']": [reply], "button[aria-label='Stop']": [{}] } })
+  const doc = fakeDocument({ match: { [GROK_TIPTAP]: fakeComposer(), [GROK_ROW]: [reply], "button[aria-label='Stop']": [{}] } })
   let polls = 0
   const timers = {
     setTimeout: (fn, ms) => {
@@ -1079,12 +1112,12 @@ test('observe: an abort → cancelled with the partial text; an already-aborted 
   await rejects(a.observe({ baselineCount: 0, signal: done.signal }), 'cancelled')
 })
 
-test('observe: the LAST container in document order is followed (compareDocumentPosition), whatever cascade entry matched it', async () => {
+test('observe: the LAST container in document order is followed (compareDocumentPosition) among the matches of the entry that matched; a container only a LATER entry matches is not unioned in (2026-09-27)', async () => {
   const first = container('newest')
   const second = container('older')
   first.compareDocumentPosition = (other) => (other === second ? 2 : 0) // second PRECEDES first
   second.compareDocumentPosition = (other) => (other === first ? 4 : 0) // first FOLLOWS second
-  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [first], '.font-claude-response': [second] } })
+  const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [first, second], '.font-claude-response': [container('a later entry: never unioned in')] } })
   const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
   assert.equal(a.countAssistant(), 2)
   assert.deepEqual(a.assistantContainers(), [second, first])
@@ -1098,7 +1131,7 @@ test('observe: the LAST container in document order is followed (compareDocument
 
 test('observe / replyText: the first assistantText match wins, else the container; CRLF → LF and NBSP → space, nothing trimmed; a throwing querySelector is skipped', async () => {
   const md = { innerText: 'a\r\nb\u00a0c ' }
-  const reply = container('outer text', { parts: { '.whitespace-pre-wrap': md } }) // no .markdown: the second entry matches
+  const reply = container('outer text', { parts: { [PRE_WRAP]: md } }) // no .markdown: the last entry matches
   const doc = fakeDocument({ match: { '#prompt-textarea': fakeComposer(), "[data-message-author-role='assistant']": [reply] } })
   const a = createAdapter({ document: doc, site: 'chatgpt', selectors: captureSelectors('chatgpt', { stop: [], done: [] }) })
   const r = await a.observe({ baselineCount: 0 })
@@ -1124,8 +1157,8 @@ test('observe / replyText: EVERY match of the first assistantText entry that mat
   assert.deepEqual([r.text, r.doneBy], ['thinking summary\n\nthe answer\nnested', 'quiet'])
   assert.equal(a.replyText(reply), 'thinking summary\n\nthe answer\nnested')
   const pre = { innerText: 'pre-wrap text' }
-  assert.equal(a.replyText(container('c', { parts: { '.markdown': [], '.whitespace-pre-wrap': [pre] } })), 'pre-wrap text')
-  assert.equal(a.replyText(container('c', { parts: { '.markdown': [summary], '.whitespace-pre-wrap': [pre] } })), 'thinking summary')
+  assert.equal(a.replyText(container('c', { parts: { '.markdown': [], [PRE_WRAP]: [pre] } })), 'pre-wrap text')
+  assert.equal(a.replyText(container('c', { parts: { '.markdown': [summary], [PRE_WRAP]: [pre] } })), 'thinking summary')
   assert.equal(a.replyText(container('only the container')), 'only the container')
 })
 

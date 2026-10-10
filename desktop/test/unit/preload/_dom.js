@@ -19,7 +19,9 @@
 // The selector engine covers the selector shapes DEFAULT_SELECTORS and site.cjs actually use:
 // a comma list of complex selectors with descendant / `>` combinators over compounds of
 // `tag`, `*`, `#id`, `.class`, `[attr]`, `[attr=v]`, `[attr^=v]`, `[attr*=v]`, `[attr$=v]`,
-// `[attr~=v]`, `:not(<compound>)`, `:disabled` and `:empty`.
+// `[attr~=v]`, `:not(<selector list>)` (complex selectors inside, as Chromium allows), `:has(<selector list>)`
+// (a descendant matches; 2026-09-27, for grok's `div[id^='response-']:has([data-testid='assistant-message'])`),
+// `:disabled` and `:empty`.
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 
@@ -121,6 +123,19 @@ class Element {
     }
     return node
   }
+  get firstChild() {
+    return this.childNodes[0] || null
+  }
+  /** `insertBefore(node, ref)` as in the browser (`ref` null = append): a newest-first transcript PREPENDS its rows (2026-09-27). */
+  insertBefore(node, ref) {
+    if (ref === null || ref === undefined) return this.appendChild(node)
+    const i = this.childNodes.indexOf(ref)
+    if (i === -1) throw new Error('_dom: insertBefore: the reference node is not a child')
+    node.parentNode = this
+    node.ownerDocument = this.ownerDocument
+    this.childNodes.splice(i, 0, node)
+    return node
+  }
   /** Unmount this element (`el.remove()` as in the browser); its own subtree stays intact, just detached. */
   remove() {
     if (this.parentNode && typeof this.parentNode.removeChild === 'function') this.parentNode.removeChild(this)
@@ -207,7 +222,7 @@ function documentOrder(node) {
 // A class name here is `[\w-]+`: `.a.b` is two classes, exactly as CSS reads it (a real class that
 // contains a dot or a bang — `gap-2.5`, `whitespace-pre!` — would need escaping in a selector, and
 // none of the cascades use one).
-const COMPOUND_RE = /^(?:[*]|[a-zA-Z][\w-]*|#[\w-]+|\.[\w-]+|\[[^\]]*\]|:not\([^)]*\)|:[a-z-]+)+/
+const COMPOUND_RE = /^(?:[*]|[a-zA-Z][\w-]*|#[\w-]+|\.[\w-]+|\[[^\]]*\]|:not\([^)]*\)|:has\([^)]*\)|:[a-z-]+)+/
 
 /** Split a selector list on top-level commas (a comma inside [] or :not() stays put). */
 function splitList(selector) {
@@ -258,7 +273,8 @@ function parseCompound(text) {
     else if ((m = /^\.([\w-]+)/.exec(rest))) simple.push({ kind: 'class', value: m[1] })
     else if ((m = /^\[([\w-]+)(?:([~^$*|]?=)\s*("[^"]*"|'[^']*'|[^\]]*))?\]/.exec(rest))) {
       simple.push({ kind: 'attr', name: m[1].toLowerCase(), op: m[2] || null, value: m[3] === undefined ? null : unquote(m[3]) })
-    } else if ((m = /^:not\(([^)]*)\)/.exec(rest))) simple.push({ kind: 'not', value: parseCompound(m[1].trim()) })
+    } else if ((m = /^:not\(([^)]*)\)/.exec(rest))) simple.push({ kind: 'not', value: parseSelectorList(m[1].trim()) })
+    else if ((m = /^:has\(([^)]*)\)/.exec(rest))) simple.push({ kind: 'has', value: parseSelectorList(m[1].trim()) })
     else if ((m = /^:([a-z-]+)/.exec(rest))) simple.push({ kind: 'pseudo', value: m[1] })
     else throw new Error(`_dom: unsupported simple selector at "${rest}"`)
     rest = rest.slice(m[0].length)
@@ -284,7 +300,8 @@ function matchesCompound(el, compound) {
     if (s.kind === 'tag') return el.localName === s.value
     if (s.kind === 'id') return el.id === s.value
     if (s.kind === 'class') return el.classList.includes(s.value)
-    if (s.kind === 'not') return !matchesCompound(el, s.value)
+    if (s.kind === 'not') return !s.value.some((complex) => matchesComplex(el, complex))
+    if (s.kind === 'has') return documentOrder(el).some((d) => d !== el && s.value.some((complex) => matchesComplex(d, complex)))
     if (s.kind === 'pseudo') {
       if (s.value === 'disabled') return el.hasAttribute('disabled')
       if (s.value === 'enabled') return !el.hasAttribute('disabled')

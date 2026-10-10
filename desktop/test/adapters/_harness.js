@@ -18,6 +18,23 @@ export const SITE_CJS = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const { DEFAULT_SELECTORS, SLOTS, mergeSelectors, SNAPSHOT_KEEP_ATTRS } = require(SITE_CJS)
 export const SITE_SRC = fs.readFileSync(SITE_CJS, 'utf8')
 
+/**
+ * The `assistant` entry each look-alike's reply row is BUILT AROUND — what a spec locates the fake's containers
+ * by. Not always the cascade's first entry (2026-10-10): chatgpt's first entry is the effort-picker exchange
+ * group (`div.group.flex.flex-col:has([class~='group/user-message'])`, fixtures chatgpt-oct10-done /
+ * -virtualized), while the fake renders the 2026-09-17 `article[data-message-author-role=assistant]` turn —
+ * a real layout still, and the one the placeholder / remount lifecycle was measured on. claude's and grok's
+ * rows carry their sites' measured testids, so theirs ARE the first entries.
+ */
+export const FAKE_ASSISTANT = Object.freeze({
+  chatgpt: "[data-message-author-role='assistant']",
+  claude: DEFAULT_SELECTORS.claude.assistant[0],
+  grok: DEFAULT_SELECTORS.grok.assistant[0],
+})
+for (const site of SLOTS) {
+  if (!DEFAULT_SELECTORS[site].assistant.includes(FAKE_ASSISTANT[site])) throw new Error(`_harness: FAKE_ASSISTANT.${site} is not in the site's assistant cascade`)
+}
+
 export const CONFIRMED_BY = ['stop_button', 'composer_cleared', 'assistant_count']
 
 /** Backticks, quotes, ${}, a backslash-n literal, newlines (incl. a blank line), a tab, two spaces, unicode, markup. */
@@ -92,15 +109,19 @@ export function installFakeIpc({ site, selectors, dev }) {
  * plus the S7-review lifecycle keys
  * remountMs / placeholderMs / webUrlMs (the measured chatgpt placeholder-then-remount turn and its
  * placeholder `/c/WEB:<uuid>` url) and the S8 key `thinking` (claude's thinking-widget turn shape,
- * whose summary line is in the DOM twice). `path` picks the page path (the SPA fallback serves
- * index.html for /c/<id>).
+ * whose summary line is in the DOM twice), and the 2026-09-27 virtualized-transcript keys keepLast /
+ * order / assistantAtSubmit / userMarkdown / echoTurn (a fixed window of mounted rows, a newest-first
+ * transcript — the grok look-alike is newest-first by default, as grok.com is, and `order=forward` appends —,
+ * the reply row mounted empty in the submit tick, the user's text rendered as markdown, an echo that
+ * names its exchange). `path` picks the page path (the SPA fallback serves index.html for
+ * /c/<id>).
  */
 export async function open(page, opts = {}) {
   const { site, selectors = DEFAULT_SELECTORS, dev = false, ipcSite = site, path: pagePath = '/', ...query } = opts
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs']
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -141,6 +162,11 @@ export const replyState = (page) =>
     urls: window.__fake.urls,
     replyText: window.__fake.replyText(),
     replySource: window.__fake.replySource(),
+    // 2026-09-27: the virtualized-transcript readings — assistant rows still mounted, exchanges trimmed away
+    mountedAssistants: window.__fake.mountedAssistants(),
+    trimmed: window.__fake.trimmed,
+    exchanges: window.__fake.exchanges,
+    order: window.__fake.order,
   }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
 export const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)

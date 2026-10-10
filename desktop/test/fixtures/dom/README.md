@@ -239,3 +239,78 @@ first reply of a fresh chat: the body is mounted and EMPTY while the site works 
 `effort-streaming` is one turn later: the first reply finished, the second streaming, six message
 matches for two turn pairs. Neither snapshot shows a send button (the site was working both times),
 so the `send` cascade is still measured only on the older layout.
+
+## claude-virtualized.html, chatgpt-virtualized.html, grok-virtualized.html (2026-09-27)
+
+The newest failed pane capture of each site from one afternoon's Fusion runs (`snapshots/<site>-failed-<ts>.html`,
+42 failures in all, every one with the site's stop control seen), pruned to the transcript and the composer
+region: the ancestors that carry `id`/`class`/`role`/`data-testid`, every mounted row, its reply body and its
+action bar, the composer and its send/voice control; everything else dropped, and a kept leaf holding one
+`…`. They pin what the failures measured — once a chat is long every site keeps a **fixed window** of rows
+mounted and unmounts the oldest as the new one mounts, so `countAssistant()` never rises:
+
+| fixture | mounted vs actual | structure |
+|---|---|---|
+| `claude-virtualized` | 9 `transcript-row`s of ~58: 5 `.font-claude-response` + 4 `[data-testid=user-message]` | `transcript-list > [role=feed] > transcript-sizer`: `[spacer] [A = the FIRST reply, pinned] [spacer] [U A U A U A U A] [spacer]`; the assistant rows carry `[data-testid=assistant-message]`, the send control is `button[data-testid=chat-input-send][aria-label="Send message"]` — the new first `send` entry |
+| `chatgpt-virtualized` | 5 `div.group.flex.flex-col.pb-2.pt-2` of ~29 exchanges | each group is ONE exchange: two nested `group/user-message` wrappers around `div.whitespace-pre-wrap` (the prompt), one `MarkdownRoot-` (the answer), one `button[aria-label='Rate response']`; oldest first, newest last; still no `data-message-*` attribute, no `.markdown`, no `#prompt-textarea`, no send button |
+| `grok-virtualized` | 7 `div[id^='response-']` of ~58 rows: 4 `[data-testid=assistant-message]` + 3 `[data-testid=user-message]` | `[data-testid=chat-transcript-scroller]` > one `div.absolute.inset-x-0.top-0` slot per row; **document order is NEWEST-FIRST**; the bare `div[id^='response-']` matches the user's rows too, `div[id^='response-']:has([data-testid='assistant-message'])` — the new first `assistant` entry — exactly the four replies |
+
+What `test/unit/preload/virtualized.test.js` pins on them: the corrected `assistant` cascade counts 4 on grok
+(7 before); a chatgpt group's reply body is its `MarkdownRoot-` and the scoped `.whitespace-pre-wrap` entry
+matches nothing inside a user turn; claude's 5 responses and 4 user turns; and the ADJACENCY step of the
+anchor rule (`containerForAnchor`) handed a user-turn element directly — the exchange group that holds it on
+chatgpt, the row after it on claude, the row BEFORE it on grok — because the text nodes are `…`, so matching
+a typed prompt to a turn (the anchor rule proper) is the fake site's and `test/adapters/virtualized.spec.js`'s
+job. Health: every page was settled when the failure was saved, so there is no stop control in any of them.
+
+These are what `Save DOM snapshot` / a failed capture writes, so they are scrubbed by construction; the
+pruning kept attributes only, never added one, and the lint and the fixed-point test run over them like
+over every other fixture.
+
+## chatgpt-oct10-done.html, claude-oct10-status.html (2026-10-10)
+
+The morning's two failed pane captures (`snapshots/chatgpt-failed-1791645173560.html`,
+`snapshots/claude-failed-1791645174374.html`; both diag lines read `containers=0 … stopSeen=true` — the
+sites had replied, and every reply-container selector matched nothing), pruned to the transcript and the
+composer the way the `*-virtualized` fixtures were. Dropped on the way, because none of it is under a kept
+ancestor: chatgpt's sidebar (`div[role=group][aria-label=<the prompt>]`, the chat titles), its minimized
+quick-chat `section[role=dialog]` and the arXiv citation `aria-label`; claude's thirty `More options for
+<title>` buttons, the model label and the "Desktop … Connected" label. The two `<form>`s on chatgpt are
+reduced to the one holding the composer.
+
+| fixture | what it shows | health |
+|---|---|---|
+| `chatgpt-oct10-done` | one FINISHED exchange. The group is a bare `div.group.flex.flex-col` — `pb-2 pt-2` are gone — and that triple also matches the answer's inner `div.group.flex.min-w-0.flex-col` wrapper (2 matches on the page), so the group is identified through the USER TURN it holds: `div.group.flex.flex-col:has([class~='group/user-message'])`, the new first `assistant` entry (identical to the old entry on every Sept-27 fixture: 1 / 2 / 5). Inside: the nested `group/user-message` pair around `div.text-size-chat.whitespace-pre-wrap`, the answer's `MarkdownRoot-` under `div.group.flex.min-w-0.flex-col`, and the finished turn's action bar with `button[aria-label='Rate response']`. The MarkdownRoot body is kept VERBATIM — 2,624 elements, 888 text nodes (headings, lists, tables, KaTeX math), on ONE line as `scrubDom` emits it, so the file stays ~100 KB — because the capture pin is its text: `replyText` renders 628 `…` runs. No stop control (the reply had ended), no send button (an empty composer never shows one: `send` is still unmeasured on this layout), composer entry 1 (`div[contenteditable='true'].ProseMirror`; no `#prompt-textarea`) | `{composer 1, send null, reply 0, stop null, messages 3, assistant 1}` |
+| `claude-oct10-status` | the claude.ai REDESIGN, caught in its STATUS phase: `transcript-list > [role=feed] > transcript-sizer > [transcript-leading] [spacer] [row U] [row A] [spacer]`. The assistant row is `div[data-testid=assistant-message]` — `.font-claude-response`, `.prose` and `.standard-markdown` match NOTHING on this page — holding only the `group/status` widget (`span[data-testid=TurnStatusClayMark]`, the label, a `.tabular-nums` timer, an sr-only `[role=status]`) and an `invisible` `[data-testid=message-actions]` wrapper with the sr-only "Show message actions" button: no reply body mounted. The user row is `div.cds-user-message-body > div[data-testid=user-message] > p.whitespace-pre-wrap`, with its `[role=toolbar]` (`user-message-edit`, Copy) and `failed-send-status-region`. The composer is `div[data-testid=chat-input][contenteditable][role=textbox].tiptap.ProseMirror` inside a `fieldset`, and the stop control `button[data-testid=chat-input-stop][aria-label="Stop response"]` sits where `chat-input-send` sits on a settled page (they swap in the same slot) | `{composer 0, send null, reply 0, stop 0, messages 2, assistant 1}` |
+
+What `fixtures.test.js` pins on them (the 2026-10-10 tests at its end): on both, `countAssistant()` is 1,
+`userTurns()` is 1 and `containerForAnchor(turn)` is that one container (chatgpt: the group that holds the turn;
+claude: the row after it); chatgpt's `findDone` is "Rate response" and its `replyText` has 628 `…` runs through
+the MarkdownRoot; claude's `findStop` is `chat-input-stop`, its `replyBlocks` are empty (so `replyText` falls back
+to the whole row — the status widget), and `findDone` is null here while it is
+`[data-testid='message-actions'] button[data-testid^='action-bar-']` on every settled row of `claude-virtualized`.
+
+Measured, and carried into `DEFAULT_SELECTORS` additively (older entries stay behind the new first entry):
+chatgpt `assistant` gains the `:has` entry first; claude `assistant` gains `[data-testid='assistant-message']`
+first, `stop` gains `button[data-testid='chat-input-stop']` first, `done` is the settled row's action bar, and
+`assistantText` gains `.standard-markdown` as a fallback behind `.prose`. The generic `MESSAGE_SELECTORS` and
+`ASSISTANT_SELECTORS` gain the chatgpt `:has` entry and `[data-testid='assistant-message']`; the bare grok
+`div[id^='response-']` left `ASSISTANT_SELECTORS` and grok's own cascade (a row without a bubble has nothing
+to capture, and on a fresh chat that entry made the user's OWN row the reply container). The consequences for
+the older fixtures: `claude-virtualized` counts 14 messages (its five `assistant-message` rows), the `reply`
+entry indices move (chatgpt-streaming / -done 0 → 1, chatgpt-thinking / -effort-streaming / -virtualized 1 → 0,
+claude-streaming / -done 0 → 1, claude-streaming `stop` 0 → 1), and the hand-built `grok-streaming` /
+`grok-done` rows now wrap their markdown in the measured bubble
+(`div[role=article][aria-label=Grok][data-testid=assistant-message].message-bubble`) — one more
+`.message-bubble` each for `countMessages` (2 → 3) — because nothing matches a bubble-less row any more.
+`grok-virtualized` stays at 14 messages: its bubbles carry the same testid, but each IS the `.message-bubble`
+already counted, and `countMessages` de-duplicates by node.
+
+UNMEASURED, deliberately said so: the claude reply BODY wrapper after the redesign. The only snapshot died in
+the status phase, before any markdown mounted, so `.prose` (and `.standard-markdown` behind it) is a carry-over
+from the Sept-27 settled rows, not a measurement; `replyText` falls back to the whole `assistant-message` when
+both miss, which would carry the status row's "Thought for Ns" and the action-bar labels along (the S8
+duplicate-chrome family). A *Save DOM snapshot* of a settled claude reply is the one reading that settles it.
+Also still unmeasured: chatgpt's send button on this layout (every snapshot has an empty composer), and
+claude's `done` marker DURING body streaming (it is absent in the status phase and present on every settled
+row; a visible stop control outranks it either way).

@@ -292,7 +292,8 @@ test('capture on: observe is called with baselineCount = the submit result assis
   await settleAll()
   const obs = table.claude.last()
   assert.equal(obs.op, 'observe')
-  assert.deepEqual(obs.payload, { baselineCount: 3, quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000 })
+  // 2026-09-27: the typed text rides along as the reply's ANCHOR (the adapter matches it against the user's own turn)
+  assert.deepEqual(obs.payload, { baselineCount: 3, quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, text: 'hello `x`' })
   assert.equal(obs.opts.timeoutMs, observeBudgetMs({ firstTokenMs: 3000, captureTimeoutMs: 4000 }) + TIMEOUT_GRACE_MS)
   assert.deepEqual(phases, ['claude:typing', 'claude:submitted', 'claude:replying'])
   obs.resolve({ ok: true, op: 'observe', text: 'At sea level water boils at 100 °C.', doneBy: 'stop_gone', ms: 900, url: 'https://x.test/c/abc' })
@@ -313,7 +314,7 @@ test('a missing / bogus assistantCount omits baselineCount from observe (the ada
   table.grok.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: -1 })
   await settleAll()
   assert.equal(table.grok.last().op, 'observe')
-  assert.deepEqual(table.grok.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000 }, 'no baselineCount at all')
+  assert.deepEqual(table.grok.last().payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, text: 'hello `x`' }, 'no baselineCount at all')
   assert.equal('baselineCount' in table.grok.last().payload, false)
   table.grok.last().resolve({ ok: true, op: 'observe', text: '', doneBy: 'weird', ms: 1 })
   const final = await done
@@ -664,7 +665,7 @@ test('insertAndSubmit budget = composer + send + 2×verify + 2×INSERT_SETTLE_MS
   await settleAll()
   const obs = table.chatgpt.last()
   // a capture config that predates `settleMs` falls back to the contract default (400), never to chatgpt's
-  assert.deepEqual(obs.payload, { baselineCount: 1, quietMs: 2500, settleMs: 400, timeoutMs: 300000, firstTokenMs: 90000 })
+  assert.deepEqual(obs.payload, { baselineCount: 1, quietMs: 2500, settleMs: 400, timeoutMs: 300000, firstTokenMs: 90000, text: 'hello `x`' })
   assert.equal(obs.opts.timeoutMs, 90000 + 300000 + TIMEOUT_GRACE_MS)
   obs.resolve({ ok: true, op: 'observe', text: 't', doneBy: 'quiet', ms: 1 })
   await done

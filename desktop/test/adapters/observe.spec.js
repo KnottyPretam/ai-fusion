@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { DEFAULT_SELECTORS, SLOTS, SNAPSHOT_KEEP_ATTRS, TRICKY, open, request, fake, replyState, ipcState, withOverride } from './_harness.js'
+import { DEFAULT_SELECTORS, FAKE_ASSISTANT, SLOTS, SNAPSHOT_KEEP_ATTRS, TRICKY, open, request, fake, replyState, ipcState, withOverride } from './_harness.js'
 import { lintText } from '../unit/preload/_fixture-lint.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -66,7 +66,8 @@ for (const site of SLOTS) {
       expect(sent).toMatchObject({ ok: true, op: 'insertAndSubmit', submitted: true })
       await expect(page.locator(STOP[site])).toHaveCount(1) // streaming: the stop button holds the send slot
       const streaming = await request(page, { op: 'health' })
-      expect(streaming.health).toMatchObject({ stop: true, reply: true, session: 'ok', matched: { stop: sel.stop[0], reply: sel.assistant[0] } })
+      // the entry the fake's reply row is built around (2026-10-10: chatgpt's first entry is the exchange group the fake does not render)
+      expect(streaming.health).toMatchObject({ stop: true, reply: true, session: 'ok', matched: { stop: sel.stop[0], reply: FAKE_ASSISTANT[site] } })
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
       expectObserved(res, 'Echo: ' + TRICKY, DONE_BY[site])
       const r = await replyState(page)
@@ -76,7 +77,7 @@ for (const site of SLOTS) {
       if (site === 'chatgpt') await expect(page.locator(CHATGPT_DONE)).toHaveCount(1)
       expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
       const after = await request(page, { op: 'health' })
-      expect(after.health).toMatchObject({ reply: true, stop: false, session: 'ok', matched: { reply: sel.assistant[0], stop: null } })
+      expect(after.health).toMatchObject({ reply: true, stop: false, session: 'ok', matched: { reply: FAKE_ASSISTANT[site], stop: null } })
     })
 
     test('?nostop=1 (+ ?nodone=1): no stop button and no marker — the reply is done once its text is quiet for quietMs', async ({ page }) => {
@@ -176,7 +177,7 @@ test.describe('?reply=json', () => {
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
       expectObserved(res, CONVERGENCE, DONE_BY[site])
       // the page really rendered chrome, not text: a <pre>, a <code>, the language label and a copy button
-      const container = DEFAULT_SELECTORS[site].assistant[0]
+      const container = FAKE_ASSISTANT[site]
       await expect(page.locator(`${container} pre`)).toHaveCount(1)
       await expect(page.locator(`${container} code`)).toHaveCount(1)
       await expect(page.locator(`${container} .code-header`)).toContainText('json') // grok's header also holds its copy button
@@ -262,7 +263,7 @@ test.describe('?reply=rich — a rendered markdown reply comes back as GFM (Stag
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
       expectObserved(res, RICH, DONE_BY[site])
       // it really is a rendered document, not text: the blocks exist in the DOM
-      const container = DEFAULT_SELECTORS[site].assistant[0]
+      const container = FAKE_ASSISTANT[site]
       await expect(page.locator(`${container} h2`)).toHaveText('Gyroscope range')
       await expect(page.locator(`${container} ul > li`)).toHaveCount(4) // two top-level items + the two nested ones
       await expect(page.locator(`${container} ul ul > li`)).toHaveCount(2)
@@ -342,7 +343,7 @@ test.describe('?reply=fidelity — every capture-fidelity shape survives one obs
       expect(res.text).toBe(await page.evaluate(() => window.__fake.replySource())) // verbatim, link-free
 
       // the DOM really carried the hard shapes (not markdown text dropped into the container)
-      const container = DEFAULT_SELECTORS[site].assistant[0]
+      const container = FAKE_ASSISTANT[site]
       await expect(page.locator(`${container} h2`)).toHaveText('Capture fidelity')
       await expect(page.locator(`${container} p code`)).toHaveText('`GYRO_RANGE`') // a backtick INSIDE the code span
       await expect(page.locator(`${container} .katex-mathml annotation`)).toHaveAttribute('encoding', 'application/x-tex')
@@ -393,7 +394,7 @@ test.describe('the end signal before the last render (?doneLagMs) and a second c
       expectObserved(res, 'Echo: two turns', DONE_BY[site])
       expect(res.text).not.toContain('Searching')
       expect((await replyState(page)).containers).toBe(2)
-      await expect(page.locator(DEFAULT_SELECTORS[site].assistant[0])).toHaveCount(2)
+      await expect(page.locator(FAKE_ASSISTANT[site])).toHaveCount(2)
       if (site === 'chatgpt') await expect(page.locator(CHATGPT_DONE)).toHaveCount(2) // the tool turn's marker was up the whole time
       expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
     })
@@ -419,7 +420,7 @@ test.describe('the end signal before the last render (?doneLagMs) and a second c
  * records a link that 404s.
  */
 test.describe('the chatgpt placeholder-then-remount lifecycle (measured live 2026-09-17)', () => {
-  const ASSISTANT = DEFAULT_SELECTORS.chatgpt.assistant[0]
+  const ASSISTANT = FAKE_ASSISTANT.chatgpt
   const MARKDOWN = DEFAULT_SELECTORS.chatgpt.assistantText[0]
 
   test('observe waits through the gap and returns the REAL reply, never the placeholder; the stop button is never dropped in between', async ({ page }) => {
@@ -749,7 +750,7 @@ test.describe("?thinking=1 — claude's doubled thinking summary", () => {
     })
     expect(panel).toEqual({ display: 'block', visibility: 'visible', height: '0px', hidden: false, ariaHidden: null, boxHeight: 0 })
     // the cascade entry that did it, and the body it points at
-    expect(DEFAULT_SELECTORS.claude.assistantText).toEqual(['.prose'])
+    expect(DEFAULT_SELECTORS.claude.assistantText).toEqual(['.prose', '.standard-markdown']) // 2026-10-10: `.standard-markdown` behind it, a fallback only
     await expect(page.locator('.font-claude-response .prose')).toHaveCount(1)
   })
 
@@ -837,7 +838,7 @@ test.describe('S9: a fenced reply, its code block’s copy control, and a stop b
     expect(JSON.parse(res.text.slice('```json\n'.length, -'\n```'.length)).divergences.length).toBe(2)
 
     // the page really did mount a done-cascade match inside the <pre>, and it is still there
-    const inBody = page.locator(`${DEFAULT_SELECTORS.chatgpt.assistant[0]} pre ${CHATGPT_DONE}`)
+    const inBody = page.locator(`${FAKE_ASSISTANT.chatgpt} pre ${CHATGPT_DONE}`)
     await expect(inBody).toHaveCount(1)
     await expect(page.locator(CHATGPT_DONE)).toHaveCount(2) // the block's + the turn's action bar
     const r = await replyState(page)
@@ -1066,7 +1067,8 @@ test.describe('S10: a container that mounts empty and stays empty while the mode
     expect(res.message).toContain('longer capture budget, not a different selector')
     // S11: the diag line, with the geometry only a real browser has — one container, followed, empty
     // by every measure, the stop control up now and seen before, no end signal
-    expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
+    // 2026-09-27: `anchor=1` — the user's own turn matched the typed prompt; `presubmit=0` — a fresh page held no container before the submit
+    expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true anchor=1 order=oldest presubmit=0 stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
     const r = await replyState(page)
     expect(r.containers).toBe(1) // it was following this turn's own container the whole time
   })

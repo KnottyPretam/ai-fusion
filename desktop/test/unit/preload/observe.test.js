@@ -23,6 +23,10 @@
 //      reported as this turn's reply when the baseline is stale and the gap is open — and a reply that
 //      mounts while the count still equals an INFLATED baseline (the placeholder counted into it, the
 //      submit-side half of the same bug) is followed all the same.
+//   5. (2026-09-27) the baseline is the PRE-SUBMIT snapshot `submit()` takes (identities and texts), else
+//      the first sample, on which `baselineCount` names the OLDEST containers as earlier turns; the count
+//      rule that picked "the last container" is retired, and a typed `text` anchors the reply on the
+//      user's own turn — see virtualized.test.js. The diag line carries `anchor` / `order` / `presubmit`.
 //
 // There is no layout and no MutationObserver here, so every sample is the OBSERVE_POLL_MS poll and every
 // element counts as visible (see the _dom.js header) — which is exactly what makes the stepping
@@ -238,9 +242,14 @@ test("an EARLIER turn's container is never reported as this turn's reply: a stal
   mount(doc, thread, finished(OLD_ANSWER))
   assert.equal(adapter.countAssistant(), 1)
 
+  // 2026-09-27: the submit takes the PRE-SUBMIT baseline — the old container is an earlier turn by
+  // identity, whatever count main sends back (the Enter fallback is confirmed by the page's stop button)
+  const sent = await adapter.submit(0)
+  assert.equal(sent.confirmedBy, 'stop_button')
+  assert.equal(sent.assistantCount, 1)
   // main's baseline is STALE — 0 while the page holds one container. Measured cause: the site unmounts
   // containers (the lifecycle above), so the `countAssistant()` sample taken at the submit can be lower
-  // than what is on the page by the time the observe message arrives.
+  // than what is on the page by the time the observe message arrives. The adapter's own snapshot wins.
   const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 20000, firstTokenMs: 5000, quietMs: 800 }))
 
   // ~1 s: this turn's placeholder — mounted AFTER observe started, so identity marks it as ours
@@ -713,7 +722,7 @@ test('S10: a stop control that was seen and then vanished names BOTH of the thin
 // hypothesis (`inner ≫ reply` → the reader; `maxContainer ≫ inner` → the container choice; all small →
 // the DOM). It rides on the message only: the code and the partial are exactly what they were.
 
-const DIAG_TAIL = String.raw`connected=true stopNow=(true|false) stopSeen=(true|false) end=(quiet|-) md=1 pre=0 code=0 reply=\d+ inner=\d+ textContent=\d+ maxContainer=\d+ rect=- viewport=-\]$`
+const DIAG_TAIL = String.raw`connected=true anchor=no order=oldest presubmit=0 stopNow=(true|false) stopSeen=(true|false) end=(quiet|-) md=1 pre=0 code=0 reply=\d+ inner=\d+ textContent=\d+ maxContainer=\d+ rect=- viewport=-\]$`
 
 test('S11: the json-incomplete throw carries the diag line, and neither its code nor its partial changes', async () => {
   const { doc, clock, adapter, thread, stop } = setup()
@@ -726,7 +735,7 @@ test('S11: the json-incomplete throw carries the diag line, and neither its code
   // the reader returned the whole container (reply == inner == textContent): the answer is prose, not a lost reply
   assert.match(
     state.error.message,
-    /^the reply never became a complete json document \(21 characters after \d+ ms\) \[containers=1 followed=0 connected=true stopNow=false stopSeen=false end=quiet md=1 pre=0 code=0 reply=21 inner=21 textContent=21 maxContainer=21 rect=- viewport=-\]$/,
+    /^the reply never became a complete json document \(21 characters after \d+ ms\) \[containers=1 followed=0 connected=true anchor=no order=oldest presubmit=0 stopNow=false stopSeen=false end=quiet md=1 pre=0 code=0 reply=21 inner=21 textContent=21 maxContainer=21 rect=- viewport=-\]$/,
   )
   assert.equal(state.error.message.includes('cannot answer'), false, 'the diag never quotes the reply: the prose travels in the partial only')
 })
@@ -741,7 +750,7 @@ test('S11: the three empty-container throws carry the diag line — what the sit
     await clock.advance(4000)
     assert.equal(state.error.code, 'reply_not_found')
     assert.equal(state.error.partial, undefined)
-    assert.match(state.error.message, /never held any text, and the site never showed a stop control \[containers=1 followed=0 connected=true stopNow=false stopSeen=false end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+    assert.match(state.error.message, /never held any text, and the site never showed a stop control \[containers=1 followed=0 connected=true anchor=no order=oldest presubmit=0 stopNow=false stopSeen=false end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
   // the stop control is still up → timeout, still reasoning
   {
@@ -750,7 +759,7 @@ test('S11: the three empty-container throws carry the diag line — what the sit
     mount(doc, thread, textTurn(''))
     await clock.advance(4000)
     assert.equal(state.error.code, 'timeout')
-    assert.match(state.error.message, /longer capture budget, not a different selector \[containers=1 followed=0 connected=true stopNow=true stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+    assert.match(state.error.message, /longer capture budget, not a different selector \[containers=1 followed=0 connected=true anchor=no order=oldest presubmit=0 stopNow=true stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
   // the stop control was seen and then vanished → timeout, either
   {
@@ -761,7 +770,7 @@ test('S11: the three empty-container throws carry the diag line — what the sit
     stop.remove()
     await clock.advance(3500)
     assert.equal(state.error.code, 'timeout')
-    assert.match(state.error.message, /outside the container this capture followed \[containers=1 followed=0 connected=true stopNow=false stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+    assert.match(state.error.message, /outside the container this capture followed \[containers=1 followed=0 connected=true anchor=no order=oldest presubmit=0 stopNow=false stopSeen=true end=- md=1 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
   // and the container-less throw, for completeness: no container was ever picked, so `followed=-` (not -1, which means detached)
   {
@@ -770,7 +779,7 @@ test('S11: the three empty-container throws carry the diag line — what the sit
     const state = settled(adapter.observe({ baselineCount: 0, timeoutMs: 3000, firstTokenMs: 1000, quietMs: 600, settleMs: 200 }))
     await clock.advance(1500)
     assert.equal(state.error.code, 'reply_not_found')
-    assert.match(state.error.message, /\(tried: .*\) \[containers=0 followed=- connected=false stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
+    assert.match(state.error.message, /\(tried: .*\) \[containers=0 followed=- connected=false anchor=no order=oldest presubmit=0 stopNow=false stopSeen=false end=- md=0 pre=0 code=0 reply=0 inner=0 textContent=0 maxContainer=0 rect=- viewport=-\]$/)
   }
 })
 

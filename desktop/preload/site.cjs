@@ -283,11 +283,13 @@
   const MESSAGE_SELECTORS = Object.freeze([
     '[data-message-author-role]', // chatgpt (and the fake site): user + assistant turns
     "[class~='group/user-message']", // chatgpt, effort-picker layout (2026-09-27): user turns
+    "div.group.flex.flex-col:has([class~='group/user-message'])", // chatgpt (2026-10-10): the exchange group, identified by the user turn it holds
     "div.group.flex.flex-col.pb-2.pt-2", // chatgpt, effort-picker layout: one turn group per exchange
     "[data-testid='user-message']", // claude user turns
     '.font-claude-message', // claude assistant turns (older markup)
     '.font-claude-response', // claude assistant turns
-    "div[id^='response-']", // grok assistant turns
+    "[data-testid='assistant-message']", // claude assistant turns (2026-10-10 redesign); grok's bubbles carry it too
+    "div[id^='response-']", // grok rows (user AND assistant: every row is one)
     '.message-bubble', // grok user/assistant bubbles
   ])
   const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
@@ -298,13 +300,21 @@
    * What `countAssistant()` counts: assistant-role containers only (+ a v2 `assistant` cascade).
    * This is the `assistantCount` handed to main (contract §2/§3) — Stage 2's observe baseline — so
    * the user's own turn, appended after the sample, is never mistaken for the reply.
+   * Since 2026-09-27 `assistantContainers()` reads the site's `assistant` cascade followed by this list
+   * as ONE cascade — the first entry with any match wins, as `findFirst` does — instead of the union of
+   * every entry: grok.com's `div[id^='response-']` matches its USER rows as well (measured from the
+   * failure snapshots of that day), and a union counted them. Since 2026-10-10 the bare id prefix is
+   * gone altogether: a row without an assistant bubble has nothing to capture, and the user's own row
+   * was the one thing the bare entry could add.
    */
   const ASSISTANT_SELECTORS = Object.freeze([
     "[data-message-author-role='assistant']", // chatgpt
+    "div.group.flex.flex-col:has([class~='group/user-message'])", // chatgpt (2026-10-10): the exchange group holding the user turn
     "div.group.flex.flex-col.pb-2.pt-2", // chatgpt, effort-picker layout (2026-09-27): the exchange's turn group
     '.font-claude-response', // claude
     '.font-claude-message', // claude (older markup)
-    "div[id^='response-']", // grok
+    "[data-testid='assistant-message']", // claude (2026-10-10 redesign); on grok the site's own cascade wins first
+    "div[id^='response-']:has([data-testid='assistant-message'])", // grok (2026-09-27): only a row that holds an assistant bubble
   ])
 
   /**
@@ -378,9 +388,22 @@
       // thinking header is never captured. The finished turn's action bar (Copy · Rate response · Share ·
       // Read aloud · Sources) sits after the blocks inside the group, so "Rate response" is the done marker —
       // unlike "Copy", which a code block or a table also carries. Older entries stay first.
-      assistant: ["[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"],
-      assistantText: ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", '.whitespace-pre-wrap'],
+      // 2026-10-10 (snapshot chatgpt-failed-1791645173560, fixture chatgpt-oct10-done): the exchange group
+      // lost `pb-2 pt-2` — its class list is exactly `group flex flex-col` — and the bare triple also matches
+      // the answer's inner `div.group.flex.min-w-0.flex-col` wrapper, so the group is identified by the USER
+      // TURN it holds: `:has([class~='group/user-message'])`. Identical to the old entry on every Sept-27
+      // fixture (1 / 2 / 5), 1 on the Oct-10 page where the old entry is 0. Older entries stay after it.
+      assistant: ["div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"],
+      // 2026-09-27 (virtualized transcripts): the last entry is scoped OUT of the user's own turn. In the
+      // effort-picker layout the user message is `div.text-size-chat.whitespace-pre-wrap` inside
+      // `group/user-message`, so before `MarkdownRoot-` mounts the bare class handed the PROMPT back as
+      // the reply text, past the empty-exchange guard in `replyText`. Chromium accepts a complex
+      // selector inside `:not()` (Selectors Level 4); the unit DOM does too.
+      assistantText: ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", ".whitespace-pre-wrap:not([class~='group/user-message'] *)"],
       done: ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"],
+      // 2026-09-27: the transcript's document order (contract §4 `transcriptOrder`). chatgpt.com keeps a
+      // sliding TAIL window of ~5 exchange groups mounted, oldest first, newest last (8 failure snapshots).
+      transcriptOrder: 'oldest-first',
       quietMs: 2500,
       // S10: three times the 400 ms every other site uses. A chosen value, not a measurement, and the
       // reason is the failure of 2026-09-20: chatgpt re-renders the WHOLE markdown body on every token
@@ -402,7 +425,9 @@
         "div[contenteditable='true'][data-testid]",
         "div[contenteditable='true']",
       ],
-      send: ["button[aria-label='Send message']", "button[aria-label*='Send Message']", "button[aria-label*='Send']"],
+      // 2026-09-27: `chat-input-send` is the stable testid of claude.ai's send control (12 failure snapshots
+      // of that day carry it; its aria-label is still "Send message", which stays as the second entry).
+      send: ["button[data-testid='chat-input-send']", "button[aria-label='Send message']", "button[aria-label*='Send Message']", "button[aria-label*='Send']"],
       loggedOut: ["a[href*='/login']", "button[data-testid='login-with-google']"],
       loggedOutUrl: ['/login'],
       challenge: ["iframe[src*='challenges.cloudflare.com']"],
@@ -412,8 +437,14 @@
       sendWaitMs: 18000,
       submitVerifyMs: 5000,
       // v2 (Stage 2)
-      stop: ["button[aria-label='Stop response']", "button[aria-label*='Stop']"],
-      assistant: ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'],
+      // 2026-10-10 (snapshot claude-failed-1791645174374, fixture claude-oct10-status — the claude.ai redesign):
+      // the stop control is `button[data-testid='chat-input-stop']` (its aria-label is still "Stop response",
+      // kept as the second entry) and it swaps with `chat-input-send` in the same composer slot.
+      stop: ["button[data-testid='chat-input-stop']", "button[aria-label='Stop response']", "button[aria-label*='Stop']"],
+      // 2026-10-10: an assistant turn is `[data-testid='assistant-message']` — the row's single assistant
+      // element on the Oct-10 page (1) and on the Sept-27 virtualized page (5), where it wraps the old
+      // `.font-claude-response`; on the redesigned page `.font-claude-response` matches NOTHING (0 of 1).
+      assistant: ["[data-testid='assistant-message']", '.font-claude-response:not(#markdown-artifact)', '.font-claude-message'],
       // The reply BODY, not the whole turn (S8, contract §4 change request). Measured live on
       // 2026-09-17 (read-only probe, docs/desktop-verification.md item 28): inside
       // `.font-claude-response` a `.prose` element holds 2717 of the container's 2754 innerText
@@ -428,8 +459,20 @@
       // whole container when none matches (exactly the old behaviour). One entry on purpose — a
       // second, looser guess (`.grid-cols-1`) would be consulted only when `.prose` is gone and
       // could then match a SMALL grid inside the answer, which would silently truncate the capture.
-      assistantText: ['.prose'],
-      done: [],
+      // 2026-10-10: `.standard-markdown` (the grid inside `.prose` on the Sept-27 settled rows) as a fallback
+      // ONLY. Neither entry is proven on the redesigned page: the one Oct-10 snapshot died in the STATUS phase
+      // (the assistant row held the "Thought for Ns" widget and no rendered markdown at all), so `.prose` is a
+      // carry-over, not a measurement, and `replyText` keeps its whole-container fallback when both miss.
+      assistantText: ['.prose', '.standard-markdown'],
+      // 2026-10-10: the done marker. Absent during the status phase (the `message-actions` wrapper is there
+      // but `invisible` and holds only the sr-only "Show message actions" button), present on every settled
+      // row of the Sept-27 page (copy / read-aloud / thumbs / retry, 5 per row). Mid-body streaming is
+      // unobserved; a visible stop control still outranks a marker (S9), and `stop_gone` with the 15 s
+      // grace ends the capture exactly as before when the marker never shows.
+      done: ["[data-testid='message-actions'] button[data-testid^='action-bar-']"],
+      // 2026-09-27: claude.ai virtualizes its transcript (`[data-testid=transcript-sizer]`: the FIRST reply
+      // stays pinned, then a window of the newest exchanges — 9 rows of ~58 measured), oldest first.
+      transcriptOrder: 'oldest-first',
       quietMs: 2500,
       settleMs: 400,
       // 2026-09-27: claude.ai drops its stop control while a web search runs mid-reply, and the capture
@@ -466,9 +509,18 @@
       submitVerifyMs: 5000,
       // v2 (Stage 2)
       stop: ["button[aria-label='Stop']", "button[aria-label*='Stop']"],
-      assistant: ["div[id^='response-']"],
+      // 2026-09-27 (10 failure snapshots): EVERY row of grok.com's transcript — the user's included — is a
+      // `div[id^='response-']`; only an assistant row holds `[data-testid='assistant-message']`. Since
+      // 2026-10-10 the bare id prefix is no longer a fallback: on a fresh chat it made the USER's own row the
+      // reply container (it holds the anchor and a `.response-content-markdown` of its own, so `replyText`
+      // handed the prompt back), and a row without a bubble has nothing to capture anyway.
+      assistant: ["div[id^='response-']:has([data-testid='assistant-message'])"],
       assistantText: ['.response-content-markdown'],
       done: [],
+      // 2026-09-27: grok.com's `[data-testid=chat-transcript-scroller]` holds one absolutely positioned slot
+      // per row and its DOCUMENT ORDER IS NEWEST-FIRST (measured): a new row is prepended, so "the last
+      // container" is the OLDEST mounted reply — exactly what the ten captured partials turned out to be.
+      transcriptOrder: 'newest-first',
       quietMs: 2500,
       settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
@@ -500,6 +552,9 @@
     if (v === null) return 'null'
     return typeof v
   }
+
+  /** The only two values `transcriptOrder` takes (contract §4, 2026-09-27); an override naming anything else is refused (2026-10-10). */
+  const TRANSCRIPT_ORDERS = Object.freeze(['oldest-first', 'newest-first'])
 
   /**
    * Merge a selectors override into the defaults: per site, per key, the override REPLACES the
@@ -541,6 +596,12 @@
         }
         if (want === 'array' && !block[key].every((x) => typeof x === 'string')) {
           warnings.push(`${site}.${key}: expected a list of strings`)
+          continue
+        }
+        // 2026-10-10: a direction is one of two literals — a misspelt one used to read silently as oldest-first,
+        // which on grok.com is exactly the failure the key exists to fix
+        if (key === 'transcriptOrder' && !TRANSCRIPT_ORDERS.includes(block[key])) {
+          warnings.push(`${site}.${key}: expected 'oldest-first' or 'newest-first', got ${JSON.stringify(block[key])}`)
           continue
         }
         merged[site][key] = clone(block[key])
@@ -643,6 +704,95 @@
       }
     }
     return false
+  }
+
+  /**
+   * The alphanumeric PROJECTION of a text (2026-09-27): lower-cased, everything but letters and digits
+   * dropped — Unicode letters and digits, not [a-z0-9] (2026-10-10): a prompt in Cyrillic, CJK, Arabic or
+   * Devanagari used to project to '' and get no anchor at all.
+   */
+  function normAlnum(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, '')
+  }
+  /** Anchor probes: three slices of this many projected characters at 25 / 50 / 75 % of the typed text… */
+  const ANCHOR_PROBE_CHARS = 80
+  /** …unless the whole projection is shorter than this, when all of it has to be on the page. */
+  const ANCHOR_WHOLE_MAX = 240
+  /** The shortest marker-free run a probe is taken from; a shorter one is skipped for the nearest longer one. */
+  const ANCHOR_SEGMENT_MIN = 20
+  /** Triplex's own delimiters (`prompts.delimited`): `<<<LABEL>>>` … `<<<END LABEL>>>`. */
+  const ANCHOR_MARKER_RE = /<<<[^<>\n]*>>>/g
+  /** A whole delimited block — its body is the quoted, prompt-specific content; what is outside is shared scaffolding. */
+  const ANCHOR_BLOCK_RE = /<<<([^<>\n]+)>>>([\s\S]*?)<<<END \1>>>/g
+
+  /**
+   * What identifies the user's OWN turn on the page (the anchor rule, 2026-09-27): the typed text
+   * projected to [a-z0-9]. The sites render a prompt as MARKDOWN, so backticks, asterisks, whitespace
+   * and the `<<<` of Triplex's delimiters (a raw `<R1>` reads as an HTML tag and is dropped) never
+   * survive verbatim, while the letters and digits do. The delimiters are cut out FIRST and every probe
+   * is taken from inside one marker-free run, so a probe reads the same whether a site drops a
+   * delimiter's letters or keeps them. When the text holds delimited BLOCKS the probes come from their
+   * bodies alone: that is the quoted, prompt-specific content (the topic, the claim, the justification,
+   * the peers' claims), while everything outside them — the notice, the anti-sycophancy clause, the
+   * round counter, the JSON instruction — is scaffolding every challenge of the same label shares, and a
+   * probe taken there tells two turns apart no better than their head or tail would. Returns null for a
+   * text that projects to nothing; `{whole: true, parts}` when the projection is shorter than
+   * ANCHOR_WHOLE_MAX (every part must be on the page); else `{whole: false, parts}` — three
+   * ANCHOR_PROBE_CHARS slices at 25 / 50 / 75 %, two of which must be. Never the head or the tail alone:
+   * Fusion's challenges share both, and a collapsed "show more" turn keeps its head only, so no probe
+   * sits at the very end.
+   */
+  function anchorProbes(text) {
+    if (typeof text !== 'string') return null
+    const project = (parts) => parts.flatMap((part) => part.split(ANCHOR_MARKER_RE)).map(normAlnum).filter((s) => s !== '')
+    const bodies = []
+    for (const m of text.matchAll(ANCHOR_BLOCK_RE)) bodies.push(m[2])
+    let segments = bodies.length > 0 ? project(bodies) : []
+    if (segments.length === 0) segments = project([text])
+    const total = segments.reduce((n, s) => n + s.length, 0)
+    if (total === 0) return null
+    if (total < ANCHOR_WHOLE_MAX) return { whole: true, parts: segments }
+    const starts = []
+    let offset = 0
+    for (const s of segments) {
+      starts.push(offset)
+      offset += s.length
+    }
+    const longest = segments.reduce((best, s) => (s.length > best.length ? s : best), '')
+    const distance = (i, at) => {
+      const end = starts[i] + segments[i].length
+      if (at >= starts[i] && at < end) return 0
+      return Math.min(Math.abs(at - starts[i]), Math.abs(at - end))
+    }
+    const parts = []
+    for (const fraction of [0.25, 0.5, 0.75]) {
+      const at = Math.floor(total * fraction)
+      // the segment holding `at` first, then its neighbours by distance; the first long enough gives the probe
+      const nearest = segments.map((_s, i) => i).sort((a, b) => distance(a, at) - distance(b, at))
+      const i = nearest.find((k) => segments[k].length >= ANCHOR_SEGMENT_MIN)
+      if (i === undefined) {
+        parts.push(longest)
+        continue
+      }
+      const seg = segments[i]
+      const from = Math.max(0, Math.min(at - starts[i], seg.length - ANCHOR_PROBE_CHARS))
+      parts.push(seg.slice(from, from + ANCHOR_PROBE_CHARS))
+    }
+    // 2026-10-10: two of the three points can clamp to the SAME slice (one long body among short blocks), and
+    // a duplicate counted twice let one slice carry the "2 of 3" vote; the parts are distinct, and
+    // `anchorMatches` asks for as many hits as there are parts, up to two.
+    return { whole: false, parts: [...new Set(parts)] }
+  }
+
+  /** Does a user turn's rendered text carry the typed text (see `anchorProbes`)? Projection on both sides. */
+  function anchorMatches(probes, turnText) {
+    if (!probes || !Array.isArray(probes.parts) || probes.parts.length === 0) return false
+    const hay = normAlnum(turnText)
+    if (hay === '') return false
+    const hits = probes.parts.filter((p) => p !== '' && hay.includes(p)).length
+    return probes.whole ? hits === probes.parts.length : hits >= Math.min(2, probes.parts.length)
   }
 
   function isResultCode(code) {
@@ -1556,6 +1706,9 @@
       return null
     }
     let sel = resolveSelectors(selectors) || siteSelectors(undefined, site) || {}
+    // 2026-09-27 (virtualized transcripts): what the observe that follows a submit anchors on.
+    let lastInserted = null // the text insertAndSubmit last typed — the anchor when the observe message carries none
+    let preSubmit = null // the pre-submit baseline submit() takes (see takeBaseline); cleared by the next insert
 
     /**
      * The document's open shadow roots, walked (`querySelectorAll('*')`) at most once per SAMPLE:
@@ -1803,9 +1956,9 @@
       return countDistinct(assistantCascade().concat(MESSAGE_SELECTORS))
     }
 
-    /** See ASSISTANT_SELECTORS: assistant turns only (+ a v2 `assistant` cascade) — the `assistantCount` reported to main. */
+    /** See ASSISTANT_SELECTORS: assistant turns only (the v2 `assistant` cascade, then the generic list; the first entry with a match) — the `assistantCount` reported to main. */
     function countAssistant() {
-      return countDistinct(assistantCascade().concat(ASSISTANT_SELECTORS))
+      return assistantContainers().length
     }
 
     /** Document-order comparator over compareDocumentPosition; 0 without the API (fakes keep insertion order). */
@@ -1821,28 +1974,144 @@
       return 0
     }
 
-    /** Every assistant container (the same set `countAssistant()` counts), de-duplicated, in document order. */
+    /**
+     * Every assistant container (the same set `countAssistant()` counts), de-duplicated, in document
+     * order: the matches of the FIRST entry — the site's v2 `assistant` cascade, then ASSISTANT_SELECTORS
+     * — that matches anything (cascade semantics, as `findFirst`; 2026-09-27). It used to be the union of
+     * every entry, and on grok.com the generic `div[id^='response-']` then counted the user's rows.
+     */
     function assistantContainers() {
-      const seen = new Set()
-      const out = []
       const roots = shadowRoots()
       for (const selector of assistantCascade().concat(ASSISTANT_SELECTORS)) {
         if (typeof selector !== 'string' || selector === '') continue
+        const seen = new Set()
+        const out = []
         for (const el of deepQuerySelectorAll(document, selector, roots)) {
           if (seen.has(el)) continue
           seen.add(el)
           out.push(el)
         }
+        if (out.length > 0) return out.length > 1 ? out.sort(docOrder) : out
       }
-      return out.length > 1 ? out.sort(docOrder) : out
+      return []
     }
 
-    /** `el` is `container` itself, inside it, or later in document order — an older turn's marker never counts. */
+    /** The transcript's document order (contract §4 `transcriptOrder`, 2026-09-27): 'newest' when rows are prepended (grok.com), else 'oldest'. */
+    function transcriptOrder() {
+      return sel.transcriptOrder === 'newest-first' ? 'newest' : 'oldest'
+    }
+
+    /** The newest element of `list` (document order) per the transcript direction; null for an empty list. */
+    function newestOf(list) {
+      if (list.length === 0) return null
+      return transcriptOrder() === 'newest' ? list[0] : list[list.length - 1]
+    }
+
+    /** The oldest `n` elements of `list` (document order) per the transcript direction. */
+    function oldestOf(list, n) {
+      const k = Math.max(0, Math.min(list.length, n))
+      if (k === 0) return []
+      return transcriptOrder() === 'newest' ? list.slice(list.length - k) : list.slice(0, k)
+    }
+
+    /** Every user turn on the page (USER_TURN_SELECTORS; of a nested pair only the outermost — chatgpt wraps its turn twice), document order. */
+    function userTurns() {
+      const roots = shadowRoots()
+      const seen = new Set()
+      const all = []
+      for (const selector of USER_TURN_SELECTORS) {
+        for (const el of deepQuerySelectorAll(document, selector, roots)) {
+          if (seen.has(el)) continue
+          seen.add(el)
+          all.push(el)
+        }
+      }
+      const outer = all.filter((el) => !all.some((other) => other !== el && containsDeep(other, el)))
+      return outer.length > 1 ? outer.sort(docOrder) : outer
+    }
+
+    /** A node's text as a FINGERPRINT (2026-09-27): textContent, normalised — layout-free, and a collapsed row still yields all of it. */
+    function fingerprint(el) {
+      try {
+        const t = el ? el.textContent : ''
+        return normalizeText(t === null || t === undefined ? '' : String(t))
+      } catch (_e) {
+        return ''
+      }
+    }
+
+    /**
+     * The PRE-SUBMIT baseline (2026-09-27): the assistant containers on the page by node identity AND by
+     * text, and the user turns by identity, as they stand before the first submit attempt. A virtualized
+     * transcript unmounts its oldest row as the new one mounts, so the COUNT never rises; and a row it
+     * remounts is new by identity but old by text — the text set is what tells a remount from a reply.
+     * `sampledAtSubmit` (2026-10-10) says whether this really is the pre-submit page (`submit()` took it) or
+     * the first observe sample's GUESS (a reloaded page, a bare op): only the former proves that a user turn
+     * in `userIds` is an EARLIER turn — on the guess every turn on the page is in it, this one included.
+     */
+    function takeBaseline(containers, sampledAtSubmit = false) {
+      const ids = new Set(containers || assistantContainers())
+      const texts = new Set()
+      for (const c of ids) {
+        const t = fingerprint(c)
+        if (!isBlank(t)) texts.add(t)
+      }
+      return { ids, texts, userIds: new Set(userTurns()), sampledAtSubmit }
+    }
+
+    /**
+     * The reply container that belongs to `anchor` (the user's own turn), direction-agnostic (2026-09-27):
+     * (a) a container that CONTAINS the anchor — chatgpt.com's exchange group — else (b) in the merged
+     * document-order list of containers and user turns, the containers on the reply side of the anchor
+     * (after it on an oldest-first transcript, before it on a newest-first one) up to the next user turn,
+     * and the NEWEST of those (a tool turn and then the answer: the answer). Null when there is none yet —
+     * the reply row has not mounted, or the site unmounted it (chatgpt's placeholder gap).
+     *
+     * A holder whose only reply body sits INSIDE the anchor is the anchor's own row, not an exchange
+     * (2026-10-10): grok.com's user row — reachable through a bare `div[id^='response-']` override — holds
+     * `[data-testid='user-message']` and a `.response-content-markdown` of its own, and rule (a) made it the
+     * container, so `replyText` handed the prompt back. An exchange whose body has not mounted (chatgpt's
+     * group while the model thinks: no block at all) is still a holder — its body, when it comes, is
+     * outside the user turn.
+     */
+    function containerForAnchor(anchor, containers, turns) {
+      const list = containers || assistantContainers()
+      const ownRow = (c) => {
+        const blocks = replyBlocks(c)
+        return blocks.length > 0 && blocks.every((b) => b === anchor || containsDeep(anchor, b))
+      }
+      const holders = list.filter((c) => containsDeep(c, anchor) && !ownRow(c))
+      if (holders.length > 0) return holders[holders.length - 1] // the innermost: a descendant follows its ancestor
+      // an ancestor of the anchor is rule (a)'s business — a holder, or the anchor's own row — never a neighbour on
+      // the reply side: on a newest-first transcript the step back from the anchor would land on its own row first
+      const merged = list
+        .filter((el) => !containsDeep(el, anchor))
+        .map((el) => ({ el, assistant: true }))
+        .concat((turns || userTurns()).map((el) => ({ el, assistant: false })))
+        .sort((a, b) => docOrder(a.el, b.el))
+      const i = merged.findIndex((x) => x.el === anchor)
+      if (i === -1) return null
+      const step = transcriptOrder() === 'newest' ? -1 : 1
+      let pick = null
+      for (let j = i + step; j >= 0 && j < merged.length; j += step) {
+        if (!merged[j].assistant) break
+        pick = merged[j].el
+      }
+      return pick
+    }
+
+    /**
+     * `el` is `container` itself, inside it, or on the REPLY side of it in document order — after it on an
+     * oldest-first transcript, before it on a newest-first one (2026-09-27) — so an older turn's marker
+     * never counts whichever way the site orders its rows.
+     */
     function onOrAfter(container, el) {
       if (container === el) return true
       try {
         if (typeof container.contains === 'function' && container.contains(el)) return true
-        if (typeof container.compareDocumentPosition === 'function') return (container.compareDocumentPosition(el) & 4) !== 0
+        if (typeof container.compareDocumentPosition === 'function') {
+          return (container.compareDocumentPosition(el) & (transcriptOrder() === 'newest' ? 2 : 4)) !== 0
+        }
       } catch (_e) {
         /* fall through */
       }
@@ -2210,7 +2479,12 @@
       const waitMs = nonNegativeInt(timeoutMs, nonNegativeInt(sel.sendWaitMs, 18000))
       const verifyMs = nonNegativeInt(sel.submitVerifyMs, 5000)
       const button = await poll(() => findSendButton(), { intervalMs: SEND_POLL_MS, timeoutMs: waitMs, signal })
-      let assistantCount = countAssistant() // before ANY submit attempt: nothing this turn mounted can be in it
+      // before ANY submit attempt: nothing this turn mounted can be in it. Since 2026-09-27 the same sample
+      // is the observe's PRE-SUBMIT baseline (identities and texts of the containers, identities of the
+      // user turns): the observe's own first sample runs after the confirmation, by when this turn's rows
+      // are already mounted on claude.ai and grok.com — and on chatgpt.com from the submit itself.
+      preSubmit = sampled(() => takeBaseline(undefined, true))
+      let assistantCount = preSubmit.ids.size
       if (button) {
         const baseline = countMessages()
         clickEl(button.el)
@@ -2267,6 +2541,8 @@
     async function insertAndSubmit(text, { signal } = {}) {
       const t0 = clock()
       if (typeof text !== 'string' || text === '') throw new AdapterError('site_error', 'insertAndSubmit: text must be a non-empty string')
+      lastInserted = text // the observe anchor when its message carries no `text` (2026-09-27)
+      preSubmit = null // cleared by the next insert; submit() takes the new one
       const composer = await requireSessionOk({ signal })
       await insertText(text, { signal })
       const s = await submit(undefined, { signal, text })
@@ -2281,6 +2557,33 @@
     }
 
     // ---- capture (Stage 2) ------------------------------------------------------------------
+    //
+    // 2026-09-27 — capture on VIRTUALIZED transcripts, measured from 42 failure snapshots of one afternoon's
+    // Fusion runs (every one with the site's stop control seen): once a chat is long, all three sites keep
+    // a FIXED WINDOW of rows mounted — claude.ai 9 `transcript-row`s of ~58 (the first reply pinned, then
+    // the newest exchanges), chatgpt.com 5 (or 4) exchange groups of ~29, grok.com 7 `div[id^='response-']`
+    // of ~58 — and unmount the oldest row as the new one mounts, so the assistant COUNT never rises and the
+    // observe's first-sample identity set already holds this turn's row. grok.com's transcript is
+    // NEWEST-FIRST in document order (absolutely positioned slots, prepended) and its `div[id^='response-']`
+    // matches user rows too, so "the last container" was the OLDEST mounted reply — each of the ten
+    // `timeout` partials was an earlier answer. Hence, below: the ANCHOR rule (the user's own turn, matched
+    // by alphanumeric projection because the sites markdown-render user text), the PRE-SUBMIT baseline
+    // taken in submit(), the per-site `transcriptOrder`, and the retired count rule.
+    //
+    // 2026-10-10 — measured from the failure snapshots of that morning (`containers=0` on both sites, every
+    // reply-container selector matching nothing): claude.ai REDESIGNED its chat — an assistant turn is
+    // `[data-testid='assistant-message']` (`.font-claude-response` and `.prose` match nothing on the page), the
+    // stop control is `button[data-testid='chat-input-stop']` (aria-label still "Stop response"), and the
+    // settled row's action bar is `[data-testid='message-actions'] button[data-testid^='action-bar-']`,
+    // absent while the row holds only its status widget. chatgpt.com's exchange group is a bare
+    // `div.group.flex.flex-col` (no `pb-2 pt-2` any more) that still HOLDS the user turn, so it is identified
+    // through `:has([class~='group/user-message'])` — the bare triple would also match the answer's inner
+    // wrapper. The claude reply BODY wrapper after the redesign is UNMEASURED: the only snapshot died in the
+    // status phase, before any markdown mounted, so `.prose` (and `.standard-markdown` behind it) is a
+    // carry-over, and `replyText` falls back to the whole `assistant-message` when both miss.
+    // And the anchor rule became PRIMARY (the reviews of the 09-27 fix): a matched user turn is this turn's
+    // anchor; the pre-submit baseline only breaks ties between several matches, and a lone match is set
+    // aside only when the turn itself was on the page before a submit that really sampled it.
 
     /**
      * observe op (contract §2/§3): wait for a NEW assistant container — one that was not on the page
@@ -2289,15 +2592,18 @@
      * ms}` with its final text — one text, at the end (streaming re-renders are non-monotonic;
      * Decision 16).
      *
-     *   which node    the containers present at observe start are snapshotted by NODE IDENTITY; the
-     *                 reply is the LAST container that is not in that snapshot, and `length > baseline`
-     *                 picks the last container only until one has been followed (main's baseline is
-     *                 sampled before the submit, so the reply — or chatgpt's placeholder turn — may
-     *                 already be mounted when the observe arrives). Once a container has been followed
-     *                 only a node that mounted after this observe started replaces it, so an EARLIER
-     *                 turn's container is never reported as this turn's reply: a stale (under-sampled)
-     *                 baseline would otherwise hand back the PREVIOUS answer, done marker and all,
-     *                 while this turn's reply is between two renders
+     *   which node    (2026-09-27) the ANCHOR rule first: the user turn whose text carries the typed text
+     *                 (`text` in the message, else the text insertAndSubmit last typed — `anchorProbes` /
+     *                 `anchorMatches`) names the exchange, and the reply is the container that holds it
+     *                 or the newest container on the reply side of it (`containerForAnchor`). Without a
+     *                 match, the newest container (per `transcriptOrder`) that is in the PRE-SUBMIT
+     *                 baseline neither by identity nor by text (`takeBaseline`, sampled in submit(); the
+     *                 first sample takes it when no submit preceded this observe). The container is
+     *                 re-picked every sample, so a later sibling of the same exchange (the tool turn /
+     *                 answer dance) replaces its predecessor and a node the site unmounted is dropped;
+     *                 an EARLIER turn's container is never this turn's reply. The count rule
+     *                 (`length > baseline` → the last container) is RETIRED: on a fixed window of rows
+     *                 the count never rises, and on a newest-first transcript "the last" is the oldest
      *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
      *                 else `reply_not_found` — the deadline applies only until a container has been
      *                 seen ONCE: a container that is unmounted again (chatgpt's placeholder turn,
@@ -2331,13 +2637,25 @@
      *                 block joined by a blank line), else the container itself, as rendered text;
      *                 CRLF → LF and NBSP → space, never trimmed
      * `quietMs` / `timeoutMs` / `firstTokenMs` / `settleMs` / `incompleteGraceMs` in the message
-     * override the selectors; a missing `baselineCount` means the current count.
+     * override the selectors; a missing `baselineCount` means the current count; `text` (2026-09-27) is
+     * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in.
      */
-    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, signal } = {}) {
+    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, text: promptText, signal } = {}) {
       const t0 = clock()
       const given = nonNegativeInt(baselineCount, null)
-      let known = null // the containers of EARLIER turns, by node identity; filled by the FIRST sample (same tick as this call, so it shares its one shadow-root walk)
-      let baseline = given // null until that first sample counts the page itself (walked only when main sent no count)
+      // 2026-09-27: the baseline is what submit() sampled BEFORE its first attempt (`preSubmit`), or — when
+      // no submit preceded this observe in this adapter (a reloaded page, a test) — the first sample, on
+      // which main's `baselineCount` says how many of the containers are EARLIER turns: the oldest that
+      // many per the transcript order (all of them when main sent no count). That is the count as a
+      // description of the page, never as a rule that picks "the last container".
+      let base = preSubmit // {ids, texts, userIds}
+      let baseline = given // for the messages only: main's count, else the baseline's size
+      const typed = typeof promptText === 'string' && promptText !== '' ? promptText : lastInserted
+      const probes = typed === null || typed === undefined ? null : anchorProbes(typed)
+      const order = transcriptOrder()
+      // diag: the user turns matching the typed text at the last sample — 0 when a text was given and nothing
+      // matched (or it projected to nothing), null (`anchor=no`) only when there was no text at all (2026-10-10)
+      let anchorCount = typed === null || typed === undefined ? null : 0
       const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
@@ -2389,7 +2707,10 @@
        *                         (the baseline, or identity across a remount);
        *   textContent ≫ inner   the text is in the DOM but not laid out (innerText of an unrendered node);
        *   all small             the DOM really holds nothing yet — the budget, the site, or a wall.
-       * `containers` / `followed` / `connected` say which node was read, `stopNow` / `stopSeen` / `end`
+       * `containers` / `followed` / `connected` say which node was read, `anchor` / `order` / `presubmit`
+       * how it was chosen (2026-09-27: the user turns that matched the typed text — `0` when a text was
+       * given and none matched, `no` when there was no text to match —, the transcript direction, and how
+       * many container identities the pre-submit baseline holds), `stopNow` / `stopSeen` / `end`
        * what the site was signalling, `md` / `pre` / `code` the body's shape, `rect` / `viewport` the
        * geometry of a view that may be hidden (0×0 is the measured normal for the analyst, and reads
        * fine). A field the DOM cannot answer prints `-`; a diag that throws prints nothing at all — it
@@ -2420,7 +2741,8 @@
           if (root && Number.isFinite(root.clientWidth) && Number.isFinite(root.clientHeight)) viewport = `${root.clientWidth}×${root.clientHeight}`
           return (
             `containers=${containers.length} followed=${container ? containers.indexOf(container) : '-'} ` +
-            `connected=${!!container && container.isConnected !== false} stopNow=${!!findStop()} stopSeen=${seenStop} ` +
+            `connected=${!!container && container.isConnected !== false} anchor=${anchorCount === null ? 'no' : anchorCount} order=${order} presubmit=${base ? base.ids.size : '-'} ` +
+            `stopNow=${!!findStop()} stopSeen=${seenStop} ` +
             `end=${endSeen || '-'} md=${count(container, '.markdown')} pre=${count(container, 'pre')} code=${count(container, 'code')} ` +
             `reply=${len(text)} inner=${container ? len(readText(container)) : 0} textContent=${container ? len(String(container.textContent || '')) : 0} ` +
             `maxContainer=${maxContainer} rect=${rect} viewport=${viewport}`
@@ -2429,10 +2751,43 @@
           return ''
         }
       }
-      /** The LAST container (document order) that was not already on the page when this observe started; null when every one of them was. */
-      const lastFresh = (containers) => {
-        for (let i = containers.length - 1; i >= 0; i -= 1) if (!known.has(containers[i])) return containers[i]
-        return null
+      /** A container whose text is one of the pre-submit texts: a virtualizer REMOUNTING an old row (new by identity, old by text). */
+      const oldByText = (c) => {
+        if (base.texts.size === 0) return false
+        const t = fingerprint(c)
+        return !isBlank(t) && base.texts.has(t)
+      }
+      /** The user turns carrying the typed text, document order; `[]` without probes. Shared by the first-sample baseline guess and `pickContainer`. */
+      const matchedTurns = (turns) => (probes ? turns.filter((t) => anchorMatches(probes, fingerprint(t))) : [])
+      /**
+       * This sample's container (2026-09-27; the "which node" paragraph above): the anchor rule when the
+       * typed text is known and a user turn carries it, else the newest container outside the pre-submit
+       * baseline. Null when neither names one (not mounted yet, or unmounted by the site).
+       *
+       * The anchor rule is PRIMARY (2026-10-10, after the reviews of the 09-27 fix): a turn that carries the
+       * typed text names this exchange, and its reply container is followed whether or not the baseline
+       * already holds that node or that text — a reloaded page holds everything by identity, and a defense
+       * repeated byte for byte holds an older reply by text. The baseline is a TIE-BREAKER: among several
+       * matches (a defended position challenged again, an identical prompt re-sent — the correction attempt
+       * of a retry) prefer the turns not on the page before the submit, then the ones whose reply container
+       * is outside the baseline by identity and text, then the newest per the transcript order. The one
+       * VETO: a turn that was on the page before a submit that really sampled it (`sampledAtSubmit`) cannot
+       * be this turn's — its reply is an earlier answer; without such a turn left the fallback rule decides.
+       */
+      const pickContainer = (containers) => {
+        const turns = userTurns()
+        const matched = matchedTurns(turns)
+        if (probes) anchorCount = matched.length
+        let cands = base.sampledAtSubmit ? matched.filter((t) => !base.userIds.has(t)) : matched
+        if (cands.length > 1) {
+          const fresh = cands.filter((t) => {
+            const c = containerForAnchor(t, containers, turns)
+            return c === null || !(base.ids.has(c) || oldByText(c))
+          })
+          if (fresh.length > 0) cands = fresh
+        }
+        if (cands.length > 0) return containerForAnchor(newestOf(cands), containers, turns)
+        return newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)))
       }
 
       /** The session gate: a banner → site_error carrying ONLY the configured phrase; a wall / challenge → that state; each with the partial. */
@@ -2460,33 +2815,33 @@
           if (signal && signal.aborted) throw new AdapterError('cancelled', 'cancelled by main', partial())
           if (full) sessionGate()
           const containers = assistantContainers()
-          if (known === null) {
-            // The first sample runs in the same tick as observe(): every container on the page now
-            // belongs to an EARLIER turn, and nothing this turn mounts can be in the snapshot.
-            known = new Set(containers)
-            if (baseline === null) baseline = known.size
+          if (base === null) {
+            // No submit preceded this observe in this adapter: the first sample runs in the same tick as
+            // observe(), and the oldest `given` containers on the page now belong to EARLIER turns (every
+            // one of them when main sent no count) — except the one the typed text names (2026-10-10): on a
+            // reloaded virtualized page the pre-submit count equals the window, so the guess would otherwise
+            // hold this turn's own row and the fallback rule would have nothing left to pick.
+            let earlier = given === null ? containers : oldestOf(containers, given)
+            const turns = userTurns()
+            const matched = matchedTurns(turns)
+            if (matched.length > 0) {
+              const own = containerForAnchor(newestOf(matched), containers, turns)
+              if (own) earlier = earlier.filter((c) => c !== own)
+            }
+            base = takeBaseline(earlier, false)
           }
-          // NODE IDENTITY first, the count only until a container has been followed once: the last
-          // container that was NOT on the page when this observe started is this turn's reply (the
-          // two-turn / tool-call dance mounts both fresh and the last of them is the answer; the
-          // measured chatgpt remount mounts a placeholder and then a DIFFERENT real node, and neither
-          // is in `known`). The count rule stays as the way IN because main's baseline is sampled
-          // before the submit and the reply — or the placeholder — can already be on the page when the
-          // observe message arrives, in which case it is in `known` and only `length > baseline` can
-          // point at it. It is retired once a container has been followed: from then on only a node
-          // that mounted after this observe started may replace it, so a stale (under-sampled)
-          // baseline can never make an EARLIER turn's container — text, done marker and all — the
-          // answer while this turn's reply is between two renders.
-          const fresh = lastFresh(containers)
+          if (baseline === null) baseline = base.ids.size
+          // The anchor rule, else the pre-submit baseline (2026-09-27; `pickContainer`). Re-picked every
+          // sample: a later sibling of the same exchange (the tool-call dance mounts the tool turn and then
+          // the answer) replaces its predecessor, and a node the site unmounted is dropped — chatgpt's
+          // placeholder turn is unmounted for ~10 s before the real reply mounts as a DIFFERENT node. A
+          // container that is still connected is kept while nothing names a replacement.
+          const picked = pickContainer(containers)
           const before = container
-          if (fresh) {
-            container = fresh
+          if (picked) {
+            container = picked
             seenContainer = true
-          } else if (!seenContainer && containers.length > baseline) {
-            container = containers[containers.length - 1]
-            seenContainer = true
-          }
-          else if (container && container.isConnected === false) container = null
+          } else if (container && container.isConnected === false) container = null
           // A NEW node is a NEW reply body (S10): a site that re-renders its turn into a different
           // element must not hand the replacement the stillness the node it replaced had accumulated.
           // The two texts are usually IDENTICAL at the swap (the same prefix, re-rendered), so without
@@ -2770,6 +3125,8 @@
       replyText,
       replyBlocks,
       findDone, // exposed for the S9 unit tests: the body rule is asserted directly, not only through a capture
+      userTurns, // 2026-09-27: the anchor rule's inputs and its adjacency step, exposed for the virtualized-transcript unit tests
+      containerForAnchor,
     }
   }
 
@@ -3069,6 +3426,7 @@
       RESULT_CODES,
       MESSAGE_SELECTORS,
       ASSISTANT_SELECTORS,
+      USER_TURN_SELECTORS,
       ALERT_SELECTORS,
       DEFAULT_SELECTORS,
       mergeSelectors,
@@ -3080,6 +3438,11 @@
       isBlank,
       nonNegativeInt,
       looksComplete,
+      normAlnum,
+      anchorProbes,
+      anchorMatches,
+      ANCHOR_PROBE_CHARS,
+      ANCHOR_WHOLE_MAX,
       openShadowRoots,
       deepQuerySelector,
       deepQuerySelectorAll,

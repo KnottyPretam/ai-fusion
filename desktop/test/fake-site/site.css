@@ -28,13 +28,23 @@ main.thread {
   flex-direction: column;
   gap: 8px;
 }
-article[data-message-author-role='user'] {
+article[data-message-author-role='user'],
+.user-turn {
   align-self: flex-end;
   max-width: 70%;
   padding: 8px 12px;
   border-radius: 12px;
   background: #e9eef6;
   white-space: pre-wrap;
+}
+/* 2026-10-10: claude's user body is a <p>; grok's user row is a full-width `div[id^=response-]` whose bubble sits at the end */
+.user-turn p.whitespace-pre-wrap {
+  margin: 0;
+}
+.user-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 article[data-message-author-role='assistant'] {
   align-self: flex-start;
@@ -254,3 +264,21 @@ button.stop {
   overflow: hidden;
 }
 .md code .cm-line { display: block; }
+
+/* --- 2026-09-27: a newest-first transcript (?order=reverse) — rows PREPENDED into absolutely positioned
+   slots inside a scroller, the grok.com shape (`[data-testid=chat-transcript-scroller]`, one
+   `div.absolute.inset-x-0.top-0` per row). Only the DOM order matters to the adapter; the slots stack. */
+main.thread.scroller {
+  position: relative;
+  min-height: 240px;
+  display: block;
+}
+main.thread.scroller > .slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

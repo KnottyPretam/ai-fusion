@@ -47,6 +47,38 @@
  *                    re-rendering — a capture that resolves on the first end signal reads a pre-final text
  *                    (window.__fake.doneSignalAt < lastRenderAt, rendersAfterSignal > 0)
  *
+ * 2026-09-27 — VIRTUALIZED transcripts (the failure of that afternoon: every pane's capture failed once its
+ * chat grew long, because the sites keep a fixed window of rows mounted and unmount the oldest as the new
+ * one mounts, and grok.com orders its rows newest-first). Opt-in; without them nothing above changes:
+ *   ?keepLast=N       at most N assistant rows stay mounted: as a new one mounts, the OLDEST exchange
+ *                     (its user row and its assistant rows) is unmounted in the same tick, so
+ *                     `countAssistant()` never exceeds N and a count rule can never fire
+ *                     (window.__fake.trimmed counts the unmounted exchanges, .mountedAssistants() the
+ *                     assistant rows still in the DOM, .exchanges the exchanges still mounted)
+ *   ?order=reverse    newest-first: the thread is a `[data-testid=chat-transcript-scroller]` and every row
+ *                     is PREPENDED inside its own absolutely positioned `div.slot.absolute.inset-x-0.top-0`
+ *                     (grok.com's shape) — document order is newest first, so "the last container" is
+ *                     the OLDEST reply on the page. The grok look-alike is newest-first BY DEFAULT, as the
+ *                     site is (`DEFAULT_SELECTORS.grok.transcriptOrder`); ?order=forward appends instead
+ *   ?assistantAtSubmit=1  the EMPTY reply row mounts in the submit handler's tick beside the stop button and
+ *                     holds no text for ASSISTANT_AT_SUBMIT_HOLD_MS (the pending row claude.ai and grok.com
+ *                     mount before the model starts) — the ?thinkMs lifecycle at a fixed short hold, so
+ *                     window.__fake.thinkingAt / .thinkingEndedAt record it; ?thinkMs wins when both are set
+ *   ?userMarkdown=1   the user's own turn is RENDERED through the same markdown renderer as the replies
+ *                     (paragraphs, `code`, **bold**) after Triplex's `<<<LABEL>>>` delimiters are cut out,
+ *                     as the sites render a prompt — so `<<<`, `>>>`, backticks and the delimiter words are
+ *                     gone from the turn's DOM text while its own letters and digits survive
+ *   ?echoTurn=1       the echo names its exchange — "Echo <n>: <text>" — so two identical prompts get two
+ *                     different replies and a spec can tell which one a capture read
+ *   (2026-10-10) the USER TURN is each site's own markup, so the adapters project exercises every entry of
+ *   USER_TURN_SELECTORS with real text, not only chatgpt's: chatgpt keeps `article[data-message-author-role=user]`;
+ *   claude is `div[data-testid=user-message] > p.whitespace-pre-wrap` (the claude.ai redesign's user body); grok is
+ *   `div[id^=response-] > div[data-testid=user-message].message-bubble > div.relative > div.response-content-markdown`
+ *   — the measured grok.com row, whose bubble carries the SAME markdown class as a reply's, which is why a bare
+ *   `div[id^=response-]` entry used to make the user's own row the reply container. The claude look-alike's reply
+ *   row also carries `data-testid="assistant-message"` and its stop control `data-testid="chat-input-stop"`
+ *   (claude.ai, 2026-10-10), beside the classes and aria-labels it had.
+ *
  * S9 — the fenced-reply capture defect, MEASURED live on 2026-09-18 (docs: the site.cjs header,
  * test/fixtures/dom/README.md). A real Analyze degraded twice on captures that were FRAGMENTS of a
  * reply still being typed: "```JSON\n{\n```" (13 characters) and `{"agre` (6). The analyst prompt asks
@@ -167,7 +199,10 @@
  *                  twoTurns, remountMs, placeholderMs, webUrlMs}, replying,
  *                  done, renders, rewinds, containers, doneSignalAt, lastRenderAt, rendersAfterSignal,
  *                  placeholderText, placeholderAt, placeholderGoneAt, remountedAt, stopEvents, urls,
- *                  replyText(), replySource()} (the site's own debug surface; `replySource()` is the reply's
+ *                  replyText(), replySource(), keepLast, order, userMarkdown, trimmed, exchanges,
+ *                  mountedAssistants()} (the site's own debug surface; the last six are the 2026-09-27
+ * virtualized-transcript readings — the window, the direction, whether the user turn is rendered as markdown,
+ * how many exchanges ?keepLast unmounted, how many are still mounted, how many assistant rows are in the DOM; `replySource()` is the reply's
  * markdown source, null before any reply; `helperText()` is the hidden helper
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
  * reply; `containers` the assistant containers appended so far; `doneSignalAt` / `lastRenderAt` epoch
@@ -208,6 +243,8 @@
    */
   const PLACEHOLDER_TEXT = 'Placeholder…'
   const PLACEHOLDER_MS = 250
+  /** ?assistantAtSubmit=1 (2026-09-27): how long the reply row mounted in the submit tick stays empty. */
+  const ASSISTANT_AT_SUBMIT_HOLD_MS = 600
   /**
    * ?thinking=1 (claude): the thinking widget's summary line — the one the live capture came back
    * with twice — and the detail line of its collapsed panel. Both sit OUTSIDE the `.prose` body.
@@ -347,10 +384,20 @@
     thinkMs: params.has('thinkMs') ? Math.max(0, Number(params.get('thinkMs')) || 0) : null,
     remountMs: params.has('remountMs') ? Math.max(0, Number(params.get('remountMs')) || 0) : null,
     placeholderMs: params.has('placeholderMs') ? Math.max(0, Number(params.get('placeholderMs')) || 0) : PLACEHOLDER_MS,
+    // 2026-09-27: the empty reply row in the submit tick, and an echo that names its exchange
+    assistantAtSubmit: params.get('assistantAtSubmit') === '1',
+    echoTurn: params.get('echoTurn') === '1',
   }
   /** ?webUrlMs: the placeholder chat URL is replaced by the real one this many ms after the push. */
   const webUrlMs = params.has('webUrlMs') ? Math.max(0, Number(params.get('webUrlMs')) || 0) : null
   replyOpts.webUrlMs = webUrlMs
+  /** 2026-09-27: the virtualized-transcript options (see the header); a keepLast under 1 is off. */
+  const keepLast = params.has('keepLast') && Number(params.get('keepLast')) >= 1 ? Math.floor(Number(params.get('keepLast'))) : null
+  // grok.com's transcript is newest-first (measured; `DEFAULT_SELECTORS.grok.transcriptOrder`), so the grok
+  // look-alike is too unless ?order=forward asks for the appended layout; the other two append unless
+  // ?order=reverse turns them around
+  const order = params.get('order') === 'reverse' || (site === 'grok' && params.get('order') !== 'forward') ? 'newest-first' : 'oldest-first'
+  const userMarkdown = params.get('userMarkdown') === '1'
 
   const app = document.getElementById('app')
   app.setAttribute('data-site', site)
@@ -406,6 +453,13 @@
     replySource: () => (reply ? reply.full : null),
     /** ?thinking=1: the two lines the widget puts outside the `.prose` body (null when it is off). */
     thinking: replyOpts.thinking ? { summary: THINKING_SUMMARY, detail: THINKING_DETAIL } : null,
+    // 2026-09-27: the virtualized-transcript readings — the window, the direction, what was trimmed away
+    keepLast,
+    order,
+    userMarkdown,
+    trimmed: 0,
+    exchanges: 0,
+    mountedAssistants: () => mountedAssistants(),
   }
   window.__fake = fake
 
@@ -458,7 +512,59 @@
 
   thread = document.createElement('main')
   thread.className = 'thread'
+  if (order === 'newest-first') {
+    // grok.com's transcript (2026-09-27): a scroller of absolutely positioned slots, the newest row first
+    thread.classList.add('scroller')
+    thread.setAttribute('data-testid', 'chat-transcript-scroller')
+  }
   app.appendChild(thread)
+
+  // --- exchanges and the mounted window (2026-09-27) ----------------------------------------
+  /** Every exchange still mounted, oldest first: `{rows: [{node, slot, assistant}]}`; ?keepLast unmounts from the front. */
+  const exchanges = []
+  let exchange = null
+  function newExchange() {
+    exchange = { rows: [] }
+    exchanges.push(exchange)
+    fake.exchanges = exchanges.length
+    return exchange
+  }
+  /** Assistant rows still in the DOM (a placeholder the lifecycle removed no longer counts). */
+  function mountedAssistants() {
+    let n = 0
+    for (const x of exchanges) for (const r of x.rows) if (r.assistant && r.node.isConnected) n += 1
+    return n
+  }
+  /** ?keepLast: unmount whole exchanges, oldest first, until at most keepLast assistant rows are mounted — never the current one. */
+  function trimExchanges() {
+    if (keepLast === null) return
+    while (mountedAssistants() > keepLast && exchanges.length > 1) {
+      const oldest = exchanges.shift()
+      for (const r of oldest.rows) (r.slot || r.node).remove()
+      fake.trimmed += 1
+      fake.exchanges = exchanges.length
+    }
+  }
+  /**
+   * Mount one row of the transcript: appended (oldest-first) or PREPENDED inside a slot (?order=reverse),
+   * registered in the current exchange, and — for an assistant row — the window trimmed in the same tick,
+   * so no sample ever sees keepLast + 1 rows.
+   */
+  function mountRow(node, { assistant = false } = {}) {
+    if (exchange === null) newExchange()
+    let slot = null
+    if (order === 'newest-first') {
+      slot = document.createElement('div')
+      slot.className = 'slot absolute inset-x-0 top-0'
+      slot.appendChild(node)
+      thread.insertBefore(slot, thread.firstChild)
+    } else {
+      thread.appendChild(node)
+    }
+    exchange.rows.push({ node, slot, assistant })
+    if (assistant) trimExchanges()
+    return node
+  }
 
   // ?thread=noise: chat content that mentions every errorText phrase of every site and links to
   // every loggedOut href (/auth/login, /login, /sign-in, accounts.x.ai) — all inside
@@ -469,13 +575,14 @@
     user.innerHTML =
       'How do I handle an API rate limit? Last time Something went wrong and it said You\'ve reached your limit — ' +
       'see <a href="/auth/login">/auth/login</a>, <a href="/login">/login</a> and <a href="/sign-in">/sign-in</a>.'
-    thread.appendChild(user)
+    newExchange()
+    mountRow(user)
     const assistant = document.createElement('article')
     assistant.setAttribute('data-message-author-role', 'assistant')
     assistant.innerHTML =
       'A rate limit is a cap on requests. "Unusual activity has been detected" is the banner you would see; ' +
       'unusual activity in your own logs is something else. For xAI, sign in at <a href="https://accounts.x.ai/sign-in">accounts.x.ai</a>.'
-    thread.appendChild(assistant)
+    mountRow(assistant, { assistant: true })
   }
 
   // --- helpers ------------------------------------------------------------------------------
@@ -513,10 +620,12 @@
     const text = composer.getText()
     if (text.trim() === '') return
     fake.submitted.push(text)
-    const msg = document.createElement('article')
-    msg.setAttribute('data-message-author-role', 'user')
-    msg.textContent = text
-    thread.appendChild(msg)
+    newExchange()
+    const { row, textEl } = buildUserTurn()
+    // ?userMarkdown=1 (2026-09-27): rendered as the sites render a prompt — delimiters cut out, markdown real
+    if (userMarkdown) renderMarkdown(textEl, text.replace(/<<<[^<>\n]*>>>/g, ''))
+    else textEl.textContent = text
+    mountRow(row)
     composer.clear()
     setSendEnabled(false)
     setTimeout(() => {
@@ -560,7 +669,8 @@
       const canned = cannedFor(text)
       if (canned !== null) return padTo('```json\n' + canned + '\n```', replyOpts.chars)
     }
-    return padTo('Echo: ' + text, replyOpts.chars)
+    // ?echoTurn: numbered by SUBMIT (window.__fake.submitted), never by what ?keepLast still has mounted
+    return padTo((replyOpts.echoTurn ? 'Echo ' + fake.submitted.length + ': ' : 'Echo: ') + text, replyOpts.chars)
   }
 
   /** The filler sentence ?replyChars repeats. Plain ASCII: no quote, backslash or brace to confuse a parser. */
@@ -946,6 +1056,7 @@
     if (site === 'claude') {
       const box = document.createElement('div')
       box.className = 'font-claude-response reply'
+      box.setAttribute('data-testid', 'assistant-message') // claude.ai, 2026-10-10: the row's assistant element
       if (!replyOpts.thinking) return { container: box, textEl: box, markDone() {} }
       // ?thinking=1: the widget above the answer, then the markdown body the capture must read
       box.appendChild(buildThinking())
@@ -956,9 +1067,14 @@
     const box = document.createElement('div')
     box.id = 'response-' + randomId()
     box.className = 'reply'
+    // 2026-09-27: the assistant BUBBLE grok.com renders inside the row (measured) — the `assistant`
+    // cascade's first entry keys on it, because the row's id prefix alone also matches the user's rows
+    const bubble = document.createElement('div')
+    bubble.setAttribute('data-testid', 'assistant-message')
     const md = document.createElement('div')
     md.className = 'response-content-markdown'
-    box.appendChild(md)
+    bubble.appendChild(md)
+    box.appendChild(bubble)
     return { container: box, textEl: md, markDone() {} }
   }
 
@@ -978,7 +1094,15 @@
     }
     const box = document.createElement('div')
     box.className = site === 'claude' ? 'font-claude-response reply' : 'reply'
-    if (site === 'grok') box.id = 'response-' + randomId()
+    if (site === 'claude') box.setAttribute('data-testid', 'assistant-message')
+    if (site === 'grok') {
+      box.id = 'response-' + randomId()
+      const bubble = document.createElement('div')
+      bubble.setAttribute('data-testid', 'assistant-message') // the row shape, without its markdown element
+      bubble.textContent = PLACEHOLDER_TEXT
+      box.appendChild(bubble)
+      return box
+    }
     box.textContent = PLACEHOLDER_TEXT
     return box
   }
@@ -1005,9 +1129,39 @@
     actions.streaming(false)
   }
 
+  /**
+   * The user's own turn, in each site's markup (2026-10-10; see the header): `{row, textEl}` — the row is
+   * what mounts, `textEl` is where the prompt goes (verbatim, or rendered under ?userMarkdown=1).
+   */
+  function buildUserTurn() {
+    if (site === 'chatgpt') {
+      const msg = document.createElement('article')
+      msg.setAttribute('data-message-author-role', 'user')
+      return { row: msg, textEl: msg }
+    }
+    if (site === 'claude') {
+      const msg = el('div', 'user-turn')
+      msg.setAttribute('data-testid', 'user-message')
+      const p = el('p', 'whitespace-pre-wrap')
+      msg.appendChild(p)
+      return { row: msg, textEl: p }
+    }
+    // grok: every row is a `div[id^='response-']`; the user's holds a bubble with the reply's own markdown class
+    const row = el('div', 'user-row')
+    row.id = 'response-' + randomId()
+    const bubble = el('div', 'message-bubble user-turn')
+    bubble.setAttribute('data-testid', 'user-message')
+    const rel = el('div', 'relative')
+    const md = el('div', 'response-content-markdown')
+    rel.appendChild(md)
+    bubble.appendChild(rel)
+    row.appendChild(bubble)
+    return { row, textEl: md }
+  }
+
   /** Append an assistant container to the thread (counted in window.__fake.containers). */
   function appendAssistant(built) {
-    thread.appendChild(built.container)
+    mountRow(built.container, { assistant: true })
     fake.containers += 1
   }
 
@@ -1024,7 +1178,10 @@
     // long as the model thinks, with the site's own stop control visible the entire time, and the
     // answer is then written into that same node. Distinct from ?remountMs, where the container is
     // removed from the DOM; these two do not compose (this one is checked first).
-    if (replyOpts.thinkMs !== null) {
+    // ?assistantAtSubmit=1 (2026-09-27) is the same lifecycle at a fixed short hold: the row is on the page
+    // in this very tick, empty, beside the stop button — ?thinkMs wins when both are set
+    const hold = replyOpts.thinkMs !== null ? replyOpts.thinkMs : replyOpts.assistantAtSubmit ? ASSISTANT_AT_SUBMIT_HOLD_MS : null
+    if (hold !== null) {
       const built = buildAssistant()
       appendAssistant(built) // empty: `replyText` reads '' from it for the whole think
       fake.replying = true
@@ -1034,7 +1191,7 @@
       setTimeout(() => {
         fake.thinkingEndedAt = Date.now()
         streamReply(text, built)
-      }, replyOpts.thinkMs)
+      }, hold)
       return
     }
     if (replyOpts.remountMs === null) {
@@ -1042,7 +1199,7 @@
       return
     }
     const placeholder = buildPlaceholder()
-    thread.appendChild(placeholder)
+    mountRow(placeholder, { assistant: true })
     fake.containers += 1
     fake.placeholderAt = Date.now()
     fake.replying = true
@@ -1174,6 +1331,7 @@
       b.setAttribute('data-testid', 'stop-button')
       b.setAttribute('aria-label', 'Stop streaming')
     } else if (site === 'claude') {
+      b.setAttribute('data-testid', 'chat-input-stop') // claude.ai, 2026-10-10: the measured testid; the label stays
       b.setAttribute('aria-label', 'Stop response')
     } else {
       b.setAttribute('aria-label', 'Stop')

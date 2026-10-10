@@ -29,8 +29,9 @@
 //      CHAT_URL_WAIT_MS → chats.set(conversation_id, slot, url). Only matching URLs are ever
 //      recorded, so a matching link is never overwritten by a non-matching URL.
 //   7. capture[slot] on → `observe{baselineCount: assistantCount, quietMs, settleMs, timeoutMs,
-//      firstTokenMs}` (plus `expect:'json'` for a structured purpose, S10, and `incompleteGraceMs`
-//      on the analyst view, S11) →
+//      firstTokenMs, text}` (plus `expect:'json'` for a structured purpose, S10, and `incompleteGraceMs`
+//      on the analyst view, S11; `text` — the typed prompt, the reply's anchor on a virtualized
+//      transcript — since 2026-09-27) →
 //      `result ok:true captured:true {text, url, ms, done_by}`; off → `captured:false {url, ms}`.
 //      A submit result without a usable assistantCount omits baselineCount: the adapter then
 //      samples the count itself (at least "now", never "nothing" — baseline 0 on a thread with
@@ -658,6 +659,11 @@ export function createOrchestrator({
       // every budget the adapter honours is sent, so the site's own `settleMs` / `firstTokenMs` are
       // never silently the adapter's fallbacks, and the analyst's multiplied windows actually arrive
       const observePayload = { quietMs, settleMs, timeoutMs: captureTimeoutMs, firstTokenMs }
+      // 2026-09-27: the typed text rides along so the adapter can ANCHOR the reply on the user's own turn
+      // (a virtualized transcript keeps a fixed number of rows mounted, so neither a count nor node
+      // identity says which row is this turn's — see the observe section of preload/site.cjs). It is
+      // a message field, never logged: every line below names lengths and signals only.
+      if (typeof request.text === 'string' && request.text !== '') observePayload.text = request.text
       // Every turn Triplex asks for in a STRUCTURED shape answers with a JSON document, so a capture
       // of half a document ends nothing (S10): the adapter keeps sampling until the braces balance.
       // Gated on the PURPOSE, not the view: `chat` is the user's own prose in a pane and must never
@@ -805,6 +811,9 @@ export function createOrchestrator({
       // 60 s observe): a settled page has nothing left to render, so half the budget is generous.
       const rereadGrace = Math.min(Number.isFinite(b.incompleteGraceMs) ? b.incompleteGraceMs : INCOMPLETE_GRACE_MS, Math.floor(SETTLED_REREAD_MS / 2))
       const payload = { baselineCount: baseline, expect: 'json', quietMs: b.quietMs, settleMs: b.settleMs, firstTokenMs: b.firstTokenMs, timeoutMs: SETTLED_REREAD_MS, incompleteGraceMs: rereadGrace }
+      // 2026-09-27: on a reloaded page every container was there before the observe began, so the typed
+      // text is what finds this turn's row (the anchor rule); the count rule that used to do it is retired.
+      if (typeof request.text === 'string' && request.text !== '') payload.text = request.text
       const observed = await client.request('observe', payload, { timeoutMs: SETTLED_REREAD_MS + TIMEOUT_GRACE_MS, signal })
       const text = typeof observed.text === 'string' ? observed.text : ''
       const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'

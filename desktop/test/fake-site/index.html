@@ -21,7 +21,8 @@
     <template id="tpl-claude">
       <div class="composer">
         <div class="ProseMirror" contenteditable="true"></div>
-        <button class="send" type="button" aria-label="Send message" disabled>Send</button>
+        <!-- data-testid="chat-input-send" is claude.ai's send control as measured on 2026-09-27 (a failed capture's own snapshot); the aria-label stays -->
+        <button class="send" type="button" aria-label="Send message" data-testid="chat-input-send" disabled>Send</button>
       </div>
     </template>
     <!-- grok (default): the TipTap editor measured live on grok.com (2026-09-16) — a form-hosted

@@ -47,7 +47,7 @@ test('every desktop/test/fixtures/dom/*.html passes the lint, and there really a
   assert.ok(FIXTURES_DIR.endsWith(path.join('desktop', 'test', 'fixtures', 'dom')), FIXTURES_DIR)
   assert.deepEqual(findings, [], `fixture lint findings: ${JSON.stringify(findings, null, 2)}`)
   for (const f of files) assert.ok(f.endsWith('.html'))
-  assert.equal(files.length, 14, 'three sites × composer / streaming / done / logged-out, plus chatgpt-thinking and chatgpt-effort-streaming (2026-09-27)')
+  assert.equal(files.length, 19, 'three sites × composer / streaming / done / logged-out, plus chatgpt-thinking, chatgpt-effort-streaming, the three <site>-virtualized snapshots (2026-09-27) and chatgpt-oct10-done / claude-oct10-status (2026-10-10)')
 })
 
 test('every committed fixture is in the scrubbed shape: allow-listed attributes only, every text node `…`, no dropped tags', () => {

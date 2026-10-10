@@ -13,8 +13,10 @@ const MS_KEYS = ['composerWaitMs', 'sendWaitMs', 'submitVerifyMs']
 /** Selectors v2 (Stage 2, contract §4), additive per site; the list keys may be empty (empty stop + done ⇒ quiet detection). */
 const V2_LIST_KEYS = ['stop', 'assistant', 'assistantText', 'done']
 const V2_MS_KEYS = ['quietMs', 'settleMs', 'firstTokenMs', 'captureTimeoutMs', 'stopGoneGraceMs']
+/** 2026-09-27: the transcript's document order — `oldest-first` (chatgpt, claude) or `newest-first` (grok, measured). */
+const V2_STRING_KEYS = ['transcriptOrder']
 const V1_KEYS = ['chatUrlPattern', ...LIST_KEYS, ...MS_KEYS]
-const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS]
+const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS, ...V2_STRING_KEYS]
 const SAMPLE_CHAT_URL = {
   chatgpt: 'https://chatgpt.com/c/68c1a2b3-4d5e-6f70-8a9b-0c1d2e3f4a5b',
   claude: 'https://claude.ai/chat/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b',
@@ -54,6 +56,7 @@ for (const site of SLOTS) {
     assert.ok(s.assistant.length >= 1, `${site}: the assistant cascade must have entries (the observe baseline)`)
     assert.equal(new Set(s.composer).size, s.composer.length, `${site}.composer has duplicates`)
     assert.equal(new Set(s.send).size, s.send.length, `${site}.send has duplicates`)
+    assert.ok(['oldest-first', 'newest-first'].includes(s.transcriptOrder), `${site}.transcriptOrder must name a direction`)
   })
 
   test(`DEFAULT_SELECTORS.${site}.chatUrlPattern compiles, matches a chat URL and not the home URL`, () => {
@@ -100,7 +103,8 @@ test('the chatgpt/claude/grok cascades start with the entries the fake site is b
   assert.equal(DEFAULT_SELECTORS.chatgpt.composer[0], '#prompt-textarea')
   assert.equal(DEFAULT_SELECTORS.chatgpt.send[0], "button[data-testid='send-button']")
   assert.equal(DEFAULT_SELECTORS.claude.composer[0], "div[contenteditable='true'].ProseMirror")
-  assert.equal(DEFAULT_SELECTORS.claude.send[0], "button[aria-label='Send message']")
+  assert.equal(DEFAULT_SELECTORS.claude.send[0], "button[data-testid='chat-input-send']") // 2026-09-27: the measured testid; the aria-label entry follows
+  assert.equal(DEFAULT_SELECTORS.claude.send[1], "button[aria-label='Send message']")
   assert.equal(DEFAULT_SELECTORS.grok.composer[0], "div.tiptap.ProseMirror[contenteditable='true'][aria-label='Ask Grok anything']")
   assert.equal(DEFAULT_SELECTORS.grok.send[0], "button[data-testid='chat-submit']")
 })
@@ -130,10 +134,17 @@ test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com
   assert.deepEqual([grok.composerWaitMs, grok.sendWaitMs, grok.submitVerifyMs], [15000, 18000, 5000])
   // v2 (Stage 2)
   assert.deepEqual(grok.stop, ["button[aria-label='Stop']", "button[aria-label*='Stop']"])
-  assert.deepEqual(grok.assistant, ["div[id^='response-']"])
+  // 2026-09-27: every row of grok.com's transcript is a `div[id^='response-']`, the user's included; only an
+  // assistant row holds `[data-testid='assistant-message']` (10 failure snapshots). 2026-10-10: the bare id prefix is
+  // gone — on a fresh chat it made the user's own row (bubble, markdown class and all) the reply container.
+  assert.deepEqual(grok.assistant, ["div[id^='response-']:has([data-testid='assistant-message'])"])
   assert.deepEqual(grok.assistantText, ['.response-content-markdown'])
   assert.deepEqual(grok.done, [])
   assert.deepEqual([grok.quietMs, grok.settleMs, grok.firstTokenMs, grok.captureTimeoutMs], [2500, 400, 90000, 300000])
+  // 2026-09-27: grok.com prepends its rows — document order is NEWEST-FIRST (measured); the other two append
+  assert.equal(grok.transcriptOrder, 'newest-first')
+  assert.equal(DEFAULT_SELECTORS.chatgpt.transcriptOrder, 'oldest-first')
+  assert.equal(DEFAULT_SELECTORS.claude.transcriptOrder, 'oldest-first')
 })
 
 test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and claude (grok above); empty stop + done ⇒ quiet detection', () => {
@@ -141,20 +152,29 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   // 2026-09-27 (Part 0): the effort-picker composer labels its stop control just "Stop" (fixture chatgpt-thinking)
   assert.deepEqual(chatgpt.stop, ["button[data-testid='stop-button']", "button[aria-label='Stop streaming']", "button[aria-label='Stop answering']", "button[aria-label='Stop']"])
   // 2026-09-27 (Part 0): the effort-picker layout has no data-* turn attributes; the reply body is the
-  // direct child of a `block-<hash>` wrapper (fixtures chatgpt-thinking / chatgpt-effort-streaming)
-  assert.deepEqual(chatgpt.assistant, ["[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"])
+  // direct child of a `block-<hash>` wrapper (fixtures chatgpt-thinking / chatgpt-effort-streaming).
+  // 2026-10-10: the exchange group lost `pb-2 pt-2`; it is the `div.group.flex.flex-col` that HOLDS the user turn
+  // (fixture chatgpt-oct10-done), first — the older entries stay behind it
+  assert.deepEqual(chatgpt.assistant, ["div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"])
   // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
   // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
-  assert.deepEqual(chatgpt.assistantText, ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", '.whitespace-pre-wrap'])
+  // 2026-09-27: the last entry is scoped OUT of the user's own turn — in the effort-picker layout the user
+  // message is `div.text-size-chat.whitespace-pre-wrap` inside `group/user-message`, and before the
+  // answer's MarkdownRoot- mounts the bare class returned the PROMPT as the reply text
+  assert.deepEqual(chatgpt.assistantText, ['.markdown', "div.group.flex.min-w-0.flex-col > [class*='MarkdownRoot-']", ".whitespace-pre-wrap:not([class~='group/user-message'] *)"])
   assert.deepEqual(chatgpt.done, ["button[data-testid='copy-turn-action-button']", "button[aria-label='Rate response']"])
-  assert.deepEqual(claude.stop, ["button[aria-label='Stop response']", "button[aria-label*='Stop']"])
-  assert.deepEqual(claude.assistant, ['.font-claude-response:not(#markdown-artifact)', '.font-claude-message'])
+  // 2026-10-10 (the claude.ai redesign, fixture claude-oct10-status): the stop control's testid first, the assistant
+  // turn's testid first; every older entry stays behind the measured one
+  assert.deepEqual(claude.stop, ["button[data-testid='chat-input-stop']", "button[aria-label='Stop response']", "button[aria-label*='Stop']"])
+  assert.deepEqual(claude.assistant, ["[data-testid='assistant-message']", '.font-claude-response:not(#markdown-artifact)', '.font-claude-message'])
   // S8 (contract §4 change request): claude's reply BODY, not the whole turn. Measured 2026-09-17 —
   // a `.prose` element inside `.font-claude-response` holds 2717 of its 2754 innerText characters —
   // and forced by the 2026-09-18 capture, where the empty cascade made `replyText` fall back to the
   // container and claude's thinking widget contributed its summary line TWICE before the answer.
-  assert.deepEqual(claude.assistantText, ['.prose'])
-  assert.deepEqual(claude.done, [])
+  // 2026-10-10: `.standard-markdown` behind `.prose` as a fallback only — neither is proven on the redesigned page
+  // (the one snapshot died in the status phase); the done marker is the settled row's action bar
+  assert.deepEqual(claude.assistantText, ['.prose', '.standard-markdown'])
+  assert.deepEqual(claude.done, ["[data-testid='message-actions'] button[data-testid^='action-bar-']"])
   // chatgpt's capture budget is the whole pane grant since 2026-09-27: its higher effort settings think for minutes
   for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, site === 'chatgpt' ? 600000 : 300000])
   // S10: the settle window after an end signal is per site — chatgpt holds a long answer far longer
@@ -198,6 +218,17 @@ test('mergeSelectors: a v2 merge keeps every v1 key, a v1 merge keeps every v2 k
   const bad = mergeSelectors(DEFAULT_SELECTORS, { grok: { stop: 'button.stop', quietMs: '2500', settleMs: 'slow', assistant: [1] } })
   assert.deepEqual(bad.merged.grok, DEFAULT_SELECTORS.grok)
   assert.deepEqual(bad.warnings.sort(), ['grok.assistant: expected a list of strings', 'grok.quietMs: expected number, got string', 'grok.settleMs: expected number, got string', 'grok.stop: expected array, got string'])
+  // 2026-09-27: `transcriptOrder` is a known STRING key — an override of it validates by kind and is applied; a number is refused
+  const order = mergeSelectors(DEFAULT_SELECTORS, { grok: { transcriptOrder: 'oldest-first' }, claude: { transcriptOrder: 'newest-first' } })
+  assert.deepEqual(order.warnings, [])
+  assert.deepEqual([order.merged.grok.transcriptOrder, order.merged.claude.transcriptOrder, order.merged.chatgpt.transcriptOrder], ['oldest-first', 'newest-first', 'oldest-first'])
+  assert.deepEqual(mergeSelectors(DEFAULT_SELECTORS, { grok: { transcriptOrder: 1 } }).warnings, ['grok.transcriptOrder: expected string, got number'])
+  // 2026-10-10: only the two literals — a misspelt direction used to pass silently and read as oldest-first
+  for (const bad of ['sideways', 'newest_first', 'reverse', '']) {
+    const r = mergeSelectors(DEFAULT_SELECTORS, { grok: { transcriptOrder: bad } })
+    assert.deepEqual(r.warnings, [`grok.transcriptOrder: expected 'oldest-first' or 'newest-first', got ${JSON.stringify(bad)}`])
+    assert.equal(r.merged.grok.transcriptOrder, 'newest-first', 'the default stays')
+  }
 })
 
 test('mergeSelectors: no override → an equal deep copy, no warnings, defaults untouched', () => {
