@@ -60,6 +60,18 @@
  *                     (grok.com's shape) — document order is newest first, so "the last container" is
  *                     the OLDEST reply on the page. The grok look-alike is newest-first BY DEFAULT, as the
  *                     site is (`DEFAULT_SELECTORS.grok.transcriptOrder`); ?order=forward appends instead
+ *                     (2026-10-11: on the grok look-alike that is an OLDEST-first DOM under the newest-first
+ *                     key — exactly the fresh-chat shape that failed live, see below). Since 2026-10-11 every
+ *                     slot has a real position: `style.transform = translateY(<summed height of the rows
+ *                     above it in TRANSCRIPT order>)`, recomputed after every mount, trim and render
+ *                     (`layoutSlots`, `offsetHeight`), and the scroller's `min-height` is the total — so a
+ *                     newest-first DOM lays out oldest-at-top, as grok.com's reused slot pool does
+ *   ?order=shuffle    (2026-10-11) the same slots and the same translateY geometry, but the DOM position of a
+ *                     row ALTERNATES — even rows (0, 2, 4 … in transcript order, user rows included) are
+ *                     prepended, odd rows appended — so the document order is neither direction of the
+ *                     transcript and only the geometry says which row follows which. grok.com's virtualizer
+ *                     reuses a POOL of slots placed by transform: a fresh chat read oldest-first where the
+ *                     58-row chat of 2026-09-27 read newest-first, and `transcriptOrder` alone picked nothing
  *   ?assistantAtSubmit=1  the EMPTY reply row mounts in the submit handler's tick beside the stop button and
  *                     holds no text for ASSISTANT_AT_SUBMIT_HOLD_MS (the pending row claude.ai and grok.com
  *                     mount before the model starts) — the ?thinkMs lifecycle at a fixed short hold, so
@@ -201,7 +213,8 @@
  *                  placeholderText, placeholderAt, placeholderGoneAt, remountedAt, stopEvents, urls,
  *                  replyText(), replySource(), keepLast, order, userMarkdown, trimmed, exchanges,
  *                  mountedAssistants()} (the site's own debug surface; the last six are the 2026-09-27
- * virtualized-transcript readings — the window, the direction, whether the user turn is rendered as markdown,
+ * virtualized-transcript readings — the window, the direction (`'oldest-first' | 'newest-first' | 'shuffle'`,
+ * the last since 2026-10-11), whether the user turn is rendered as markdown,
  * how many exchanges ?keepLast unmounted, how many are still mounted, how many assistant rows are in the DOM; `replySource()` is the reply's
  * markdown source, null before any reply; `helperText()` is the hidden helper
  * textarea's value, null when there is none; `replyText()` the current reply text, null before any
@@ -395,8 +408,12 @@
   const keepLast = params.has('keepLast') && Number(params.get('keepLast')) >= 1 ? Math.floor(Number(params.get('keepLast'))) : null
   // grok.com's transcript is newest-first (measured; `DEFAULT_SELECTORS.grok.transcriptOrder`), so the grok
   // look-alike is too unless ?order=forward asks for the appended layout; the other two append unless
-  // ?order=reverse turns them around
-  const order = params.get('order') === 'reverse' || (site === 'grok' && params.get('order') !== 'forward') ? 'newest-first' : 'oldest-first'
+  // ?order=reverse turns them around. ?order=shuffle (2026-10-11) scrambles the DOM order altogether — the
+  // slots are placed by transform, as grok.com's reused pool is, so only the geometry says which row is which
+  const order =
+    params.get('order') === 'shuffle' ? 'shuffle' : params.get('order') === 'reverse' || (site === 'grok' && params.get('order') !== 'forward') ? 'newest-first' : 'oldest-first'
+  /** Rows live in absolutely positioned slots placed by translateY (?order=reverse / ?order=shuffle); ?order=forward and the default append. */
+  const slotted = order !== 'oldest-first'
   const userMarkdown = params.get('userMarkdown') === '1'
 
   const app = document.getElementById('app')
@@ -512,8 +529,9 @@
 
   thread = document.createElement('main')
   thread.className = 'thread'
-  if (order === 'newest-first') {
+  if (slotted) {
     // grok.com's transcript (2026-09-27): a scroller of absolutely positioned slots, the newest row first
+    // (?order=reverse) or in no transcript order at all (?order=shuffle, 2026-10-11); placed by `layoutSlots`
     thread.classList.add('scroller')
     thread.setAttribute('data-testid', 'chat-transcript-scroller')
   }
@@ -550,20 +568,45 @@
    * registered in the current exchange, and — for an assistant row — the window trimmed in the same tick,
    * so no sample ever sees keepLast + 1 rows.
    */
+  let rowSeq = 0 // every row mounted so far, in transcript order (?order=shuffle alternates on its parity)
   function mountRow(node, { assistant = false } = {}) {
     if (exchange === null) newExchange()
     let slot = null
-    if (order === 'newest-first') {
+    if (slotted) {
       slot = document.createElement('div')
       slot.className = 'slot absolute inset-x-0 top-0'
       slot.appendChild(node)
-      thread.insertBefore(slot, thread.firstChild)
+      // reverse: PREPENDED, newest first; shuffle (2026-10-11): even rows prepended, odd rows appended, so the DOM
+      // order is neither direction of the transcript — only the translateY geometry (`layoutSlots`) tells
+      if (order === 'newest-first' || rowSeq % 2 === 0) thread.insertBefore(slot, thread.firstChild)
+      else thread.appendChild(slot)
     } else {
       thread.appendChild(node)
     }
+    rowSeq += 1
     exchange.rows.push({ node, slot, assistant })
     if (assistant) trimExchanges()
+    layoutSlots()
     return node
+  }
+
+  /**
+   * Place the slots (2026-10-11): each slot is translated down by the summed height of the rows ABOVE it in
+   * TRANSCRIPT order — recomputed after every mount, trim and render — and the scroller's min-height is the
+   * total, so a newest-first or shuffled DOM still lays out oldest-at-top, exactly as grok.com's reused slot
+   * pool does. A removed placeholder leaves its slot empty (0 px): it shifts nothing.
+   */
+  function layoutSlots() {
+    if (!slotted) return
+    let y = 0
+    for (const x of exchanges) {
+      for (const r of x.rows) {
+        if (!r.slot || !r.slot.isConnected) continue
+        r.slot.style.transform = 'translateY(' + y + 'px)'
+        y += r.slot.offsetHeight
+      }
+    }
+    thread.style.minHeight = y + 'px'
   }
 
   // ?thread=noise: chat content that mentions every errorText phrase of every site and links to
@@ -1115,6 +1158,7 @@
   function renderReply(s) {
     if (replyOpts.kind === 'echo') reply.textEl.replaceChildren(document.createTextNode(s))
     else renderMarkdown(reply.textEl, s)
+    layoutSlots() // a growing row pushes the rows below it down (2026-10-11)
     fake.renders += 1
     fake.lastRenderAt = Date.now()
     if (reply.ended) fake.rendersAfterSignal += 1

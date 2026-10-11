@@ -72,6 +72,13 @@ const EXPECTED = {
   // stop in the same slot), two messages (the user row + the assistant row through the generic list).
   'chatgpt-oct10-done': { composer: 1, send: null, reply: 0, stop: null, session: 'ok', messages: 3, assistant: 1 },
   'claude-oct10-status': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
+  // 2026-10-11: a plain Send's failed capture on a FRESH grok.com chat (`containers=1 anchor=1 order=newest presubmit=0`,
+  // `reply_not_found` with 6,865 characters on the page), pruned to the scroller and the composer like the others
+  // (README): four `div.absolute.inset-x-0.top-0` slots — an empty one, the USER row, the ASSISTANT row, an empty one —
+  // in OLDEST-first document order, where grok-virtualized's 58-row chat was newest-first (the slots are a reused
+  // pool placed by transform). One container (entry 0), one user turn, two rows + two bubbles = 4 messages; settled,
+  // so no stop; the composer is the measured TipTap editor (entry 0) and the voice button sits where submit would.
+  'grok-oct11-fresh': { composer: 0, send: null, reply: 0, stop: null, session: 'ok', messages: 4, assistant: 1 },
   'claude-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
   // grok's composer is the one measured fact (grok.com, signed in, 2026-09-16): the TipTap editor
   // must win over the hidden helper textarea, and the submit button exists only once text is in —
@@ -142,7 +149,7 @@ test('every state of every site has a fixture, and every fixture has an expectat
   for (const slot of [...SLOTS].sort()) for (const state of ['composer', 'done', 'logged-out', 'streaming']) wanted.push(`${slot}-${state}`)
   // Every site has the four states; a site may add a NAMED extra state measured later (2026-09-27:
   // `chatgpt-thinking`, the effort-picker composer mid-thought). Every file on disk has an expectation.
-  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status']
+  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status', 'grok-oct11-fresh']
   assert.deepEqual(names, [...wanted, ...EXTRA].sort())
   assert.deepEqual(Object.keys(EXPECTED).sort(), names)
   assert.ok(fs.existsSync(path.join(FIXTURES_DIR, 'README.md')), 'the fixtures must document what is measured and what is not')

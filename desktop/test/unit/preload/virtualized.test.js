@@ -10,7 +10,8 @@
 // the ADJACENCY step of the anchor rule handed a user turn directly (the fixtures' text is `…`; matching a
 // typed prompt is the adapters project's job), the anchor probes as pure functions, the PRE-SUBMIT baseline
 // `submit()` takes, the retired count rule on a newest-first page, the direction-aware done marker,
-// `transcriptOrder` as a selector, and the `anchor` / `order` / `presubmit` diag fields.
+// `transcriptOrder` as a selector, and the `anchor` / `order` / `presubmit` diag fields (`geom=` joined them on
+// 2026-10-11 — geometry first, see geometry.test.js; the unit DOM has no layout, so here it reads `no` or `-`).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -301,7 +302,7 @@ test('the count rule is gone: on a NEWEST-FIRST transcript a rising count picks 
   assert.equal(again.done, false)
   await clock.advance(1000)
   assert.equal(again.error && again.error.code, 'reply_not_found', 'a remounted old row is old by text')
-  assert.match(again.error.message, / anchor=no order=newest presubmit=4 /)
+  assert.match(again.error.message, / anchor=no order=newest geom=- presubmit=4 /) // every container is in the baseline: nothing left to measure
 })
 
 test('the anchor rule on a fixed window: the typed text finds the user turn whose reply is the newest row on its reply side; an identical prompt re-sent anchors on the NEW turn; a text that matches nothing falls back to the baseline', async () => {
@@ -352,11 +353,11 @@ test('the diag line names the anchor decision: `anchor=<matched turns>`, `order=
   const state = settled(adapter.observe({ baselineCount: 1, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 500, settleMs: 200, text: 'What is the maximum gyroscope range of the BMI088?' }))
   await clock.advance(1500)
   assert.equal(state.error && state.error.code, 'reply_not_found')
-  assert.match(state.error.message, /\[containers=1 followed=- connected=false anchor=1 order=oldest presubmit=1 stopNow=true stopSeen=true end=- /)
+  assert.match(state.error.message, /\[containers=1 followed=- connected=false anchor=1 order=oldest geom=no presubmit=1 stopNow=true stopSeen=true end=- /)
   const { clock: clock2, adapter: adapter2 } = setup(CLAUDE_PAGE, 'claude', { claude: { transcriptOrder: 'newest-first' } })
   const none = settled(adapter2.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 500, settleMs: 200 }))
   await clock2.advance(1500)
-  assert.match(none.error.message, /\[containers=0 followed=- connected=false anchor=no order=newest presubmit=0 /)
+  assert.match(none.error.message, /\[containers=0 followed=- connected=false anchor=no order=newest geom=- presubmit=0 /)
 })
 
 test('a done marker counts on the REPLY side only: on a newest-first transcript an OLDER turn\'s marker (after the container in document order) never ends the capture; one inside the container does', async () => {
@@ -417,7 +418,7 @@ test('no submit, a FULL window (chatgpt: baselineCount equals the five mounted g
   const none = settled(blind.observe({ baselineCount: 5, timeoutMs: 60000, firstTokenMs: 3000, quietMs: 1000, settleMs: 400 }))
   await clock.advance(3500)
   assert.equal(none.error && none.error.code, 'reply_not_found')
-  assert.match(none.error.message, / anchor=no order=oldest presubmit=5 /)
+  assert.match(none.error.message, / anchor=no order=oldest geom=- presubmit=5 /)
 })
 
 test('no submit, claude-shaped [U A U A U A] with baselineCount 3 and the text of the last turn → its reply is captured (the first-sample guess leaves the anchored row out of the baseline)', async () => {
@@ -506,7 +507,7 @@ test('grok, a fresh chat: the user\'s own row is not a container (the bare id pr
     const state = settled(adapter.observe({ baselineCount: 1, timeoutMs: 60000, firstTokenMs: 2000, quietMs: 800, settleMs: 200, text: PROMPT }))
     await clock.advance(2500)
     assert.equal(state.error && state.error.code, 'reply_not_found', 'nothing to follow until the reply row mounts')
-    assert.match(state.error.message, /\[containers=1 followed=- connected=false anchor=1 order=newest presubmit=1 /)
+    assert.match(state.error.message, /\[containers=1 followed=- connected=false anchor=1 order=newest geom=no presubmit=1 /)
     const again = settled(adapter.observe({ baselineCount: 1, timeoutMs: 60000, firstTokenMs: 3000, quietMs: 800, settleMs: 200, text: PROMPT }))
     await clock.advance(500)
     mount(doc, thread, grokReplyRow('The answer.'), thread.firstChild)
@@ -524,7 +525,7 @@ test('the diag says `anchor=0` when a text was given and no turn carries it, `an
   const wrong = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 500, settleMs: 200, text: 'a text that matches nothing on this page' }))
   await clock.advance(1500)
   assert.equal(wrong.error && wrong.error.code, 'reply_not_found')
-  assert.match(wrong.error.message, / anchor=0 order=newest presubmit=0 /)
+  assert.match(wrong.error.message, / anchor=0 order=newest geom=- presubmit=0 /)
   const punctuation = settled(adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 500, settleMs: 200, text: '<<<R1>>>\n\n<<<END R1>>> !!!' }))
   await clock.advance(1500)
   assert.match(punctuation.error.message, / anchor=0 /, 'a text that projects to nothing was still a text')

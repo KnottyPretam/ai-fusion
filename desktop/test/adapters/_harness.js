@@ -113,7 +113,8 @@ export function installFakeIpc({ site, selectors, dev }) {
  * order / assistantAtSubmit / userMarkdown / echoTurn (a fixed window of mounted rows, a newest-first
  * transcript — the grok look-alike is newest-first by default, as grok.com is, and `order=forward` appends —,
  * the reply row mounted empty in the submit tick, the user's text rendered as markdown, an echo that
- * names its exchange). `path` picks the page path (the SPA fallback serves index.html for
+ * names its exchange; since 2026-10-11 `order=shuffle` scrambles the DOM order under the same translateY
+ * placement every slotted row now has, see geometry.spec.js). `path` picks the page path (the SPA fallback serves index.html for
  * /c/<id>).
  */
 export async function open(page, opts = {}) {

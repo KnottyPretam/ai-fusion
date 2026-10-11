@@ -520,6 +520,8 @@
       // 2026-09-27: grok.com's `[data-testid=chat-transcript-scroller]` holds one absolutely positioned slot
       // per row and its DOCUMENT ORDER IS NEWEST-FIRST (measured): a new row is prepended, so "the last
       // container" is the OLDEST mounted reply — exactly what the ten captured partials turned out to be.
+      // 2026-10-11: a FRESH chat's two slots read OLDEST-first — the slots are a reused pool placed by
+      // transform — so this is the DOM fallback direction only; geometry decides first (the capture section).
       transcriptOrder: 'newest-first',
       quietMs: 2500,
       settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
@@ -1996,14 +1998,72 @@
       return []
     }
 
-    /** The transcript's document order (contract §4 `transcriptOrder`, 2026-09-27): 'newest' when rows are prepended (grok.com), else 'oldest'. */
+    /**
+     * The transcript's document order (contract §4 `transcriptOrder`, 2026-09-27): 'newest' when rows are
+     * prepended (grok.com), else 'oldest'. Since 2026-10-11 this is the DOM FALLBACK direction; geometry
+     * decides first (`containerForAnchor`, `newestOf`) — grok.com's virtualizer reuses a pool of absolutely
+     * positioned slots and places rows by transform, so its document order carries no transcript order at all.
+     */
     function transcriptOrder() {
       return sel.transcriptOrder === 'newest-first' ? 'newest' : 'oldest'
     }
 
-    /** The newest element of `list` (document order) per the transcript direction; null for an empty list. */
-    function newestOf(list) {
+    /**
+     * An element's laid-out top and bottom (2026-10-11): `{top, bottom, ok}`. `ok` is false when
+     * `getBoundingClientRect` is missing or throws, or the rect is degenerate — height 0 AND top 0: the unit
+     * DOM, which has no layout, or a 0×0 hidden view that lays nothing out.
+     */
+    function topOf(el) {
+      try {
+        if (!el || typeof el.getBoundingClientRect !== 'function') return { top: 0, bottom: 0, ok: false }
+        const r = el.getBoundingClientRect()
+        if (!r || !Number.isFinite(r.top) || !Number.isFinite(r.height)) return { top: 0, bottom: 0, ok: false }
+        if (r.height === 0 && r.top === 0) return { top: 0, bottom: 0, ok: false }
+        return { top: r.top, bottom: Number.isFinite(r.bottom) ? r.bottom : r.top + r.height, ok: true }
+      } catch (_e) {
+        return { top: 0, bottom: 0, ok: false }
+      }
+    }
+
+    /**
+     * One sample's geometry (2026-10-11): `of(el)` is `topOf(el)` read once per element, and `usable` the
+     * verdict of the last rule that consulted it — true when the laid-out positions decided the pick, false
+     * when they could not and the DOM order had to, null while nothing has been measured (the diag's `geom`).
+     */
+    function geometryReader() {
+      const cache = new Map()
+      return {
+        usable: null,
+        of(el) {
+          if (!cache.has(el)) cache.set(el, topOf(el))
+          return cache.get(el)
+        },
+      }
+    }
+
+    /**
+     * The newest element of `list`: by GEOMETRY when every element has a usable rect and (past one element)
+     * their tops are not all equal — the largest top, i.e. the lowest on the page: every site renders a newer
+     * row below an older one (2026-10-11) — else by the transcript direction over document order (2026-09-27).
+     * Null for an empty list. `geo` (optional) shares the sample's rect reads and records the verdict.
+     */
+    function newestOf(list, geo) {
       if (list.length === 0) return null
+      const g = geo || geometryReader()
+      let best = null
+      const tops = new Set()
+      for (const el of list) {
+        const r = g.of(el)
+        if (!r.ok) {
+          best = null
+          break
+        }
+        tops.add(r.top)
+        if (best === null || r.top > best.top) best = { el, top: r.top }
+      }
+      const usable = best !== null && (list.length === 1 || tops.size > 1)
+      g.usable = usable
+      if (usable) return best.el
       return transcriptOrder() === 'newest' ? list[0] : list[list.length - 1]
     }
 
@@ -2060,34 +2120,79 @@
     }
 
     /**
-     * The reply container that belongs to `anchor` (the user's own turn), direction-agnostic (2026-09-27):
-     * (a) a container that CONTAINS the anchor — chatgpt.com's exchange group — else (b) in the merged
-     * document-order list of containers and user turns, the containers on the reply side of the anchor
-     * (after it on an oldest-first transcript, before it on a newest-first one) up to the next user turn,
-     * and the NEWEST of those (a tool turn and then the answer: the answer). Null when there is none yet —
-     * the reply row has not mounted, or the site unmounted it (chatgpt's placeholder gap).
-     *
-     * A holder whose only reply body sits INSIDE the anchor is the anchor's own row, not an exchange
-     * (2026-10-10): grok.com's user row — reachable through a bare `div[id^='response-']` override — holds
-     * `[data-testid='user-message']` and a `.response-content-markdown` of its own, and rule (a) made it the
-     * container, so `replyText` handed the prompt back. An exchange whose body has not mounted (chatgpt's
-     * group while the model thinks: no block at all) is still a holder — its body, when it comes, is
-     * outside the user turn.
+     * `c` is the anchor's OWN row rather than an exchange (2026-10-10, lifted out of `containerForAnchor` on
+     * 2026-10-11): its only reply body sits inside the anchor. grok.com's user row — reachable through a bare
+     * `div[id^='response-']` override — holds `[data-testid='user-message']` and a `.response-content-markdown`
+     * of its own, and rule (a) once made it the container, so `replyText` handed the prompt back. An exchange
+     * whose body has not mounted (chatgpt's group while the model thinks: no block at all) is NOT an own row —
+     * its body, when it comes, is outside the user turn.
      */
-    function containerForAnchor(anchor, containers, turns) {
+    function ownRowOf(anchor, c) {
+      const blocks = replyBlocks(c)
+      return blocks.length > 0 && blocks.every((b) => b === anchor || containsDeep(anchor, b))
+    }
+
+    /**
+     * The reply container that belongs to `anchor` (the user's own turn), direction-agnostic (2026-09-27):
+     * (a) a container that CONTAINS the anchor — chatgpt.com's exchange group — else (b) the containers on
+     * the reply side of the anchor up to the next user turn, and the NEWEST of those (a tool turn and then
+     * the answer: the answer). Null when there is none yet — the reply row has not mounted, or the site
+     * unmounted it (chatgpt's placeholder gap).
+     *
+     * Rule (b) reads GEOMETRY first (2026-10-11; `topOf`): it is usable when the anchor and at least one
+     * candidate (a container not holding the anchor) are laid out and their usable tops are not all equal.
+     * Then the reply side is BELOW the prompt, universally — the candidates whose top is at or under the
+     * anchor's bottom − 1 px with no laid-out user turn between the anchor's bottom − 1 px and their top
+     * (such a turn is the next prompt, and the row under it another exchange) — and the pick is the LOWEST of
+     * them, as the DOM step takes the newest of its run; none below → null, the reply row has not mounted.
+     * Without usable geometry (the unit DOM; a 0×0 hidden view with zero heights) the DOM step stands: in the
+     * merged document-order list of containers and user turns, the run after the anchor on an oldest-first
+     * transcript, before it on a newest-first one — `transcriptOrder`, now the FALLBACK direction only,
+     * because grok.com's reused slot pool has no document order to read (a fresh chat's two rows sat
+     * oldest-first where the 58-row chat was newest-first). `geo` (optional) shares the sample's rect reads
+     * and records the verdict for the diag.
+     */
+    function containerForAnchor(anchor, containers, turns, geo) {
       const list = containers || assistantContainers()
-      const ownRow = (c) => {
-        const blocks = replyBlocks(c)
-        return blocks.length > 0 && blocks.every((b) => b === anchor || containsDeep(anchor, b))
-      }
-      const holders = list.filter((c) => containsDeep(c, anchor) && !ownRow(c))
-      if (holders.length > 0) return holders[holders.length - 1] // the innermost: a descendant follows its ancestor
+      const allTurns = turns || userTurns()
+      const g = geo || geometryReader()
       // an ancestor of the anchor is rule (a)'s business — a holder, or the anchor's own row — never a neighbour on
       // the reply side: on a newest-first transcript the step back from the anchor would land on its own row first
-      const merged = list
-        .filter((el) => !containsDeep(el, anchor))
+      const candidates = list.filter((el) => !containsDeep(el, anchor))
+      const a = g.of(anchor)
+      const tops = new Set()
+      if (a.ok) tops.add(a.top)
+      let laidOut = false
+      for (const c of candidates) {
+        const r = g.of(c)
+        if (!r.ok) continue
+        laidOut = true
+        tops.add(r.top)
+      }
+      g.usable = a.ok && laidOut && tops.size > 1
+      const holders = list.filter((c) => containsDeep(c, anchor) && !ownRowOf(anchor, c))
+      if (holders.length > 0) return holders[holders.length - 1] // the innermost: a descendant follows its ancestor
+      if (g.usable) {
+        const floor = a.bottom - 1
+        // the laid-out user turns under the prompt (never the anchor, nor a wrapper of it): the next prompt bounds the exchange
+        const blockers = []
+        for (const t of allTurns) {
+          if (t === anchor || containsDeep(anchor, t) || containsDeep(t, anchor)) continue
+          const r = g.of(t)
+          if (r.ok && r.top > floor) blockers.push(r.top)
+        }
+        let lowest = null
+        for (const c of candidates) {
+          const r = g.of(c)
+          if (!r.ok || r.top < floor) continue
+          if (blockers.some((t) => t < r.top)) continue // a user turn between the prompt and this row: another exchange
+          if (lowest === null || r.top > lowest.top) lowest = { el: c, top: r.top }
+        }
+        return lowest === null ? null : lowest.el
+      }
+      const merged = candidates
         .map((el) => ({ el, assistant: true }))
-        .concat((turns || userTurns()).map((el) => ({ el, assistant: false })))
+        .concat(allTurns.map((el) => ({ el, assistant: false })))
         .sort((a, b) => docOrder(a.el, b.el))
       const i = merged.findIndex((x) => x.el === anchor)
       if (i === -1) return null
@@ -2584,6 +2689,18 @@
     // And the anchor rule became PRIMARY (the reviews of the 09-27 fix): a matched user turn is this turn's
     // anchor; the pre-submit baseline only breaks ties between several matches, and a lone match is set
     // aside only when the turn itself was on the page before a submit that really sampled it.
+    //
+    // 2026-10-11 — measured from a plain Send on a FRESH grok.com chat (`snapshots/grok-failed-1791751097135.html`,
+    // fixture `grok-oct11-fresh`): with one user row and one assistant row mounted, the scroller's two
+    // `div.absolute.inset-x-0.top-0` slots sat in OLDEST-first document order — the user row first, the
+    // assistant row second — where the 58-row chat of 2026-09-27 read newest-first. grok.com's virtualizer
+    // reuses a POOL of absolutely positioned slots and places each row by transform, so its document order
+    // carries no transcript order at all; `transcriptOrder: 'newest-first'` stepped BACKWARDS from the
+    // anchor, found nothing, and the capture waited 90 s for a 6,865-character reply that was already there
+    // (`reply_not_found`, `containers=1 anchor=1 order=newest presubmit=0`). Hence, below: rule (b) of
+    // `containerForAnchor` and `newestOf` read GEOMETRY first — the reply is the laid-out row below the
+    // prompt — with `transcriptOrder` demoted to the DOM fallback direction, and an anchored turn with no
+    // container on its reply side falls through to the identity + text rule instead of waiting blindly.
 
     /**
      * observe op (contract §2/§3): wait for a NEW assistant container — one that was not on the page
@@ -2603,7 +2720,12 @@
      *                 answer dance) replaces its predecessor and a node the site unmounted is dropped;
      *                 an EARLIER turn's container is never this turn's reply. The count rule
      *                 (`length > baseline` → the last container) is RETIRED: on a fixed window of rows
-     *                 the count never rises, and on a newest-first transcript "the last" is the oldest
+     *                 the count never rises, and on a newest-first transcript "the last" is the oldest.
+     *                 (2026-10-11) The reply side is read from GEOMETRY first — the laid-out row below the
+     *                 prompt, `transcriptOrder` only the DOM fallback direction, grok.com's slot pool having
+     *                 no document order to read — and an anchored turn with no container on its reply side
+     *                 falls through to the identity + text rule over the containers that are neither its
+     *                 holder nor its own row (`pickContainer`), never a blind wait
      *   first token   a container beyond the baseline within `firstTokenMs` (capped by the budget),
      *                 else `reply_not_found` — the deadline applies only until a container has been
      *                 seen ONCE: a container that is unmounted again (chatgpt's placeholder turn,
@@ -2656,6 +2778,7 @@
       // diag: the user turns matching the typed text at the last sample — 0 when a text was given and nothing
       // matched (or it projected to nothing), null (`anchor=no`) only when there was no text at all (2026-10-10)
       let anchorCount = typed === null || typed === undefined ? null : 0
+      let geomSeen = null // diag `geom` (2026-10-11): whether laid-out geometry decided the last sample's pick; null until a sample had something to measure
       const quiet = nonNegativeInt(quietMs, nonNegativeInt(sel.quietMs, 2500))
       const budget = nonNegativeInt(timeoutMs, nonNegativeInt(sel.captureTimeoutMs, 300000))
       const firstToken = Math.min(nonNegativeInt(firstTokenMs, nonNegativeInt(sel.firstTokenMs, 90000)), budget)
@@ -2707,10 +2830,12 @@
        *                         (the baseline, or identity across a remount);
        *   textContent ≫ inner   the text is in the DOM but not laid out (innerText of an unrendered node);
        *   all small             the DOM really holds nothing yet — the budget, the site, or a wall.
-       * `containers` / `followed` / `connected` say which node was read, `anchor` / `order` / `presubmit`
-       * how it was chosen (2026-09-27: the user turns that matched the typed text — `0` when a text was
-       * given and none matched, `no` when there was no text to match —, the transcript direction, and how
-       * many container identities the pre-submit baseline holds), `stopNow` / `stopSeen` / `end`
+       * `containers` / `followed` / `connected` say which node was read, `anchor` / `order` / `geom` /
+       * `presubmit` how it was chosen (2026-09-27: the user turns that matched the typed text — `0` when a
+       * text was given and none matched, `no` when there was no text to match —, the transcript direction
+       * (the DOM fallback since 2026-10-11), whether the laid-out GEOMETRY decided the last sample's pick —
+       * `yes`, `no` when the DOM order had to, `-` while no sample had anything to measure —, and how many
+       * container identities the pre-submit baseline holds), `stopNow` / `stopSeen` / `end`
        * what the site was signalling, `md` / `pre` / `code` the body's shape, `rect` / `viewport` the
        * geometry of a view that may be hidden (0×0 is the measured normal for the analyst, and reads
        * fine). A field the DOM cannot answer prints `-`; a diag that throws prints nothing at all — it
@@ -2741,7 +2866,7 @@
           if (root && Number.isFinite(root.clientWidth) && Number.isFinite(root.clientHeight)) viewport = `${root.clientWidth}×${root.clientHeight}`
           return (
             `containers=${containers.length} followed=${container ? containers.indexOf(container) : '-'} ` +
-            `connected=${!!container && container.isConnected !== false} anchor=${anchorCount === null ? 'no' : anchorCount} order=${order} presubmit=${base ? base.ids.size : '-'} ` +
+            `connected=${!!container && container.isConnected !== false} anchor=${anchorCount === null ? 'no' : anchorCount} order=${order} geom=${geomSeen === null ? '-' : geomSeen ? 'yes' : 'no'} presubmit=${base ? base.ids.size : '-'} ` +
             `stopNow=${!!findStop()} stopSeen=${seenStop} ` +
             `end=${endSeen || '-'} md=${count(container, '.markdown')} pre=${count(container, 'pre')} code=${count(container, 'code')} ` +
             `reply=${len(text)} inner=${container ? len(readText(container)) : 0} textContent=${container ? len(String(container.textContent || '')) : 0} ` +
@@ -2773,21 +2898,35 @@
        * is outside the baseline by identity and text, then the newest per the transcript order. The one
        * VETO: a turn that was on the page before a submit that really sampled it (`sampledAtSubmit`) cannot
        * be this turn's — its reply is an earlier answer; without such a turn left the fallback rule decides.
+       *
+       * Anchored, but no container on the reply side (2026-10-11): never a blind wait. grok.com's virtualizer
+       * reuses a POOL of absolutely positioned slots, so a fresh chat's two rows read OLDEST-first under the
+       * newest-first key and the DOM step found nothing while the reply stood right there. With geometry
+       * unusable the identity + text rule decides instead, over the containers that are neither the anchor's
+       * holder nor its own row: on a fresh chat that is the reply row; on a long chat a remounted older row is
+       * old by text and skipped, and nothing left is still null — the reply row has not mounted.
        */
       const pickContainer = (containers) => {
+        const geo = geometryReader()
         const turns = userTurns()
         const matched = matchedTurns(turns)
         if (probes) anchorCount = matched.length
         let cands = base.sampledAtSubmit ? matched.filter((t) => !base.userIds.has(t)) : matched
         if (cands.length > 1) {
           const fresh = cands.filter((t) => {
-            const c = containerForAnchor(t, containers, turns)
+            const c = containerForAnchor(t, containers, turns, geo)
             return c === null || !(base.ids.has(c) || oldByText(c))
           })
           if (fresh.length > 0) cands = fresh
         }
-        if (cands.length > 0) return containerForAnchor(newestOf(cands), containers, turns)
-        return newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)))
+        let pick = null
+        if (cands.length > 0) {
+          const anchor = newestOf(cands, geo)
+          pick = containerForAnchor(anchor, containers, turns, geo)
+          if (pick === null) pick = newestOf(containers.filter((c) => !containsDeep(c, anchor) && !ownRowOf(anchor, c) && !base.ids.has(c) && !oldByText(c)), geo)
+        } else pick = newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)), geo)
+        if (geo.usable !== null) geomSeen = geo.usable
+        return pick
       }
 
       /** The session gate: a banner → site_error carrying ONLY the configured phrase; a wall / challenge → that state; each with the partial. */
@@ -2825,7 +2964,8 @@
             const turns = userTurns()
             const matched = matchedTurns(turns)
             if (matched.length > 0) {
-              const own = containerForAnchor(newestOf(matched), containers, turns)
+              const geo = geometryReader()
+              const own = containerForAnchor(newestOf(matched, geo), containers, turns, geo)
               if (own) earlier = earlier.filter((c) => c !== own)
             }
             base = takeBaseline(earlier, false)
@@ -3127,6 +3267,7 @@
       findDone, // exposed for the S9 unit tests: the body rule is asserted directly, not only through a capture
       userTurns, // 2026-09-27: the anchor rule's inputs and its adjacency step, exposed for the virtualized-transcript unit tests
       containerForAnchor,
+      newestOf, // 2026-10-11: the geometry-first "newest", exposed for the geometry unit tests
     }
   }
 

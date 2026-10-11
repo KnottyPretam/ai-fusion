@@ -267,7 +267,10 @@ button.stop {
 
 /* --- 2026-09-27: a newest-first transcript (?order=reverse) — rows PREPENDED into absolutely positioned
    slots inside a scroller, the grok.com shape (`[data-testid=chat-transcript-scroller]`, one
-   `div.absolute.inset-x-0.top-0` per row). Only the DOM order matters to the adapter; the slots stack. */
+   `div.absolute.inset-x-0.top-0` per row). Since 2026-10-11 the slots no longer stack: site.js places each
+   one by an inline `transform: translateY(<the rows above it in transcript order>)` and sets the scroller's
+   min-height to the total (`layoutSlots`), so the page lays out oldest-at-top whatever the DOM order —
+   the geometry the adapter reads first; ?order=shuffle scrambles the DOM order under the same placement. */
 main.thread.scroller {
   position: relative;
   min-height: 240px;

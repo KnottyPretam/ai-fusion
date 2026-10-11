@@ -437,6 +437,45 @@ test.describe('the virtualized-transcript options (2026-09-27)', () => {
     await expect(page.locator(sel.assistant[0]).last()).toHaveText('Echo 2: q2')
   })
 
+  test('?order=shuffle (2026-10-11): even rows prepended, odd rows appended — the DOM order is neither direction of the transcript — while every slot (?order=reverse too) is placed by translateY so the rows read oldest-at-top and the scroller grows to hold them', async ({ page }) => {
+    await page.goto('/?site=claude&replyMs=0&order=shuffle&echoTurn=1')
+    await expect(page.locator("[data-testid='chat-transcript-scroller']")).toHaveCount(1)
+    for (let i = 1; i <= 3; i += 1) await submit(page, `q${i}`)
+    expect((await state(page)).order).toBe('shuffle')
+    await expect(page.locator('main.thread.scroller > .slot')).toHaveCount(6)
+    // user rows are the even rows (0, 2, 4): prepended, newest first; reply rows the odd ones: appended, oldest first
+    await expect(page.locator("[data-testid='user-message']")).toHaveText(['q3', 'q2', 'q1'])
+    await expect(page.locator(sel.assistant[0])).toHaveText(['Echo 1: q1', 'Echo 2: q2', 'Echo 3: q3'])
+    const placed = (page) =>
+      page.evaluate(() => {
+        const thread = document.querySelector('main.thread.scroller')
+        const slots = [...document.querySelectorAll('main.thread.scroller > .slot')].map((s) => ({ text: s.textContent, top: s.getBoundingClientRect().top, bottom: s.getBoundingClientRect().bottom, transform: s.style.transform }))
+        const byTop = [...slots].sort((a, b) => a.top - b.top)
+        return {
+          byTop: byTop.map((s) => s.text),
+          transforms: byTop.map((s) => s.transform),
+          overlaps: byTop.some((s, i) => i > 0 && s.top < byTop[i - 1].bottom - 0.5),
+          held: thread.getBoundingClientRect().bottom >= Math.max(...slots.map((s) => s.bottom)),
+          minHeight: thread.style.minHeight,
+        }
+      })
+    const shuffle = await placed(page)
+    expect(shuffle.byTop).toEqual(['q1', 'Echo 1: q1', 'q2', 'Echo 2: q2', 'q3', 'Echo 3: q3']) // the geometry IS the transcript
+    expect(shuffle.transforms[0]).toBe('translateY(0px)')
+    expect(shuffle.transforms.every((t) => /^translateY\(\d+(\.\d+)?px\)$/.test(t))).toBe(true)
+    expect(shuffle.overlaps).toBe(false) // the slots no longer stack at top 0
+    expect(shuffle.held).toBe(true) // the scroller's min-height is the total
+    expect(shuffle.minHeight).toMatch(/^\d+px$/)
+    // ?order=reverse is placed the same way: prepended DOM, oldest-at-top geometry
+    await page.goto('/?site=claude&replyMs=0&order=reverse&echoTurn=1')
+    for (let i = 1; i <= 2; i += 1) await submit(page, `q${i}`)
+    const reverse = await placed(page)
+    await expect(page.locator("[data-testid='user-message']")).toHaveText(['q2', 'q1'])
+    expect(reverse.byTop).toEqual(['q1', 'Echo 1: q1', 'q2', 'Echo 2: q2'])
+    expect(reverse.overlaps).toBe(false)
+    expect(reverse.held).toBe(true)
+  })
+
   test('?userMarkdown=1: the user turn is rendered as markdown — delimiters cut out, backticks and asterisks gone, the letters kept; without it the turn is the prompt verbatim', async ({ page }) => {
     // one line: this helper types through the keyboard, and the fake composer submits on Enter
     const PROMPT = 'Round 1. <<<YOUR CLAIM>>> The `GYRO_RANGE` register selects **up to 2000 deg/s**. <<<END YOUR CLAIM>>>'

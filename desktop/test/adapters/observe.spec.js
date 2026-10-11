@@ -1067,8 +1067,9 @@ test.describe('S10: a container that mounts empty and stays empty while the mode
     expect(res.message).toContain('longer capture budget, not a different selector')
     // S11: the diag line, with the geometry only a real browser has — one container, followed, empty
     // by every measure, the stop control up now and seen before, no end signal
-    // 2026-09-27: `anchor=1` — the user's own turn matched the typed prompt; `presubmit=0` — a fresh page held no container before the submit
-    expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true anchor=1 order=oldest presubmit=0 stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
+    // 2026-09-27: `anchor=1` — the user's own turn matched the typed prompt; `presubmit=0` — a fresh page held no container before the submit;
+    // 2026-10-11: `geom=yes` — a real browser lays the rows out, so the geometry decided the pick
+    expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true anchor=1 order=oldest geom=yes presubmit=0 stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
     const r = await replyState(page)
     expect(r.containers).toBe(1) // it was following this turn's own container the whole time
   })

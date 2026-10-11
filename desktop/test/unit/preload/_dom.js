@@ -10,7 +10,9 @@
 // chatgpt placeholder turn measured on 2026-09-17: `observe` has to drop a container whose
 // `isConnected` went false). There is no layout and no view, so `isVisible` treats every element as
 // visible and `toMarkdown` preserves no whitespace (see the site.cjs Stage 3 header): a fixture is
-// a shape, never a rendering.
+// a shape, never a rendering. The one layout stand-in (2026-10-11): an element carrying
+// `data-rect="top,height"` answers `getBoundingClientRect()` from it, for the geometry rule of the
+// capture; every other element has no such method at all (see the getter below for why not zeros).
 //
 // The parser is deliberately strict and small; the fixtures are hand-written to suit it:
 //   * tags and attributes are lowercase, attribute values are double-quoted (or bare / single-quoted)
@@ -80,6 +82,26 @@ class Element {
   }
   get disabled() {
     return this.hasAttribute('disabled')
+  }
+  /**
+   * Layout stand-in (2026-10-11, for the geometry rule of site.cjs): an element carrying `data-rect="top,height"`
+   * answers `getBoundingClientRect()` with `{top, bottom, height, width, left, right, x, y}` built from it (a
+   * nominal width while the height is non-zero); an element WITHOUT the attribute has no such method at all —
+   * not a zero rect — because site.cjs's `isVisible` reads a 0×0 box as hidden and would hide every composer
+   * and button in every fixture, while its `topOf` reads a missing call exactly as it reads a degenerate rect:
+   * no geometry, the DOM order decides. The unit DOM has no layout; the attribute is the test's own claim about
+   * where a row sits, and `data-rect="0,0"` is the explicit "laid out at nothing" of a 0×0 view.
+   */
+  get getBoundingClientRect() {
+    const raw = this.getAttribute('data-rect')
+    if (raw === null) return undefined
+    return () => {
+      const [top, height] = String(raw).split(',').map((v) => Number(v))
+      const t = Number.isFinite(top) ? top : 0
+      const h = Number.isFinite(height) ? height : 0
+      const width = h === 0 ? 0 : 800
+      return { top: t, height: h, bottom: t + h, width, left: 0, right: width, x: 0, y: t }
+    }
   }
   /**
    * Connected = the walk up from this node ends at the document (or at its `documentElement`, which is

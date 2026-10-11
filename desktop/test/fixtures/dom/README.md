@@ -314,3 +314,26 @@ duplicate-chrome family). A *Save DOM snapshot* of a settled claude reply is the
 Also still unmeasured: chatgpt's send button on this layout (every snapshot has an empty composer), and
 claude's `done` marker DURING body streaming (it is absent in the status phase and present on every settled
 row; a visible stop control outranks it either way).
+
+## grok-oct11-fresh.html (2026-10-11)
+
+A plain Send's failed pane capture on a FRESH grok.com chat (`snapshots/grok-failed-1791751097135.html`; the diag
+read `containers=1 followed=- connected=false anchor=1 order=newest presubmit=0 stopNow=false stopSeen=true … reply=0
+… maxContainer=6865` — the anchor matched the one user turn, exactly one assistant container held the 6,865-character
+reply, and it was never followed; claude and chatgpt captured in the same Send), pruned to the scroller and the
+composer the way the `*-virtualized` fixtures were. What it shows: inside `[data-testid=chat-transcript-scroller] >
+div.relative` **four** `div.absolute.inset-x-0.top-0` slots — an empty one, the USER row (`div[id^=response-]` holding
+`[data-testid=user-message]`), the ASSISTANT row (`[data-testid=assistant-message]` with its `thinking-container`, its
+`.response-content-markdown` and the `last-response` action bar), an empty one — in **OLDEST-first** document order,
+where `grok-virtualized`'s 58-row chat read newest-first. grok.com's virtualizer reuses a POOL of absolutely
+positioned slots and places each row by transform, so the DOM order carries no transcript order at all; no `style`
+attribute survives `scrubDom` (`SNAPSHOT_KEEP_ATTRS`), so the fixture cannot show the transforms — the live page has
+them. The composer is the measured TipTap editor (entry 0) with the voice button in the action slot (an empty
+composer never shows submit), and the page was settled: no stop control.
+
+| fixture | health | what `test/unit/preload/geometry.test.js` pins |
+|---|---|---|
+| `grok-oct11-fresh` | `{composer 0, send null, reply 0, stop null, session ok, messages 4, assistant 1}` — the two rows and their two bubbles are the four messages | the slot order `- U A -`; with no rects (the unit DOM has no layout) and `transcriptOrder: 'newest-first'`, `containerForAnchor(userTurn)` is **null** — the bug: rule (b) stepped backwards from the anchor and found nothing — and an observe on that page (the prompt and a reply written into the parsed bubbles, since the scrubbed text is `…`) still captures, through the fall-through: an anchored turn with no container on its reply side takes the identity + text rule over the containers that are neither its holder nor its own row. In a real browser the geometry decides first — the laid-out row below the prompt — which `test/adapters/geometry.spec.js` drives on the grok look-alike's `?order=forward` (that DOM shape) and `?order=shuffle`. |
+
+Carried into `site.cjs` (the capture section, dated): `transcriptOrder` is the DOM **fallback** direction only; the
+diag line gained `geom=<yes|no|->` after `order=`.
