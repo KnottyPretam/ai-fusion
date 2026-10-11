@@ -88,6 +88,8 @@ Then a line "Key claims:" and a numbered list of at most 8 claims your answer re
 important first. Each item is ONE sentence, then " — because: " and ONE sentence of reasoning
 or evidence.
 Then a line "Uncertain:" and one sentence naming what you are not sure of, or "none".
+Never ask a clarifying question or wait for input: if something is ambiguous, state your
+assumption and answer under it.
 Keep the whole reply under 4,000 characters (about 500 words). No preamble, no closing
 summary, no other headings, no tables, and no code fences unless the question asks for code."""
 

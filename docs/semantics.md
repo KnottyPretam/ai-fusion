@@ -25,7 +25,7 @@ never a Send: one analyst call (`role="analyst"`, `purpose="extraction"` — the
 literal has no room, as for Refactor; the same `refactor.validated_call` primitive, `retries=0` plus
 one correction attempt, the web no-retry rule, `on_partial` into `raw_attempts`) restates the
 question clearly and succinctly as JSON `{"question"}`; the deterministic `ANSWER_FORMAT` block
-(direct answer, at most 8 numbered claims each with one sentence of reasoning, an `Uncertain:` line,
+(direct answer, at most 8 numbered claims each with one sentence of reasoning, an `Uncertain:` line, no clarifying question — an assumption stated instead (2026-10-11: chatgpt.com paused a turn in an "Ask User Input" widget and the capture ended on the question),,
 the whole reply under 4,000 characters) is appended by code, LAST, and `preparse_done.prompt` is
 what the composer receives. Pre-checks before the first yield: 404 → 422 `empty_prompt` (blank, or
 nothing but the block once `strip_format` has run) → 422 `prompt_too_long` at

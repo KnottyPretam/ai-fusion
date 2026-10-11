@@ -147,7 +147,10 @@ def test_a_long_composed_prompt_still_auto_titles_as_its_first_60_characters():
 
 def test_the_answer_block_is_short_plain_and_asks_for_the_shape_analyze_reads():
     block = prompts.ANSWER_FORMAT
-    assert len(block) <= 600
+    # 720 since 2026-10-11: one sentence more — never ask a clarifying question (chatgpt.com paused a
+    # turn in an "Ask User Input" widget and the capture ended on the question, not an answer).
+    assert len(block) <= 720
+    assert "clarifying question" in block and "assumption" in block
     assert "<<<" not in block
     assert "4,000" in block and "Key claims:" in block and "Uncertain:" in block
     assert "at most 8" in block and "most\nimportant first" in block.replace("\r", "")
