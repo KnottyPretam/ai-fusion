@@ -513,14 +513,17 @@ function start() {
     // S11: the failing DOM, scrubbed — the hidden analyst's client for an analyst turn (before the
     // settled re-read reloads it), under `analyst-<ts>.html`; since 2026-09-27 (Part 0) also a PANE
     // whose capture ended `timeout` / `reply_not_found`, under `<slot>-failed-<ts>.html` — a name the
-    // user's own Site-menu snapshots never use, so pruning the failure files never touches theirs.
-    saveFailureSnapshot: async (view, slot) => {
+    // user's own Site-menu snapshots never use, so pruning the failure files never touches theirs;
+    // and since 2026-10-11 a pane capture that ended OK but SUSPECT (its text echoes the prompt, or it
+    // read a whole exchange with no reply body), under `<slot>-suspect-<ts>.html` (`kind: 'suspect'`),
+    // its own namespace pruned on its own. The analyst has one namespace whatever the kind.
+    saveFailureSnapshot: async (view, slot, { kind = 'failed' } = {}) => {
       const analyst = view === 'analyst'
       const { path: file } = await saveDomSnapshot({
         client: analyst ? analystViews.adapterFor(slot) : views.adapterFor(slot),
         name: analyst ? 'analyst' : slot,
         snapshotsDir,
-        failed: !analyst,
+        kind: analyst ? null : kind,
       })
       return file
     },

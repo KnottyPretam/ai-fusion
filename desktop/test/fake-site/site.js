@@ -82,6 +82,23 @@
  *                     gone from the turn's DOM text while its own letters and digits survive
  *   ?echoTurn=1       the echo names its exchange — "Echo <n>: <text>" — so two identical prompts get two
  *                     different replies and a spec can tell which one a capture read
+ *   ?chatgptLayout=group  (2026-10-11, chatgpt only) the EXCHANGE-GROUP layout measured on chatgpt.com on
+ *                     2026-10-10 (fixture chatgpt-oct10-done): the user turn and the reply share ONE
+ *                     `div.group.flex.flex-col` — the `assistant` cascade's first entry, which HOLDS the user
+ *                     turn (`div.group/user-message`, under a screen-reader-only `h5.sr-only` "You said:") —
+ *                     and the reply body is `div.group.flex.min-w-0.flex-col > div.MarkdownRoot-fake` under
+ *                     its own `h6.sr-only` "ChatGPT said:", with `button[aria-label='Rate response']` as the
+ *                     done marker. The group is on the page from the SUBMIT tick, the reply block mounts
+ *                     into it when the reply begins. Composes with ?replyMs / ?reply=… / ?nostop / ?nodone /
+ *                     ?askUser; the placeholder / thinkMs / twoTurns lifecycles keep the article shape
+ *   ?askUser=1        (2026-10-11) the ask-the-user turn measured on chatgpt.com on 2026-10-11 14:41: the
+ *                     reply is the fixed ASK_USER_TEXT line (never an echo — it must not carry the prompt),
+ *                     streamed as usual, and when it finishes the assistant row mounts a small form (`form.ask-user`:
+ *                     a label "Asking question", a text input and a button), the stop control GOES and NO done
+ *                     marker ever mounts; window.__fake.askedAt records the moment. Under ?chatgptLayout=group
+ *                     the reply block renders NO MarkdownRoot (a bare `div.text-size-chat`, as the measured
+ *                     turn did), so no `assistantText` entry matches and the capture reads the exchange —
+ *                     the shape that handed the user's own prompt back as the reply
  *   (2026-10-10) the USER TURN is each site's own markup, so the adapters project exercises every entry of
  *   USER_TURN_SELECTORS with real text, not only chatgpt's: chatgpt keeps `article[data-message-author-role=user]`;
  *   claude is `div[data-testid=user-message] > p.whitespace-pre-wrap` (the claude.ai redesign's user body); grok is
@@ -258,6 +275,9 @@
   const PLACEHOLDER_MS = 250
   /** ?assistantAtSubmit=1 (2026-09-27): how long the reply row mounted in the submit tick stays empty. */
   const ASSISTANT_AT_SUBMIT_HOLD_MS = 600
+  /** ?askUser=1 (2026-10-11): the one line the ask-the-user turn says before its widget, and the widget's label. Fixed, never an echo. */
+  const ASK_USER_TEXT = 'Before I answer, one optional question about your timeline.'
+  const ASK_USER_LABEL = 'Asking question'
   /**
    * ?thinking=1 (claude): the thinking widget's summary line — the one the live capture came back
    * with twice — and the detail line of its collapsed panel. Both sit OUTSIDE the `.prose` body.
@@ -400,7 +420,11 @@
     // 2026-09-27: the empty reply row in the submit tick, and an echo that names its exchange
     assistantAtSubmit: params.get('assistantAtSubmit') === '1',
     echoTurn: params.get('echoTurn') === '1',
+    // 2026-10-11: the ask-the-user turn (see the header) — a fixed line, then a widget, the stop gone, no marker
+    askUser: params.get('askUser') === '1',
   }
+  /** 2026-10-11: chatgpt's exchange-group layout (?chatgptLayout=group), else the article-per-turn layout. */
+  const chatgptLayout = site === 'chatgpt' && params.get('chatgptLayout') === 'group' ? 'group' : 'article'
   /** ?webUrlMs: the placeholder chat URL is replaced by the real one this many ms after the push. */
   const webUrlMs = params.has('webUrlMs') ? Math.max(0, Number(params.get('webUrlMs')) || 0) : null
   replyOpts.webUrlMs = webUrlMs
@@ -477,6 +501,10 @@
     trimmed: 0,
     exchanges: 0,
     mountedAssistants: () => mountedAssistants(),
+    // 2026-10-11: the layout chatgpt renders (`'article' | 'group'`), the ask-the-user turn's texts, and when its widget mounted
+    chatgptLayout,
+    askUser: replyOpts.askUser ? { text: ASK_USER_TEXT, label: ASK_USER_LABEL } : null,
+    askedAt: null,
   }
   window.__fake = fake
 
@@ -705,6 +733,8 @@
   }
 
   function replyFor(text) {
+    // ?askUser (2026-10-11): a fixed line, whatever the kind — the turn's text must never carry the prompt
+    if (replyOpts.askUser) return ASK_USER_TEXT
     if (replyOpts.kind === 'fidelity') return padTo(CANNED_FIDELITY, replyOpts.chars)
     if (replyOpts.kind === 'openfence') return padTo(CANNED_OPEN_FENCE, replyOpts.chars)
     if (replyOpts.kind === 'rich') return padTo(CANNED_RICH, replyOpts.chars)
@@ -1071,8 +1101,57 @@
     return widget
   }
 
+  /** The exchange group the current turn lives in (?chatgptLayout=group): mounted by submit(), filled by the reply. */
+  let currentGroup = null
+
+  /**
+   * ?askUser (2026-10-11): the widget the ask-the-user turn mounts once its line has streamed — a small form
+   * with a label, a text input and a button. Mounted beside the reply's text element, never inside it.
+   */
+  function buildAskUserWidget() {
+    const form = el('form', 'ask-user')
+    form.addEventListener('submit', (e) => e.preventDefault())
+    const label = el('div', 'ask-user-label')
+    label.textContent = ASK_USER_LABEL
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.setAttribute('aria-label', ASK_USER_LABEL)
+    const button = document.createElement('button')
+    button.type = 'submit'
+    button.textContent = 'Send answer'
+    form.append(label, input, button)
+    return form
+  }
+
   /** The per-site assistant container: `{container, textEl, markDone()}` (see the header for the shapes). */
   function buildAssistant() {
+    if (site === 'chatgpt' && chatgptLayout === 'group' && currentGroup !== null) {
+      // the measured exchange-group reply block (fixture chatgpt-oct10-done): a screen-reader-only heading,
+      // then `div.group.flex.min-w-0.flex-col` holding the MarkdownRoot body — or, for the ask-the-user
+      // turn, a bare text element that no `assistantText` entry matches (measured 2026-10-11)
+      const block = el('div', 'block-fake')
+      const said = el('h6', 'sr-only')
+      said.textContent = 'ChatGPT said:'
+      const wrap = el('div', 'group flex min-w-0 flex-col')
+      const body = el('div', replyOpts.askUser ? 'text-size-chat relative overflow-visible' : 'MarkdownRoot-fake')
+      wrap.appendChild(body)
+      block.append(said, wrap)
+      return {
+        container: currentGroup,
+        textEl: body,
+        block,
+        markDone() {
+          if (replyOpts.nodone) return
+          const bar = el('div', 'actions')
+          const rate = document.createElement('button')
+          rate.type = 'button'
+          rate.setAttribute('aria-label', 'Rate response')
+          rate.textContent = 'Rate'
+          bar.appendChild(rate)
+          block.appendChild(bar)
+        },
+      }
+    }
     if (site === 'chatgpt') {
       const article = document.createElement('article')
       article.setAttribute('data-message-author-role', 'assistant')
@@ -1178,6 +1257,24 @@
    * what mounts, `textEl` is where the prompt goes (verbatim, or rendered under ?userMarkdown=1).
    */
   function buildUserTurn() {
+    if (site === 'chatgpt' && chatgptLayout === 'group') {
+      // the measured exchange group (fixture chatgpt-oct10-done): the user turn is `group/user-message` twice
+      // nested under a screen-reader-only "You said:" heading, and the group it sits in is what the
+      // `assistant` cascade's first entry matches — on the page from this very tick
+      const group = el('div', 'group flex flex-col')
+      const block = el('div', 'block-fake')
+      const outer = el('div', 'group/user-message flex flex-col items-end gap-2')
+      const said = el('h5', 'sr-only')
+      said.textContent = 'You said:'
+      const inner = el('div', 'group/user-message flex w-full flex-col gap-1 items-end')
+      const body = el('div', 'text-size-chat whitespace-pre-wrap user-turn')
+      inner.appendChild(body)
+      outer.append(said, inner)
+      block.appendChild(outer)
+      group.appendChild(block)
+      currentGroup = group
+      return { row: group, textEl: body }
+    }
     if (site === 'chatgpt') {
       const msg = document.createElement('article')
       msg.setAttribute('data-message-author-role', 'user')
@@ -1205,7 +1302,16 @@
 
   /** Append an assistant container to the thread (counted in window.__fake.containers). */
   function appendAssistant(built) {
-    mountRow(built.container, { assistant: true })
+    if (built.block) {
+      // ?chatgptLayout=group: the reply block goes INTO the exchange group submit() already mounted — the
+      // container count never rises, exactly as on chatgpt.com (the anchor rule is what finds the reply)
+      built.container.appendChild(built.block)
+      if (exchange === null) newExchange()
+      exchange.rows.push({ node: built.block, slot: null, assistant: true })
+      layoutSlots()
+    } else {
+      mountRow(built.container, { assistant: true })
+    }
     fake.containers += 1
   }
 
@@ -1315,6 +1421,16 @@
     }
     const finish = () => {
       renderReply(reply.full)
+      if (replyOpts.askUser) {
+        // ?askUser (2026-10-11): the widget mounts beside the text, the stop control goes, NO done marker
+        reply.ended = true
+        const host = reply.block || reply.container
+        host.appendChild(buildAskUserWidget())
+        fake.askedAt = Date.now()
+        endReply()
+        fake.done = true
+        return
+      }
       signalEnd()
       endReply()
       fake.done = true

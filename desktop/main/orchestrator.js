@@ -79,6 +79,13 @@
 // count the settled answer as an earlier turn), and never past what is left of the backend's grant.
 // ANY failure inside the recovery reports the ORIGINAL failure, code, message and partial intact. The
 // view stays reserved throughout: it is the same turn.
+//
+// Suspect capture (2026-10-11; `suspectReason`, `saveSuspectEvidence`): a PANE capture that ended OK whose
+// adapter result says `echoesPrompt` (the text carries the typed prompt) or `bodyMatched:false` with
+// `heldUserTurn:true` (no reply body matched; a whole exchange was read) saves `<slot>-suspect-<ts>.html`
+// through the same snapshot dep (newest 20 of its kind), logs ONE line naming the file and the flag, and is
+// delivered unchanged. Measured 2026-10-11 14:41 on chatgpt.com: the ask-the-user widget turn, captured as a
+// success with the user's own prompt as the reply, left no evidence at all.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
@@ -151,6 +158,29 @@ export const SETTLED_REREAD_MS = 60000
 export const REREAD_CODES = Object.freeze(['timeout', 'reply_not_found'])
 /** Insert-phase failures on a pane whose DOM is saved for the next calibration (2026-09-27). */
 export const SUBMIT_EVIDENCE_CODES = Object.freeze(['not_submitted', 'send_not_found'])
+
+/** The snapshot kind (ipc.js SNAPSHOT_KINDS) a SUSPECT pane capture is saved under: `<slot>-suspect-<ts>.html`. */
+export const SUSPECT_SNAPSHOT_KIND = 'suspect'
+
+/**
+ * Why a PANE capture that ended OK is still worth its DOM (2026-10-11), or null. The adapter's observe result
+ * carries three booleans beside the text (site.cjs, the internal result — never the bridge frame):
+ *   `echoesPrompt`   the final text carries the typed prompt (the anchor probes over its projection)
+ *                    → 'echoes_prompt';
+ *   `bodyMatched` false AND `heldUserTurn` true   no reply body matched on the last sample and the container
+ *                    read was a whole exchange (it holds the user turn) → 'exchange_fallback'.
+ * Measured on chatgpt.com, 2026-10-11 14:41: a turn that paused to ask the user a question in a widget mounted
+ * no reply body, the capture fell back to the exchange group and delivered `#### You said:` and the user's own
+ * prompt as the reply — as a SUCCESS, so nothing was saved. The first flag catches that text wherever it comes
+ * from; the second catches the shape even when the fallback read has already stripped the prompt out.
+ * A result with neither flag (an adapter that predates them) is never suspect.
+ */
+export function suspectReason(observed) {
+  if (!observed || typeof observed !== 'object') return null
+  if (observed.echoesPrompt === true) return 'echoes_prompt'
+  if (observed.bodyMatched === false && observed.heldUserTurn === true) return 'exchange_fallback'
+  return null
+}
 
 /**
  * What the settled re-read needs of the grant, worst case: the reload wait, `ready`, the re-read
@@ -256,9 +286,11 @@ function adapterFailure(e) {
  *   onNavigate?(slot, cb)          cb(url) on did-navigate / did-navigate-in-page; returns unsubscribe
  *   newChatUrl?(slot)              the site's newChatUrl (for `fresh:true`)
  *   onTurn?(slot, phase, code?)    `panes:turn` for the renderer
- *   saveFailureSnapshot?(view, slot) → Promise<string|null>   S11: write that view's scrubbed DOM under
+ *   saveFailureSnapshot?(view, slot, {kind}?) → Promise<string|null>   S11: write that view's scrubbed DOM under
  *                                  snapshots/ (ipc.js saveDomSnapshot) and resolve with the path; called
- *                                  BEFORE a settled re-read reloads the page; a rejection is logged, never fatal
+ *                                  BEFORE a settled re-read reloads the page; a rejection is logged, never fatal.
+ *                                  2026-10-11: `{kind: 'suspect'}` for a PANE capture that ended OK but suspect
+ *                                  (`suspectReason`) — `<slot>-suspect-<ts>.html`; omitted = the failure kind
  *   mutex, now, log, insertSettleMs, setTimeout, clearTimeout
  */
 export function createOrchestrator({
@@ -683,6 +715,14 @@ export function createOrchestrator({
       // characters in the persisted conversation: nothing on the way through said how a capture ended.
       // The length, never the text — the reply does not go in the log.
       info(`${label}: captured ${text.length} chars by ${doneBy} in ${Number.isFinite(observed.ms) ? Math.round(observed.ms) : elapsed()} ms`)
+      // 2026-10-11: a PANE capture that ended OK but reads as suspect (`suspectReason`) leaves its DOM behind,
+      // exactly as a failed one does, and is delivered UNCHANGED — the flags never reach the frame, and the
+      // text is the adapter's. Pane only: the analyst page never renders an exchange, and its replies are
+      // JSON documents that quote nothing. The view is still reserved, so the snapshot op never meets `busy`.
+      if (entry.view === 'pane') {
+        const reason = suspectReason(observed)
+        if (reason) await saveSuspectEvidence(slot, label, reason)
+      }
       const finalUrl = (typeof observed.url === 'string' && observed.url) || resultUrl()
       noteAnalystChat(seam, slot, convId, finalUrl)
       return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: finalUrl, ms: elapsed(), done_by: doneBy }
@@ -736,6 +776,26 @@ export function createOrchestrator({
       if (file) info(`${label}: DOM snapshot of the failed capture saved to ${file}`)
     } catch (e) {
       warn(`${label}: DOM snapshot of the failed capture failed: ${(e && e.message) || e}`)
+    }
+  }
+
+  /**
+   * What a SUSPECT pane capture leaves behind (2026-10-11): the DOM as the capture read it, scrubbed, under
+   * `<slot>-suspect-<ts>.html` through the same `saveFailureSnapshot` dep (`{kind: 'suspect'}`), and ONE log
+   * line naming the file and the flag that fired — never a character of the text. A snapshot that fails is a
+   * line in the log, never a reason to touch the result. Never rejects.
+   */
+  async function saveSuspectEvidence(slot, label, reason) {
+    if (typeof saveFailureSnapshot !== 'function') {
+      info(`${label}: suspect capture (${reason}); no snapshot writer is wired, nothing saved`)
+      return
+    }
+    try {
+      const file = await saveFailureSnapshot('pane', slot, { kind: SUSPECT_SNAPSHOT_KIND })
+      if (file) info(`${label}: suspect capture (${reason}) — DOM snapshot saved to ${file}`)
+      else info(`${label}: suspect capture (${reason}); the snapshot writer saved nothing`)
+    } catch (e) {
+      warn(`${label}: suspect capture (${reason}) — DOM snapshot failed: ${(e && e.message) || e}`)
     }
   }
 

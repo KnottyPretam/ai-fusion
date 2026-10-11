@@ -20,7 +20,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, requireCouncil, requireOpenRouterKey, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, SNAPSHOT_NAMES, ANALYST_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, requireCouncil, requireOpenRouterKey, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, failurePrefix, resolveSnapshotKind, SNAPSHOT_NAMES, SNAPSHOT_KINDS, ANALYST_SNAPSHOTS_KEPT, FAILURE_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
 import { SLOTS } from '../../../main/sites.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
@@ -890,4 +890,55 @@ test('Part 0: a pane FAILURE snapshot is `<slot>-failed-<ts>.html`, pruned among
   const { path: file } = await saveDomSnapshot({ client, name: 'chatgpt', snapshotsDir: dir, fs, now: () => 7, failed: true })
   assert.equal(file, '/snap/chatgpt-failed-7.html')
   assert.deepEqual(written, [['/snap/chatgpt-failed-7.html', '<html>…</html>']])
+})
+
+test('2026-10-11: a SUSPECT pane snapshot is `<slot>-suspect-<ts>.html` — its own kind, pruned among its own kind only (newest FAILURE_SNAPSHOTS_KEPT): never a `-failed-` file, never a manual one; the analyst keeps its one namespace', async () => {
+  assert.deepEqual([...SNAPSHOT_KINDS], ['failed', 'suspect'])
+  assert.equal(FAILURE_SNAPSHOTS_KEPT, 20)
+  // the (failed, kind) option pair
+  assert.equal(resolveSnapshotKind(), null)
+  assert.equal(resolveSnapshotKind({ failed: true }), 'failed')
+  assert.equal(resolveSnapshotKind({ kind: 'suspect' }), 'suspect')
+  assert.equal(resolveSnapshotKind({ failed: true, kind: 'suspect' }), 'suspect', 'an explicit kind wins')
+  assert.throws(() => resolveSnapshotKind({ kind: 'weird' }), /bad_request/)
+  assert.throws(() => resolveSnapshotKind({ kind: 42 }), /bad_request/)
+  // the names
+  assert.equal(failurePrefix('chatgpt'), 'chatgpt-failed')
+  assert.equal(failurePrefix('chatgpt', 'suspect'), 'chatgpt-suspect')
+  assert.equal(failurePrefix('analyst', 'suspect'), 'analyst', 'one namespace for the analyst')
+  assert.throws(() => failurePrefix('chatgpt', 'weird'), /bad_request/)
+  assert.equal(snapshotFileName('chatgpt', 42, { kind: 'suspect' }), 'chatgpt-suspect-42.html')
+  assert.equal(snapshotFileName('chatgpt', 42, { kind: 'failed' }), 'chatgpt-failed-42.html')
+  assert.equal(snapshotFileName('chatgpt', 42, { failed: true }), 'chatgpt-failed-42.html', 'the Part 0 spelling still works')
+  assert.equal(snapshotFileName('chatgpt', 42), 'chatgpt-42.html')
+  assert.equal(snapshotFileName('analyst', 42, { kind: 'suspect' }), 'analyst-42.html')
+  assert.throws(() => snapshotFileName('chatgpt', 42, { kind: 'weird' }), /bad_request/)
+  // the prune: one kind at a time
+  const dir = '/snap'
+  const files = ['chatgpt-1.html', 'chatgpt-2.html', 'chatgpt-failed-1.html', 'chatgpt-failed-2.html', 'chatgpt-suspect-1.html', 'chatgpt-suspect-2.html', 'chatgpt-suspect-3.html', 'claude-suspect-1.html', 'analyst-1.html']
+  const removed = []
+  const written = []
+  const fs = {
+    readdirSync: () => files,
+    unlinkSync: (p) => removed.push(p),
+    mkdirSync: () => {},
+    writeFileSync: (p, html) => written.push([p, html]),
+  }
+  assert.deepEqual(pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 2, { kind: 'suspect' }), ['chatgpt-suspect-1.html'], 'the oldest suspect beyond the cap goes')
+  assert.deepEqual(removed, ['/snap/chatgpt-suspect-1.html'])
+  assert.deepEqual(pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 1, { kind: 'failed' }), ['chatgpt-failed-1.html'], 'the failed kind is pruned on its own')
+  assert.deepEqual(pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 0), [], 'no kind: a pane name is still a no-op')
+  assert.ok(removed.every((p) => p.includes('-suspect-') || p.includes('-failed-')), 'never a manual one')
+  assert.equal(removed.some((p) => p.includes('claude')), false, 'never another slot')
+  assert.throws(() => pruneSnapshots({ fs, snapshotsDir: dir }, 'chatgpt', 2, { kind: 'weird' }), /bad_request/)
+  // the writer: a suspect write lands under the suspect name and prunes the suspect kind to FAILURE_SNAPSHOTS_KEPT
+  const many = Array.from({ length: FAILURE_SNAPSHOTS_KEPT + 3 }, (_v, i) => `grok-suspect-${i + 1}.html`).concat(['grok-failed-1.html', 'grok-1.html'])
+  const removed2 = []
+  const fs2 = { readdirSync: () => many, unlinkSync: (p) => removed2.push(p), mkdirSync: () => {}, writeFileSync: (p, html) => written.push([p, html]) }
+  const client = { request: async (op) => (op === 'snapshot' ? { html: '<html>…</html>' } : null) }
+  const { path: file } = await saveDomSnapshot({ client, name: 'grok', snapshotsDir: dir, fs: fs2, now: () => 7, kind: 'suspect' })
+  assert.equal(file, '/snap/grok-suspect-7.html')
+  assert.deepEqual(written, [['/snap/grok-suspect-7.html', '<html>…</html>']])
+  assert.deepEqual(removed2.sort(), ['/snap/grok-suspect-1.html', '/snap/grok-suspect-2.html', '/snap/grok-suspect-3.html'], 'the three oldest suspects beyond 20 (the listing predates the write)')
+  await assert.rejects(saveDomSnapshot({ client, name: 'grok', snapshotsDir: dir, fs: fs2, kind: 'weird' }), /bad_request/)
 })

@@ -46,7 +46,9 @@ function expectObserved(res, text, doneBy) {
   expect(Number.isInteger(res.ms)).toBe(true)
   expect(res.ms).toBeGreaterThanOrEqual(0)
   expect(res.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
-  expect(Object.keys(res).sort()).toEqual(['doneBy', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
+  // 2026-10-11: the three reading flags ride beside the text on the INTERNAL result (never the bridge frame)
+  expect(Object.keys(res).sort()).toEqual(['bodyMatched', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
+  for (const flag of ['bodyMatched', 'echoesPrompt', 'heldUserTurn']) expect(typeof res[flag]).toBe('boolean')
 }
 
 function expectPartialOf(res, full) {

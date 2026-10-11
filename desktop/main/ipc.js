@@ -188,9 +188,27 @@ export const SNAPSHOT_NAMES = Object.freeze([...SLOTS, 'analyst'])
 export const ANALYST_SNAPSHOTS_KEPT = 20
 export const FAILURE_SNAPSHOTS_KEPT = ANALYST_SNAPSHOTS_KEPT
 
-/** The file-name prefix a name's FAILURE snapshots share: the analyst's whole namespace, a pane's `-failed` suffix. */
-export function failurePrefix(name) {
-  return requireSnapshotName(name) === 'analyst' ? 'analyst' : `${name}-failed`
+/**
+ * The KINDS of snapshot main writes by itself for a pane, each its own namespace under `<slot>-<kind>-<ts>.html`
+ * and each pruned to the newest FAILURE_SNAPSHOTS_KEPT among its own kind only: `failed` — a capture that ended
+ * `timeout` / `reply_not_found` (Part 0, 2026-09-27); `suspect` (2026-10-11) — a capture that ended OK but whose
+ * text echoes the typed prompt, or that read a whole exchange because no reply body matched (the chatgpt.com
+ * ask-the-user widget turn: the capture counted as a success, so nothing was saved and the layout had to be
+ * re-measured from the persisted conversation). The analyst keeps its one namespace (`analyst-<ts>.html`).
+ */
+export const SNAPSHOT_KINDS = Object.freeze(['failed', 'suspect'])
+
+/** The kind the (`failed`, `kind`) option pair names: `kind` when given (validated), else `failed` → 'failed', else null (a manual snapshot). */
+export function resolveSnapshotKind({ failed = false, kind = null } = {}) {
+  if (kind === null || kind === undefined) return failed ? 'failed' : null
+  if (typeof kind !== 'string' || !SNAPSHOT_KINDS.includes(kind)) throw badRequest()
+  return kind
+}
+
+/** The file-name prefix a name's snapshots of `kind` share: the analyst's whole namespace, a pane's `-<kind>` suffix. */
+export function failurePrefix(name, kind = 'failed') {
+  const k = resolveSnapshotKind({ kind }) || 'failed'
+  return requireSnapshotName(name) === 'analyst' ? 'analyst' : `${name}-${k}`
 }
 
 export function requireSnapshotName(name) {
@@ -200,11 +218,13 @@ export function requireSnapshotName(name) {
 
 /**
  * The file name a DOM snapshot is written under: `<name>-<ts>.html` (name ∈ SNAPSHOT_NAMES, ts = integer
- * ms); a pane's failure snapshot is `<slot>-failed-<ts>.html` so it never collides with — and is never
- * pruned alongside — the snapshots the user saves by hand.
+ * ms); a pane's failure snapshot is `<slot>-failed-<ts>.html` (`failed: true`, or `kind: 'failed'`) and a
+ * suspect capture's `<slot>-suspect-<ts>.html` (`kind: 'suspect'`), so neither ever collides with — nor is
+ * pruned alongside — the snapshots the user saves by hand, or each other.
  */
-export function snapshotFileName(name, ts, { failed = false } = {}) {
-  const stem = failed ? failurePrefix(name) : requireSnapshotName(name)
+export function snapshotFileName(name, ts, { failed = false, kind = null } = {}) {
+  const k = resolveSnapshotKind({ failed, kind })
+  const stem = k ? failurePrefix(name, k) : requireSnapshotName(name)
   return `${stem}-${Math.round(Number(ts) || 0)}.html`
 }
 
@@ -214,19 +234,22 @@ export function snapshotFileName(name, ts, { failed = false } = {}) {
  * is whichever view's adapter client the caller resolved — a pane's (`views.adapterFor(slot)`) or the
  * hidden analyst's (`analystViews.adapterFor(slot)`) — and `name` labels the file; the renderer never
  * reaches this with a name of its own choosing (`panes:snapshot` keeps `requireSlot` at the boundary).
- * Shared by `panes:snapshot`, the Site menu and the orchestrator's failure snapshot. After an
- * `analyst` write the `analyst-*.html` files are pruned to the newest ANALYST_SNAPSHOTS_KEPT.
+ * Shared by `panes:snapshot`, the Site menu and the orchestrator's failure / suspect snapshots. After an
+ * `analyst` write the `analyst-*.html` files are pruned to the newest ANALYST_SNAPSHOTS_KEPT; after a pane
+ * write of a `kind` (`failed: true` ≡ `kind: 'failed'`; `kind: 'suspect'`, 2026-10-11) that kind's files
+ * are pruned to the newest FAILURE_SNAPSHOTS_KEPT — its own kind only, never the other's, never a manual one.
  */
-export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs, now = Date.now, failed = false }) {
+export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs, now = Date.now, failed = false, kind = null }) {
   requireSnapshotName(name)
+  const k = resolveSnapshotKind({ failed, kind })
   if (!client) throw new Error('view_crashed')
   if (!snapshotsDir) throw new Error('snapshots_unavailable')
   const res = await client.request('snapshot', {}, { timeoutMs: SNAPSHOT_TIMEOUT_MS })
   if (!res || typeof res.html !== 'string') throw new Error('site_error')
   fs.mkdirSync(snapshotsDir, { recursive: true })
-  const file = path.join(snapshotsDir, snapshotFileName(name, now(), { failed }))
+  const file = path.join(snapshotsDir, snapshotFileName(name, now(), { kind: k }))
   fs.writeFileSync(file, res.html, 'utf8')
-  if (name === 'analyst' || failed) pruneSnapshots({ fs, snapshotsDir }, name, FAILURE_SNAPSHOTS_KEPT, { failed: true })
+  if (name === 'analyst' || k) pruneSnapshots({ fs, snapshotsDir }, name, FAILURE_SNAPSHOTS_KEPT, { kind: k || 'failed' })
   return { path: file }
 }
 
@@ -235,13 +258,14 @@ export async function saveDomSnapshot({ client, name, snapshotsDir, fs = nodeFs,
  * `ts` in the name, which is what the writer stamps; mtime would move with a copy). Returns the names
  * removed. Never throws: a directory that cannot be listed, or a file already gone, is pruned enough.
  */
-export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep, { failed = false } = {}) {
+export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep, { failed = false, kind = null } = {}) {
   requireSnapshotName(name) // throws bad_request for a name outside SNAPSHOT_NAMES; never throws on fs errors
-  // Only a failure-path prefix is ever pruned: the analyst's namespace, or a pane's `-failed` files.
-  // A pane snapshot the user saved from the Site menu is never touched — the invariant lives here,
-  // with the code that could break it, not at a call site (review 2026-09-22).
-  if (name !== 'analyst' && !failed) return []
-  const prefix = failurePrefix(name)
+  const k = resolveSnapshotKind({ failed, kind })
+  // Only a failure-path prefix is ever pruned: the analyst's namespace, or a pane's `-failed` / `-suspect`
+  // files, one kind at a time. A pane snapshot the user saved from the Site menu is never touched — the
+  // invariant lives here, with the code that could break it, not at a call site (review 2026-09-22).
+  if (name !== 'analyst' && !k) return []
+  const prefix = failurePrefix(name, k || 'failed')
   let names = []
   try {
     names = fs.readdirSync(snapshotsDir)

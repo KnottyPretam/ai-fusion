@@ -164,11 +164,19 @@ button.send[disabled] { opacity: 0.35; cursor: not-allowed; }
   background: #f1f1f1;
 }
 .markdown,
+.MarkdownRoot-fake,
 .font-claude-response,
 .response-content-markdown {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* 2026-10-11: chatgpt's exchange group (?chatgptLayout=group) — the user turn at the end, the reply block under it —
+   and the ask-the-user widget (?askUser=1); `.sr-only` is Tailwind's screen-reader-only clip, never display:none */
+.group.flex.flex-col { display: flex; flex-direction: column; gap: 8px; }
+.group\/user-message.items-end { align-items: flex-end; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+form.ask-user { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+form.ask-user input { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; }
 article[data-message-author-role='assistant'] .actions { margin-top: 6px; }
 
 /* --- S8: claude's thinking / tool-use widget (?thinking=1) ----------------------------------- */

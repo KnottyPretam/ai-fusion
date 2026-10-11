@@ -188,6 +188,23 @@
 // offline by the fake site's `?thinking=1` (claude) and pinned by `test/adapters/observe.spec.js`,
 // `test/unit/preload/markdown.test.js` and `test/unit/preload/selectors.test.js`.
 //
+// The EXCHANGE fallback never echoes the prompt (2026-10-11). The same `blockText(container)` fallback, on
+// chatgpt.com's exchange-group layout (the container HOLDS the user turn), handed main the user's own prompt
+// as the reply: a turn that paused to ask the user a question in a widget (measured 2026-10-11 14:41, 291 s,
+// `stop_gone`, 2,276 chars) mounted NO reply body, and the captured text was `#### You said:`, the whole
+// prompt, then the widget's line — as a SUCCESS, so no snapshot was written. Now `replyReading` reads an
+// exchange with no body, once the stop control is gone, through `exchangeText`: `toMarkdown` with the
+// `exclude` predicate `exchangeChrome` — every USER_TURN_SELECTORS match and every screen-reader-only
+// element (`sr-only` / `visually-hidden`: SR_ONLY_CLASSES) left out with its subtree — and `readTextExcluding`
+// under the same predicate when that render is blank. SCOPE: only that fallback. A body block the cascade
+// matched keeps its sr-only text, a turn-level container (claude, grok, the article layout) reads byte for byte
+// as before, and '' while the stop control is up is unchanged. The observe result also carries `bodyMatched`,
+// `heldUserTurn` and `echoesPrompt` (the anchor probes over the final text) for main — the internal result,
+// never the bridge frame — so a capture that still reads an exchange, or still quotes the prompt, saves its
+// DOM as `<slot>-suspect-<ts>.html` (main/orchestrator.js `suspectReason`). Replayed offline by the fake site's
+// `?chatgptLayout=group` + `?askUser=1` and pinned by `test/adapters/exchange.spec.js` and
+// `test/unit/preload/exchange.test.js`.
+//
 // S10 — the capture ended mid-reply once the answers got LONG. Evidence from a real Analyze on
 // 2026-09-20, after the user raised the reasoning effort inside chatgpt and claude (the three replies
 // it compared were 4992 / 13677 / 8583 characters): both analyst attempts came back as fragments the
@@ -295,6 +312,40 @@
   const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
   /** The user's OWN turn, per site — what tells an exchange-shaped container apart from a single reply (2026-09-27). */
   const USER_TURN_SELECTORS = Object.freeze(["[data-message-author-role='user']", "[data-testid='user-message']", "[class~='group/user-message']"])
+  /**
+   * Screen-reader-only class tokens (Tailwind's `sr-only`, Bootstrap's `visually-hidden`): text a sighted
+   * reader never sees — chatgpt.com's "You said:" / "ChatGPT said:" headings — and so chrome, never the
+   * visible answer. Dropped ONLY by the exchange-fallback read (`exchangeText`, 2026-10-11): a reply body
+   * the `assistantText` cascade matched, and a turn-level container, read exactly as they always did.
+   */
+  const SR_ONLY_CLASSES = Object.freeze(['sr-only', 'visually-hidden'])
+
+  /** `el` carries a screen-reader-only class token (see SR_ONLY_CLASSES). */
+  function isScreenReaderOnly(el) {
+    if (!el || typeof el !== 'object') return false
+    const raw = safeTrue(() => typeof el.getAttribute === 'function') ? el.getAttribute('class') : null
+    const classes = raw === null || raw === undefined ? (typeof el.className === 'string' ? el.className : '') : String(raw)
+    for (const c of classes.split(/\s+/)) if (c !== '' && SR_ONLY_CLASSES.includes(c)) return true
+    return false
+  }
+
+  /** `el` IS a user turn (one of USER_TURN_SELECTORS matches it) — the subtree the exchange fallback leaves out. */
+  function isUserTurn(el) {
+    if (!el || typeof el !== 'object') return false
+    for (const selector of USER_TURN_SELECTORS) if (safeTrue(() => typeof el.matches === 'function' && el.matches(selector))) return true
+    return false
+  }
+
+  /**
+   * The skip predicate of the exchange-fallback read (2026-10-11): the user's own turn and every
+   * screen-reader-only element. Measured on chatgpt.com, 2026-10-11 14:41: a turn that paused to ask the
+   * user a question in a widget mounted no reply body at all, so `replyText` fell back to the whole
+   * exchange group — which HOLDS the user turn — and the captured "reply" was `#### You said:` followed
+   * by the user's own prompt, then the widget's line. The prompt is never the answer.
+   */
+  function exchangeChrome(el) {
+    return isUserTurn(el) || isScreenReaderOnly(el)
+  }
 
   /**
    * What `countAssistant()` counts: assistant-role containers only (+ a v2 `assistant` cascade).
@@ -976,6 +1027,47 @@
     }
   }
 
+  /** Some element under `el` (the light DOM) is one `exclude` answers `true` for. */
+  function holdsExcluded(el, exclude) {
+    try {
+      if (typeof el.querySelectorAll !== 'function') return false
+      for (const d of Array.from(el.querySelectorAll('*'))) if (safeTrue(() => exclude(d) === true)) return true
+    } catch (_e) {
+      return false
+    }
+    return false
+  }
+
+  /**
+   * `readText(el)` with every subtree `exclude(el)` answers `true` for left out (2026-10-11): the rendered
+   * text of the same predicate `toMarkdown`'s walk honours, for the fallback that runs when the markdown
+   * render is blank. A subtree holding nothing excluded is read whole (`innerText`, so the page's own
+   * layout decides its line breaks); one that does is read child by child, the excluded ones skipped,
+   * the pieces joined by a newline. Without a predicate, or when nothing under `el` is excluded, this
+   * IS `readText(el)`, byte for byte. Never throws.
+   */
+  function readTextExcluding(el, exclude) {
+    if (!el) return ''
+    if (typeof exclude !== 'function' || !holdsExcluded(el, exclude)) return readText(el)
+    const parts = []
+    try {
+      for (const c of mdChildren(el)) {
+        const type = mdNodeType(c)
+        if (type === 3) {
+          const s = normalizeText(typeof c.data === 'string' ? c.data : typeof c.nodeValue === 'string' ? c.nodeValue : '')
+          if (!isBlank(s)) parts.push(s.trim())
+          continue
+        }
+        if (type !== 1 || safeTrue(() => exclude(c) === true)) continue
+        const s = holdsExcluded(c, exclude) ? readTextExcluding(c, exclude) : readText(c)
+        if (!isBlank(s)) parts.push(s)
+      }
+    } catch (_e) {
+      /* whatever was read so far */
+    }
+    return parts.join('\n')
+  }
+
   // ---------------------------------------------------------------------------------------------
   // DOM snapshot scrubbing (contract §3 `scrubDom`; Stage 2)
   // ---------------------------------------------------------------------------------------------
@@ -1228,8 +1320,13 @@
     return !!(cs && (cs.display === 'none' || cs.visibility === 'hidden'))
   }
 
+  /** The caller's own skip predicate (`toMarkdown(el, {exclude})`, 2026-10-11) says `el` is out; a throwing predicate keeps it. */
+  function mdExcluded(el, ctx) {
+    return typeof ctx.exclude === 'function' && safeTrue(() => ctx.exclude(el) === true)
+  }
+
   function mdSkip(el, ctx) {
-    return MD_SKIP_TAGS.includes(tagNameOf(el)) || mdHidden(el, ctx)
+    return MD_SKIP_TAGS.includes(tagNameOf(el)) || mdHidden(el, ctx) || mdExcluded(el, ctx)
   }
 
   function mdIsBlock(el) {
@@ -1272,7 +1369,7 @@
 
   /** A formula / an image, ONCE, wherever the walk meets it; a hidden one renders to `''`. */
   function mdSelfRender(node, ctx) {
-    if (mdHidden(node, ctx)) return ''
+    if (mdHidden(node, ctx) || mdExcluded(node, ctx)) return ''
     return tagNameOf(node) === 'math' ? mdMath(node, ctx) : mdImage(node)
   }
 
@@ -1643,12 +1740,15 @@
    * (`pre`, or a computed `white-space` of pre / pre-wrap / pre-line / break-spaces), which is
    * copied verbatim. Never throws and never reaches the network; `''` for a node with no children
    * (the caller then falls back to the rendered text — see `replyText`).
+   * `exclude(el)` (2026-10-11, optional): a predicate over ELEMENTS; one it answers `true` for is left out
+   * with its whole subtree, wherever the walk meets it (a block, an inline, a list item, a table cell, a
+   * self-rendered image or formula). Without it the render is byte-identical to what it always was.
    */
-  function toMarkdown(el, { window: win } = {}) {
+  function toMarkdown(el, { window: win, exclude } = {}) {
     if (!el || typeof el !== 'object') return ''
     try {
       const view = win || (el.ownerDocument && el.ownerDocument.defaultView) || null
-      const ctx = { styles: new Map(), win: view, preserve: false, pendingLang: '' }
+      const ctx = { styles: new Map(), win: view, preserve: false, pendingLang: '', exclude: typeof exclude === 'function' ? exclude : null }
       if (mdNodeType(el) === 3) return mdTidy(mdInline(el, ctx), false)
       ctx.preserve = mdNodeType(el) === 1 ? mdPreserves(el, ctx, false) : false
       const tag = tagNameOf(el)
@@ -2303,15 +2403,40 @@
      * thinking summary, which is why `claude.assistantText` stopped being empty).
      */
     function replyText(container) {
+      return replyReading(container).text
+    }
+
+    /**
+     * `replyText` with what it saw (2026-10-11): `{text, bodyMatched, heldUserTurn}` — whether a body
+     * block matched (the text is the body) and whether the container holds a user turn of its own (it is
+     * an exchange). The observe result carries the two booleans of its LAST sample so main can tell a
+     * capture that read the answer's body from one that read a whole exchange.
+     */
+    function replyReading(container) {
       const blocks = replyBlocks(container)
-      if (blocks.length > 0) return blocks.map(blockText).join('\n\n')
+      const heldUserTurn = holdsUserTurn(container)
+      if (blocks.length > 0) return { text: blocks.map(blockText).join('\n\n'), bodyMatched: true, heldUserTurn }
       // 2026-09-27: a container that is a whole EXCHANGE (it holds the user's own turn — chatgpt.com's
       // effort-picker layout) whose reply body has NOT appeared while the site's stop control is still
       // up has not started its reply: its own text is the user's message and a thinking header (a live
       // capture read "Worked for 27s" as the answer). A turn-level container (every older layout) still
-      // reads as itself, and so does an exchange once the site has stopped signalling.
-      if (findStop() && holdsUserTurn(container)) return ''
-      return blockText(container)
+      // reads as itself. An exchange the site has stopped signalling on is read WITHOUT its user turn and
+      // without its screen-reader-only chrome (`exchangeText`, 2026-10-11): measured on chatgpt.com, a turn
+      // that paused to ask the user a question mounted no body at all, and the fallback handed main
+      // `#### You said:` and the user's own prompt as the reply.
+      if (heldUserTurn) return { text: findStop() ? '' : exchangeText(container), bodyMatched: false, heldUserTurn: true }
+      return { text: blockText(container), bodyMatched: false, heldUserTurn: false }
+    }
+
+    /**
+     * An EXCHANGE container's text with the user's own turn and every screen-reader-only element left out
+     * (`exchangeChrome`): the markdown render under that predicate, else the rendered text under the same
+     * predicate. Only the exchange fallback reads this way — a body block the cascade matched, and a
+     * turn-level container, are read exactly as before (pinned by test/unit/preload/exchange.test.js).
+     */
+    function exchangeText(container) {
+      const md = toMarkdown(container, { window: win, exclude: exchangeChrome })
+      return isBlank(md) ? readTextExcluding(container, exchangeChrome) : md
     }
 
     /**
@@ -2756,8 +2881,14 @@
      *                 document until the reply container is known, then only the reply's parent (the
      *                 thread); every sample walks the open shadow roots at most once
      *   text          the last container's `assistantText` matches (first entry that matches, every
-     *                 block joined by a blank line), else the container itself, as rendered text;
-     *                 CRLF → LF and NBSP → space, never trimmed
+     *                 block joined by a blank line), else the container itself, as rendered text — an
+     *                 EXCHANGE container (it holds the user turn) without its user turn and its
+     *                 screen-reader-only chrome (`exchangeText`, 2026-10-11); CRLF → LF and NBSP → space,
+     *                 never trimmed
+     *   flags         (2026-10-11, the internal result only — never the bridge frame) `bodyMatched`: the
+     *                 last sample read a matched body block; `heldUserTurn`: the container it read was an
+     *                 exchange; `echoesPrompt`: the final text carries the typed prompt (the anchor probes
+     *                 over its projection — two of three, or the whole of a short text; false with no text)
      * `quietMs` / `timeoutMs` / `firstTokenMs` / `settleMs` / `incompleteGraceMs` in the message
      * override the selectors; a missing `baselineCount` means the current count; `text` (2026-09-27) is
      * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in.
@@ -2813,6 +2944,8 @@
       let lastChangeAt = t0
       let lastSampleAt = t0 // the previous sample's clock: the gap between two samples is what a container gap freezes
       let seenStop = false
+      let bodyMatched = false // the LAST sample read a body block the `assistantText` cascade matched (2026-10-11; reported to main)
+      let heldUserTurn = false // …and the container it read held a user turn of its own — an exchange (2026-10-11; reported to main)
       let seenContainer = false // a container has been followed at least once: a later gap is a re-render, not a missing reply, and the count rule is retired
       let endSeen = null // 'done_selector' | 'stop_gone' | 'quiet' once the site signalled the end
       let endSeenAt = 0
@@ -3030,7 +3163,10 @@
             }
             return null
           }
-          text = normalizeText(replyText(container))
+          const reading = replyReading(container)
+          text = normalizeText(reading.text)
+          bodyMatched = reading.bodyMatched
+          heldUserTurn = reading.heldUserTurn
           const changed = text !== lastText
           if (changed) {
             lastText = text
@@ -3201,7 +3337,13 @@
           }
           if (r === SETTLE || r === REREAD) scheduleSample()
           else if (r) {
-            settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0) }))
+            // 2026-10-11: three booleans beside the text, for main's eyes only (the internal adapter result,
+            // never the bridge frame): how the last sample read the container, and whether the final text
+            // carries the typed prompt (the same probes that anchor the reply on the user's turn — two of
+            // three, or the whole of a short text). A reply that quotes the prompt is reported, not hidden:
+            // main saves the DOM as evidence and delivers the text unchanged.
+            const echoesPrompt = probes !== null && anchorMatches(probes, text)
+            settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0), bodyMatched, heldUserTurn, echoesPrompt }))
             return
           }
           if (container && observed === document) observeTarget(container.parentNode || container)
@@ -3263,6 +3405,8 @@
       snapshot,
       assistantContainers,
       replyText,
+      replyReading,
+      exchangeText,
       replyBlocks,
       findDone, // exposed for the S9 unit tests: the body rule is asserted directly, not only through a capture
       userTurns, // 2026-09-27: the anchor rule's inputs and its adjacency step, exposed for the virtualized-transcript unit tests
@@ -3592,6 +3736,11 @@
       isEnabled,
       isTextField,
       readText,
+      readTextExcluding,
+      SR_ONLY_CLASSES,
+      isScreenReaderOnly,
+      isUserTurn,
+      exchangeChrome,
       scrubDom,
       toMarkdown,
       MD_SKIP_TAGS,

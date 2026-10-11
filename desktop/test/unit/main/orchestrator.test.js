@@ -6,7 +6,7 @@
 // every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, suspectReason, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES, SUSPECT_SNAPSHOT_KIND } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
@@ -66,7 +66,7 @@ function okHealth(extra = {}) {
  * links {slot: url} for CONV, urls {slot: current url}, pattern, timeouts (undefined → the small
  * test budget; null → the orchestrator's defaults), analyst (an analystAdapterFor fn).
  */
-function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs, setHealth, pendingNavigation } = {}) {
+function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = {}, pattern = PATTERN, timeouts, analyst, insertSettleMs, setHealth, pendingNavigation, failureSnapshot = null } = {}) {
   const trace = []
   const table = {}
   for (const slot of clients) table[slot] = scriptedClient(slot, trace)
@@ -77,12 +77,26 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
   const chatsSet = []
   const chatsDoc = { [CONV]: { ...links } }
   const current = { ...urls }
+  const snapshots = [] // every saveFailureSnapshot call: [view, slot, opts]
   let restored = 0
   let clock = 1000.4
   const log = fakeLog()
   const orch = createOrchestrator({
     adapterFor: (slot) => table[slot] || null,
     ...(analyst ? { analystAdapterFor: analyst } : {}),
+    ...(failureSnapshot === null
+      ? {}
+      : {
+          // the snapshot dep (2026-10-11): 'ok' answers a path, 'reject' throws, 'empty' answers null
+          saveFailureSnapshot: async (view, slot, opts) => {
+            trace.push(`${view}:snapshot`)
+            snapshots.push([view, slot, opts])
+            if (failureSnapshot === 'reject') throw new Error('op observe (r1) in flight')
+            if (failureSnapshot === 'empty') return null
+            const kind = opts && opts.kind ? `-${opts.kind}` : ''
+            return `/tmp/snapshots/${slot}${kind}-${snapshots.length}.html`
+          },
+        }),
     focusView: (slot) => trace.push(`${slot}:focus`),
     restoreRendererFocus: () => {
       restored += 1
@@ -131,7 +145,7 @@ function setup({ clients = SLOTS, health = {}, capture = {}, links = {}, urls = 
     current[slot] = url
     if (navCbs[slot]) navCbs[slot](url, { inPage: true })
   }
-  return { orch, table, trace, timers, phases, loads, chatsSet, chatsDoc, current, emitted, emit, navigate, restored: () => restored, navCbs, log }
+  return { orch, table, trace, timers, phases, loads, chatsSet, chatsDoc, current, emitted, emit, navigate, restored: () => restored, navCbs, log, snapshots }
 }
 
 const request = (slot, extra = {}) => ({ type: 'request', req_id: `req-${slot}`, model: `web:${slot}`, slot, view: 'pane', fresh: false, text: 'hello `x`', role: slot, purpose: 'chat', conversation_id: CONV, timeout_s: 600, ...extra })
@@ -769,4 +783,113 @@ test('S10: one log line per captured turn names the length, the signal it ended 
   assert.match(line, /claude: captured 14 chars by done_selector in 1234 ms/)
   // and no reply text in the log, ever (the no-text-in-logs rule)
   for (const [, m] of log.lines) assert.equal(m.includes('json'), false, m)
+})
+
+// --- suspect captures (2026-10-11): a PANE capture that ended OK but echoes the prompt, or read a whole exchange ---
+
+const SUSPECT_TEXT = 'Give me investment advice for a ten year horizon.'
+
+/** Drive a pane turn with capture on through ready / submit / observe; `flags` ride on the observe result. */
+async function capturedTurn(opts, flags, slot = 'chatgpt') {
+  const s = setup({ capture: { [slot]: true }, urls: { [slot]: 'https://x.test/c/abc' }, ...opts })
+  const done = s.orch.run(request(slot), s.emit)
+  await settleAll()
+  s.table[slot].last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  s.table[slot].last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 1, url: 'https://x.test/c/abc' })
+  await settleAll()
+  assert.equal(s.table[slot].last().op, 'observe')
+  s.table[slot].last().resolve({ ok: true, op: 'observe', text: SUSPECT_TEXT, doneBy: 'stop_gone', ms: 291000, url: 'https://x.test/c/abc', ...flags })
+  const final = await done
+  return { ...s, final }
+}
+
+test('suspectReason: echoesPrompt wins; bodyMatched:false with heldUserTurn:true is the exchange fallback; anything else — a body read, a turn-level fallback, flags absent — is not suspect', () => {
+  assert.equal(suspectReason({ echoesPrompt: true, bodyMatched: true, heldUserTurn: false }), 'echoes_prompt')
+  assert.equal(suspectReason({ echoesPrompt: true, bodyMatched: false, heldUserTurn: true }), 'echoes_prompt', 'the text flag names the worse outcome first')
+  assert.equal(suspectReason({ echoesPrompt: false, bodyMatched: false, heldUserTurn: true }), 'exchange_fallback')
+  assert.equal(suspectReason({ echoesPrompt: false, bodyMatched: false, heldUserTurn: false }), null, 'a turn-level fallback is how claude and grok always read')
+  assert.equal(suspectReason({ echoesPrompt: false, bodyMatched: true, heldUserTurn: true }), null, 'the exchange read its body')
+  assert.equal(suspectReason({ text: 'x', doneBy: 'quiet' }), null, 'an adapter that predates the flags')
+  assert.equal(suspectReason({ echoesPrompt: 'true', bodyMatched: 'false', heldUserTurn: 'true' }), null, 'booleans only')
+  assert.equal(suspectReason(null), null)
+  assert.equal(SUSPECT_SNAPSHOT_KIND, 'suspect')
+})
+
+test('echoesPrompt:true → the pane DOM is saved through the snapshot dep as kind suspect, ONE log line names the file and the flag (never the text), and the result frame is delivered unchanged', async () => {
+  const { final, snapshots, log, emitted, phases } = await capturedTurn({ failureSnapshot: 'ok' }, { echoesPrompt: true, bodyMatched: false, heldUserTurn: true })
+  assert.deepEqual(snapshots, [['pane', 'chatgpt', { kind: 'suspect' }]])
+  assert.deepEqual(final, { type: 'result', req_id: 'req-chatgpt', ok: true, captured: true, text: SUSPECT_TEXT, url: 'https://x.test/c/abc', ms: final.ms, done_by: 'stop_gone' })
+  assertValid(final)
+  assert.deepEqual(emitted.map((f) => f.type), ['accepted', 'result'])
+  assert.equal(phases.at(-1), 'chatgpt:done')
+  const lines = log.lines.filter(([, m]) => m.includes('suspect'))
+  assert.equal(lines.length, 1, `one suspect line, got ${JSON.stringify(lines)}`)
+  assert.deepEqual(lines[0], ['log', '[orchestrator] chatgpt: suspect capture (echoes_prompt) — DOM snapshot saved to /tmp/snapshots/chatgpt-suspect-1.html'])
+  for (const [, m] of log.lines) assert.equal(m.includes('investment'), false, m)
+})
+
+test('bodyMatched:false + heldUserTurn:true (the exchange fallback, prompt already stripped) → saved as suspect under that reason', async () => {
+  const { final, snapshots, log } = await capturedTurn({ failureSnapshot: 'ok' }, { echoesPrompt: false, bodyMatched: false, heldUserTurn: true })
+  assert.deepEqual(snapshots, [['pane', 'chatgpt', { kind: 'suspect' }]])
+  assert.equal(final.ok, true)
+  assert.equal(final.text, SUSPECT_TEXT)
+  assertValid(final)
+  const line = log.lines.map(([, m]) => m).find((m) => m.includes('suspect'))
+  assert.match(line, /^\[orchestrator\] chatgpt: suspect capture \(exchange_fallback\) — DOM snapshot saved to \/tmp\/snapshots\/chatgpt-suspect-1\.html$/)
+})
+
+test('not suspect: a body-matched read of an exchange, a turn-level fallback (claude / grok as they always read), and a result without the flags save nothing and log nothing', async () => {
+  for (const flags of [{ echoesPrompt: false, bodyMatched: true, heldUserTurn: true }, { echoesPrompt: false, bodyMatched: false, heldUserTurn: false }, {}]) {
+    const { final, snapshots, log, trace } = await capturedTurn({ failureSnapshot: 'ok' }, flags)
+    assert.deepEqual(snapshots, [], JSON.stringify(flags))
+    assert.equal(trace.includes('pane:snapshot'), false)
+    assert.equal(final.ok, true)
+    assert.equal(final.text, SUSPECT_TEXT)
+    assert.equal(log.lines.some(([, m]) => m.includes('suspect')), false, JSON.stringify(flags))
+  }
+})
+
+test('a snapshot dep that rejects, answers null, or is not wired: one line says so and the result is still delivered OK and unchanged', async () => {
+  const flags = { echoesPrompt: true, bodyMatched: false, heldUserTurn: true }
+  const rejected = await capturedTurn({ failureSnapshot: 'reject' }, flags)
+  assert.equal(rejected.final.ok, true)
+  assert.equal(rejected.final.text, SUSPECT_TEXT)
+  assertValid(rejected.final)
+  assert.deepEqual(rejected.snapshots, [['pane', 'chatgpt', { kind: 'suspect' }]])
+  assert.deepEqual(
+    rejected.log.lines.filter(([, m]) => m.includes('suspect')),
+    [['warn', '[orchestrator] chatgpt: suspect capture (echoes_prompt) — DOM snapshot failed: op observe (r1) in flight']],
+  )
+  const empty = await capturedTurn({ failureSnapshot: 'empty' }, flags)
+  assert.equal(empty.final.ok, true)
+  assert.deepEqual(
+    empty.log.lines.filter(([, m]) => m.includes('suspect')),
+    [['log', '[orchestrator] chatgpt: suspect capture (echoes_prompt); the snapshot writer saved nothing']],
+  )
+  const unwired = await capturedTurn({}, flags)
+  assert.equal(unwired.final.ok, true)
+  assert.deepEqual(unwired.snapshots, [])
+  assert.deepEqual(
+    unwired.log.lines.filter(([, m]) => m.includes('suspect')),
+    [['log', '[orchestrator] chatgpt: suspect capture (echoes_prompt); no snapshot writer is wired, nothing saved']],
+  )
+  for (const s of [rejected, empty, unwired]) for (const [, m] of s.log.lines) assert.equal(m.includes('investment'), false, m)
+})
+
+test('the ANALYST view never saves a suspect snapshot, whatever its flags say — the rule is for panes', async () => {
+  const { orch, table, emit, snapshots, log } = setup({ failureSnapshot: 'ok', analyst: (slot) => table[slot] })
+  const done = orch.run(request('chatgpt', { req_id: 'req-analyst', view: 'analyst', purpose: 'extraction', fresh: true }), emit)
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'ready' })
+  await settleAll()
+  table.chatgpt.last().resolve({ ok: true, op: 'insertAndSubmit', submitted: true, assistantCount: 0 })
+  await settleAll()
+  assert.equal(table.chatgpt.last().op, 'observe')
+  table.chatgpt.last().resolve({ ok: true, op: 'observe', text: '```json\n{}\n```', doneBy: 'done_selector', ms: 10, echoesPrompt: true, bodyMatched: false, heldUserTurn: true })
+  const final = await done
+  assert.equal(final.ok, true)
+  assertValid(final)
+  assert.deepEqual(snapshots, [])
+  assert.equal(log.lines.some(([, m]) => m.includes('suspect')), false)
 })

@@ -122,7 +122,8 @@ export async function open(page, opts = {}) {
   await page.addInitScript(installFakeIpc, { site: ipcSite, selectors, dev })
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn']
+  // 2026-10-11: chatgptLayout (`group` = the exchange-group layout) and askUser (the ask-the-user widget turn), see exchange.spec.js
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn', 'chatgptLayout', 'askUser']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -168,6 +169,10 @@ export const replyState = (page) =>
     trimmed: window.__fake.trimmed,
     exchanges: window.__fake.exchanges,
     order: window.__fake.order,
+    // 2026-10-11: the chatgpt layout rendered, the ask-the-user turn's texts (null when off) and when its widget mounted
+    chatgptLayout: window.__fake.chatgptLayout,
+    askUser: window.__fake.askUser,
+    askedAt: window.__fake.askedAt,
   }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
 export const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)
