@@ -6,7 +6,8 @@
 #
 # Puts the AppImage in ~/.local/bin, the icon in the hicolor theme and a .desktop entry in
 # ~/.local/share/applications, so "Solomon's Judgment" appears in the launcher with its icon and the
-# running window is matched back to it (StartupWMClass). The system-wide alternative is the .deb:
+# running window is matched back to it (StartupWMClass). On NixOS the entry runs it through
+# appimage-run (pinned under ~/.local/share/solomons-judgment). The system-wide alternative is the .deb:
 # `sudo dpkg -i build/dist/solomons-judgment-*.deb`, which needs root and installs to /opt.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,9 +19,12 @@ DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 TARGET="$BIN_DIR/$APP_ID.AppImage"
 ENTRY="$DESKTOP_DIR/$APP_ID.desktop"
+# NixOS only: appimage-run, pinned by a GC-root symlink so a garbage collection never strands the entry.
+RUNNER_LINK="${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID/appimage-run"
 
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -f "$TARGET" "$ENTRY"
+  rm -f "$TARGET" "$ENTRY" "$RUNNER_LINK"
+  rmdir "$(dirname "$RUNNER_LINK")" 2>/dev/null || true
   for sz in 32 48 64 128 256 512; do rm -f "$ICON_DIR/${sz}x${sz}/apps/$APP_ID.png"; done
   update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
   echo "removed $TARGET and $ENTRY"
@@ -43,12 +47,21 @@ done
 mkdir -p "$ICON_DIR/512x512/apps"
 install -m 644 "$root/desktop/assets/icon.png" "$ICON_DIR/512x512/apps/$APP_ID.png"
 
+# NixOS cannot execute an AppImage directly (its /lib64 loader is a stub), so the entry launches it
+# through appimage-run — never one found on PATH, which may be a transient `nix shell` path.
+launch="$TARGET"
+if [ -e /etc/NIXOS ]; then
+  mkdir -p "$(dirname "$RUNNER_LINK")"
+  nix build nixpkgs#appimage-run --out-link "$RUNNER_LINK"
+  launch="$RUNNER_LINK/bin/appimage-run $TARGET"
+fi
+
 cat > "$ENTRY" <<ENTRY_EOF
 [Desktop Entry]
 Type=Application
 Name=Solomon's Judgment
 Comment=Claude, ChatGPT and Grok in one window, under your own logins
-Exec=$TARGET %U
+Exec=$launch %U
 Icon=$APP_ID
 Terminal=false
 Categories=Development;

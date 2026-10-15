@@ -89,9 +89,43 @@ that first (or point `src` at a release asset). The quick alternative, no flake 
 nix-shell -p appimage-run --run 'appimage-run build/dist/solomons-judgment-*.AppImage'
 ```
 
-> **Not verified**: there is no Nix on the machine this was written on. The flake is written to the
-> documented `appimageTools.wrapType2` interface and evaluated only for syntax. Treat the first
-> `nix build` as the real test.
+### Building the AppImage on NixOS
+
+The dev shell is not enough on its own: NixOS's `/lib64` loader is a stub that refuses generic-Linux
+binaries, and a stock build trips over three of them. electron-builder's bundled `7za` and
+`mksquashfs` are swapped for nixpkgs' through the two `USE_SYSTEM_*` switches electron-builder
+already honours, and uv is kept on the dev shell's python312 (`.python-version` pins 3.12, and a
+CPython that uv downloads cannot start either):
+
+```sh
+nix develop --no-write-lock-file -c nix shell nixpkgs#p7zip nixpkgs#squashfsTools -c bash -c '
+  export UV_PYTHON_DOWNLOADS=never UV_PYTHON=python3.12 USE_SYSTEM_7ZA=true USE_SYSTEM_MKSQUASHFS=true
+  uv sync --frozen --group packaging
+  (cd frontend && npm ci) && (cd desktop && npm ci)
+  scripts/package.sh --linux AppImage'
+scripts/install-local.sh        # into the launcher (rofi / fuzzel / any XDG menu); re-run after each build
+```
+
+`--no-write-lock-file` because the repo carries no `flake.lock`. Only the AppImage target: deb and
+pacman go through electron-builder's bundled fpm, another generic-Linux binary. A NixOS host cannot
+execute an AppImage directly (no AppImage binfmt by default), so on NixOS `install-local.sh` writes
+an entry that launches it through `appimage-run`, pinned by a GC-root symlink at
+`~/.local/share/solomons-judgment/appimage-run` so a garbage collection never strands the menu
+entry; `--uninstall` removes the pin too. The frozen backend also refuses to
+start directly on the host, so to repeat the CI check run it inside an FHS env
+(`nix shell nixpkgs#steam-run-free -c steam-run …`), whose bwrap mounts its own `/tmp` — stage
+anything the check needs under `build/`.
+
+The backend is frozen against the build host's glibc (2.42 on NixOS 26.11), so an AppImage built
+this way is for NixOS and other recent distros; the CI artifacts are the portable ones.
+
+> **Verified on NixOS 26.11 (glibc 2.42, Hyprland)**, 2026-10-14: the AppImage builds with the recipe
+> above; the shipped backend answers `/` and serves `/app/` with an empty PATH inside `steam-run`;
+> launched through `appimage-run`, the app logs `[backend] spawned … via bundled`, connects the
+> bridge and opens the window with all three panes; after `install-local.sh` it is listed by
+> `rofi -show drun` with its icon, and the entry's `Exec` starts it. **Still not verified**: `nix build` /
+> `nix run` of the flake itself — `build/` is git-ignored, so a git flake cannot see the AppImage it
+> wraps. Treat the first `nix build` as the real test.
 
 ## Windows
 
