@@ -58,6 +58,35 @@ test('will-navigate: site and SSO hosts allowed, off-site external, non-http den
   assert.equal(isAllowedNavigation('https://evil.example/', claude), false)
 })
 
+test('grok sign-in: every hop of x.ai\'s post-sign-in cookie chain stays in the pane, and only in grok\'s (2026-10-14)', () => {
+  const grok = SITES.grok
+  const wc = fakeWebContents()
+  const opened = []
+  attachPolicy(wc, grok, { openExternal: (u) => opened.push(u) })
+  const chain = [
+    'https://accounts.x.ai/sign-in?redirect=grok-com',
+    'https://auth.x.ai/set-cookie?q=t',
+    'https://auth.grokusercontent.com/set-cookie?q=t',
+    'https://auth.grok.com/set-cookie?q=t',
+    'https://auth.cursor.com/set-cookie?q=t',
+    'https://grok.com/',
+  ]
+  for (const url of chain) {
+    const nav = navEvent(url)
+    wc.emit('will-navigate', nav, url)
+    const redirect = navEvent(url)
+    wc.emit('will-redirect', redirect, url, false, true)
+    assert.equal(nav.prevented || redirect.prevented, false, `${url} stays in the pane`)
+  }
+  assert.deepEqual(opened, [], 'nothing of the chain reaches the system browser')
+  // exact hosts, not their whole domains, and not another site's
+  assert.equal(navigationDecision('https://x.ai/', grok), 'external')
+  assert.equal(navigationDecision('https://cursor.com/', grok), 'external')
+  assert.equal(navigationDecision('https://grokusercontent.com/', grok), 'external')
+  assert.equal(navigationDecision('https://auth.cursor.com/set-cookie', chatgpt), 'external')
+  assert.equal(navigationDecision('https://auth.grokusercontent.com/set-cookie', claude), 'external')
+})
+
 test('isExternalUrl accepts http(s)/mailto only', () => {
   assert.equal(isExternalUrl('https://x.test/'), true)
   assert.equal(isExternalUrl('http://x.test/'), true)

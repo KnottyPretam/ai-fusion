@@ -151,6 +151,12 @@ function isMainFrameNavigation(event, isMainFrame) {
   return true
 }
 
+/** `origin + path` only: a sign-in hop carries its session token in the query. */
+function redacted(url) {
+  const u = parseUrl(url)
+  return u ? `${u.origin}${u.pathname}`.slice(0, 120) : ''
+}
+
 function makeExternal(openExternal) {
   return (url) => {
     if (typeof openExternal !== 'function' || !isExternalUrl(url)) return
@@ -178,16 +184,20 @@ export function attachPolicy(webContents, site, { openExternal, childWindowOptio
   const onWindowOpen = ({ url }) => {
     const decision = popupDecision(url, site, ssoHosts)
     if (decision === 'allow') return { action: 'allow', overrideBrowserWindowOptions: { ...childWindowOptions } }
-    if (decision === 'external') external(url)
-    else warnTo(log, `[policy] denied popup ${String(url).slice(0, 120)}`)
+    if (decision === 'external') {
+      warnTo(log, `[policy] external popup ${redacted(url)}`)
+      external(url)
+    } else warnTo(log, `[policy] denied popup ${String(url).slice(0, 120)}`)
     return { action: 'deny' }
   }
   const decideNavigation = (event, url, what) => {
     const decision = navigationDecision(url, site, ssoHosts)
     if (decision === 'allow') return
     if (event && typeof event.preventDefault === 'function') event.preventDefault()
-    if (decision === 'external') external(url)
-    else warnTo(log, `[policy] denied ${what} ${String(url).slice(0, 120)}`)
+    if (decision === 'external') {
+      warnTo(log, `[policy] external ${what} ${redacted(url)}`)
+      external(url)
+    } else warnTo(log, `[policy] denied ${what} ${String(url).slice(0, 120)}`)
   }
   const onWillNavigate = (event, url) => decideNavigation(event, navigationUrl(event, url), 'navigation')
   const onWillRedirect = (event, url, _isInPlace, isMainFrame) => {

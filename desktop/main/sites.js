@@ -24,7 +24,11 @@ export const SITES = Object.freeze({
     url: 'https://grok.com/',
     newChatUrl: 'https://grok.com/',
     partition: 'persist:grok',
-    hosts: ['grok.com', 'accounts.x.ai', 'x.com'],
+    // The last three are hops of x.ai's post-sign-in cookie chain (measured 2026-10-14):
+    // accounts.x.ai → auth.x.ai/set-cookie → auth.grokusercontent.com/set-cookie →
+    // auth.grok.com/set-cookie → auth.cursor.com/set-cookie → grok.com. Off the list, a hop was
+    // handed to the system browser, which received the session while the pane sat on Google's page.
+    hosts: ['grok.com', 'accounts.x.ai', 'x.com', 'auth.x.ai', 'auth.grokusercontent.com', 'auth.cursor.com'],
   },
 })
 

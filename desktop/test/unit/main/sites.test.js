@@ -8,7 +8,7 @@ test('SITES / SSO_HOSTS match contract §5', () => {
   assert.deepEqual([...SLOTS], ['claude', 'chatgpt', 'grok'])
   assert.deepEqual(SITES.chatgpt, { url: 'https://chatgpt.com/', newChatUrl: 'https://chatgpt.com/', partition: 'persist:chatgpt', hosts: ['chatgpt.com', 'chat.openai.com', 'auth.openai.com', 'auth0.openai.com'] })
   assert.deepEqual(SITES.claude, { url: 'https://claude.ai/new', newChatUrl: 'https://claude.ai/new', partition: 'persist:claude', hosts: ['claude.ai'] })
-  assert.deepEqual(SITES.grok, { url: 'https://grok.com/', newChatUrl: 'https://grok.com/', partition: 'persist:grok', hosts: ['grok.com', 'accounts.x.ai', 'x.com'] })
+  assert.deepEqual(SITES.grok, { url: 'https://grok.com/', newChatUrl: 'https://grok.com/', partition: 'persist:grok', hosts: ['grok.com', 'accounts.x.ai', 'x.com', 'auth.x.ai', 'auth.grokusercontent.com', 'auth.cursor.com'] })
   assert.deepEqual([...SSO_HOSTS], ['accounts.google.com', 'accounts.youtube.com', 'login.live.com', 'login.microsoftonline.com', 'appleid.apple.com', 'auth.openai.com', 'auth0.openai.com', 'accounts.x.ai', 'x.com', 'twitter.com', 'api.twitter.com', 'challenges.cloudflare.com'])
 })
 
