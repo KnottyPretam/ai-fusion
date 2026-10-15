@@ -271,7 +271,20 @@ function createWindow() {
   win.on('closed', () => {
     win = null
   })
-  loadWithRetry(win.webContents, rendererUrl(), { tag: 'renderer' })
+  // 2026-10-15: the renderer's HTTP cache is emptied before its first load. The bundled renderer's files carry
+  // the AppImage's 1980 timestamp, which the backend used to send as `last-modified` with no Cache-Control —
+  // fresh for years by Chromium's heuristic — so every launch reused the FIRST build's page (an upgrade never
+  // reached the screen) and, rendering before the backend listened, lost the sidebar's one request for the
+  // conversation list. `routers/desktop_app.py` now sends `no-cache`; this heals a profile an older build
+  // already wrote. The DEFAULT session is the renderer's alone: the site logins live in their `persist:`
+  // partitions and are never touched. A failed clear is a log line; the page loads regardless.
+  const target = win
+  Promise.resolve()
+    .then(() => session.defaultSession.clearCache())
+    .catch((e) => console.warn(`[triplex] clearing the renderer cache failed: ${(e && e.message) || e}`))
+    .then(() => {
+      if (!target.isDestroyed()) loadWithRetry(target.webContents, rendererUrl(), { tag: 'renderer' })
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

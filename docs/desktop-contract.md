@@ -315,7 +315,10 @@ HealthFrame, Health, Accepted, Rejected, Result, Pong, HelloAck, Request, Cancel
 Endpoints: `WS /api/bridge` (`routers/bridge.py`: accept → Origin check → first frame within 10 s → token check → `hello_ack` → `hub.attach` → receive loop → `hub.detach` on disconnect; ping task; attach onward inside one try/finally, a failed ack send never attaches);
 `GET /api/bridge/status` → `hub.status()`; `GET /app`, `/app/`, `/app/{path:path}`
 (`routers/desktop_app.py`: serves `TRIPLEX_APP_DIR`, resolved-path containment, `index.html`
-for extension-less paths, 404 otherwise/unset); `POST /api/conversations/{id}/send` body
+for extension-less paths, 404 otherwise/unset; every file `Cache-Control: no-cache` since 2026-10-15 —
+the bundled files' 1980 `last-modified` had Chromium reuse the first build's renderer for years — and
+main empties the renderer's default-session HTTP cache before the window's first load, healing a
+profile an older build wrote); `POST /api/conversations/{id}/send` body
 `{prompt: str, slots?: list[str] | None}` (omitted/null = the conversation's council, all three for the classic one; a slot the council did not seat → 404
 `not_found("slot")`; `[]` → 422 `empty_slots`; de-duplicated in council = `SLOT_IDS` order — 2026-09-27;
 `turn_start.slots` lists the subset; `SendTurn.responses` holds only those slots);

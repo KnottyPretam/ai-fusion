@@ -321,6 +321,11 @@ class FakeSession {
     this.cleared += 1
     return Promise.resolve()
   }
+  clearCache() {
+    // 2026-10-15: the renderer's cache is cleared before its first load — the window's loads at that moment
+    report.cacheClears = [...(report.cacheClears || []), { session: this.partition, windowLoads: report.windows.map((w) => w.webContents.loads.length) }]
+    return Promise.resolve()
+  }
 }
 const sessions = new Map()
 export const session = {

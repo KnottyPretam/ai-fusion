@@ -42,6 +42,16 @@ async def test_assets_are_served_with_their_media_type(client, dist):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/css")
 
 
+async def test_every_file_must_be_revalidated(client, dist):
+    """2026-10-15: no-cache on every file -- a bundled file's 1980 `last-modified` made Chromium count a
+    page fresh for years, so an upgraded app kept showing its first build's renderer."""
+    for path in ("/app/", "/app/conversations/abc", "/app/assets/app.js", "/app/assets/app.css"):
+        r = await client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers["cache-control"] == "no-cache", path
+        assert r.headers.get("etag"), f"{path}: revalidation needs a validator"
+
+
 async def test_missing_asset_is_404(client, dist):
     r = await client.get("/app/assets/missing.js")
     assert r.status_code == 404 and r.json() == NOT_FOUND

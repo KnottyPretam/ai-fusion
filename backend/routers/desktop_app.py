@@ -9,6 +9,11 @@ path is resolved against the directory and served only when the resolved file is
 (`..`, absolute paths, symlinks out of the tree and NUL bytes are all 404, never a file outside
 `TRIPLEX_APP_DIR`); a missing asset is 404. Same origin as `/api`, so `main.py` CORS and
 `api/http.js` stay frozen. Errors use the `{detail:{error:"not_found", what:"app"}}` envelope.
+
+Every file goes out with `Cache-Control: no-cache` (2026-10-15): the bundled renderer's files carry
+the AppImage's 1980 timestamp as `last-modified`, and with nothing else Chromium's heuristic counted
+the page fresh for years -- every launch reused the FIRST build's renderer, and an upgrade never
+reached the screen. `no-cache` makes each load revalidate through the ETag (a 304 on loopback).
 """
 
 from __future__ import annotations
@@ -65,4 +70,4 @@ async def serve_app(path: str = "") -> FileResponse:
     target = resolve_file(root, path)
     if target is None:
         raise api_errors.not_found("app")
-    return FileResponse(target)
+    return FileResponse(target, headers={"Cache-Control": "no-cache"})

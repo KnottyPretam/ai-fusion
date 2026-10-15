@@ -85,6 +85,9 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.ok(win.options.webPreferences.preload.endsWith(path.join('preload', 'renderer.cjs')))
   assert.equal(win.options.autoHideMenuBar, true)
   assert.deepEqual(win.loads, ['http://localhost:5184'])
+  // 2026-10-15: the renderer's (default-session) HTTP cache is emptied once, BEFORE the window's first load —
+  // a page an older build cached as fresh for years must never stand in for this build's (main.js createWindow)
+  assert.deepEqual(report.cacheClears, [{ session: 'default', windowLoads: [0] }])
   assert.deepEqual([win.options.width, win.options.height], [1600, 900])
   // the stored theme's ground is in the constructor options: nothing flashes white while the
   // renderer URL loads (default theme = dark, and loadWithRetry can retry for seconds)
