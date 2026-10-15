@@ -221,7 +221,9 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.ok(p.observeMsg, 'capture on → observe')
   assert.equal(p.observeMsg.baselineCount, 0)
   assert.equal(p.observeMsg.quietMs, 2500)
-  assert.equal(p.observeMsg.timeoutMs, 300000)
+  // 2026-10-15: claude asks for the whole 600 s pane grant; what reaches the adapter is that capped by the grant —
+  // 600 s less the 30 s margin, the composer wait and the worst-case insert + submit (orchestrator `budgets`)
+  assert.equal(p.observeMsg.timeoutMs, 511880)
   assert.equal(p.results.length, 1)
   const result = p.results[0]
   assert.equal(result.req_id, '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c')

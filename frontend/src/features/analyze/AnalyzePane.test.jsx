@@ -561,3 +561,125 @@ describe('AnalyzePane: a refused condensed set is not a retried comparison', () 
     expect(screen.getByTestId('analyze-degraded')).toHaveTextContent('after one retry')
   })
 })
+
+// --- Read again (2026-10-15) ------------------------------------------------------------------
+// A desktop Send whose claude capture gave up while claude.ai was STILL ANSWERING (its stop control up at
+// the last sample — the diag says `stopNow=true`). The slot can be read out of its pane again: the hint
+// says what really happened and the Read-again row offers the fix; nothing says "Send again".
+const WEB_CONFIG = {
+  ...sendTurn().slot_config,
+  slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } },
+}
+const DIAG = '[containers=1 followed=0 connected=true anchor=1 order=oldest geom=yes presubmit=0 stopNow=true stopSeen=true end=- md=0 pre=0 code=0 reply=181 inner=414 textContent=547 maxContainer=414 rect=367×52 viewport=432×691]'
+const STILL = `the reply was still in progress after 300000 ms ${DIAG}`
+const stuckTurn = (overrides = {}) =>
+  sendTurn({ id: 's2', slot_config: WEB_CONFIG, responses: { claude: null, chatgpt: 'b', grok: 'c' }, errors: { claude: STILL }, partial: { claude: 'Flagging…' }, ...overrides })
+
+describe('Read again: the pure rules (a mirror of backend/features/reread.py)', () => {
+  test('isStillAnswering / plainError read the capture diag', async () => {
+    const { isStillAnswering, plainError } = await import('./slice.js')
+    expect(isStillAnswering(STILL)).toBe(true)
+    expect(isStillAnswering('the reply was still in progress after 300000 ms [containers=1 stopNow=false]')).toBe(false)
+    expect(isStillAnswering(undefined)).toBe(false)
+    expect(plainError(STILL)).toBe('the reply was still in progress after 300000 ms')
+    expect(plainError('missing: [grok]')).toBe('missing: [grok]') // only the capture diag is cut
+  })
+
+  test('rereadableSlots: an empty web-pane slot of a Send nothing but Analyze / Refactor followed', async () => {
+    const { rereadableSlots } = await import('./slice.js')
+    const turn = stuckTurn()
+    expect(rereadableSlots(conversation([turn]), turn)).toEqual(['claude'])
+    expect(rereadableSlots(conversation([turn, { type: 'analyze', id: 'a' }, { type: 'refactor', id: 'r' }]), turn)).toEqual(['claude'])
+    expect(rereadableSlots(conversation([turn, { type: 'continue', id: 'k', slot: 'grok' }]), turn)).toEqual([])
+    const analyst = stuckTurn({ slot_config: { ...WEB_CONFIG, slots: { ...WEB_CONFIG.slots, claude: { model: 'web:claude:analyst', effort: 'off' } } } })
+    expect(rereadableSlots(conversation([analyst]), analyst)).toEqual([])
+    const openrouter = sendTurn({ id: 's2', responses: { claude: null, chatgpt: 'b', grok: 'c' }, errors: { claude: 'timeout' } })
+    expect(rereadableSlots(conversation([openrouter]), openrouter)).toEqual([])
+    expect(rereadableSlots(conversation([turn]), null)).toEqual([])
+  })
+})
+
+describe('Read again: the hint and the row', () => {
+  test('still answering: the hint says the app stopped waiting, never "timeout" / "no reply" / "Send again", and the diag stays off screen', () => {
+    renderPane(stateWith([], { conv: conversation([stuckTurn()]) }))
+    const hint = screen.getByTestId('analyze-hint')
+    expect(hint).toHaveTextContent(`claude was still answering when ${APP_NAME} stopped waiting; the reply is in the pane. Read claude again below once the site has finished.`)
+    expect(hint.textContent).not.toMatch(/no reply came back|Send again|containers=|cannot be analyzed/)
+    expect(screen.getByTestId('analyze-run')).toBeDisabled()
+    expect(screen.getByTestId('analyze-reread-claude')).toBeEnabled()
+    expect(screen.queryByTestId('analyze-reread-chatgpt')).toBeNull()
+  })
+
+  test('capture off on a web pane: turn Capture on first, then read it again', () => {
+    const turn = stuckTurn({ errors: { claude: `${NOT_CAPTURED_MESSAGE_PREFIX}claude; the reply is in the site pane` } })
+    renderPane(stateWith([], { conv: conversation([turn]) }))
+    expect(screen.getByTestId('analyze-hint')).toHaveTextContent(`capture was off for claude, so ${APP_NAME} never read it. Turn Capture on in that pane header first. Read claude again below.`)
+  })
+
+  test('a slot that cannot be read again is named apart: Send again for it', () => {
+    const turn = stuckTurn({
+      slot_config: { ...WEB_CONFIG, slots: { ...WEB_CONFIG.slots, grok: { model: 'x-ai/grok-5', effort: 'off' } } },
+      responses: { claude: null, chatgpt: 'b', grok: null },
+      errors: { claude: STILL, grok: 'cost_cap_exceeded: session cap reached' },
+    })
+    renderPane(stateWith([], { conv: conversation([turn]) }))
+    const hint = screen.getByTestId('analyze-hint')
+    expect(hint).toHaveTextContent('no reply came back from grok: cost_cap_exceeded: session cap reached')
+    expect(hint).toHaveTextContent('Read claude again below once the site has finished; grok cannot be read again — Send again for it.')
+    expect(screen.queryByTestId('analyze-reread-grok')).toBeNull()
+  })
+
+  test('the button POSTs the re-read, shows progress, then refetches: the filled slot drops its row and Analyze is enabled', async () => {
+    const before = conversation([stuckTurn()])
+    const after = conversation([stuckTurn({ responses: { claude: 'the finished answer', chatgpt: 'b', grok: 'c' }, errors: {}, partial: {} })])
+    let release
+    const gate = new Promise((r) => (release = r))
+    const fetchMock = vi.fn(async (url, init) => {
+      if (init && init.method === 'POST') {
+        await gate
+        return sseResponse([
+          { type: 'reread_start', turn_id: 's2', slot: 'claude' },
+          { type: 'reread_done', turn_id: 's2', slot: 'claude', chars: 19, done_by: 'done_selector' },
+        ])
+      }
+      return jsonResponse(after)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderPane(stateWith([], { conv: before }))
+    fireEvent.click(screen.getByTestId('analyze-reread-claude'))
+    await waitFor(() => expect(screen.getByTestId('analyze-reread-status')).toHaveTextContent("reading claude's reply from its pane"))
+    release()
+    await waitFor(() => expect(screen.queryByTestId('analyze-reread')).toBeNull())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/conversations/c1/turns/s2/slots/claude/reread')
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/conversations/c1')
+    await waitFor(() => expect(screen.getByTestId('analyze-run')).toBeEnabled())
+    expect(screen.queryByTestId('analyze-hint')).toBeNull()
+  })
+
+  test('a re-read that fails shows its reason, without the diag; the row stays for another try', async () => {
+    const conv = conversation([stuckTurn()])
+    const fetchMock = vi.fn(async (url, init) =>
+      init && init.method === 'POST'
+        ? sseResponse([
+            { type: 'reread_start', turn_id: 's2', slot: 'claude' },
+            { type: 'reread_error', turn_id: 's2', slot: 'claude', code: 'timeout', message: `the reply was still in progress after 511880 ms ${DIAG}`, error_type: 'site' },
+          ])
+        : jsonResponse(conv),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderPane(stateWith([], { conv }))
+    fireEvent.click(screen.getByTestId('analyze-reread-claude'))
+    await waitFor(() => expect(screen.getByTestId('analyze-reread-error')).toHaveTextContent('claude: the reply was still in progress after 511880 ms'))
+    expect(screen.getByTestId('analyze-reread-error').textContent).not.toContain('containers=')
+    await waitFor(() => expect(screen.getByTestId('analyze-reread-claude')).toBeEnabled())
+  })
+
+  test('a refused re-read (409) shows the code', async () => {
+    const conv = conversation([stuckTurn()])
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => (init && init.method === 'POST' ? jsonResponse({ detail: { error: 'reread_stale', since: 'send' } }, 409) : jsonResponse(conv))))
+    renderPane(stateWith([], { conv }))
+    fireEvent.click(screen.getByTestId('analyze-reread-claude'))
+    await waitFor(() => expect(screen.getByTestId('analyze-reread-error')).toHaveTextContent('claude: reread_stale'))
+  })
+})

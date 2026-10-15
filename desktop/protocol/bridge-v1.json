@@ -1296,6 +1296,69 @@
         }
       ]
     },
+    "reread": {
+      "direction": "server",
+      "examples": [
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "claude",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "reread",
+          "req_id": "7c6b5a4f-3e2d-4c1b-9a0f-8e7d6c5b4a3f",
+          "slot": "grok",
+          "text": "Compare the two plans below.\n\nPlan A: ...",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 300
+        }
+      ],
+      "invalid": [
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "claude",
+          "text": "What is the boiling point of water at sea level?",
+          "timeout_s": 600
+        },
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "claude",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": null,
+          "timeout_s": 600
+        },
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "gemini",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "claude",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600,
+          "view": "pane"
+        },
+        {
+          "type": "reread",
+          "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
+          "slot": "claude",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 0
+        }
+      ]
+    },
     "cancel": {
       "direction": "server",
       "examples": [

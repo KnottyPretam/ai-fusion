@@ -171,6 +171,24 @@ test('hello_ack is required before requests: a request before it is dropped; aft
   assert.equal(client.status().discarded, 0)
 })
 
+test('reread (2026-10-15) takes the request path: dropped before hello_ack, handed to onRequest after it (main routes it by type)', async () => {
+  const REREAD = corpus.frames.reread.examples[0]
+  const { client, last, requests, log } = setup()
+  client.connect()
+  last().open()
+  last().receive(REREAD)
+  await tick()
+  assert.deepEqual(requests, [], 'a re-read before hello_ack is dropped like a request')
+  assert.ok(log.lines.some(([, m]) => m.includes('reread req=') && m.includes('before hello_ack')))
+  last().receive(HELLO_ACK)
+  last().receive(REREAD)
+  assert.equal(client.inflight(), 1)
+  await tick()
+  await tick()
+  assert.deepEqual(requests, [REREAD])
+  assert.ok(log.lines.some(([, m]) => m.includes(`req=${REREAD.req_id} slot=claude re-read accepted for dispatch`)))
+})
+
 test('ping → pong echoing ts; cancel → onCancel(req_id); invalid / non-server frames are dropped without effect', () => {
   const { client, last, cancels, handshake, log } = setup()
   client.connect()

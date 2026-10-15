@@ -4,6 +4,7 @@
 //   `hello{protocol, token, version, sites, capture, analyst}`; nothing else goes out until the
 //   backend's `hello_ack` (a `request` that arrives before it is dropped with a warning). Then:
 //     request  → onRequest(frame, emit)   (the orchestrator's run; emit carries accepted/rejected/result)
+//     reread   → onRequest(frame, emit)   (2026-10-15: main routes it to the orchestrator's reread; the same replies)
 //     cancel   → onCancel(req_id)
 //     ping     → pong{ts} (the ping's ts echoed)
 //   plus `capture` / `analyst` / `health` frames whenever main's state changes (and the cached
@@ -253,7 +254,7 @@ export function createBridgeClient({
       }
       return sendFrame(out)
     }
-    info(`req=${frame.req_id} slot=${frame.slot} view=${frame.view} purpose=${frame.purpose} accepted for dispatch`)
+    info(frame.type === 'reread' ? `req=${frame.req_id} slot=${frame.slot} re-read accepted for dispatch` : `req=${frame.req_id} slot=${frame.slot} view=${frame.view} purpose=${frame.purpose} accepted for dispatch`)
     Promise.resolve()
       .then(() => (typeof onRequest === 'function' ? onRequest(frame, emit) : null))
       .catch((e) => {
@@ -297,8 +298,9 @@ export function createBridgeClient({
         if (state === 'connected') armPingWatch()
         return
       case 'request':
+      case 'reread': // 2026-10-15: read a pane's reply again, typing nothing — the same replies, through onRequest
         if (state !== 'connected') {
-          warn(`request req=${f.req_id} before hello_ack; dropped`)
+          warn(`${f.type} req=${f.req_id} before hello_ack; dropped`)
           return
         }
         dispatch(f)

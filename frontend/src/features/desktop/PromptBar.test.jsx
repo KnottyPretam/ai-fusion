@@ -95,6 +95,14 @@ describe('PromptBar: pure helpers', () => {
     expect(formatResult('x')).toBe('')
   })
 
+  test('formatResult / resultTitle (2026-10-15): a capture that gave up with the stop control still up says "still answering", never "✗ timeout"', () => {
+    const still = { ok: false, code: 'timeout', message: 'the reply was still in progress after 300000 ms [containers=1 stopNow=true stopSeen=true]', ms: 0 }
+    expect(formatResult(still)).toBe('… still answering — stopped waiting')
+    expect(resultTitle(still)).toMatch(/^.+ stopped waiting while the site was still answering; the reply is in the pane\. Read it again from the Analyze tab once it has finished\.\n/)
+    // a timeout with the stop control gone is a real failure, and keeps its code
+    expect(formatResult({ ...still, message: 'the reply was still in progress after 300000 ms [containers=1 stopNow=false stopSeen=true]' })).toBe('✗ timeout')
+  })
+
   test('resultTitle carries the message (and the Stage 1 selector / url keys when present)', () => {
     expect(resultTitle({ ok: false, code: 'send_not_found', message: 'no send button', ms: 0 })).toBe('no send button')
     expect(resultTitle({ ok: false, code: 'x', message: 'no send button', sendSelector: "button[aria-label='Submit']", url: 'https://grok.com/' })).toBe(

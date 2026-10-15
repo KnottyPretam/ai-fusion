@@ -31,7 +31,7 @@ DOC_CLIENT_TYPES = {
     "result",
     "pong",
 }
-DOC_SERVER_TYPES = {"hello_ack", "request", "cancel", "ping"}
+DOC_SERVER_TYPES = {"hello_ack", "request", "reread", "cancel", "ping"}
 DOC_REJECT_CODES = {
     "view_busy",
     "logged_out",

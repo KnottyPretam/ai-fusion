@@ -575,3 +575,59 @@ test('duplicate probes are one probe: a text whose blocks are one long body amon
   assert.ok(normAlnum(headOnly).includes(head) && !normAlnum(headOnly).includes(tail))
   assert.ok(!anchorMatches(probes, headOnly), 'one slice (which used to count twice) is not a match')
 })
+
+// ---- the re-read (2026-10-15): main's `reread`, nothing typed, `requireAnchor: true` ---------------------
+
+test('re-read, no submit in this page (an app restart or a reload since the Send): the anchored turn\'s FINISHED reply is captured from the payload main sends — the text, requireAnchor, no baselineCount', async () => {
+  const { doc, clock, adapter, thread, stop } = setup(CLAUDE_PAGE, 'claude')
+  stop.remove()
+  mount(doc, thread, user('question 1 about the BMI088 gyroscope range register'))
+  mount(doc, thread, reply('Answer 1.'))
+  mount(doc, thread, user('question 2 about the BMI088 gyroscope range register'))
+  mount(doc, thread, reply('Answer 2, which took Claude eight minutes of thinking.'))
+  const state = settled(adapter.observe({ timeoutMs: 60000, firstTokenMs: 3000, quietMs: 800, settleMs: 200, text: 'question 2 about the BMI088 gyroscope range register', requireAnchor: true }))
+  await clock.advance(2000)
+  assert.equal(state.error, null, state.error && state.error.message)
+  assert.deepEqual([state.value.text, state.value.doneBy], ['Answer 2, which took Claude eight minutes of thinking.', 'quiet'])
+})
+
+test('re-read while the site is STILL answering (the stop control up, the reply growing): followed to the end like a capture, never cut at the first sample', async () => {
+  const PROMPT = 'question about the BMI088 gyroscope range register, answered slowly'
+  const { doc, clock, adapter, thread, stop } = setup(CLAUDE_PAGE, 'claude')
+  mount(doc, thread, user(PROMPT))
+  const row = mount(doc, thread, reply('')) // the row mounts empty while the model thinks (measured on all three sites)
+  const state = settled(adapter.observe({ timeoutMs: 60000, firstTokenMs: 3000, quietMs: 800, settleMs: 200, text: PROMPT, requireAnchor: true }))
+  await clock.advance(5000)
+  assert.equal(state.done, false, 'a visible stop control withdraws every end signal')
+  mount(doc, row.querySelector('.prose'), '<span>The full answer, at last.</span>')
+  await clock.advance(1000)
+  stop.remove()
+  await clock.advance(16000) // claude's 15 s stop-gone grace
+  assert.equal(state.error, null, state.error && state.error.message)
+  assert.deepEqual([state.value.text, state.value.doneBy], ['The full answer, at last.', 'stop_gone'])
+})
+
+test('re-read in a chat that does not hold the prompt (another conversation\'s, after a submit there): requireAnchor picks NOTHING and ends reply_not_found with anchor=0 — the same observe without it hands back the other chat\'s newest reply', async () => {
+  const OTHER_REPLY = 'A reply to some other conversation.'
+  const build = async () => {
+    const s = setup(CLAUDE_PAGE, 'claude')
+    mount(s.doc, s.thread, user('an older question in the other chat'))
+    mount(s.doc, s.thread, reply('An older answer.'))
+    await s.adapter.submit(0) // that chat's own Send: the pre-submit baseline is ITS
+    mount(s.doc, s.thread, user('the other conversation\'s latest question'))
+    mount(s.doc, s.thread, reply(OTHER_REPLY))
+    s.stop.remove()
+    return s
+  }
+  const payload = { timeoutMs: 60000, firstTokenMs: 3000, quietMs: 800, settleMs: 200, text: 'the prompt this re-read is looking for, typed in a different chat' }
+  const guarded = await build()
+  const state = settled(guarded.adapter.observe({ ...payload, requireAnchor: true }))
+  await guarded.clock.advance(3500)
+  assert.equal(state.error && state.error.code, 'reply_not_found')
+  assert.match(state.error.message, / anchor=0 /)
+  const unguarded = await build()
+  const hazard = settled(unguarded.adapter.observe(payload))
+  await unguarded.clock.advance(2000)
+  assert.equal(hazard.error, null, 'the fallback rule (what requireAnchor switches off) would have answered…')
+  assert.equal(hazard.value.text, OTHER_REPLY, '…with another conversation\'s reply')
+})

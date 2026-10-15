@@ -18,7 +18,9 @@ starlette `TestClient` websocket mixed with the async ASGI `client` fixture (pla
   `{"delay_ms": n, "text"?: str, "done_by"?: str}` = `accepted` now and the result after `n` ms,
   `"drop"` = no frame at all (no ack), `{"delay_ms": n, "drop": True}` = accepted then silence.
   A list is consumed one entry per request, sticky-last (the analyst retry). Pings are answered
-  with pongs; `cancel` frames are recorded in `cancels`; every `request` in `requests`.
+  with pongs; `cancel` frames are recorded in `cancels`; every `request` in `requests`. A `reread`
+  frame (2026-10-15) is answered the same way under the key `(slot, "pane", "reread")` and recorded
+  in `rereads`.
 - `web_env`: the desktop slot config (`SLOT_*_MODEL=web:*`, `SLOT_*_EFFORT=off`,
   `ANALYST_MODEL=web:chatgpt:analyst`) set AFTER the root conftest's autouse `_no_real_key`
   deleted those keys (pytest orders autouse fixtures first), plus short bridge timeouts so a
@@ -132,6 +134,7 @@ class FakeDesktop:
     conn: FakeConnection
     script: dict[Any, Any]
     requests: list[dict[str, Any]] = field(default_factory=list)
+    rereads: list[dict[str, Any]] = field(default_factory=list)
     cancels: list[str] = field(default_factory=list)
     pings: int = 0
     errors: list[str] = field(default_factory=list)
@@ -159,8 +162,8 @@ class FakeDesktop:
         while True:
             frame = await self.conn.outgoing.get()
             kind = frame.get("type")
-            if kind == "request":
-                self.requests.append(frame)
+            if kind in ("request", "reread"):
+                (self.requests if kind == "request" else self.rereads).append(frame)
                 task = asyncio.create_task(self._answer(frame))
                 self._tasks.add(task)
                 task.add_done_callback(self._tasks.discard)
@@ -170,8 +173,14 @@ class FakeDesktop:
                 self.pings += 1
                 bridge.hub.dispatch({"type": "pong", "ts": frame["ts"]})
 
+    @staticmethod
+    def _key(frame: dict[str, Any]) -> tuple[str, str, str]:
+        if frame["type"] == "reread":
+            return (frame["slot"], "pane", "reread")
+        return (frame["slot"], frame["view"], frame["purpose"])
+
     def _entry(self, frame: dict[str, Any]) -> Any:
-        key = (frame["slot"], frame["view"], frame["purpose"])
+        key = self._key(frame)
         entry = self.script.get(key, self.script.get("*", _MISSING))
         if isinstance(entry, list):
             n = self._served.get(key, 0)
@@ -186,7 +195,7 @@ class FakeDesktop:
             self.errors.append(f"{type(e).__name__}: {e}")
 
     async def _reply(self, frame: dict[str, Any]) -> None:
-        rid, slot, view = frame["req_id"], frame["slot"], frame["view"]
+        rid, slot, view = frame["req_id"], frame["slot"], self._key(frame)[1]
         entry = self._entry(frame)
         dispatch = bridge.hub.dispatch
         if entry is _MISSING:
@@ -195,7 +204,7 @@ class FakeDesktop:
                     "type": "rejected",
                     "req_id": rid,
                     "code": "unknown_site",
-                    "message": f"no script for {slot}/{view}/{frame['purpose']}",
+                    "message": f"no script for {'/'.join(self._key(frame))}",
                 }
             )
             return

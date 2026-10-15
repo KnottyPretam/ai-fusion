@@ -124,6 +124,20 @@ per slot per turn. Clients refetch `GET /api/conversations/{id}` after `turn_don
   follows the persisted turn. The whole prompt is ONE user message on every transport, and a
   SUCCESSFUL plan typed into a council member's pane (`web:<slot>`, not `:analyst`) mirrors
   `[plan_request, plan_reply]` into that slot's thread (`docs/semantics.md`, "Plan").
+- `POST …/turns/{turn_id}/slots/{slot}/reread` (no body) → `reread_start{turn_id, slot}`, then
+  exactly one of `reread_done{turn_id, slot, chars, done_by}` | `reread_error{turn_id, slot, code,
+  message, error_type}`. Added 2026-10-15 ("Read again"): reads a Send slot's reply out of its web
+  pane again — nothing typed — and completes the Send, so Analyze can run. Pre-stream errors in order:
+  404 `not_found/conversation` → 404 `not_found/turn` → 422 `not_a_send_turn` → 404
+  `not_found/slot` (a slot that Send did not run) → 409 `already_captured` → 422
+  `not_a_web_pane{model}` (the slot's model in that turn is not `web:<slot>`) → 409
+  `reread_stale{since}` (a turn other than `analyze` / `refactor` came after the Send; `since` is its
+  type) → 409 `busy` LAST. `reread_done` follows the persisted write (the response, the slot's error /
+  partial / truncation cleared, the `[user, assistant]` pair in the slot's thread under the Send's turn
+  id, the assistant message `meta:{"reread":true}`); after `reread_error` nothing was written. The
+  codes are the bridge's (`timeout`, `reply_not_found`, `logged_out`, … with `error_type:"site"`;
+  `not_captured`, `bridge_unavailable`, … with `"triplex"`) plus `empty_reply` for a blank read.
+  `docs/semantics.md` "Read again".
 
 
 ### `backend/schemas.py` (pydantic v2, `SCHEMA_VERSION = 1`)

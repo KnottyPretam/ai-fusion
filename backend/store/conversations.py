@@ -259,6 +259,51 @@ async def append_turn(conv_id: str, turn: Turn) -> None:
     await _modify(conv_id, mutate)
 
 
+async def complete_send_slot(conv_id: str, turn_id: str, slot: SlotId, text: str) -> None:
+    """Read again (2026-10-15, `features/reread.py`): fill a Send slot whose capture gave up.
+
+    ONE write: ``responses[slot] = text``, the slot's error, partial and truncation cleared, and the
+    ``[user(prompt), assistant(text)]`` pair appended to ``threads[slot]`` under the Send's OWN turn
+    id -- the pair a ``slot_done`` would have written, the assistant message marked
+    ``meta={"reread": True}``. A ValueError, with nothing written, when the turn is missing or not a
+    Send, never ran ``slot``, already holds its reply, or ``slot`` is outside the council; a blank
+    ``text`` is one too (an empty assistant message is never persisted)."""
+    if slot not in SLOT_IDS:
+        raise ValueError(f"unknown slot {slot!r}")
+    if not text.strip():
+        raise ValueError("the re-read reply is blank")
+
+    def mutate(conv: Conversation) -> None:
+        turn = next((t for t in conv.turns if t.id == turn_id), None)
+        if turn is None or turn.type != "send":
+            raise ValueError(f"turn {turn_id!r} is not a send turn of conversation {conv.id}")
+        if slot not in turn.responses:
+            raise ValueError(f"send turn {turn_id!r} did not run {slot!r}")
+        if turn.responses[slot] is not None:
+            raise ValueError(f"send turn {turn_id!r} already holds {slot!r}'s reply")
+        if slot not in council_of(conv.slot_config):
+            raise ValueError(f"slot {slot!r} is not in this conversation's council")
+        turn.responses[slot] = text
+        turn.errors.pop(slot, None)
+        turn.partial.pop(slot, None)
+        if slot in turn.truncated:
+            turn.truncated[slot] = False
+        conv.threads[slot].extend(
+            [
+                ThreadMessage(role="user", content=turn.prompt, kind="chat", turn_id=turn.id),
+                ThreadMessage(
+                    role="assistant",
+                    content=text,
+                    kind="chat",
+                    turn_id=turn.id,
+                    meta={"reread": True},
+                ),
+            ]
+        )
+
+    await _modify(conv_id, mutate)
+
+
 def busy_guard(conv_id: str) -> AbstractAsyncContextManager[None]:
     """Second concurrent feature call on the same conversation -> api_errors.conflict('busy').
 

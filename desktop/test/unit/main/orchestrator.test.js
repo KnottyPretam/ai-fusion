@@ -6,7 +6,7 @@
 // every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, suspectReason, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES, SUSPECT_SNAPSHOT_KIND } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, suspectReason, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES, SUSPECT_SNAPSHOT_KIND, REREAD_FIRST_ROW_MS } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
@@ -892,4 +892,110 @@ test('the ANALYST view never saves a suspect snapshot, whatever its flags say �
   assertValid(final)
   assert.deepEqual(snapshots, [])
   assert.equal(log.lines.some(([, m]) => m.includes('suspect')), false)
+})
+
+// --- reread (2026-10-15): read a pane's reply to the typed prompt again, typing nothing ----------------------
+
+const rereadFrame = (slot, extra = {}) => ({ type: 'reread', req_id: `rr-${slot}`, slot, text: 'hello `x`', conversation_id: CONV, timeout_s: 600, ...extra })
+
+test('reread: accepted, then ONLY an observe — no ready, no insert, no focus — anchored on the text with requireAnchor; the result is a capture', async () => {
+  const chat = 'https://x.test/c/abc'
+  const { orch, table, emitted, emit, phases, loads, trace } = setup({ health: { claude: okHealth() }, capture: { claude: true }, links: { claude: chat }, urls: { claude: chat } })
+  const done = orch.reread(rereadFrame('claude'), emit)
+  await settleAll()
+  assert.deepEqual(table.claude.ops(), ['observe'])
+  const obs = table.claude.last()
+  assert.deepEqual(obs.payload, { quietMs: 250, settleMs: 200, timeoutMs: 4000, firstTokenMs: 3000, text: 'hello `x`', requireAnchor: true })
+  assert.equal(obs.opts.timeoutMs, 3000 + 4000 + TIMEOUT_GRACE_MS)
+  obs.resolve({ ok: true, op: 'observe', text: 'The finished answer.', doneBy: 'done_selector', ms: 42, url: chat })
+  const final = await done
+  assert.deepEqual(emitted.map((f) => f.type), ['accepted', 'result'])
+  assert.deepEqual(emitted[0], { type: 'accepted', req_id: 'rr-claude', view: 'pane', slot: 'claude' })
+  assert.deepEqual([final.ok, final.captured, final.text, final.done_by, final.url], [true, true, 'The finished answer.', 'done_selector', chat])
+  for (const f of emitted) assertValid(f)
+  assert.deepEqual(loads, [], 'the chat on screen is never reloaded')
+  assert.ok(!trace.includes('claude:focus'), 'nothing is typed, so the view is never focused')
+  assert.deepEqual(phases, ['claude:replying', 'claude:done'])
+})
+
+test('reread: a site STILL answering is not view_busy (no stop re-check either) — the observe follows the reply to its end', async () => {
+  const { orch, table, emit } = setup({ health: { claude: okHealth({ stop: true }) }, capture: { claude: true } })
+  const done = orch.reread(rereadFrame('claude'), emit)
+  await settleAll()
+  assert.deepEqual(table.claude.ops(), ['observe'], 'no health re-read, no rejection')
+  table.claude.last().resolve({ ok: true, op: 'observe', text: 'done thinking', doneBy: 'stop_gone', ms: 1 })
+  assert.equal((await done).ok, true)
+})
+
+test('reread: every other health reject stands, and a turn in flight on the view is view_busy', async () => {
+  for (const [h, code] of [[okHealth({ session: 'logged_out' }), 'logged_out'], [okHealth({ session: 'challenge' }), 'challenge']]) {
+    const { orch, table, emitted, emit, phases } = setup({ health: { claude: h }, capture: { claude: true } })
+    const final = await orch.reread(rereadFrame('claude'), emit)
+    assert.deepEqual([final.type, final.code], ['rejected', code])
+    assertValid(final)
+    assert.deepEqual(emitted, [final])
+    assert.deepEqual(table.claude.calls, [])
+    assert.deepEqual(phases, [])
+  }
+  const { orch, table, emit } = setup({ health: { claude: okHealth() }, capture: { claude: true } })
+  const running = orch.run(request('claude'), emit)
+  await settleAll()
+  assert.equal(table.claude.last().op, 'ready')
+  const busy = []
+  const final = await orch.reread(rereadFrame('claude'), (f) => busy.push(f))
+  assert.deepEqual([final.type, final.code], ['rejected', 'view_busy'])
+  assert.equal(orch.inflight('claude').reqId, 'req-claude', 'the running turn keeps the view')
+  table.claude.last().reject(new AdapterRequestError('cancelled', 'test over'))
+  await running
+})
+
+test('reread: the pane shows another chat → the conversation\'s recorded chat is opened first; a failed open is `navigation`', async () => {
+  const chat = 'https://x.test/c/mine'
+  {
+    const { orch, table, emit, loads } = setup({ capture: { claude: true }, links: { claude: chat }, urls: { claude: 'https://x.test/c/someone-else' } })
+    const done = orch.reread(rereadFrame('claude'), emit)
+    await settleAll()
+    assert.deepEqual(loads, [['claude', chat]])
+    assert.deepEqual(table.claude.ops(), ['observe'])
+    table.claude.last().resolve({ ok: true, op: 'observe', text: 't', doneBy: 'quiet', ms: 1 })
+    assert.equal((await done).ok, true)
+  }
+  {
+    const { orch, table, emit } = setup({ capture: { claude: true }, links: { claude: 'https://x.test/c/fail' }, urls: { claude: 'https://x.test/c/other' } })
+    const final = await orch.reread(rereadFrame('claude'), emit)
+    assert.deepEqual([final.ok, final.code], [false, 'navigation'])
+    assertValid(final)
+    assert.deepEqual(table.claude.calls, [], 'nothing is read from a chat that did not open')
+  }
+})
+
+test('reread: capture off → captured:false without an observe (the switch governs a re-read like a capture)', async () => {
+  const { orch, table, emit } = setup({ capture: { claude: false } })
+  const final = await orch.reread(rereadFrame('claude'), emit)
+  assert.deepEqual([final.type, final.ok, final.captured], ['result', true, false])
+  assertValid(final)
+  assert.deepEqual(table.claude.calls, [])
+})
+
+test('reread: the first-row deadline is REREAD_FIRST_ROW_MS at most (the row exists; only a render is waited for), the capture budget is the pane\'s', async () => {
+  const { orch, table, emit } = setup({ capture: { grok: true }, timeouts: null })
+  const done = orch.reread(rereadFrame('grok'), emit)
+  await settleAll()
+  const obs = table.grok.last()
+  assert.equal(obs.payload.firstTokenMs, REREAD_FIRST_ROW_MS)
+  assert.equal(obs.payload.requireAnchor, true)
+  obs.resolve({ ok: true, op: 'observe', text: 't', doneBy: 'quiet', ms: 1 })
+  await done
+})
+
+test('reread: an observe that fails reply_not_found / timeout is reported with its partial and leaves the failing DOM behind', async () => {
+  const { orch, table, emit, snapshots, phases } = setup({ capture: { claude: true }, failureSnapshot: 'ok' })
+  const done = orch.reread(rereadFrame('claude'), emit)
+  await settleAll()
+  table.claude.last().reject(new AdapterRequestError('timeout', 'the reply was still in progress after 4000 ms [stopNow=true]', { partial: 'Still thinking' }))
+  const final = await done
+  assert.deepEqual([final.ok, final.code, final.partial], [false, 'timeout', 'Still thinking'])
+  assertValid(final)
+  assert.deepEqual(snapshots, [['pane', 'claude', undefined]])
+  assert.deepEqual(phases, ['claude:replying', 'claude:error:timeout'])
 })

@@ -140,7 +140,7 @@ test('DEFAULT_SELECTORS.grok is contract §4 verbatim (verified live on grok.com
   assert.deepEqual(grok.assistant, ["div[id^='response-']:has([data-testid='assistant-message'])"])
   assert.deepEqual(grok.assistantText, ['.response-content-markdown'])
   assert.deepEqual(grok.done, [])
-  assert.deepEqual([grok.quietMs, grok.settleMs, grok.firstTokenMs, grok.captureTimeoutMs], [2500, 400, 90000, 300000])
+  assert.deepEqual([grok.quietMs, grok.settleMs, grok.firstTokenMs, grok.captureTimeoutMs], [2500, 400, 90000, 600000])
   // 2026-09-27: grok.com prepends its rows — document order is NEWEST-FIRST (measured); the other two append
   assert.equal(grok.transcriptOrder, 'newest-first')
   assert.equal(DEFAULT_SELECTORS.chatgpt.transcriptOrder, 'oldest-first')
@@ -175,8 +175,9 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   // (the one snapshot died in the status phase); the done marker is the settled row's action bar
   assert.deepEqual(claude.assistantText, ['.prose', '.standard-markdown'])
   assert.deepEqual(claude.done, ["[data-testid='message-actions'] button[data-testid^='action-bar-']"])
-  // chatgpt's capture budget is the whole pane grant since 2026-09-27: its higher effort settings think for minutes
-  for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, site === 'chatgpt' ? 600000 : 300000])
+  // every site's capture budget is the whole pane grant: chatgpt's since 2026-09-27 (its higher effort settings think
+  // for minutes), claude's and grok's since 2026-10-15 (a claude.ai reply was still thinking at 300 s)
+  for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, 600000])
   // S10: the settle window after an end signal is per site — chatgpt holds a long answer far longer
   // between two renders than the four throttle ticks every other site settles for.
   assert.deepEqual(SLOTS.map((s) => DEFAULT_SELECTORS[s].settleMs), [400, 1200, 400])

@@ -92,11 +92,11 @@ test('captureTimeoutsFor / chatUrlPatternFor read the v2 keys with the contract 
   // S10: chatgpt's settle window is its own (1200 ms); every other site keeps the 400 ms default
   // 2026-09-27: chatgpt's capture budget is the whole pane grant (its effort picker thinks for minutes)
   assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'chatgpt'), { quietMs: 2500, settleMs: 1200, firstTokenMs: 90000, captureTimeoutMs: 600000 })
-  assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'claude'), { quietMs: 2500, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 300000 })
+  assert.deepEqual(captureTimeoutsFor(DEFAULT_SELECTORS, 'claude'), { quietMs: 2500, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 600000 }) // 2026-10-15
   assert.deepEqual(captureTimeoutsFor({ grok: { quietMs: 100, settleMs: 900, captureTimeoutMs: -5 } }, 'grok'), { quietMs: 100, settleMs: 900, firstTokenMs: 90000, captureTimeoutMs: 300000 })
   // a config that predates the key (or carries a bad one) falls back to the contract default, not to chatgpt's
   assert.deepEqual(captureTimeoutsFor({ claude: { quietMs: 100 } }, 'claude'), { quietMs: 100, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 300000 })
-  assert.deepEqual(captureTimeoutsFor(null, 'claude'), { quietMs: 2500, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 300000 })
+  assert.deepEqual(captureTimeoutsFor(null, 'claude'), { quietMs: 2500, settleMs: 400, firstTokenMs: 90000, captureTimeoutMs: 600000 }) // no config → the shipped defaults
   assert.equal(chatUrlPatternFor(DEFAULT_SELECTORS, 'claude'), DEFAULT_SELECTORS.claude.chatUrlPattern)
   assert.equal(chatUrlPatternFor({ claude: { chatUrlPattern: '^http://127' } }, 'claude'), '^http://127')
   assert.equal(chatUrlPatternFor(null, 'grok'), DEFAULT_SELECTORS.grok.chatUrlPattern)

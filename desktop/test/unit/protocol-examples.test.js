@@ -12,7 +12,7 @@ const FILE = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'proto
 
 // docs/desktop-contract.md §1 — hard-coded on purpose so the corpus cannot drift silently.
 const CLIENT_TYPES = ['hello', 'capture', 'analyst', 'health', 'accepted', 'rejected', 'result', 'pong'];
-const SERVER_TYPES = ['hello_ack', 'request', 'cancel', 'ping'];
+const SERVER_TYPES = ['hello_ack', 'request', 'reread', 'cancel', 'ping'];
 const ALL_TYPES = [...CLIENT_TYPES, ...SERVER_TYPES];
 const REJECT_CODES = ['view_busy', 'logged_out', 'challenge', 'blocked', 'analyst_not_chosen', 'unknown_site', 'view_crashed'];
 const RESULT_CODES = ['composer_not_found', 'send_not_found', 'not_submitted', 'reply_not_found', 'timeout', 'cancelled', 'adapter_gone', 'site_error', 'navigation', 'view_crashed'];

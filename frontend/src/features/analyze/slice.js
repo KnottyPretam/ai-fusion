@@ -68,6 +68,39 @@ export function councilSizeFor(turn, slotConfig) {
  */
 export const NOT_CAPTURED_MESSAGE_PREFIX = 'capture is off for '
 
+/**
+ * A pane capture that gave up while the site was STILL ANSWERING (2026-10-15): the adapter's diag line,
+ * which every capture failure carries in its message (desktop/preload/site.cjs observe), says the site's
+ * stop control was up at the last sample. That is "the app stopped waiting", never "the model timed out".
+ */
+export const STILL_ANSWERING_RE = /\bstopNow=true\b/
+
+export function isStillAnswering(message) {
+  return typeof message === 'string' && STILL_ANSWERING_RE.test(message)
+}
+
+/** An error message without the capture's trailing diag line (`[containers=…]`: counts for the log, noise on screen). */
+export function plainError(message) {
+  return String(message || '').replace(/\s*\[containers=[^\]]*\]\s*$/, '').trim()
+}
+
+/**
+ * The slots of `send` whose reply can be read out of its pane again — `POST …/turns/{id}/slots/{slot}/reread`
+ * (2026-10-15). A MIRROR of backend/features/reread.py's pre-checks, so the button is offered only where the
+ * request would be taken: no reply yet, the slot's model in that turn is its own web pane (`web:<slot>`, not
+ * the `:analyst` page, not OpenRouter / Ollama), and nothing but an Analyze or a Refactor came after the Send
+ * (anything else may have typed into that pane). Catalog order, as `send.responses` is.
+ */
+export function rereadableSlots(conversation, send) {
+  if (!conversation || !send || send.type !== 'send') return []
+  const turns = conversation.turns || []
+  const at = turns.findIndex((t) => t && t.id === send.id)
+  if (at < 0) return []
+  if (turns.slice(at + 1).some((t) => !t || (t.type !== 'analyze' && t.type !== 'refactor'))) return []
+  const specs = (send.slot_config && send.slot_config.slots) || {}
+  return Object.keys(send.responses || {}).filter((slot) => send.responses[slot] == null && specs[slot] && specs[slot].model === `web:${slot}`)
+}
+
 export function initial() {
   return { status: 'idle', turn: null, cached: false, error: null, ofTurn: null }
 }

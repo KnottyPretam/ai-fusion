@@ -582,7 +582,7 @@ function start() {
     getAnalyst: () => settings.getAnalyst(),
     getHealth: (slot) => views.getHealth(slot),
     setHealth: (slot, h) => views.setHealth(slot, h),
-    onRequest: (frame, emit) => orchestrator.run(frame, emit),
+    onRequest: (frame, emit) => (frame.type === 'reread' ? orchestrator.reread(frame, emit) : orchestrator.run(frame, emit)),
     onCancel: (reqId) => orchestrator.cancel(reqId),
     onState: (state) => {
       const rising = !!state.connected && !bridgeState.connected

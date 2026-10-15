@@ -531,7 +531,10 @@
       // control now has to STAY gone this long before it ends a capture; a reappearing one withdraws it.
       stopGoneGraceMs: 15000, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
-      captureTimeoutMs: 300000,
+      // 2026-10-15: chatgpt's 2026-09-27 failure, on claude.ai — a Send's reply was still thinking at 300 s
+      // (`stopNow=true stopSeen=true`, its "Flagging … considerations" header the only text) and finished
+      // minutes later, after the capture had given up. The whole pane grant, as chatgpt has.
+      captureTimeoutMs: 600000,
     },
     grok: {
       chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+(?:[?#]|$)',
@@ -577,7 +580,7 @@
       quietMs: 2500,
       settleMs: 400, // four throttle ticks: a 100 ms lull between two token batches is ordinary mid-stream
       firstTokenMs: 90000,
-      captureTimeoutMs: 300000,
+      captureTimeoutMs: 600000, // 2026-10-15: the whole pane grant, as chatgpt and claude — grok's thinking modes run for minutes too
       stopGoneGraceMs: 0, // grok's stop control has not been seen to flicker; a vanished one counts at once (contract §4, 2026-09-27)
     },
   }
@@ -2891,9 +2894,11 @@
      *                 over its projection — two of three, or the whole of a short text; false with no text)
      * `quietMs` / `timeoutMs` / `firstTokenMs` / `settleMs` / `incompleteGraceMs` in the message
      * override the selectors; a missing `baselineCount` means the current count; `text` (2026-09-27) is
-     * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in.
+     * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in;
+     * `requireAnchor: true` (2026-10-15, main's re-read) follows ONLY the anchored turn's reply — with no
+     * user turn carrying `text`, nothing is picked and the observe ends `reply_not_found`.
      */
-    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, text: promptText, signal } = {}) {
+    function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, text: promptText, requireAnchor, signal } = {}) {
       const t0 = clock()
       const given = nonNegativeInt(baselineCount, null)
       // 2026-09-27: the baseline is what submit() sampled BEFORE its first attempt (`preSubmit`), or — when
@@ -2905,6 +2910,10 @@
       let baseline = given // for the messages only: main's count, else the baseline's size
       const typed = typeof promptText === 'string' && promptText !== '' ? promptText : lastInserted
       const probes = typed === null || typed === undefined ? null : anchorProbes(typed)
+      // 2026-10-15: a RE-READ (main's `reread`, nothing typed) takes only the reply of the user turn that holds
+      // `text`. Without that turn on the page the fallback rule would hand back whichever reply is newest — in
+      // a chat main did not open, another conversation's — so it never runs: no anchor, no pick.
+      const anchorOnly = requireAnchor === true
       const order = transcriptOrder()
       // diag: the user turns matching the typed text at the last sample — 0 when a text was given and nothing
       // matched (or it projected to nothing), null (`anchor=no`) only when there was no text at all (2026-10-10)
@@ -3057,7 +3066,7 @@
           const anchor = newestOf(cands, geo)
           pick = containerForAnchor(anchor, containers, turns, geo)
           if (pick === null) pick = newestOf(containers.filter((c) => !containsDeep(c, anchor) && !ownRowOf(anchor, c) && !base.ids.has(c) && !oldByText(c)), geo)
-        } else pick = newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)), geo)
+        } else if (!anchorOnly) pick = newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)), geo)
         if (geo.usable !== null) geomSeen = geo.usable
         return pick
       }

@@ -1,6 +1,7 @@
 /* Analyze pane (W10). Palette tokens from index.css; plain bench-instrument styling. */
 .pane { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
 .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reread { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; } /* the Read-again row (2026-10-15) */
 .title { font-weight: 600; }
 .btn { padding: 3px 10px; border: 1px solid var(--primary); border-radius: 4px; background: var(--primary); color: var(--on-accent); }
 .btnSecondary { background: var(--bg); color: var(--primary); }

@@ -82,7 +82,7 @@ RESULT_CODES: frozenset[str] = frozenset(get_args(ResultCode))
 CLIENT_TYPES: frozenset[str] = frozenset(
     {"hello", "capture", "analyst", "health", "accepted", "rejected", "result", "pong"}
 )
-SERVER_TYPES: frozenset[str] = frozenset({"hello_ack", "request", "cancel", "ping"})
+SERVER_TYPES: frozenset[str] = frozenset({"hello_ack", "request", "reread", "cancel", "ping"})
 
 ReqId = Annotated[str, Field(min_length=1)]
 Millis = Annotated[int, Field(ge=0)]
@@ -279,6 +279,23 @@ class Request(_Frame):
         return self
 
 
+class Reread(_Frame):
+    """Read a pane's reply to ``text`` again, typing nothing (2026-10-15).
+
+    For a Send whose capture gave up while the site was still answering: the adapter anchors on the
+    user turn that holds ``text`` -- the prompt that turn typed -- in ``conversation_id``'s recorded
+    chat and returns that turn's reply through the same ``accepted`` / ``rejected`` / ``result``
+    replies a ``request`` gets. A pane only; never the analyst page (it has its own settled re-read).
+    """
+
+    type: Literal["reread"]
+    req_id: ReqId
+    slot: BridgeSlot
+    text: str
+    conversation_id: str = Field(min_length=1)
+    timeout_s: int = Field(gt=0)
+
+
 class Cancel(_Frame):
     """Sent on timeout or when the consumer closes the stream."""
 
@@ -296,7 +313,7 @@ ClientFrame = Annotated[
     Hello | CaptureFrame | AnalystFrame | HealthFrame | Accepted | Rejected | Result | Pong,
     Field(discriminator="type"),
 ]
-ServerFrame = Annotated[HelloAck | Request | Cancel | Ping, Field(discriminator="type")]
+ServerFrame = Annotated[HelloAck | Request | Reread | Cancel | Ping, Field(discriminator="type")]
 
 ClientFrameAdapter: TypeAdapter[ClientFrame] = TypeAdapter(ClientFrame)
 ServerFrameAdapter: TypeAdapter[ServerFrame] = TypeAdapter(ServerFrame)

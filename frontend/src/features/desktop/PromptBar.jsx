@@ -90,7 +90,16 @@ import { DEFAULT_COUNCIL, NOT_CAPTURED, SLOT_LABELS, councilOf, initialPanes, se
 import css from './desktop.module.css'
 import { APP_NAME } from '../../branding.js'
 
-/** 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '✗ send_not_found' | '' */
+/**
+ * A capture that gave up while the site was STILL ANSWERING (2026-10-15): the adapter's diag line says its
+ * stop control was up at the last sample. A MIRROR of features/analyze/slice.js `STILL_ANSWERING_RE`
+ * (features never import each other): keep the two in step. Not a timeout of the model — the app stopped
+ * waiting, and the reply can be read again from the Analyze tab.
+ */
+export const STILL_ANSWERING_RE = /\bstopNow=true\b/
+const stillAnswering = (r) => !r.ok && typeof r.message === 'string' && STILL_ANSWERING_RE.test(r.message)
+
+/** 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '… still answering — stopped waiting' | '✗ send_not_found' | '' */
 export function formatResult(r) {
   if (!r || typeof r !== 'object') return ''
   if (r.ok) {
@@ -98,6 +107,7 @@ export function formatResult(r) {
     const tail = seconds > 0 ? ` · ${seconds.toFixed(1)} s` : ''
     return `${r.code === NOT_CAPTURED ? 'sent ✓ not captured' : 'sent ✓ captured'}${tail}`
   }
+  if (stillAnswering(r)) return '… still answering — stopped waiting'
   return `✗ ${r.code || 'error'}`
 }
 
@@ -105,6 +115,7 @@ export function formatResult(r) {
 export function resultTitle(r) {
   if (!r || typeof r !== 'object') return ''
   const parts = []
+  if (stillAnswering(r)) parts.push(`${APP_NAME} stopped waiting while the site was still answering; the reply is in the pane. Read it again from the Analyze tab once it has finished.`)
   if (r.message) parts.push(String(r.message))
   if (r.sendSelector) parts.push(`send: ${r.sendSelector}`)
   if (r.url) parts.push(`url: ${r.url}`)

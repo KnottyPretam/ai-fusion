@@ -25,7 +25,7 @@ export const PURPOSES = Object.freeze(['chat', 'extraction', 'defense', 'converg
 export const REJECT_CODES = Object.freeze(['view_busy', 'logged_out', 'challenge', 'blocked', 'analyst_not_chosen', 'unknown_site', 'view_crashed'])
 export const RESULT_CODES = Object.freeze(['composer_not_found', 'send_not_found', 'not_submitted', 'reply_not_found', 'timeout', 'cancelled', 'adapter_gone', 'site_error', 'navigation', 'view_crashed'])
 export const CLIENT_TYPES = Object.freeze(['hello', 'capture', 'analyst', 'health', 'accepted', 'rejected', 'result', 'pong'])
-export const SERVER_TYPES = Object.freeze(['hello_ack', 'request', 'cancel', 'ping'])
+export const SERVER_TYPES = Object.freeze(['hello_ack', 'request', 'reread', 'cancel', 'ping'])
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isStr = (v) => typeof v === 'string'
@@ -210,6 +210,15 @@ const SERVER = {
     int(f.timeout_s, 'request.timeout_s', { gt: 0 })
     const expected = `web:${f.slot}${f.view === 'analyst' ? ':analyst' : ''}`
     if (f.model !== expected) fail(`request.model: must be "${expected}" for slot "${f.slot}" and view "${f.view}"`)
+  },
+  // 2026-10-15: read a pane's reply to `text` again, typing nothing (contract §1)
+  reread(f) {
+    keys(f, 'reread', ['type', 'req_id', 'slot', 'text', 'conversation_id', 'timeout_s'])
+    nonEmptyStr(f.req_id, 'reread.req_id')
+    oneOf(f.slot, SLOT_IDS, 'reread.slot')
+    str(f.text, 'reread.text')
+    nonEmptyStr(f.conversation_id, 'reread.conversation_id')
+    int(f.timeout_s, 'reread.timeout_s', { gt: 0 })
   },
   cancel(f) {
     keys(f, 'cancel', ['type', 'req_id'])

@@ -35,6 +35,9 @@ env keys) are normative; `bridge_protocol.py` (frozen) validates every frame at 
   failed `result` that carries `partial` text yields that text as one `text` delta BEFORE the
   error delta, so `slot_error.partial` shows what the site produced (the OpenRouter path does the
   same for a mid-stream error after text).
+- `reread(slot=, text=, conversation_id=) -> RereadOutcome` (2026-10-15): the `reread` frame -- read
+  a pane's reply to `text` (the prompt a Send typed) again, typing nothing -- for `features/reread.py`.
+  Never raises; `stream`'s result mapping and its one INFO line (`purpose=reread`).
 - A `result ok:false` / `rejected` code is passed through verbatim with `error_type:"site"`; the
   codes this module mints (`error_type:"triplex"`) are the constants below. `transport_disabled`
   lives here too because `errors.py` belongs to another workstream.
@@ -670,6 +673,128 @@ async def stream(
         )
 
 
+# --------------------------------------------------------------------------- re-read (2026-10-15)
+@dataclass(frozen=True)
+class RereadOutcome:
+    """What `reread` returns: the reply (`text`, with the adapter's `done_by`), or a failure --
+    `code` / `message` / `error_type`, plus whatever the site had produced in `partial`."""
+
+    text: str | None = None
+    done_by: str | None = None
+    code: str | None = None
+    message: str = ""
+    error_type: str | None = None
+    partial: str | None = None
+
+
+def build_reread(
+    *, req_id: str, slot: str, text: str, conversation_id: str, timeout_s: float | int
+) -> dict[str, Any]:
+    """The `reread` frame as a plain dict, validated through the frozen `Reread` model."""
+    frame = {
+        "type": "reread",
+        "req_id": req_id,
+        "slot": slot,
+        "text": text,
+        "conversation_id": conversation_id,
+        "timeout_s": max(1, int(round(float(timeout_s)))),
+    }
+    return bp.parse_server_frame(frame).model_dump(mode="json")
+
+
+async def reread(*, slot: str, text: str, conversation_id: str) -> RereadOutcome:
+    """Read the PANE's reply to `text` -- the prompt a Send typed -- again, typing nothing (the
+    `reread` frame; Electron anchors on the user turn that holds `text` in the conversation's chat).
+    NEVER raises. The result mapping is `stream`'s: a `rejected` / failed `result` code passes
+    through with `error_type:"site"` (and the failed result's `partial`), a result with capture off
+    is `not_captured` with `stream`'s message, the hub's failures are this module's codes. The pane
+    grant (`BRIDGE_TIMEOUT_S`) bounds it, and the one INFO line is `stream`'s with
+    `purpose=reread`: never any text."""
+    started = time.monotonic()
+    req_id = str(uuid.uuid4())
+    outcome = "ok"
+    done_by = "-"
+    chars = 0
+    try:
+        if slot not in bp.BRIDGE_SLOTS:
+            outcome = BRIDGE_BAD_MODEL
+            return RereadOutcome(
+                code=BRIDGE_BAD_MODEL,
+                message=f"no site pane for {slot!r}",
+                error_type=ERROR_TYPE_TRIPLEX,
+            )
+        if not hub.connected:
+            outcome = BRIDGE_UNAVAILABLE
+            return RereadOutcome(
+                code=BRIDGE_UNAVAILABLE,
+                message="no desktop client is connected",
+                error_type=ERROR_TYPE_TRIPLEX,
+            )
+        grant = timeout_s()
+        frame = build_reread(
+            req_id=req_id, slot=slot, text=text, conversation_id=conversation_id, timeout_s=grant
+        )
+        try:
+            async with contextlib.aclosing(
+                hub.request(frame, accept_timeout_s=accept_timeout_s(), timeout_s=grant)
+            ) as replies:
+                async for reply in replies:
+                    kind = reply["type"]
+                    if kind == "rejected":
+                        outcome = reply["code"]
+                        return RereadOutcome(
+                            code=reply["code"], message=reply["message"], error_type=ERROR_TYPE_SITE
+                        )
+                    if kind != "result":
+                        continue  # accepted: the read is under way
+                    if reply["ok"] is False:
+                        outcome = reply["code"]
+                        partial = reply.get("partial")
+                        partial = partial if isinstance(partial, str) and partial else None
+                        chars = len(partial or "")
+                        return RereadOutcome(
+                            code=reply["code"],
+                            message=reply["message"],
+                            error_type=ERROR_TYPE_SITE,
+                            partial=partial,
+                        )
+                    if reply["captured"] is False:
+                        outcome = NOT_CAPTURED
+                        return RereadOutcome(
+                            code=NOT_CAPTURED,
+                            message=f"capture is off for {slot}; the reply is in the site pane",
+                            error_type=ERROR_TYPE_TRIPLEX,
+                        )
+                    done_by = reply.get("done_by") or "-"
+                    chars = len(reply["text"])
+                    return RereadOutcome(text=reply["text"], done_by=reply.get("done_by"))
+        except BridgeError as e:
+            outcome = e.code
+            return RereadOutcome(code=e.code, message=e.message, error_type=ERROR_TYPE_TRIPLEX)
+        outcome = BRIDGE_DISCONNECTED  # the hub ended without a terminal frame: impossible by construction
+        return RereadOutcome(
+            code=BRIDGE_DISCONNECTED,
+            message="the bridge re-read ended without a result",
+            error_type=ERROR_TYPE_TRIPLEX,
+        )
+    except Exception as e:  # pragma: no cover - last line of defence: never raises
+        log.exception("bridge re-read failed")
+        outcome = TRANSPORT_ERROR
+        return RereadOutcome(
+            code=TRANSPORT_ERROR, message=f"{type(e).__name__}: {e}", error_type=ERROR_TYPE_TRIPLEX
+        )
+    finally:
+        log.info(
+            "bridge req=%s slot=%s view=pane purpose=reread %s ms=%d done_by=%s chars=%d",
+            req_id,
+            slot,
+            "ok" if outcome == "ok" else f"code={outcome}",
+            int((time.monotonic() - started) * 1000),
+            done_by,
+            chars,
+        )
+
+
 __all__ = [
     "BACKEND_VERSION",
     "BRIDGE_BAD_MODEL",
@@ -689,16 +814,19 @@ __all__ = [
     "BridgeConnection",
     "BridgeError",
     "BridgeHub",
+    "RereadOutcome",
     "accept_timeout_s",
     "analyst_timeout_s",
     "grant_s",
     "bridge_token",
     "build_request",
+    "build_reread",
     "conversation_scope",
     "current_conversation",
     "hub",
     "parse_web_model",
     "ping_s",
+    "reread",
     "stream",
     "text_for",
     "timeout_s",

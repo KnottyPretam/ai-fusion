@@ -88,6 +88,18 @@ test('request.model must match slot and view exactly', () => {
   assert.equal(validate({ ...base, timeout_s: 0 }).ok, false)
 })
 
+test('reread (2026-10-15): a pane slot, the typed text, a conversation that must be named, a positive grant — and nothing else', () => {
+  const base = { type: 'reread', req_id: 'r', slot: 'claude', text: 't', conversation_id: 'c', timeout_s: 1 }
+  assert.equal(validate(base).ok, true)
+  assert.equal(validateServerFrame(base).ok, true)
+  assert.equal(validate({ ...base, conversation_id: null }).ok, false, 'a re-read needs the chat its conversation recorded')
+  assert.equal(validate({ ...base, conversation_id: '' }).ok, false)
+  assert.equal(validate({ ...base, slot: 'gemini' }).ok, false)
+  assert.equal(validate({ ...base, view: 'pane' }).ok, false, 'a pane only: there is no view key')
+  assert.equal(validate({ ...base, timeout_s: 0 }).ok, false)
+  assert.equal(validate({ ...base, text: 5 }).ok, false)
+})
+
 test('health: matched.error is optional, every other key required; session is one of five states', () => {
   const h = { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: null, send: null, reply: null, stop: null }, url: '', host: '', title: '', ts: 0 }
   assert.doesNotThrow(() => checkHealth(h))

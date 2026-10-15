@@ -425,3 +425,45 @@ pre-checks run before the first yield in this order: 404 → the fusion turn (40
 producer task owns the call
 and the writes and releases the guard in its `finally` before the final event is enqueued (the
 Refactor shape: a client disconnect never cancels the plan or releases the guard early).
+
+## Read-again addendum (2026-10-15)
+
+**Why.** A pane capture has a budget and a site can think for longer than any budget. Measured on
+2026-10-15: claude.ai was still thinking at the 300 s capture budget — its stop control up
+(`stopNow=true stopSeen=true` in the capture's diag), the only text its "Flagging … considerations"
+header — and its answer landed minutes after the capture gave up. The slot failed `timeout`, Analyze
+refused the Send (`409 incomplete_send_turn`), and nothing could ever fill the slot: the turn was lost
+although the answer sat in the pane. Two changes follow. (1) claude's and grok's capture budget is the
+whole pane grant, as chatgpt's has been since 2026-09-27 (`captureTimeoutMs: 600000`). (2) **Read
+again**: `POST …/turns/{turn_id}/slots/{slot}/reread` reads that slot's reply out of its pane again
+and completes the Send.
+
+**What a re-read is.** Nothing is typed. Electron opens the conversation's recorded chat when the pane
+shows another (nothing recorded → the chat on screen; a chat already on screen is never reloaded,
+because a reload abandons a reply still being written) and follows the reply of the user turn that
+holds the Send's prompt (`text` = `SendTurn.prompt`, exactly what was typed) — to its end when the site
+is still writing it: a visible stop control is not `view_busy` for a re-read. Only that turn's reply is
+ever taken (`requireAnchor`): a chat without the prompt ends `reply_not_found`, never with another
+turn's reply. The capture switch governs a re-read as it governs a capture (off → `not_captured`), so a
+slot that replied with capture off can be read once the switch is on.
+
+**Rules.** Pre-checks before the first yield, in order: 404 conversation → 404 turn → 422
+`not_a_send_turn` → 404 slot (one the Send did not run) → 409 `already_captured` → 422
+`not_a_web_pane{model}` (the slot's model in the turn must be `web:<slot>`: an OpenRouter / Ollama reply
+has no page, and `web:<slot>:analyst` was answered on the hidden page) → 409 `reread_stale{since}` →
+`busy_guard` LAST. **Stale**: any turn after the Send other than `analyze` or `refactor` (which run on the
+hidden analyst page) may have typed into that pane — a later Send, a continue, Fusion's defenses, a
+pane-typed Plan — and then the newest prompt there is no longer this turn's, so the request is refused
+rather than risk reading the wrong exchange. ONE producer task: `bridge.reread` under the pane grant;
+a reply → `store.complete_send_slot` writes, in one locked write, `responses[slot]`, clears the slot's
+`errors` / `partial` / `truncated`, and appends the `[user(prompt), assistant(reply)]` pair to
+`threads[slot]` under the Send's own turn id (the assistant message `meta:{"reread":true}`) — the pair a
+`slot_done` would have written, so Analyze, Fusion and the export see an ordinary complete Send; then
+`reread_done`. A failure → `reread_error` and NOTHING written (the turn keeps its original error); a
+blank read is `empty_reply` and never persisted. The turn's `usage` is not changed.
+
+**Wording.** A capture that gave up with the stop control still up is "still answering when the app
+stopped waiting", never "timed out" or "no reply came back": the prompt bar shows `… still answering —
+stopped waiting`, and the Analyze pane's hint says so and offers **Read <slot> again** for every slot
+`rereadableSlots` admits (the renderer's mirror of the pre-checks above). A turn with no re-readable
+slot keeps the old wording word for word.

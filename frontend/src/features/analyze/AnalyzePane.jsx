@@ -7,6 +7,9 @@
 //   analyze-run                  Analyze button (POST {} — cache hit returns the same turn)
 //   analyze-rerun                Re-run button (POST {force:true}); rendered once a turn exists
 //   analyze-hint                 why the buttons are disabled
+//   analyze-reread               (2026-10-15) the Read-again row: analyze-reread-<slot> buttons, one per
+//                                slot whose reply can be read out of its pane again; analyze-reread-status
+//                                while one runs, analyze-reread-error when it failed
 //   analyze-cached               "cached" chip (analyze_done.cached)
 //   export-analyze               the Export control (features/export; R-labelled documents only)
 //   analyze-status               running indicator
@@ -20,12 +23,12 @@
 //   analyze-divergences          <table>; analyze-divergence-<id> rows (data-fused="yes|no"),
 //                                analyze-cell-<id>-<label>, analyze-materiality-<id>,
 //                                analyze-not-fused-<id>
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import ExportControl from '../export/ExportControl.jsx'
 import { loadConversation } from '../../api/http.js'
 import { useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
-import { NOT_CAPTURED_MESSAGE_PREFIX, RANK, councilSize, councilSizeFor, countWord, initial, isSendTurnComplete, labelsFor, latestSendTurn, sendTurnFor } from './slice.js'
+import { NOT_CAPTURED_MESSAGE_PREFIX, RANK, councilSize, councilSizeFor, countWord, initial, isSendTurnComplete, isStillAnswering, labelsFor, latestSendTurn, plainError, rereadableSlots, sendTurnFor } from './slice.js'
 import RefactorView from './RefactorView.jsx'
 import { initial as refactorInitial } from './refactorSlice.js'
 import css from './analyze.module.css'
@@ -94,6 +97,28 @@ export default function AnalyzePane() {
   )
   const start = useCallback((body) => startFeature('analyze', body), [startFeature])
   const startRefactor = useCallback((body) => startFeature('refactor', body), [startFeature])
+  // Read again (2026-10-15): read one slot's reply out of its pane, typing nothing, and complete the Send
+  // (backend/features/reread.py). Local state, keyed by conversation: the outcome is shown once, then the
+  // refetched conversation says the rest (a filled slot drops its button and enables Analyze).
+  const [reread, setReread] = useState({ convId: null, slot: null, status: 'idle', error: null })
+  const startReread = useCallback(
+    async (turnId, slot) => {
+      if (!conversation) return
+      const id = conversation.id
+      setReread({ convId: id, slot, status: 'running', error: null })
+      let error = null
+      try {
+        const events = await run('reread', `/api/conversations/${id}/turns/${turnId}/slots/${slot}/reread`)
+        const last = events[events.length - 1]
+        if (!last || last.type !== 'reread_done') error = plainError(last && last.message) || 'the re-read ended without a reply'
+      } catch (e) {
+        error = (e && (e.code || e.message)) || 'error'
+      }
+      setReread({ convId: id, slot, status: error ? 'error' : 'idle', error })
+      if (convIdRef.current === id) await loadConversation(dispatch, id, { isCurrent: (c) => convIdRef.current === c.id })
+    },
+    [conversation, run, dispatch],
+  )
 
   if (!conversation) return null
 
@@ -116,20 +141,37 @@ export default function AnalyzePane() {
   // Wording: only the `notCaptured` branch may speak of capture. That branch fires solely on the
   // desktop message minted by backend/llm/bridge.py (there is no capture switch on the web); a
   // plain failure "came back" or did not, in both shells.
+  //
+  // Read again (2026-10-15): when a failed slot is a web pane whose reply can be read again
+  // (`rereadableSlots`), "cannot be analyzed — Send again" is no longer true, and a capture that gave up
+  // with the site's stop control still up is not a failure of the model at all: it was still answering
+  // when the app stopped waiting. That branch says so and points at the Read-again row; every other turn
+  // keeps the wording above, word for word.
   const errs = (send && send.errors) || {}
   const failed = Object.keys(errs)
   const notCaptured = failed.filter((s) => String(errs[s] || '').startsWith(NOT_CAPTURED_MESSAGE_PREFIX))
   const errored = failed.filter((s) => !notCaptured.includes(s))
+  const rereadable = rereadableSlots(conversation, send)
   const list = (xs) => xs.join(', ')
   const were = (xs) => (xs.length === 1 ? 'was' : 'were')
   // One clause per slot: two slots that failed for different reasons (a cost cap and a timeout) must
   // never be given one shared cause — that sends the user to the wrong fix for one of them.
-  const reasons = (xs) => xs.map((s) => `${s}: ${String(errs[s] || '').trim() || 'no reason given'}`).join('; ')
+  const reasons = (xs) => xs.map((s) => `${s}: ${plainError(errs[s]) || 'no reason given'}`).join('; ')
 
   let hint = null
   if (!send) hint = 'send a prompt first'
   else if (streaming) hint = 'a stream is running'
-  else if (notCaptured.length && !errored.length) {
+  else if (rereadable.length) {
+    const still = errored.filter((s) => isStillAnswering(errs[s]))
+    const other = errored.filter((s) => !still.includes(s))
+    const said = []
+    if (still.length) said.push(`${list(still)} ${were(still)} still answering when ${APP_NAME} stopped waiting; the reply is in the pane`)
+    if (other.length) said.push(`no reply came back from ${reasons(other)}`)
+    if (notCaptured.length) said.push(`capture was off for ${list(notCaptured)}, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}`)
+    const capture = notCaptured.some((s) => rereadable.includes(s)) ? ` Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} first.` : ''
+    const rest = failed.filter((s) => !rereadable.includes(s))
+    hint = `${said.join('; ')}.${capture} Read ${list(rereadable)} again below${still.length ? ' once the site has finished' : ''}${rest.length ? `; ${list(rest)} cannot be read again — Send again for ${rest.length === 1 ? 'it' : 'them'}` : ''}.`
+  } else if (notCaptured.length && !errored.length) {
     hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
   } else if (errored.length) {
     hint = `no reply came back from ${reasons(errored)}${notCaptured.length ? ` (and capture was off for ${list(notCaptured)})` : ''}. This turn cannot be analyzed — Send again.`
@@ -195,6 +237,33 @@ export default function AnalyzePane() {
         )}
       </div>
 
+      {send && rereadable.length > 0 && (
+        <div className={css.reread} data-testid="analyze-reread">
+          {rereadable.map((slot) => (
+            <button
+              key={slot}
+              type="button"
+              className={`${css.btn} ${css.btnSecondary}`}
+              data-testid={`analyze-reread-${slot}`}
+              disabled={streaming}
+              onClick={() => startReread(send.id, slot)}
+              title={`Read ${slot}'s reply out of its pane again, typing nothing, and complete this Send so it can be analyzed. If the site is still answering, this waits for it to finish.`}
+            >
+              Read {slot} again
+            </button>
+          ))}
+          {reread.convId === conversation.id && reread.status === 'running' && (
+            <span className={css.status} data-testid="analyze-reread-status">
+              reading {reread.slot}&apos;s reply from its pane…
+            </span>
+          )}
+          {reread.convId === conversation.id && reread.status === 'error' && rereadable.includes(reread.slot) && (
+            <span className={css.error} data-testid="analyze-reread-error">
+              {reread.slot}: {reread.error}
+            </span>
+          )}
+        </div>
+      )}
       {(refactor.status === 'running' || refactor.status === 'working') && (
         <div className={css.status} data-testid="refactor-status">
           {refactor.notice || `mapping the question and reducing the ${councilN} responses…`}

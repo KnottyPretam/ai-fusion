@@ -1,6 +1,7 @@
 // desktop/main/orchestrator.js — one bridge `request` → one turn in a site view (Stage 2 electron-bridge).
 //
 //   run(request, emit) → Promise<finalFrame>   emit(frame) carries accepted / rejected / result to the backend
+//   reread(frame, emit) → Promise<finalFrame>  the same replies for a `reread` frame (2026-10-15, below)
 //   cancel(reqId) → boolean                    aborts the adapter op in flight for that request
 //   inflight(slot) → {reqId, view} | null
 //
@@ -86,6 +87,17 @@
 // through the same snapshot dep (newest 20 of its kind), logs ONE line naming the file and the flag, and is
 // delivered unchanged. Measured 2026-10-11 14:41 on chatgpt.com: the ask-the-user widget turn, captured as a
 // success with the user's own prompt as the reply, left no evidence at all.
+// Re-read (2026-10-15; `reread`, the bridge's `reread` frame): read a PANE's reply to `frame.text` again,
+// typing nothing — for a Send whose capture gave up while the site was still answering (measured that
+// morning: a claude.ai reply still thinking at the 300 s budget, `stopNow=true`, finished minutes later and
+// nothing could ever fill its slot). Same accepted / rejected / result replies as `run`. Differences: a pane
+// only (the analyst page has the settled re-read above); a site still answering is NOT `view_busy` — waiting
+// for it is the point — while every other health reject, and a turn in flight on the view, still stands; the
+// conversation's recorded chat is opened when the pane shows another one, and nothing recorded means the chat
+// on screen; then no `ready` and no insert, only `observe{text, requireAnchor: true}` with the pane's windows
+// and a first-row deadline of REREAD_FIRST_ROW_MS (the row exists: the Send typed it). `requireAnchor` makes a
+// chat without that prompt a `reply_not_found`, never somebody else's reply. A chat the pane already shows is
+// never reloaded: a reload abandons a reply still being written (the S11 rule). Capture off → `captured:false`.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
@@ -156,6 +168,8 @@ export const INCOMPLETE_GRACE_MS = 20000
 export const SETTLED_REREAD_MS = 60000
 /** The failure codes a settled re-read may follow: the two that say "the capture did not read it", never one that says the site refused. */
 export const REREAD_CODES = Object.freeze(['timeout', 'reply_not_found'])
+/** A re-read's deadline for the anchored reply ROW (2026-10-15): the Send typed it minutes ago, so this only covers the page rendering after a navigation. */
+export const REREAD_FIRST_ROW_MS = 30000
 /** Insert-phase failures on a pane whose DOM is saved for the next calibration (2026-09-27). */
 export const SUBMIT_EVIDENCE_CODES = Object.freeze(['not_submitted', 'send_not_found'])
 
@@ -888,6 +902,88 @@ export function createOrchestrator({
     }
   }
 
+  /** The re-read proper, after `accepted` (header, 2026-10-15). Resolves with the result frame (never rejects). */
+  async function rereadTurn(frame, entry) {
+    const { slot } = frame
+    const { seam, label } = entry
+    const reqId = frame.req_id
+    const elapsed = () => Math.max(0, Math.round(now() - entry.started))
+    const signal = entry.controller.signal
+    const client = seam.client
+    const b = budgets(slot, 'pane', frame.timeout_s)
+    const cancelled = () => {
+      if (signal.aborted) throw new AdapterRequestError('cancelled', 'cancelled by the backend')
+    }
+    try {
+      const convId = frame.conversation_id
+      const link = chats && typeof chats.get === 'function' ? chats.get(convId, slot) : null
+      if (link && link !== seam.url()) {
+        if (typeof seam.loadUrl !== 'function') throw new AdapterRequestError('navigation', `${label}: cannot navigate (no loader)`)
+        info(`${label}: opening the recorded chat`)
+        try {
+          await seam.loadUrl(link)
+        } catch (e) {
+          throw new AdapterRequestError('navigation', `could not open the recorded chat: ${(e && e.message) || e}`)
+        }
+        cancelled()
+      }
+      await awaitPendingNavigation(seam, label, signal)
+      cancelled()
+      if (!seam.observes()) return { type: 'result', req_id: reqId, ok: true, captured: false, url: seam.url(), ms: elapsed() }
+      phase(slot, 'replying')
+      const firstTokenMs = Math.min(b.firstTokenMs, REREAD_FIRST_ROW_MS)
+      const payload = { quietMs: b.quietMs, settleMs: b.settleMs, timeoutMs: b.captureTimeoutMs, firstTokenMs, text: frame.text, requireAnchor: true }
+      const observed = await client.request('observe', payload, { timeoutMs: observeBudgetMs({ firstTokenMs, captureTimeoutMs: b.captureTimeoutMs }) + TIMEOUT_GRACE_MS, signal })
+      const text = typeof observed.text === 'string' ? observed.text : ''
+      const doneBy = ['done_selector', 'stop_gone', 'quiet'].includes(observed.doneBy) ? observed.doneBy : 'quiet'
+      info(`${label}: re-read ${text.length} chars by ${doneBy} in ${Number.isFinite(observed.ms) ? Math.round(observed.ms) : elapsed()} ms`)
+      const finalUrl = (typeof observed.url === 'string' && observed.url) || seam.url()
+      return { type: 'result', req_id: reqId, ok: true, captured: true, text, url: finalUrl, ms: elapsed(), done_by: doneBy }
+    } catch (e) {
+      const f = adapterFailure(e)
+      const code = RESULT_CODE_SET.has(f.code) ? f.code : 'site_error'
+      const message = code === f.code ? f.message : `${f.code}: ${f.message}`
+      warn(`${label}: ${code} — ${message}`)
+      if (REREAD_CODES.includes(code)) await saveFailureEvidence(entry, slot, label, e)
+      return { type: 'result', req_id: reqId, ok: false, code, message, partial: f.partial }
+    }
+  }
+
+  /**
+   * reread(frame, emit): `frame` is a validated §1 `reread` frame; the replies and their order are run()'s.
+   * Resolves with the final frame; never rejects.
+   */
+  async function reread(frame, emit) {
+    const send = (out) => {
+      try {
+        if (typeof emit === 'function') emit(out)
+      } catch (e) {
+        warn(`emit failed: ${(e && e.message) || e}`)
+      }
+      return out
+    }
+    const reqId = frame && typeof frame.req_id === 'string' && frame.req_id !== '' ? frame.req_id : ''
+    const slot = frame && frame.slot
+    const reject = (code, message) => send({ type: 'rejected', req_id: reqId, code, message })
+    if (!SLOTS.includes(slot)) return reject('unknown_site', `no view for slot ${String(slot)}`)
+    const seam = seamFor('pane', slot)
+    if (!seam.client) return reject('view_crashed', `${slot}: no live view`)
+    const entry = { reqId, view: 'pane', slot, seam, label: `${slot} (re-read)`, controller: new AbortController(), started: now() }
+    // A visible stop control is the reply this re-read is for, still being written: never view_busy here.
+    const health = typeof seam.getHealth === 'function' ? seam.getHealth() : null
+    const bad = rejectFromHealth(health && typeof health === 'object' ? { ...health, stop: null } : health, { inflight: active.has(slot) })
+    if (bad) return reject(bad.code, `${slot}: ${bad.message}`)
+    active.set(slot, entry)
+    send({ type: 'accepted', req_id: reqId, view: 'pane', slot })
+    try {
+      const result = await rereadTurn(frame, entry)
+      phase(slot, result.ok ? 'done' : 'error', result.ok ? undefined : result.code)
+      return send(result)
+    } finally {
+      if (active.get(slot) === entry) active.delete(slot)
+    }
+  }
+
   /**
    * run(request, emit): `request` is a validated §1 request frame; `emit(frame)` sends the
    * accepted/rejected frame first and the result last. Resolves with the final frame; never
@@ -973,5 +1069,5 @@ export function createOrchestrator({
     return e ? { reqId: e.reqId, view: e.view } : null
   }
 
-  return { run, cancel, inflight, mutex }
+  return { run, reread, cancel, inflight, mutex }
 }
