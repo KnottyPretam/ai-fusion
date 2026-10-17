@@ -25,11 +25,24 @@ Electron itself is downloaded by `npm ci` in `desktop/`.
 ## Ubuntu / Debian
 
 ```sh
-sudo apt-get install -y libarchive-tools fakeroot dpkg   # bsdtar is only needed for the Arch target
-uv sync --frozen
+sudo apt-get install -y binutils libarchive-tools fakeroot dpkg   # binutils: PyInstaller's objdump; bsdtar only for the Arch target
+UV_PYTHON_PREFERENCE=only-managed uv sync --frozen                # a uv-managed Python 3.12 (see below)
 (cd frontend && npm ci) && (cd desktop && npm ci)
-scripts/package.sh --linux                                # AppImage + deb + pacman
+scripts/package.sh --linux                                        # AppImage + deb + pacman
 ```
+
+Two prerequisites a minimal Ubuntu lacks (measured 2026-10-17 in clean `ubuntu:20.04` and
+`ubuntu:24.04` containers, CI's own steps as a non-root user):
+
+- **`binutils`**. PyInstaller stops with *"On Linux, objdump is required"* without it. GitHub's
+  runners and any machine with `build-essential` already have it.
+- **A Python with a shared library**. On 24.04 the system Python is 3.12, so a plain `uv sync` builds
+  `.venv` on it, and Ubuntu ships that interpreter without `libpython3.12.so`. PyInstaller then
+  stops with *"Python shared library … was not found"*. `UV_PYTHON_PREFERENCE=only-managed` makes uv
+  use its own 3.12, which has the library. Verified: all three packages build, the frozen backend
+  answers, and the packaged app starts. On 20.04 the system Python is 3.8, so uv fetches its own 3.12
+  anyway. The apt route on 24.04 is `libpython3.12t64` (`libpython3.12` has no candidate there); it
+  is not tested.
 
 Install it system-wide, or just for yourself:
 
