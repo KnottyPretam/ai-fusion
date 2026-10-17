@@ -13,6 +13,7 @@ import inspect
 import json
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -45,6 +46,7 @@ ANALYST = ("chatgpt", "analyst", "extraction")
 PLANTED_PROMPT = scenario_prompt("planted_factual")
 RESTATED = "What is the maximum selectable full-scale range of the Bosch BMI088 gyroscope?"
 _R_LABEL_RE = re.compile(r"\bR[123]\b")
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _types(events: list[dict[str, Any]]) -> list[str]:
@@ -155,6 +157,19 @@ def test_the_answer_block_is_short_plain_and_asks_for_the_shape_analyze_reads():
     assert "4,000" in block and "Key claims:" in block and "Uncertain:" in block
     assert "at most 8" in block and "most\nimportant first" in block.replace("\r", "")
     assert "because:" in block and "no tables" in block
+
+
+def test_the_desktop_prompt_bar_mirrors_the_answer_block_verbatim():
+    """2026-10-15: the prompt bar's "Concise answers" switch appends this block with no analyst call,
+    from a copy in the renderer (product code never reads the backend; the precedent is
+    `SPLIT_NOTICE_PREFIX` in test_split.py). The template literal holds no escape and no `${`, so
+    its source text is its value: equal bytes here mean the same prompt reaches the sites."""
+    js = REPO_ROOT / "frontend" / "src" / "features" / "desktop" / "answerFormat.js"
+    match = re.search(
+        r"^export const ANSWER_FORMAT = `([^`]*)`", js.read_text(encoding="utf-8"), re.M
+    )
+    assert match is not None, "ANSWER_FORMAT is no longer a template literal"
+    assert match.group(1) == prompts.ANSWER_FORMAT
 
 
 def test_triplex_authored_preparse_text_is_identity_free():

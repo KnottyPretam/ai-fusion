@@ -1,6 +1,6 @@
 // PromptBar (renderer-desktop Stage 1, renderer-desktop-2 Stage 2): the unified prompt. One
-// textarea, a target checkbox per slot, Pre-parse, Send, "New chat everywhere" and one result line
-// per slot.
+// textarea, a target checkbox per slot, the "Concise answers" switch, Pre-parse, Send, "New chat
+// everywhere" and one result line per slot.
 //
 // Stage 2: Send is a Triplex Send through features/send/useSendTurn.js (the SendPane.startTurn
 // extraction): a conversation is created when none is selected, `POST /api/conversations/{id}/send`
@@ -19,7 +19,8 @@
 // phase; a keystroke typed then would land in the site's composer between insert and submit); the
 // focus comes back only if the composer had it when the send started. The composer is cleared at
 // submit (the text is the persisted turn's prompt) and restored when the turn fails before it
-// streamed (a pre-stream 409/422, a failed create) so the user can retry.
+// streamed (a pre-stream 409/422, a failed create) so the user can retry — restored to what the
+// user TYPED, never to the text Concise answers composed from it (below).
 //
 // Per-slot result line: `panes.lastSend[slot]`, recorded by the slice from the send stream's
 // slot_done / slot_error events (`sent ✓ captured` | `sent ✓ not captured` | `✗ <code>`, see
@@ -56,8 +57,9 @@
 // the question clearly and succinctly through the hidden analyst page (one call, the primitive
 // Refactor uses), the backend appends its answer-format block deterministically, and the result
 // REPLACES the composer text, where the user reviews or edits it and then presses Send as usual —
-// Send stays byte-verbatim, and the pre-parse itself persists nothing. The wait is a real analyst
-// reply (40–340 s measured), so the status line carries an elapsed counter and a Cancel:
+// Send stays byte-verbatim (Concise answers sees the block already there and adds nothing), and the
+// pre-parse itself persists nothing. The wait is a real analyst reply (40–340 s measured), so the
+// status line carries an elapsed counter and a Cancel:
 // `abortStream('preparse')` (the frozen api/runStream.js) aborts the fetch, Starlette cancels the
 // backend's inline call and the bridge tells the analyst page to stop. Undo puts the typed text back
 // until the text is edited or sent — native Ctrl+Z cannot restore a programmatic value change, hence
@@ -74,6 +76,19 @@
 // not extended: `streams.preparse` locks nothing but this button, while AnalyzePane's `canRun`
 // already disables itself on any stream.
 //
+// Concise answers (2026-10-15) — `prompt-concise`, a checkbox after the targets, OFF by default and
+// sticky per viewer in localStorage `triplex.panes.concise` (read and written under try/catch: a
+// blocked storage leaves it off, and the switch still holds for the session). When it is on, Send
+// posts `withAnswerFormat(text)` (./answerFormat.js): the composer text with the answer-format block
+// Pre-parse appends — at most 8 claims, under 4,000 characters, no tables — and no analyst call.
+// Measured 2026-10-15: replies of 7,747 / 24,963 / 6,065 characters cost Analyze 16 condense calls
+// on the analyst page and still degraded; replies in this shape are compared in one call. A text
+// that already ends with the block (a Pre-parsed prompt) is posted as it is, never doubled. The
+// backend Send is unchanged — the renderer composes what the user sends, and the backend's
+// `strip_format` keeps the block out of the auto-title, Refactor and Analyze. The persisted turn's
+// prompt is the composed text; a failed turn gives back the TYPED text (`typed`, carried beside the
+// posted prompt through finish / runTurn / the queued turn).
+//
 // Enter sends, Shift+Enter inserts a newline, an IME composition (`isComposing` / keyCode 229) is
 // never treated as a send. Every `window.triplex` call is optional-chained: the bar renders and
 // sends under a partial stub (desktop-smoke.test.jsx) and under the web app.
@@ -83,6 +98,7 @@ import { abortStream, useRunStream } from '../../api/runStream.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { useSendTurn } from '../send/useSendTurn.js'
 import { councilSlotConfig, isDesktopAnalyst, loadAnalyst } from './analyst.js'
+import { withAnswerFormat } from './answerFormat.js'
 import { useOpenChats } from './chats.js'
 import { desktopApi } from './PaneDeck.jsx'
 import { FEATURE as PREPARSE, initial as preparseInitial } from './preparseSlice.js'
@@ -175,6 +191,29 @@ export function preparseBanner(code, detail = null) {
   return `Pre-parse failed: ${preparseFailureText(code, detail)}. Your text is unchanged; you can Send it as it is.`
 }
 
+/** Concise answers (2026-10-15): the renderer-owned key of the switch, 'true' | 'false'; absent = off. */
+export const CONCISE_KEY = 'triplex.panes.concise'
+/** The switch's description (the TooltipLayer reads `title`): what it appends, and why. */
+export const CONCISE_TITLE =
+  'Append the answer format Pre-parse adds, without the analyst call: at most 8 claims with a reason each, under 4,000 characters, no tables — replies that short let Analyze compare them in one call instead of condensing each first'
+
+// Bare `localStorage` inside the try: the access itself can throw when site data is blocked (slice.js).
+function loadConcise() {
+  try {
+    return typeof localStorage !== 'undefined' && !!localStorage && localStorage.getItem(CONCISE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function persistConcise(on) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) localStorage.setItem(CONCISE_KEY, on ? 'true' : 'false')
+  } catch {
+    /* quota / private mode: the switch still holds for this session */
+  }
+}
+
 export default function PromptBar({ api = desktopApi(), composerRef = null, chats = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
@@ -191,13 +230,14 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   const { newChatEverywhere, createAdopted, busy: creating, error: chatError, clearError: clearChatError } = chats || own
   const [text, setText] = useState('')
   const [inFlight, setInFlight] = useState(null) // targets of the send this bar started, while it runs
-  const [queued, setQueued] = useState(null) // {prompt, slots, convId}: a turn waiting for its created conversation
+  const [queued, setQueued] = useState(null) // {prompt, slots, convId, typed}: a turn waiting for its created conversation
   const [createError, setCreateError] = useState(null)
   const [preparsing, setPreparsing] = useState(false) // the click → the stream (or the create before it) settled
   const [preparsed, setPreparsed] = useState(null) // {original, prompt}: the applied result, until edited or sent
   const [preparseError, setPreparseError] = useState(null) // {code, detail} of a pre-stream failure (409/422, transport)
   const [cancelled, setCancelled] = useState(false) // "pre-parse cancelled" on the status line, for a moment
   const [elapsed, setElapsed] = useState(0) // whole seconds since the click, while preparsing
+  const [concise, setConcise] = useState(loadConcise) // append the answer-format block at Send
   const ownRef = useRef(null)
   const ref = composerRef || ownRef
   const alive = useRef(true)
@@ -301,28 +341,30 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
   const canPreparse = !busy && !creating && !empty && analystChosen && !analystBusy && !unedited && typeof createAdopted === 'function'
 
   // The end of a send this bar started: unlock, and keep the text for a retry when the turn failed
-  // before / instead of streaming (the banner says why).
-  const finish = (ok, sent) => {
+  // before / instead of streaming (the banner says why). `typed` is what the user typed — not the
+  // posted prompt, which Concise answers may have composed from it.
+  const finish = (ok, typed) => {
     sendingRef.current = false
     dispatch({ type: 'panes/sendResult', results: {} })
     if (!alive.current) return
     setInFlight(null)
-    if (!ok) setText((cur) => (cur === '' ? sent : cur))
+    if (!ok) setText((cur) => (cur === '' ? typed : cur))
   }
 
-  const runTurn = async (sent, list) => {
+  const runTurn = async (sent, list, typed) => {
     let ok = false
     try {
       // `sendBody` posts {prompt} for the whole council and {prompt, slots} for a strict subset.
       ok = await startTurn({ prompt: sent, slots: list })
     } finally {
-      finish(ok, sent)
+      finish(ok, typed)
     }
   }
 
   const send = async () => {
     if (!canSend || sendingRef.current) return
-    const sent = text
+    const typed = text
+    const sent = concise ? withAnswerFormat(typed) : typed
     const list = targets
     sendingRef.current = true
     setText('')
@@ -339,13 +381,13 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
         conv = await createConversation(dispatch, { slot_config: councilSlotConfig(panes.council) })
       } catch (e) {
         if (alive.current) setCreateError((e && e.message) || 'could not create conversation')
-        finish(false, sent)
+        finish(false, typed)
         return
       }
-      if (alive.current) setQueued({ prompt: sent, slots: list, convId: conv.id })
+      if (alive.current) setQueued({ prompt: sent, slots: list, convId: conv.id, typed })
       return
     }
-    await runTurn(sent, list)
+    await runTurn(sent, list, typed)
   }
 
   // The queued turn starts once the store shows the conversation the create produced: this render's
@@ -354,7 +396,7 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
     if (!queued || !conversation || conversation.id !== queued.convId) return
     const q = queued
     setQueued(null)
-    runTurn(q.prompt, q.slots)
+    runTurn(q.prompt, q.slots, q.typed)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the created conversation lands
   }, [queued, conversation])
 
@@ -514,6 +556,18 @@ export default function PromptBar({ api = desktopApi(), composerRef = null, chat
             </label>
           ))}
         </span>
+        <label className={css.target} title={CONCISE_TITLE}>
+          <input
+            type="checkbox"
+            data-testid="prompt-concise"
+            checked={concise}
+            onChange={(e) => {
+              setConcise(e.target.checked)
+              persistConcise(e.target.checked)
+            }}
+          />
+          Concise answers
+        </label>
         <button type="button" className={css.newChat} data-testid="prompt-newchat" disabled={busy || creating} title={newChatTitle} onClick={newChat}>
           New chat everywhere
         </button>

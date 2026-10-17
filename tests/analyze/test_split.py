@@ -55,6 +55,22 @@ def _types(events: list[dict[str, Any]]) -> list[str]:
     return [e["type"] for e in events]
 
 
+def condense_system(pieces: int, question: str = DEFAULT_PROMPT) -> str:
+    """The condense system prompt one piece of a label quoted in `pieces` messages receives: the
+    count-capped prompt (2026-10-15), its cap the label's share of the room the question leaves."""
+    cap = feature.label_claims_cap(feature.condense_room(question), 3)
+    return prompts.condense_system_for(3, max_claims=feature.share_per_piece(cap, pieces))
+
+
+def pass_two_system(block: str, question: str = DEFAULT_PROMPT) -> str:
+    """…and the one a piece of an over-share pass-1 `block` receives on pass 2: the cap sized from
+    the block's own claims and length (review 2026-10-15, `block_claims_cap`)."""
+    room = feature.condense_room(question)
+    cap = feature.block_claims_cap(len(block.splitlines()), len(block), room, 3)
+    pieces = len(feature.chunk_reply(block))
+    return prompts.condense_system_for(3, max_claims=feature.share_per_piece(cap, pieces))
+
+
 def responses_of(total: int) -> dict[str, str]:
     """Three slot replies whose characters sum to exactly `total`."""
     each = total // 3
@@ -150,7 +166,7 @@ async def test_long_replies_are_condensed_label_by_label_before_the_comparison(
     expected = {"R1": responses["claude"], "R2": responses["chatgpt"], "R3": responses["grok"]}
     for label, call in zip(LABELS[:3], calls[:3], strict=True):
         system, user = call["messages"]
-        assert system["content"] == prompts.CONDENSE_SYSTEM
+        assert system["content"] == condense_system(1)
         assert blocks_of(user["content"]) == {label: expected[label]}  # exactly one reply quoted
         assert DEFAULT_PROMPT in user["content"]  # the question, so "substantive" has a referent
         assert call["response_format"] is None  # bullets are not a validated artifact
@@ -377,9 +393,16 @@ async def test_a_set_still_over_the_bound_after_one_pass_gets_a_second_pass_then
     assert _types(events)[-1] == "analyze_done", events[-1].get("turn", {}).get("error")
     calls = extraction_calls()
     assert len(calls) == 6 + 6 + 1  # two pieces per label per pass, then the comparison
-    for call in calls[:12]:
+    rendered_pieces = events[-1]["turn"]["raw_attempts"]
+    for index, call in enumerate(calls[:12]):
         system, user = call["messages"]
-        assert system["content"] == prompts.CONDENSE_SYSTEM
+        if index < 6:
+            assert system["content"] == condense_system(2)  # two pieces per label
+        else:  # pass 2: the cap is sized from the label's pass-1 block (its two pieces joined)
+            first = 2 * ((index - 6) // 2)
+            assert system["content"] == pass_two_system(
+                "\n".join(rendered_pieces[first : first + 2])
+            )
         assert len(next(iter(blocks_of(user["content"]).values()))) <= feature.CONDENSE_CHUNK_CHARS
     # the second pass condensed the FIRST pass's bullets, not the raw replies
     _system, user7 = calls[6]["messages"]
@@ -432,9 +455,10 @@ async def test_a_reply_over_the_chunk_size_is_condensed_in_pieces_that_reach_the
 
     calls = extraction_calls()
     assert len(calls) == 6  # three pieces for R1, one each for R2 and R3, then the comparison
-    for call in calls[:5]:
+    for index, call in enumerate(calls[:5]):
         system, user = call["messages"]
-        assert system["content"] == prompts.CONDENSE_SYSTEM
+        # R1's three pieces share its cap; R2 and R3 are one piece each
+        assert system["content"] == condense_system(3 if index < 3 else 1)
         quoted = blocks_of(user["content"])
         assert len(quoted) == 1  # one label per condense message, always
         assert len(next(iter(quoted.values()))) <= feature.CONDENSE_CHUNK_CHARS
@@ -463,7 +487,7 @@ async def test_the_condense_partial_is_returned_even_on_failure(monkeypatch):
         yield Delta(kind="error", code="timeout", message="the reply never became a complete json document")
 
     monkeypatch.setattr(llm_client, "stream_completion", fake_stream)
-    text, _usage, error, raw = await feature._condense(
+    text, _usage, error, raw, _claims, _reused = await feature._condense(
         model="web:chatgpt:analyst", question="q", label="R1", response="a reply"
     )
     assert error is not None and "complete json" in error

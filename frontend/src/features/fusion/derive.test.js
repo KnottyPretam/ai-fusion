@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { buildTimeline, clampIterations, fusionGate, isSendComplete, latestClaim, latestJustification, latestSendTurn, newestOkAnalyze, standingIds, traceText, usageSummary } from './derive.js'
+import { SIZE_REFUSAL_MARKERS, buildTimeline, clampIterations, fusionGate, isSendComplete, latestClaim, latestJustification, latestSendTurn, newestOkAnalyze, standingIds, traceText, usageSummary } from './derive.js'
 import { EXTRACTION, ROUND1, ROUND2, SLOT_CONFIG, USAGE, analyzeTurn, conversation, exchange, roundDone, sendTurn } from './fixtures.js'
 
 const idle = { send: { status: 'idle' }, analyze: { status: 'idle' }, fusion: { status: 'idle' } }
@@ -84,6 +84,66 @@ describe('fusionGate (docs/api-contract.md button rule)', () => {
 
   test('falls back to the conversation slot_config when the slotConfig slice is null', () => {
     expect(fusionGate({ conversation: conversation(), slotConfig: null, streams: idle }).enabled).toBe(true)
+  })
+
+  // 2026-10-15: an Analyze that degraded on SIZE is not auto-re-run by Fusion (it replayed a 16-call
+  // condense chain to the same refusal) until a Refactor of that Send gives Analyze a new input.
+  // One real message per backend source (backend/features/analyze.py), so each marker is exercised.
+  const SIZE_ERRORS = {
+    oversize_message: "R2's reply is 31,250 characters, over the 30,000 the analyst can take in one message. Ask that slot again for a shorter answer, or analyze a Send whose replies fit — Triplex will not compare a truncated one.",
+    condense_ineffective: "the comparison message would still be 33,196 characters (the condensed replies plus the question) after 2 condense passes, over the 20,000 one analyst message is sized for (the largest block is R2's at 24,963). Condensing did not shorten them enough to compare, and nothing was truncated to force it.",
+  }
+  const SIZE_BLOCKED = { enabled: false, reason: 'Analyze could not fit these replies into one comparison — run Refactor, then Analyze', autoAnalyze: false, standing: null }
+  const degradedWith = (id, ofTurn, error) => ({ ...analyzeTurn(id, ofTurn, null, 'degraded'), error })
+  const refactorTurn = (id, ofTurn, status = 'ok') => ({ type: 'refactor', id, ts: '2026-09-07T00:00:02.000Z', slot_config: SLOT_CONFIG, usage: USAGE, of_turn: ofTurn, refactoring: status === 'ok' ? {} : null, status, error: status === 'ok' ? null : 'parse_error', raw_attempts: [] })
+
+  test('a size-degraded Analyze blocks Fusion instead of auto-analyzing (each marker)', () => {
+    expect(SIZE_REFUSAL_MARKERS).toEqual(['can take in one message', 'condense passes'])
+    for (const [source, error] of Object.entries(SIZE_ERRORS)) {
+      const conv = conversation([sendTurn(), degradedWith('a1', 's1', error)])
+      expect(fusionGate({ conversation: conv, slotConfig: SLOT_CONFIG, streams: idle }), source).toEqual(SIZE_BLOCKED)
+    }
+    // the NEWEST analyze of the send decides: a size degrade after a non-size one still blocks
+    const twice = conversation([sendTurn(), degradedWith('a1', 's1', 'parse_error: no JSON object found'), degradedWith('a2', 's1', SIZE_ERRORS.condense_ineffective)])
+    expect(fusionGate({ conversation: twice, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(SIZE_BLOCKED)
+    // …and the other way round: a non-size degrade NEWER than a size one auto-analyzes again
+    const later = conversation([sendTurn(), degradedWith('a1', 's1', SIZE_ERRORS.condense_ineffective), degradedWith('a2', 's1', 'not_captured')])
+    expect(fusionGate({ conversation: later, slotConfig: SLOT_CONFIG, streams: idle })).toEqual({ enabled: true, reason: null, autoAnalyze: true, standing: null })
+  })
+
+  test('an ok Refactor of that Send NEWER than the size degrade re-enables with autoAnalyze', () => {
+    const after = conversation([sendTurn(), degradedWith('a1', 's1', SIZE_ERRORS.condense_ineffective), refactorTurn('r1', 's1')])
+    expect(fusionGate({ conversation: after, slotConfig: SLOT_CONFIG, streams: idle })).toEqual({ enabled: true, reason: null, autoAnalyze: true, standing: null })
+    // an ok Refactor BEFORE the degrade was already Analyze's input: still blocked
+    const before = conversation([sendTurn(), refactorTurn('r1', 's1'), degradedWith('a1', 's1', SIZE_ERRORS.condense_ineffective)])
+    expect(fusionGate({ conversation: before, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(SIZE_BLOCKED)
+    // a degraded Refactor, or an ok one of another Send, changes nothing
+    const failed = conversation([sendTurn(), degradedWith('a1', 's1', SIZE_ERRORS.oversize_message), refactorTurn('r1', 's1', 'degraded')])
+    expect(fusionGate({ conversation: failed, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(SIZE_BLOCKED)
+    const other = conversation([sendTurn(), degradedWith('a1', 's1', SIZE_ERRORS.oversize_message), refactorTurn('r1', 's0')])
+    expect(fusionGate({ conversation: other, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(SIZE_BLOCKED)
+  })
+
+  test('a degrade for any other reason still auto-analyzes', () => {
+    // a condense CALL that failed (condense_failure) is retried, not refused: the cache re-asks only the failed pieces
+    for (const error of ['parse_error: no JSON object found', "validation_error: unknown label(s) ['R4']; only R1, R2, R3 exist", 'not_captured', "could not condense R2's reply for the comparison: timeout", null]) {
+      const conv = conversation([sendTurn(), degradedWith('a1', 's1', error)])
+      expect(fusionGate({ conversation: conv, slotConfig: SLOT_CONFIG, streams: idle })).toEqual({ enabled: true, reason: null, autoAnalyze: true, standing: null })
+    }
+  })
+
+  test('a size-degraded Analyze of a PREVIOUS Send does not block the latest Send', () => {
+    const conv = conversation([sendTurn('s1'), degradedWith('a1', 's1', SIZE_ERRORS.condense_ineffective), sendTurn('s2')])
+    expect(fusionGate({ conversation: conv, slotConfig: SLOT_CONFIG, streams: idle })).toEqual({ enabled: true, reason: null, autoAnalyze: true, standing: null })
+  })
+
+  test('an ok Analyze wins over a size degrade, newer or older', () => {
+    const okStanding = { enabled: true, reason: null, autoAnalyze: false, standing: ['d1', 'd2'] }
+    const newer = conversation([sendTurn(), degradedWith('a1', 's1', SIZE_ERRORS.condense_ineffective), analyzeTurn('a2', 's1')])
+    expect(fusionGate({ conversation: newer, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(okStanding)
+    // a forced re-run that degraded on size: the backend still fuses the newest OK analyze
+    const older = conversation([sendTurn(), analyzeTurn('a1', 's1'), degradedWith('a2', 's1', SIZE_ERRORS.condense_ineffective)])
+    expect(fusionGate({ conversation: older, slotConfig: SLOT_CONFIG, streams: idle })).toEqual(okStanding)
   })
 })
 

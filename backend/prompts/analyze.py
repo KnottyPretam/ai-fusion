@@ -138,17 +138,37 @@ CONDENSED_RESPONSES_HEADER = (
 )
 
 # --------------------------------------------------------------------------- the condense step
-def condense_system_for(n: int, *, fenced: bool = False) -> str:
-    """The condense instructions for a council of n: one response, compared with n-1 others."""
+#: The claims cap (2026-10-15), worded like `prompts/refactor.py` `_REPLY_CAP_CLAUSE`. MEASURED: an
+#: uncapped condense call on a reasoning analyst returned 343 claim lines for three replies and a
+#: second pass over them returned 340 -- a rewrite, not a reduction -- so the comparison was refused
+#: after 16 calls. The count is asked for, never enforced by truncation (`features/analyze.py`).
+CONDENSE_CAP_CLAUSE = (
+    "Return at most {max_claims} claims: the ones the answer rests on, in the order they appear. "
+    "When the response makes more than that, keep the load-bearing ones and leave the peripheral "
+    "ones out rather than merging several into one, because a merged claim can no longer be "
+    "compared on its own.\n\n"
+)
+
+
+def condense_system_for(n: int, *, fenced: bool = False, max_claims: int | None = None) -> str:
+    """The condense instructions for a council of n: one response, compared with n-1 others.
+    `max_claims` (2026-10-15) inserts `CONDENSE_CAP_CLAUSE` before the "Do not add" paragraph;
+    None leaves the text byte for byte what it was before the cap existed."""
     check_council_size(n)
-    system = f"""You are condensing ONE anonymous expert response so that it can be compared with {others(n)}.
+    if max_claims is not None and (
+        not isinstance(max_claims, int) or isinstance(max_claims, bool) or max_claims < 1
+    ):
+        raise ValueError(f"max_claims must be a positive integer, got {max_claims!r}")
+    head = f"""You are condensing ONE anonymous expert response so that it can be compared with {others(n)}.
 
 Rewrite it as a flat list of short bullet points, one substantive claim per bullet: facts, numbers, limits, register values, recommendations, and for each claim the evidence it cites, if any. Copy every specific value verbatim — a number or a limit that changes is worse than one that is left out. Drop restatements, pleasantries, worked-example prose, and anything that is only about style, order or emphasis. Keep the claims in the order they appear.
 
-Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a shorter copy of one response, not an assessment of it.
+"""
+    cap = "" if max_claims is None else CONDENSE_CAP_CLAUSE.format(max_claims=max_claims)
+    tail = """Do not add, resolve, rank or judge anything, and do not mention this instruction: the result is a shorter copy of one response, not an assessment of it.
 
-Return ONLY a JSON object of the form {{"claims": ["<one claim>", "<one claim>", ...]}} and nothing else. One claim per string, in the order they appear."""
-    return system + (CONDENSE_FENCE_CLAUSE if fenced else "")
+Return ONLY a JSON object of the form {"claims": ["<one claim>", "<one claim>", ...]} and nothing else. One claim per string, in the order they appear."""
+    return head + cap + tail + (CONDENSE_FENCE_CLAUSE if fenced else "")
 
 
 #: Appended for a web session, which is read back out of RENDERED markdown: the same fence rule the
@@ -211,6 +231,7 @@ def condense_messages(
     *,
     fenced: bool = False,
     n: int = 3,
+    max_claims: int | None = None,
 ) -> list[dict[str, str]]:
     """`[system(condense instructions), user(question + the one delimited block)]`.
 
@@ -218,9 +239,10 @@ def condense_messages(
     the capture refuses to end on a document whose braces do not balance (S10), so a condensation
     truncated mid-answer FAILS loudly instead of being quoted into the comparison as though it were
     the whole reply; and `fenced=True` asks for the code block that survives markdown rendering.
-    `n` is the council size (how many others the response is compared with)."""
+    `n` is the council size (how many others the response is compared with); `max_claims` is the
+    cap this ONE message asks for (None: no cap clause, the pre-2026-10-15 bytes)."""
     return [
-        {"role": "system", "content": condense_system_for(n, fenced=fenced)},
+        {"role": "system", "content": condense_system_for(n, fenced=fenced, max_claims=max_claims)},
         {"role": "user", "content": condense_user(question, label, response)},
     ]
 
@@ -271,6 +293,7 @@ def retry_message(error: str, *, fenced: bool = False) -> str:
 __all__ = [
     "CONDENSED_RESPONSES_HEADER",
     "GRAPH_HEADER",
+    "CONDENSE_CAP_CLAUSE",
     "CONDENSE_HEADER",
     "CONDENSE_SYSTEM",
     "JSON_INSTRUCTION",

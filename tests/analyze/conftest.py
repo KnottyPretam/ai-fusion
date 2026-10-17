@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 import pytest
 
+from backend.features import analyze as analyze_feature
 from backend.llm import mock
 from backend.schemas import DEFAULT_COUNCIL, Conversation, SlotId
 from backend.store import conversations as store
@@ -80,6 +81,16 @@ def blocks_of(user_content: str) -> dict[str, str]:
 
 def outside_blocks(user_content: str) -> str:
     return BLOCK_RE.sub(" ", user_content)
+
+
+@pytest.fixture(autouse=True)
+def _clear_condense_cache():
+    """The condensation cache is process-level (2026-10-15, `features/analyze.py`); a test that
+    condenses the same text as an earlier one must still make its calls, so it starts and ends
+    empty. Here rather than in tests/conftest.py, which is frozen."""
+    analyze_feature.clear_condense_cache()
+    yield
+    analyze_feature.clear_condense_cache()
 
 
 async def persist(src: Conversation) -> Conversation:

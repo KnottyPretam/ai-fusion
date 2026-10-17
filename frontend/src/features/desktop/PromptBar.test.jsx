@@ -5,8 +5,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import './index.jsx' // registers the `panes` slice (and, through useSendTurn, `slots`)
-import PromptBar, { BRIDGE_BANNER_TEXT, CANCELLED_NOTICE_MS, PREPARSE_TITLES, formatResult, preparseBanner, preparseFailureText, resultTitle } from './PromptBar.jsx'
+import PromptBar, { BRIDGE_BANNER_TEXT, CANCELLED_NOTICE_MS, CONCISE_KEY, CONCISE_TITLE, PREPARSE_TITLES, formatResult, preparseBanner, preparseFailureText, resultTitle } from './PromptBar.jsx'
 import { ANALYST_KEY, desktopSlotConfig } from './analyst.js'
+import { ANSWER_FORMAT } from './answerFormat.js'
 import { NOT_CAPTURED, initialPanes } from './slice.js'
 import { renderWithStore, sample } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
@@ -1044,5 +1045,142 @@ describe('PromptBar: Pre-parse', () => {
       localStorage.removeItem(ANALYST_KEY)
     }
     expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+})
+
+// Concise answers (2026-10-15): an opt-in switch that appends the answer-format block (./answerFormat.js,
+// the mirror of the backend's ANSWER_FORMAT) to what Send posts. Renderer only — the backend Send is
+// verbatim, so the /send body is where the block shows.
+describe('PromptBar: Concise answers', () => {
+  const concise = () => screen.getByTestId('prompt-concise')
+  const bar = () => screen.getByTestId('prompt-bar')
+  const withConv = { conversation: conv(), slotConfig: CFG }
+  const sendCall = (calls) => calls.find((c) => c.method === 'POST' && c.url.endsWith('/send'))
+
+  afterEach(() => {
+    localStorage.removeItem(CONCISE_KEY)
+  })
+
+  test('off by default, beside the targets, its title says what it appends and why; sticky in localStorage across remounts', () => {
+    stubFetch([])
+    const first = mount(fakeTriplex(), {}, withConv)
+    expect(concise()).not.toBeChecked()
+    expect(localStorage.getItem(CONCISE_KEY)).toBeNull() // nothing is written until the user touches it
+    const label = concise().closest('label')
+    expect(label).toHaveTextContent('Concise answers')
+    expect(label.previousElementSibling).toHaveAttribute('aria-label', 'Targets')
+    expect(label.title).toBe(CONCISE_TITLE)
+    for (const phrase of ['at most 8 claims', 'under 4,000 characters', 'no tables', 'Analyze compare them in one call']) expect(label.title).toContain(phrase)
+    fireEvent.click(concise())
+    expect(concise()).toBeChecked()
+    expect(localStorage.getItem(CONCISE_KEY)).toBe('true')
+    first.unmount()
+    const second = mount(fakeTriplex(), {}, withConv)
+    expect(concise()).toBeChecked()
+    fireEvent.click(concise())
+    expect(concise()).not.toBeChecked()
+    expect(localStorage.getItem(CONCISE_KEY)).toBe('false')
+    second.unmount()
+    mount(fakeTriplex(), {}, withConv)
+    expect(concise()).not.toBeChecked()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  test('unchecked: the /send body is the typed text, no block', async () => {
+    const calls = stubTurn({ send: () => sseResponse(fullStream('t1')), after: afterSend('plain') })
+    mount(fakeTriplex(), {}, withConv)
+    type('plain question\nline two')
+    enter()
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(sendCall(calls).body).toEqual({ prompt: 'plain question\nline two' })
+  })
+
+  test('checked: the /send body is the typed text, trailing whitespace dropped, a blank line, the block; the composer is cleared', async () => {
+    localStorage.setItem(CONCISE_KEY, 'true')
+    const calls = stubTurn({ send: () => sseResponse(fullStream('t1')), after: afterSend('q') })
+    mount(fakeTriplex(), {}, withConv)
+    expect(concise()).toBeChecked()
+    type('Which gyroscope range?  \n')
+    enter()
+    expect(composer()).toHaveValue('')
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    expect(calls[0].body).toEqual({ prompt: `Which gyroscope range?\n\n${ANSWER_FORMAT}` })
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(composer()).toHaveValue('')
+  })
+
+  test('checked, first Send: the queued turn (after the create) posts the composed prompt too, with the subset', async () => {
+    localStorage.setItem(CONCISE_KEY, 'true')
+    const calls = stubTurn({ create: true, send: () => sseResponse(fullStream('t1', ['chatgpt', 'grok'])), after: afterSend('first') })
+    mount(fakeTriplex(), { targets: { claude: false, chatgpt: true, grok: true } })
+    type('first')
+    enter()
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations', 'POST /api/conversations/c1/send', 'GET /api/conversations/c1', 'GET /api/conversations']))
+    expect(calls[1].body).toEqual({ prompt: `first\n\n${ANSWER_FORMAT}`, slots: ['chatgpt', 'grok'] })
+  })
+
+  test('checked: a text that already ends with the block (a Pre-parsed prompt) is posted as it is, never doubled', async () => {
+    localStorage.setItem(CONCISE_KEY, 'true')
+    const composed = `q\n\n${ANSWER_FORMAT}`
+    const calls = stubTurn({ send: () => sseResponse(fullStream('t1')), after: afterSend(composed) })
+    mount(fakeTriplex(), {}, withConv)
+    type(composed)
+    enter()
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(sendCall(calls).body).toEqual({ prompt: composed })
+  })
+
+  test('checked: a failed turn (pre-stream 409) and a failed create both give back the TYPED text, never the composed one', async () => {
+    localStorage.setItem(CONCISE_KEY, 'true')
+    const calls = stubTurn({ send: jsonResponse({ detail: { error: 'busy' } }, 409) })
+    const first = mount(fakeTriplex(), {}, withConv)
+    type('again')
+    enter()
+    expect(composer()).toHaveValue('')
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('busy'))
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(sendCall(calls).body).toEqual({ prompt: `again\n\n${ANSWER_FORMAT}` }) // the block was posted…
+    expect(composer()).toHaveValue('again') // …but the composer holds what was typed
+    first.unmount()
+    vi.unstubAllGlobals()
+    stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse({ detail: { error: 'disk_full' } }, 500) }])
+    mount(fakeTriplex())
+    type('keep me')
+    enter()
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('disk_full'))
+    expect(composer()).toHaveValue('keep me')
+  })
+
+  test('checked, first Send: when the QUEUED turn fails (create ok, then a 409), the composer gets back the TYPED text', async () => {
+    localStorage.setItem(CONCISE_KEY, 'true')
+    const calls = stubTurn({ create: true, send: jsonResponse({ detail: { error: 'busy' } }, 409) })
+    mount(fakeTriplex())
+    type('queued question')
+    enter()
+    expect(composer()).toHaveValue('')
+    await waitFor(() => expect(screen.getByTestId('prompt-banner')).toHaveTextContent('busy'))
+    await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+    expect(sendCall(calls).body).toEqual({ prompt: `queued question\n\n${ANSWER_FORMAT}` }) // the queued turn posted the block…
+    expect(composer()).toHaveValue('queued question') // …and the composer holds what was typed
+  })
+
+  test('a storage that throws leaves the switch off and it still works for the session', async () => {
+    const throwing = () => {
+      throw new Error('SecurityError')
+    }
+    vi.stubGlobal('localStorage', { getItem: throwing, setItem: throwing, removeItem: throwing })
+    try {
+      const calls = stubTurn({ send: () => sseResponse(fullStream('t1')), after: afterSend('q') })
+      mount(fakeTriplex(), {}, withConv)
+      expect(concise()).not.toBeChecked()
+      fireEvent.click(concise())
+      expect(concise()).toBeChecked()
+      type('q')
+      enter()
+      await waitFor(() => expect(bar()).toHaveAttribute('data-sending', 'false'))
+      expect(sendCall(calls).body).toEqual({ prompt: `q\n\n${ANSWER_FORMAT}` })
+    } finally {
+      vi.unstubAllGlobals() // before the describe's afterEach touches localStorage again
+    }
   })
 })

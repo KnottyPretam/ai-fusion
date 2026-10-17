@@ -80,6 +80,14 @@ into ONE chat message, 27,252 of it quoted replies, against a 32,768-character c
   reply by about 30% (measured 2026-09-22: 20,511 -> 14,950), so a set still over the bound gets a
   SECOND pass over the condensed blocks (`CONDENSE_PASSES`), and only a set that does not fit after
   that is refused (`condense_ineffective`), never truncated.
+- Every condense message asks for a COUNT (2026-10-15; measured: an uncapped prompt got 343 claim
+  lines back, then 340 from the second pass, and the set was refused after 16 calls). Each label's
+  cap is sized so ONE pass fits (`label_claims_cap`, shared over its pieces by `share_per_piece`);
+  more than was asked is kept with one WARNING. Pass 2 is the safety net and is TARGETED: only a
+  block over its share of the room is condensed again, the others are kept as they are, and each is
+  asked for FEWER claims than it holds (`block_claims_cap`). A successful condensation that kept to
+  its cap is cached in memory by its exact messages, so re-running Analyze (or the Fusion that
+  auto-runs it) over the same text makes no condense call for it (`reuse_notice`).
 
 The bound is transport-independent on purpose. The ceiling that produced the failure is the web
 transport's, but a 27 KB analyst prompt is a bad prompt everywhere -- it is the input against which
@@ -93,9 +101,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
+import math
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections import OrderedDict
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 from .. import anon, api_errors
@@ -159,6 +171,27 @@ CONDENSED_MAX_CHARS = 20_000
 # over the condensed blocks is "the other step" the user asked for on 2026-09-20 when one is not
 # enough. A set that does not fit after two is refused loudly, never truncated (same decision).
 CONDENSE_PASSES = 2
+# The claims cap each condense message asks for (2026-10-15). MEASURED on the run that motivated it:
+# replies of 7,747 / 24,963 / 6,065 characters took 16 sequential condense calls on a reasoning
+# analyst page (34.5 min) and the comparison was STILL refused at 33,196 characters, because the
+# condense prompt asked for every claim with no count -- 343 claim lines on pass 1 and 340 on pass 2,
+# a rewrite rather than a reduction. So each label is now asked for at most its share of what one
+# comparison message can carry, sized for ONE pass to fit: CONDENSE_TARGET_FRACTION of the room
+# (`condense_room`) over the council at CLAIM_CHARS_ASSUMED per bullet (`label_claims_cap`), then
+# over the label's pieces (`share_per_piece`, never under CONDENSE_CLAIMS_MIN). The other 40% is the
+# margin for longer bullets or a few more of them. More than was asked for is KEPT with one WARNING
+# per label, never cut (the house rule above; `features/refactor.py` does the same).
+CLAIM_CHARS_ASSUMED = 120  # measured 2026-10-15: ~96-100 characters per rendered bullet, max 116
+CONDENSE_TARGET_FRACTION = 0.6
+CONDENSE_CLAIMS_MIN = 4
+# The condensation cache (2026-10-15): a click on Fusion after a degraded Analyze re-ran the whole
+# condense chain, because a degraded turn is never cached. A successful condensation is a pure
+# function of the model and the exact messages, so it is kept in memory (LRU, this many entries) and
+# a repeat of the identical message is answered from here with no call and nothing booked. Only
+# condensations are kept; the comparison is never cached. One that came back OVER its cap is not kept
+# either (review 2026-10-15): it is the measured failure mode, and a cached one replayed the same
+# refusal on every forced Re-run with no call made, for as long as the process lived.
+CONDENSE_CACHE_MAX = 64
 # What every PROGRESS narration on `analyze_retry` begins with. The event alphabet is frozen, so the
 # split step (`split_notice`) and the chunk step (`chunk_notice`) can only announce themselves on the
 # retry event, and the pane tells a narration apart from a failed attempt by this prefix ALONE
@@ -172,6 +205,8 @@ _END = None  # queue sentinel
 # Strong references to running producer tasks (asyncio keeps only weak ones): a task must survive
 # the generator that spawned it when the client disconnects.
 _tasks: set[asyncio.Task[None]] = set()
+# condense_cache_key -> (rendered claim lines, claim count); newest last (CONDENSE_CACHE_MAX).
+_condense_cache: OrderedDict[str, tuple[str, int]] = OrderedDict()
 
 
 # --------------------------------------------------------------------------- pre-checks
@@ -348,6 +383,7 @@ def split_notice(
     *,
     bound: int = SPLIT_MIN_CHARS,
     pass_no: int = 1,
+    max_claims: int | None = None,
 ) -> str:
     """What `analyze_retry` carries for one condense sub-call. The event alphabet is frozen, so
     this string is the only place the split can announce itself (module docstring), and the pane
@@ -355,16 +391,20 @@ def split_notice(
 
     Pass 1 names the split trigger and the reply; pass 2 (review 2026-09-22) names the bound that
     actually forced it and says the block is already condensed -- before that, both passes read as
-    the same sentence citing a threshold the second one never used."""
+    the same sentence citing a threshold the second one never used. `max_claims` (2026-10-15) adds
+    the label's claims cap at the END, so the prefix stays first."""
+    cap = "" if max_claims is None else f" (at most {max_claims} claims)"
     if pass_no <= 1:
         return (
             f"{SPLIT_NOTICE_PREFIX}: {total:,} characters of replies is over {bound:,}, so "
             f"{label}'s reply ({chars:,} characters) is being condensed to its substantive claims first"
+            f"{cap}"
         )
     return (
         f"{SPLIT_NOTICE_PREFIX}: the condensed set still comes to {total:,} characters after "
         f"{pass_no - 1} pass{'es' if pass_no > 2 else ''}, over the {bound:,} one comparison message "
         f"can carry, so {label}'s condensed block ({chars:,} characters) is being condensed again"
+        f"{cap}"
     )
 
 
@@ -376,6 +416,43 @@ def comparison_chars(question: str, responses: dict[Label, str], graph: str = ""
     """What the comparison message would quote: the blocks, the question and the graph. The scaffold
     (headers, notice, delimiters) adds ~1.5 KB on top; CONDENSED_MAX_CHARS leaves room for it."""
     return quoted_chars(responses) + len(question) + len(graph)
+
+
+def condense_room(question: str, graph: str = "") -> int:
+    """What the condensed blocks may fill of CONDENSED_MAX_CHARS once the question and the graph,
+    which ride in the same comparison message, are counted (`comparison_chars`' arithmetic)."""
+    return CONDENSED_MAX_CHARS - len(question) - len(graph)
+
+
+def label_claims_cap(room: int, n: int) -> int:
+    """The most claims ONE label is asked for: n blocks of this many claims at CLAIM_CHARS_ASSUMED
+    each fill CONDENSE_TARGET_FRACTION of `room`. The measured run (2026-10-15): a 466-character
+    question in a council of three -> room 19,534 -> 32."""
+    return math.floor(room * CONDENSE_TARGET_FRACTION / (n * CLAIM_CHARS_ASSUMED))
+
+
+def share_per_piece(cap: int, pieces: int) -> int:
+    """The cap ONE message is asked for when `cap` is spread over `pieces` messages (a reply quoted
+    in pieces), never under CONDENSE_CLAIMS_MIN: a piece asked for a list too short to carry its
+    own substance would lose it. Refactor's `claims_per_piece` is this over REPLY_CLAIMS_MAX."""
+    if pieces < 1:
+        raise ValueError(f"pieces must be at least 1, got {pieces!r}")
+    return max(CONDENSE_CLAIMS_MIN, math.ceil(cap / pieces))
+
+
+def block_claims_cap(claims: int, chars: int, room: int, n: int) -> int:
+    """The cap a block over its share is asked for on pass 2 (review 2026-10-15): `label_claims_cap`
+    with the bullet length the block actually came back with in place of CLAIM_CHARS_ASSUMED, and
+    never above that cap. Asking it for the pass-1 cap again cannot shrink a block that OBEYED it
+    with long bullets -- it holds at most that many claims, and spread over its pieces and rounded
+    up the ask is at least as many (measured in review: 33 claims at ~350 characters, then 17 + 17
+    asked of them, six more calls and the same refusal). Here its claims at their measured length
+    fill CONDENSE_TARGET_FRACTION of its share of the room, so an over-share block is asked for
+    fewer than it holds."""
+    return min(
+        label_claims_cap(room, n),
+        math.floor(claims * room * CONDENSE_TARGET_FRACTION / (n * chars)),
+    )
 
 
 def condense_ineffective(total: int, label: Label | str, chars: int) -> str:
@@ -512,20 +589,54 @@ def _split_lines(paragraph: str, limit: int) -> list[str]:
     return out
 
 
-def chunk_notice(label: Label | str, chars: int, pieces: int) -> str:
+def chunk_notice(label: Label | str, chars: int, pieces: int, max_claims: int | None = None) -> str:
     """What `analyze_retry` carries when one reply needs more than one condense message. Progress,
-    like `split_notice`, so it begins with the same prefix -- that is the only way the pane knows."""
+    like `split_notice`, so it begins with the same prefix -- that is the only way the pane knows.
+    `max_claims` (2026-10-15) is the cap each piece is asked for, added at the end."""
     return (
         f"{SPLIT_NOTICE_PREFIX}: {label}'s reply is {chars:,} characters, over the "
         f"{CONDENSE_CHUNK_CHARS:,} one condense message can be answered for, so it is being "
         f"condensed in {pieces} pieces"
+        + ("" if max_claims is None else f" (at most {max_claims} claims each)")
     )
 
 
+def reuse_notice(label: Label | str, piece: int = 1, pieces: int = 1) -> str:
+    """What `analyze_retry` carries when a condensation is answered from the cache (2026-10-15):
+    progress, so the prefix comes first, and "(reused)" says no analyst call was made for it."""
+    where = f" (piece {piece} of {pieces})" if pieces > 1 else ""
+    return (
+        f"{SPLIT_NOTICE_PREFIX}: {label}'s claims{where} (reused) — this exact condense message was "
+        f"answered earlier, so no analyst call was made for it"
+    )
+
+
+def condense_cache_key(model: str, messages: list[dict[str, str]]) -> str:
+    """sha256 of the model and the canonical condense messages: the cap, the transport's fence
+    clause, the council size, the question and the quoted text are all in the messages, so any
+    change to what would be typed is a different key."""
+    canonical = json.dumps({"model": model, "messages": messages}, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def clear_condense_cache() -> None:
+    """Forget every cached condensation (tests; the cache is process-level)."""
+    _condense_cache.clear()
+
+
 async def _condense(
-    *, model: str, question: str, label: Label, response: str, n: int = 3
-) -> tuple[str, FeatureUsage, str | None, str]:
+    *,
+    model: str,
+    question: str,
+    label: Label,
+    response: str,
+    n: int = 3,
+    max_claims: int | None = None,
+) -> tuple[str, FeatureUsage, str | None, str, int, bool]:
     """One condense sub-call: that label's reply in, its claims out as bullet lines.
+    Returns `(text, usage, error, raw, claims, reused)`: `claims` is how many came back (0 on a
+    failure) and `reused` is True when the cache answered (2026-10-15) -- no call made, `usage`
+    empty, `raw` the cached lines.
 
     Streamed for its TEXT rather than through `complete_json`, because the claims are quoted data
     for the comparison prompt and there is no schema to add for them -- but they are asked for and
@@ -533,7 +644,20 @@ async def _condense(
     being quoted as though it were the whole reply: a half-written object does not parse, and on a
     web session the capture will not even end on one (S10, `looksComplete`). Never raises -- the LLM
     layer does not -- and an empty reply is a failure, because an empty block would silently drop
-    one label out of the comparison."""
+    one label out of the comparison. `max_claims` is the cap this message asks for."""
+    messages = prompts.condense_messages(
+        question,
+        label,
+        response,
+        fenced=client.transport_kind(model) == "web",
+        n=n,
+        max_claims=max_claims,
+    )
+    key = condense_cache_key(model, messages)
+    hit = _condense_cache.get(key)
+    if hit is not None:
+        _condense_cache.move_to_end(key)
+        return hit[0], FeatureUsage(), None, hit[0], hit[1], True
     usage = FeatureUsage()
     parts: list[str] = []
     error: str | None = None
@@ -541,9 +665,7 @@ async def _condense(
         role=ROLE,
         purpose=PURPOSE,
         model=model,
-        messages=prompts.condense_messages(
-            question, label, response, fenced=client.transport_kind(model) == "web", n=n
-        ),
+        messages=messages,
         effort=ANALYST_EFFORT,
         max_tokens=_analyst_max_tokens(model),
     ):
@@ -569,19 +691,26 @@ async def _condense(
     if error is None and not text.strip():
         error = "the condense pass returned no text"
     if error is not None:
-        return "", usage, error, text
+        return "", usage, error, text, 0, False
     # The claims arrive as JSON so a half-written answer cannot pass for a whole one; they are
     # rendered back to bullet lines here, because what the comparison prompt quotes is prose.
     value, perr = client.extract_json(text, repair=client.transport_kind(model) == "web")
     if value is None:
-        return "", usage, f"the condense pass returned no usable claims: {perr}", text
+        return "", usage, f"the condense pass returned no usable claims: {perr}", text, 0, False
     claims = value.get("claims")
     if not isinstance(claims, list) or not claims:
-        return "", usage, "the condense pass returned no claims", text
+        return "", usage, "the condense pass returned no claims", text, 0, False
     lines = [f"- {str(c).strip()}" for c in claims if str(c).strip()]
     if not lines:
-        return "", usage, "the condense pass returned no claims", text
-    return "\n".join(lines), usage, None, text
+        return "", usage, "the condense pass returned no claims", text, 0, False
+    rendered = "\n".join(lines)
+    # Only a SUCCESSFUL condensation is remembered: a failure must be free to succeed next time, and
+    # so must one that came back over its cap (review 2026-10-15, CONDENSE_CACHE_MAX).
+    if max_claims is None or len(lines) <= max_claims:
+        _condense_cache[key] = (rendered, len(lines))
+        while len(_condense_cache) > CONDENSE_CACHE_MAX:
+            _condense_cache.popitem(last=False)
+    return rendered, usage, None, text, len(lines), False
 
 
 async def _condense_all(
@@ -594,39 +723,69 @@ async def _condense_all(
     queue: asyncio.Queue[dict[str, Any] | None],
     bound: int = SPLIT_MIN_CHARS,
     pass_no: int = 1,
+    graph: str = "",
+    caps: Mapping[Label, int] | None = None,
+    counts: dict[Label, int] | None = None,
 ) -> tuple[dict[Label, str] | None, str | None]:
-    """The three condense sub-calls, in R1/R2/R3 order. Returns `(condensed, None)` or
-    `(None, error)` on the first failure -- the comparison call never runs on a partial set.
+    """The condense sub-calls, in R1..Rn order. Returns `(condensed, None)` or `(None, error)` on
+    the first failure -- the comparison call never runs on a partial set.
+
+    `responses` is always the WHOLE council (its size is the n the prompt and the cap are built
+    for). With `caps` None every label is asked for at most `label_claims_cap` claims of the room
+    the question and `graph` leave, shared over its pieces; `caps` (2026-10-15, the targeted pass 2)
+    maps the labels to condense to the cap each is asked for, and every other label's block is
+    returned exactly as it came in.
 
     `usage` and `raw_attempts` are the caller's, appended to as each sub-call returns, so a run
-    that fails on the second label still reports what it spent and what the first one produced."""
+    that fails on the second label still reports what it spent and what the first one produced;
+    so is `counts`, when given: each condensed label's claim count, what pass 2 sizes its cap from."""
     total = quoted_chars(responses)
+    n = len(responses)
+    room_cap = label_claims_cap(condense_room(question, graph), n)
     condensed: dict[Label, str] = {}
     for label in LABELS:  # the council's labels, in R-order (the dict holds exactly R1..Rn)
         if label not in responses:
             continue
         response = responses[label]
-        queue.put_nowait(
-            {
-                "type": "analyze_retry",
-                "error": split_notice(label, len(response), total, bound=bound, pass_no=pass_no),
-            }
-        )
+        if caps is not None and label not in caps:
+            condensed[label] = response  # under its share: kept as it is, no call
+            continue
+        cap = room_cap if caps is None else caps[label]
         # One condense message can only quote CONDENSE_CHUNK_CHARS. A bigger reply is condensed in
         # pieces and their claim lines concatenated: the comparison quotes the same kind of block
         # either way, and no single analyst message is ever the size that never came back.
         pieces = chunk_reply(response)
+        per_piece = share_per_piece(cap, len(pieces))
+        queue.put_nowait(
+            {
+                "type": "analyze_retry",
+                "error": split_notice(
+                    label,
+                    len(response),
+                    total,
+                    bound=bound,
+                    pass_no=pass_no,
+                    max_claims=share_per_piece(cap, 1),
+                ),
+            }
+        )
         if len(pieces) > 1:
             queue.put_nowait(
                 {
                     "type": "analyze_retry",
-                    "error": chunk_notice(label, len(response), len(pieces)),
+                    "error": chunk_notice(label, len(response), len(pieces), max_claims=per_piece),
                 }
             )
         blocks: list[str] = []
-        for piece in pieces:
-            text, call_usage, error, raw = await _condense(
-                model=model, question=question, label=label, response=piece, n=len(responses)
+        claims = 0
+        for index, piece in enumerate(pieces, start=1):
+            text, call_usage, error, raw, count, reused = await _condense(
+                model=model,
+                question=question,
+                label=label,
+                response=piece,
+                n=n,
+                max_claims=per_piece,
             )
             usage.merge(call_usage)
             # The RAW reply, not the rendered claims: on a failure `text` is empty and `raw` is the
@@ -634,8 +793,27 @@ async def _condense_all(
             raw_attempts.append(raw if error is not None else text)
             if error is not None:
                 return None, condense_failure(label, error)
+            if reused:
+                queue.put_nowait(
+                    {"type": "analyze_retry", "error": reuse_notice(label, index, len(pieces))}
+                )
             blocks.append(text)
+            claims += count
+        asked = per_piece * len(pieces)
+        if claims > asked:
+            # Kept, every one (house rule: never a silent truncation); ONE line per label says so.
+            log.warning(
+                "analyze: %s returned %d claims in %d piece(s), over the %d asked for (cap %d); "
+                "kept all",
+                label,
+                claims,
+                len(pieces),
+                asked,
+                cap,
+            )
         condensed[label] = "\n".join(blocks)
+        if counts is not None:
+            counts[label] = claims
     return condensed, None
 
 
@@ -719,6 +897,7 @@ async def _produce(
             error = oversize_message(*over)  # loud, and not one analyst call
         elif needs_split(responses):
             condensed = True
+            counts: dict[Label, int] = {}
             reduced, error = await _condense_all(
                 model=model,
                 question=question,
@@ -726,6 +905,8 @@ async def _produce(
                 usage=usage,
                 raw_attempts=raw_attempts,
                 queue=queue,
+                graph=graph,
+                counts=counts,
             )
             # Re-measure, and condense AGAIN when one pass was not enough (S11). Measured 2026-09-22:
             # one pass took 20,511 characters to 14,950, and the old check refused that against
@@ -733,12 +914,24 @@ async def _produce(
             # CONDENSED_MAX_CHARS; a set still over it gets one more pass over the condensed blocks,
             # and a set that does not fit after CONDENSE_PASSES is refused, never truncated.
             passes = 1
+            room = condense_room(question, graph)
             while (
                 reduced is not None
                 and comparison_chars(question, reduced, graph) > CONDENSED_MAX_CHARS
                 and passes < CONDENSE_PASSES
             ):
                 passes += 1
+                # TARGETED (2026-10-15): only a block over its share of the room is condensed again;
+                # one under its share is not what is in the way, and every re-ask is one more
+                # sequential analyst call (measured: an untargeted pass 2 rewrote 343 claims as 340).
+                # The blocks sum to more than the room here, so at least one is over its share. Each
+                # is asked for fewer claims than it holds (review 2026-10-15, `block_claims_cap`):
+                # the pass-1 cap again would rewrite a block that kept to it with long bullets.
+                caps = {
+                    label: block_claims_cap(counts[label], len(text), room, len(reduced))
+                    for label, text in reduced.items()
+                    if len(text) > room / len(reduced)
+                }
                 reduced, error = await _condense_all(
                     model=model,
                     question=question,
@@ -748,6 +941,9 @@ async def _produce(
                     queue=queue,
                     bound=CONDENSED_MAX_CHARS,
                     pass_no=passes,
+                    graph=graph,
+                    caps=caps,
+                    counts=counts,
                 )
             if reduced is not None:
                 still = comparison_chars(question, reduced, graph)
@@ -852,17 +1048,26 @@ async def run_analyze(
 __all__ = [
     "ATTEMPTS",
     "PURPOSE",
+    "CLAIM_CHARS_ASSUMED",
     "CONDENSED_MAX_CHARS",
+    "CONDENSE_CACHE_MAX",
     "CONDENSE_CHUNK_CHARS",
+    "CONDENSE_CLAIMS_MIN",
     "CONDENSE_PASSES",
+    "CONDENSE_TARGET_FRACTION",
     "REPLY_BUDGET_CHARS",
     "ROLE",
     "SPLIT_MIN_CHARS",
     "SPLIT_NOTICE_PREFIX",
+    "block_claims_cap",
     "cached_ok_turn",
+    "clear_condense_cache",
+    "condense_cache_key",
     "condense_failure",
     "comparison_chars",
     "condense_ineffective",
+    "condense_room",
+    "label_claims_cap",
     "extraction_schema_for",
     "refactored_input",
     "render_graph",
@@ -879,7 +1084,9 @@ __all__ = [
     "resolve_send_turn",
     "responses_by_label",
     "retry_follow_up",
+    "reuse_notice",
     "run_analyze",
+    "share_per_piece",
     "split_notice",
     "web_retry_suppressed",
 ]

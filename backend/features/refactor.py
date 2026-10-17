@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -80,6 +79,7 @@ from .analyze import (
     missing_responses,
     resolve_send_turn,
     responses_by_label,
+    share_per_piece,
 )
 
 log = logging.getLogger("triplex.features.refactor")
@@ -125,10 +125,9 @@ def chunk_notice(label: Label | str, chars: int, pieces: int, max_claims: int) -
 
 def claims_per_piece(pieces: int) -> int:
     """The claims cap ONE piece of a reply is asked for: the reply's share of `REPLY_CLAIMS_MAX`,
-    floored at 4 so a piece is never asked for a list too short to carry its own substance."""
-    if pieces < 1:
-        raise ValueError(f"pieces must be at least 1, got {pieces!r}")
-    return max(4, math.ceil(prompts.REPLY_CLAIMS_MAX / pieces))
+    floored at 4 so a piece is never asked for a list too short to carry its own substance. The
+    arithmetic is `analyze.share_per_piece` (2026-10-15), which Analyze's condense step shares."""
+    return share_per_piece(prompts.REPLY_CLAIMS_MAX, pieces)
 
 
 def reply_notice(label: Label | str, chars: int) -> str:

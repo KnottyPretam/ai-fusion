@@ -305,6 +305,31 @@ not fit after two passes is refused (`condense_ineffective`, naming the total, t
 and the largest block) — never truncated. Re-using the split trigger as the bound refused a real
 comparison after ten minutes of successful condense calls; that is the defect this replaces.
 
+**Every condense message asks for a count; pass 2 is targeted; condensations are cached (2026-10-15).**
+Measured that morning: replies of 7,747 / 24,963 / 6,065 characters took 16 sequential condense calls
+(34.5 min on a reasoning analyst page) and were STILL refused at 33,196 characters. The condense prompt
+asked for every claim with no count, and the model rewrote rather than reduced — 343 claim lines on pass
+1, 340 on pass 2; the "~30% per pass" above is what one model did on 2026-09-22, not a property of the
+prompt. Now: (1) each label is asked for at most `label_claims_cap(condense_room(question, graph), n)`
+claims — `CONDENSE_TARGET_FRACTION` (0.6) of the room the question and the graph leave in
+`CONDENSED_MAX_CHARS`, over the council, at `CLAIM_CHARS_ASSUMED` (120) characters per bullet (32 for
+that run) — shared over its pieces by `share_per_piece` (never under `CONDENSE_CLAIMS_MIN` = 4; Refactor's
+`claims_per_piece` is the same rule over `REPLY_CLAIMS_MAX`), with the cap clause of Refactor's reply
+prompt; more than was asked for is kept with one WARNING per label, never cut, and the uncapped prompt
+(`max_claims=None`) is byte-identical to before. (2) Pass 2 condenses ONLY the blocks over their share
+of the room (`room / n`), each asked for fewer claims than it holds (`block_claims_cap`, from the bullet
+length it actually came back with); a block under its share is kept as it is, with no call. (3) A
+condensation that kept to its cap is cached in memory (LRU, `CONDENSE_CACHE_MAX` = 64, keyed by the
+model and the exact messages), so a forced Re-run — or the Fusion that auto-runs Analyze — makes no
+call for it (`analyze_retry` narrates "(reused)", prefix first); one over its cap is never cached, and
+the comparison never is. The notices end with "(at most K claims)" after the prefix. The Fusion button
+(`features/fusion/derive.js fusionGate`) no longer auto-runs an Analyze whose newest attempt for the
+latest Send was REFUSED ON SIZE (`SIZE_REFUSAL_MARKERS`: `oversize_message`, `condense_ineffective`) until
+an ok Refactor of that Send follows it; a failed condense CALL (`condense_failure`) still auto-analyzes,
+because a retry can get past it. Upstream, the prompt bar's opt-in **Concise answers** appends Pre-parse's
+answer block to a Send (renderer only; the backend Send stays verbatim and `strip_format` removes the
+block for the title, Refactor and Analyze), so replies stay under the split trigger and Analyze is one call.
+
 ## Council addendum (2026-09-27)
 
 **The council.** A conversation seats 2..5 agents — `council_of(conv.slot_config)`, the keys of

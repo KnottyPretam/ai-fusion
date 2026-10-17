@@ -79,6 +79,29 @@ export function anyStreaming(streams) {
   return Object.values(streams || {}).some((s) => s && s.status === 'streaming')
 }
 
+// 2026-10-15: a degraded Analyze whose error carries one of these was REFUSED ON SIZE — the replies
+// did not fit one analyst message — and running it again over the same input refuses the same way
+// (measured: a Fusion click auto-re-ran a 16-call condense chain, 34.5 min on the analyst page, to the
+// same refusal). They mirror oversize_message and condense_ineffective in backend/features/analyze.py
+// (a copy with a pointer: features never import each other). Deliberately NOT condense_failure's
+// "could not condense": that is a condense CALL that failed (a timeout, an unparseable answer), which a
+// retry can get past — and the backend's condensation cache re-asks only the pieces that failed — so it
+// auto-analyzes as before. analyze/AnalyzePane.jsx NO_COMPARISON_MARKERS is the wider list of degrades
+// that never reached the comparison; keep the shared strings in step.
+export const SIZE_REFUSAL_MARKERS = ['can take in one message', 'condense passes']
+
+/** True when the newest Analyze of `sendTurnId` degraded on size and no ok Refactor of that Send came after it (a Refactor changes what the next Analyze compares). */
+export function sizeDegradedAnalyze(conversation, sendTurnId) {
+  const turns = (conversation && conversation.turns) || []
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]
+    if (!t || t.of_turn !== sendTurnId) continue
+    if (t.type === 'refactor' && t.status === 'ok') return false
+    if (t.type === 'analyze') return t.status === 'degraded' && SIZE_REFUSAL_MARKERS.some((m) => String(t.error || '').includes(m))
+  }
+  return false
+}
+
 // The Fusion button rule. Returns {enabled, reason, autoAnalyze, standing}; `reason` explains a
 // disabled button, `autoAnalyze` says the run will have to auto-run Analyze first, `standing` is
 // the id set the next run would fuse (null when no ok Analyze result exists yet).
@@ -88,6 +111,12 @@ export function fusionGate({ conversation, slotConfig, streams }) {
   if (!send) return { enabled: false, reason: 'no send turn yet', autoAnalyze: false, standing: null }
   if (!isSendComplete(send)) return { enabled: false, reason: 'latest send turn is incomplete', autoAnalyze: false, standing: null }
   const analyze = newestOkAnalyze(conversation, send.id)
+  // 2026-10-15: an ok Analyze still wins; without one, a size degrade is not auto-run again (the
+  // backend would replay the whole condense chain to the same refusal) until a Refactor of this Send
+  // gives Analyze a smaller input. Any other degrade auto-analyzes as before.
+  if (!analyze && sizeDegradedAnalyze(conversation, send.id)) {
+    return { enabled: false, reason: 'Analyze could not fit these replies into one comparison — run Refactor, then Analyze', autoAnalyze: false, standing: null }
+  }
   const autoAnalyze = !analyze
   let standing = null
   if (analyze) {
