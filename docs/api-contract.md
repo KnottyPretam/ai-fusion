@@ -454,13 +454,16 @@ web app never sends the new field.
   or a log line.
 - **`GET /api/bridge/status`** → 200 `{connected, protocol, version, since, sites:{<slot>:{capture,
   health, health_ts}}, analyst, inflight}` = `bridge.hub.status()` (§6); the desktop renderer's
-  `bridge-banner` keys on `connected`.
+  `bridge-banner` keys on `connected`. `sites` always lists every bridge slot: `claude, chatgpt,
+  grok` and, since 2026-10-17, `gemini` (bridge v1 amended in place — `docs/desktop-contract.md` §1);
+  `analyst` may be `{slot:"gemini"}`.
 - **`GET /app`, `/app/`, `/app/{path}`** (`backend/routers/desktop_app.py`) → the built renderer from
   `TRIPLEX_APP_DIR` (`frontend/dist` built with `VITE_BASE=/app/`): `index.html` for extension-less
   paths, resolved-path containment, 404 for a missing asset and for every path when `TRIPLEX_APP_DIR`
   is unset (§6). Same origin as `/api`, so `main.py` CORS and `http.js` stay frozen.
 - **`GET /api/models`** under `TRIPLEX_DESKTOP=1` returns `webmodels.desktop_catalog()` (`web:<slot>`,
-  `web:<slot>:analyst` ×3, `ollama:<name>` per `OLLAMA_MODELS`; all `efforts=["off"]`,
+  `web:<slot>:analyst` ×3 — ×4 since 2026-10-17: `web:gemini` "Gemini (web session)", vendor `google`,
+  and `web:gemini:analyst` — `ollama:<name>` per `OLLAMA_MODELS`; all `efforts=["off"]`,
   `structured_outputs=False`) instead of the OpenRouter catalog (Stage 3, §6); otherwise byte-identical.
 
 ## Export addendum (turn exports)
@@ -515,13 +518,19 @@ per session, below).
 `BRIDGE_SLOTS`: the bridge's OWN slot vocabulary (the sites with a Stage-1 adapter), decoupled from the
 catalog; `AnalystChoice.slot`, `Hello.sites`, `HealthFrame.slot`, `Accepted.slot` and `Request.slot`
 are typed `BridgeSlot`. `desktop/protocol/bridge-v1.json` is untouched — `gemini` stays an invalid slot
-on the wire until a protocol v2. An OpenRouter or Ollama agent never crosses the bridge.
+on the wire until a protocol v2. An OpenRouter or Ollama agent never crosses the bridge. **Amended
+2026-10-17:** `BridgeSlot = Literal["claude","chatgpt","grok","gemini"]` — gemini appended LAST by an
+in-place amendment of v1 (the `reread` precedent, not a v2), `BridgeRole` gains `gemini`, `CaptureMap`
+gains a required `gemini: bool`, `Hello.sites` is 1..4 unique; the corpus's canonical invalid slot is
+now `deepseek` (Gemini addendum below; `docs/desktop-contract.md` §1).
 
 **New modules.** `backend/vendors.py` (pure): `Vendor(id, name, prefixes, family_words, identity,
 web_site, stage2_site, default_model, default_effort="medium")`, `CATALOG` (SLOT_IDS order; the
 `deepseek` default effort is `high` because `deepseek/deepseek-v4-pro` lists high/xhigh only), `BY_ID`,
 `WEB_SITES == BRIDGE_SLOTS`, `STAGE2_SITES == ("gemini","deepseek","qwen")` (a site, no adapter yet;
-`mimo` is token or local only), `display_name(slot)`, `default_slot_spec(slot)` (a fresh `SlotSpec` on
+`mimo` is token or local only — since 2026-10-17 gemini is `web_site=True, stage2_site=False`, so
+`WEB_SITES == ("claude","chatgpt","grok","gemini")` and `STAGE2_SITES == ("deepseek","qwen")`; its
+`default_model` stays the OpenRouter slug a fresh token row starts on), `display_name(slot)`, `default_slot_spec(slot)` (a fresh `SlotSpec` on
 the vendor's default slug: `anthropic/claude-opus-5`, `openai/gpt-5.6-sol`, `x-ai/grok-4.6`,
 `google/gemini-3.8-flash`, `deepseek/deepseek-v4-pro`, `qwen/qwen3.7-max`, `xiaomi/mimo-v2.6-pro`),
 `vendor_of_model(model_id, name="") -> Vendor | None` (`web:<slot>[:analyst]` → that vendor even
@@ -545,7 +554,9 @@ never logged. `backend/llm/fixtures/models.json` gains `google/gemini-3.8-flash`
   session default the desktop pushed (`PUT /api/session/defaults`), else `settings().default_slot_config`.
 - `PUT …/slot_config`, in this order after the 404: 422 `{detail:{error:"web_slot_mismatch", slot,
   model}}` for the first slot (council order) whose `web:` model names another slot's site, a site
-  without a Stage-1 adapter (`web:gemini`) or is malformed (`web:`, `web:claude:foo`) — `web:<slot>` and
+  without a web adapter (`web:gemini` until 2026-10-17, `web:deepseek` since — `web:gemini` and
+  `web:gemini:analyst` on the gemini slot are legal now; `web:gemini` on another slot is still a
+  mismatch) or is malformed (`web:`, `web:claude:foo`) — `web:<slot>` and
   `web:<slot>:analyst` on the slot's own site both pass (the bridge decides the view); 422
   `unsupported_effort` as before; then `store.update_slot_config`: the same council → REPLACE as
   before; a different council (any change to the key set) → 409 `{detail:{error:"council_changed",
@@ -573,7 +584,7 @@ never logged. `backend/llm/fixtures/models.json` gains `google/gemini-3.8-flash`
 - Pre-parse / Refactor: `restate_messages(question, n=)` ("put to two experts"), `reply_messages(…, n=)`;
   one reply call per label R1..Rn.
 - `GET /api/models` under `TRIPLEX_DESKTOP=1`: `webmodels.desktop_catalog()` (`web:<site>` and
-  `web:<site>:analyst` for the three sites, `ollama:<name>` per `OLLAMA_MODELS`) and then, ONLY when a
+  `web:<site>:analyst` for the three sites — the four since 2026-10-17 — `ollama:<name>` per `OLLAMA_MODELS`) and then, ONLY when a
   session key has been pushed, `webmodels.tag_openrouter(openrouter_filter(await catalog.get_catalog(
   force_refresh=…)))` — COPIES of the OpenRouter entries a council row can seat, each with
   `raw.transport == "openrouter"` (`catalog._mem` keeps the untagged objects `get_meta` serves). Without
@@ -623,7 +634,9 @@ anon_note(3)`, byte for byte), `others_not_called(n)` ("the other slot was not c
 
 **Frontend contract addendum.** `SLOT_IDS` (7), `DEFAULT_COUNCIL`, `COUNCIL_MIN/MAX`, `SLOT_VENDORS`
 (7), `SLOT_LABELS` (7: Claude, ChatGPT, Grok, Gemini, DeepSeek, Qwen, MiMo), `SITES =
-['claude','chatgpt','grok']`, `TRANSPORTS`, `transportOf(model)` (`web` / `ollama` / else
+['claude','chatgpt','grok']` (+ `'gemini'` since 2026-10-17 in both slices, `config/index.jsx` and
+`fusion/planSlice.js`; `features/send/slice.js` `DEFAULT_COUNCIL` stays three while
+`features/desktop/slice.js` `DEFAULT_COUNCIL = [...SITES]`, four — Gemini addendum), `TRANSPORTS`, `transportOf(model)` (`web` / `ollama` / else
 `openrouter`), `slotStyle(slot)` (one `--slot-color` custom property from the frozen `index.css`
 tokens `--claude … --mimo`) and `councilOf(spec)` (the `{slots}` keys in catalog order; null without)
 are mirrored in `features/send/slice.js` and `features/desktop/slice.js` (features never import each
@@ -687,10 +700,11 @@ ok plan turn for it (an in-flight or just-settled state for the same `ofFusion` 
 `persistPlanModel(storage, model)` (`localStorage 'triplex.plan.model'`), `planModelOptions({items,
 desktop, keyConfigured})` → `[{label, options:[{id, name}]}]` (desktop: "your web sessions (typed
 into this conversation's chat)" = `web:claude` "Claude — this conversation's chat" FIRST, then
-`web:chatgpt`, `web:grok`; "hidden analyst pages" = the three `web:<site>:analyst`; "local (Ollama)"
+`web:chatgpt`, `web:grok` (and `web:gemini` since 2026-10-17); "hidden analyst pages" = the three
+`web:<site>:analyst` (four since 2026-10-17); "local (Ollama)"
 = catalog items with `raw.transport === 'ollama'`; "OpenRouter" = `raw.transport === 'openrouter'`,
 structured-outputs first, only when `keyConfigured`; browser: the OpenRouter catalog, structured
-first, with the default id present even when the catalog lacks it; the three site names come from a
+first, with the default id present even when the catalog lacks it; the site names (four since 2026-10-17) come from a
 local `SITE_LABELS`, mirrored, never imported from another feature), `checkedSteps(storage, turnId)`
 / `toggleStep(storage, turnId, n)` (`localStorage 'triplex.plan.checked.<turnId>'`, every access in
 try/catch). Test ids: `plan-root`, `plan-run` ("Make a plan" / "Re-plan" = `force:true`; the body
@@ -708,3 +722,36 @@ tokens. `send/slice.js threadItems` / `SlotColumn` label a `plan_request` / `pla
 "plan", as fusion messages are labelled. Meter: a `Plan` row (`FEATURE_ROWS` += `plan`; `plan_start`
 resets the last-invocation row, `plan_done` books the turn's totals unless `cached`, `plan_degraded`
 books); the cost-cap flag keys on the code in any event, as before.
+
+## Gemini + agents stepper addendum (2026-10-17 — "a tab for gemini, and a plus/minus for agents")
+
+Additive. No endpoint was added and none changed shape; every document, fixture, golden, scenario and
+prompt pin is byte-identical (`schemas.py`, `config.py` and the web app untouched).
+
+- **`gemini` is a web site.** `vendors.py`: gemini `web_site=True, stage2_site=False`, so `WEB_SITES ==
+  BRIDGE_SLOTS == ("claude","chatgpt","grok","gemini")` (catalog order, asserted at import) and
+  `STAGE2_SITES == ("deepseek","qwen")`. `web:gemini` (a pane: the user's own gemini.google.com login,
+  so its own model picker — Argon included) and `web:gemini:analyst` (a hidden analyst page signed in to
+  Gemini) are legal models: `validate_slot_config` passes them on the gemini slot (PUT `…/slot_config`,
+  `POST /api/conversations` with a config, `PUT /api/session/defaults`) and still answers 422
+  `web_slot_mismatch` for `web:gemini` on another slot and for `web:deepseek` anywhere;
+  `bridge.parse_web_model` routes them; a Send / Fusion request carries `role:"gemini"`.
+- **Bridge (frozen `bridge_protocol.py`, v1 amended in place — the `reread` precedent).** `BridgeSlot` /
+  `BridgeRole` gain `gemini` (last), `CaptureMap.gemini` is REQUIRED, `Hello.sites` is a subset of 1..4;
+  `bridge-v1.json` 62 examples / 85 invalids (was 53 / 80), `deepseek` the canonical invalid slot
+  (`docs/desktop-contract.md` §1). `GET /api/bridge/status` `sites` lists the four.
+- **`GET /api/models` (desktop)** lists four `web:<site>` and four `web:<site>:analyst` entries.
+- **Councils.** `schemas.COUNCIL_MIN/MAX` stay 2 / 5 and `schemas.DEFAULT_COUNCIL` stays the classic
+  three (the web app's and the mock default; a five-member conversation on disk keeps loading). The
+  DESKTOP's default is the four web sites: main's `DEFAULT_COUNCIL()` loops the sites and pushes it on
+  every bridge connect as `PUT /api/session/defaults`, which `POST /api/conversations {}` seats; a profile
+  that stored the old default (the classic three on web sessions at effort off) is migrated to four once
+  (`settings.json` `migrations: ["council-four-sites"]`, desktop-contract §5). Only the renderer's
+  EDITORS cap a council at four (`COUNCIL_EDIT_MAX`, the agents stepper and the Agents page's Add);
+  the API keeps accepting 2..5. The stepper uses existing routes only: `PUT …/slot_config` on an empty
+  conversation (a 409 `council_changed` falls back to a new chat), `POST /api/conversations
+  {slot_config}` for the new chat, `GET /api/ollama/models` for its local seats.
+- **Frontend contract.** `SITES` gains `'gemini'` in `features/{desktop,send}/slice.js`,
+  `config/index.jsx` (+ `SITE_LABELS`) and `fusion/planSlice.js` (the analyst picker and the Plan
+  picker offer `web:gemini` / `web:gemini:analyst`); `features/send/slice.js` `DEFAULT_COUNCIL` stays
+  three; the desktop slice, the stepper and its test ids are `docs/desktop-contract.md` §7.

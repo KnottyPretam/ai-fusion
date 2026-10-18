@@ -1,5 +1,6 @@
 // AgentsPage (2026-09-27, "a council anyone can assemble"): the drawer's Agents tab. Assemble a
-// council of 2..5 agents from the 7-vendor catalog — each on ONE transport (subscription web
+// council of 2..4 agents (2026-10-17: COUNCIL_EDIT_MAX; a stored five-member council still renders,
+// validates, applies and saves — the editor just never makes a fifth row) from the 7-vendor catalog — each on ONE transport (subscription web
 // session / token based through OpenRouter / local Ollama) with a model and an effort — apply it to
 // the open conversation, save it as main's default for new conversations, and hold the one
 // OpenRouter key.
@@ -13,7 +14,9 @@
 //   agents-model-custom-<slot>           an unlisted OpenRouter slug / Ollama name (`ollama:` auto-prefixed)
 //   agents-effort-<slot>                 effort select
 //   agents-remove-<slot>                 drop the row (disabled at two)
-//   agents-add                           seat the next unseated vendor (disabled at five)
+//   agents-add                           seat the next unseated vendor (disabled at four, COUNCIL_EDIT_MAX);
+//                                        its effort is the model's own (stepper.seatEffort: `off`
+//                                        when listed, else the lowest — never a 422 unsupported_effort)
 //   agents-summary                       "n agents → R1…Rn; labels are assigned per turn"
 //   agents-error                         the first validation failure, or the server's refusal
 //   agents-apply                         PUT the FULL slot_config to the open conversation — disabled
@@ -28,14 +31,16 @@
 //
 // Sources and precedence: the rows start from the open conversation's `slotConfig` when one is
 // selected (its council is what Apply edits), else from main's default (`panes.council`), else the
-// classic three web panes; they re-seed whenever that source changes (a conversation switch, a
-// council pushed by main) — local edits are a draft, never persisted on their own. The catalog is
+// sites on their web sessions (four since 2026-10-17); they re-seed whenever that source changes
+// (a conversation switch, a council pushed by main) — local edits are a draft, never persisted on
+// their own. The catalog is
 // the desktop `GET /api/models` (`raw.transport`); an unlisted id goes through the custom field.
 // Every `window.triplex` call is optional-chained: the page renders under a partial stub.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api as http, loadModels } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import {
+  COUNCIL_EDIT_MAX,
   EFFORTS,
   TRANSPORT_LABELS,
   TRANSPORT_TITLES,
@@ -54,7 +59,8 @@ import {
   validateCouncil,
 } from './council.js'
 import { desktopApi } from './PaneDeck.jsx'
-import { COUNCIL_MAX, COUNCIL_MIN, SLOT_LABELS, initialPanes, slotStyle } from './slice.js'
+import { COUNCIL_MIN, SLOT_LABELS, initialPanes, slotStyle } from './slice.js'
+import { seatEffort } from './stepper.js'
 import css from './desktop.module.css'
 
 export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse', 'refactor']
@@ -168,7 +174,7 @@ export default function AgentsPage({ api = desktopApi() }) {
     if (!models.loaded && !models.error) loadModels(dispatch).catch(() => {})
   }, [dispatch, models.loaded, models.error])
 
-  // The source of the draft: the open conversation's config, else main's default, else the three.
+  // The source of the draft: the open conversation's config, else main's default, else every site.
   const source = conversation && slotConfig && slotConfig.slots ? 'conversation' : 'default'
   const sourceSpec = source === 'conversation' ? slotConfig : panes.council
   const seed = useMemo(() => {
@@ -205,7 +211,7 @@ export default function AgentsPage({ api = desktopApi() }) {
   const canApply = applyWhy === null && !busy
   const canDefault = !invalid && !busy && typeof api?.setCouncil === 'function'
   const free = freeSlots(rows)
-  const canAdd = rows.length < COUNCIL_MAX && free.length > 0
+  const canAdd = rows.length < COUNCIL_EDIT_MAX && free.length > 0
   const keyConfigured = !!(keyStatus && keyStatus.configured)
 
   const update = (index, next) => setRows((cur) => cur.map((r, i) => (i === index ? next : r)))
@@ -214,7 +220,8 @@ export default function AgentsPage({ api = desktopApi() }) {
     if (!canAdd) return
     const slot = free[0]
     const transport = transportsFor(slot)[0]
-    setRows((cur) => [...cur, { slot, transport, model: defaultModelFor(slot, transport, models), effort: 'off' }])
+    const model = defaultModelFor(slot, transport, models)
+    setRows((cur) => [...cur, { slot, transport, model, effort: seatEffort(models, model) }])
   }
 
   // The full config, never a partial patch: the backend replaces the stored SlotConfig on PUT and
@@ -294,7 +301,7 @@ export default function AgentsPage({ api = desktopApi() }) {
         ))}
       </div>
       <div className={css.agentsBar}>
-        <button type="button" className={css.agentsBtn} data-testid="agents-add" disabled={!canAdd} onClick={add} title={canAdd ? `Seat ${SLOT_LABELS[free[0]]} (${rows.length + 1} of ${COUNCIL_MAX})` : `A council seats at most ${COUNCIL_MAX} agents`}>
+        <button type="button" className={css.agentsBtn} data-testid="agents-add" disabled={!canAdd} onClick={add} title={canAdd ? `Seat ${SLOT_LABELS[free[0]]} (${rows.length + 1} of ${COUNCIL_EDIT_MAX})` : rows.length > COUNCIL_EDIT_MAX ? `At most four agents; this council has ${rows.length} from before (Remove trims it)` : 'At most four agents'}>
           + Add an agent
         </button>
         <span className={css.agentsSummary} data-testid="agents-summary">

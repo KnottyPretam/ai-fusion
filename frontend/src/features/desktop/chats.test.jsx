@@ -292,3 +292,62 @@ describe("useOpenChats: createAdopted (a first Pre-parse with no conversation) c
     expect(fake.openChats).not.toHaveBeenCalled()
   })
 })
+
+describe('useOpenChats: newChatEverywhere(council) (2026-10-17, the agents stepper)', () => {
+  const TWO = { slots: { claude: { model: 'web:claude', effort: 'off' }, gemini: { model: 'web:gemini', effort: 'off' } } }
+  const THREE = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
+
+  test('an explicit spec beats the council ref, even when the default changes in the same tick (the ref is only refreshed at render)', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse(conv({ id: 'c9' }), 201) }])
+    mount(fake, { panes: { ...initialPanes(), council: THREE } })
+    let result
+    await act(async () => {
+      // the stepper's order: the default first, then the create — in one handler, no render between
+      store.dispatch({ type: 'panes/council', council: TWO })
+      result = await store.chats.newChatEverywhere(TWO)
+    })
+    expect(result && result.id).toBe('c9')
+    expect(Object.keys(calls[0].body.slot_config.slots)).toEqual(['claude', 'gemini'])
+    expect(calls[0].body.slot_config.slots).toEqual(TWO.slots)
+    await tick()
+    expect(fake.openChats).toHaveBeenCalledWith('c9')
+    expect(fake.openChats).toHaveBeenCalledTimes(1) // one create path, one last-opened mark
+  })
+
+  test('the control: without the explicit spec, a create straight after the dispatch seats the STALE default (why the stepper passes it)', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse(conv({ id: 'c9' }), 201) }])
+    mount(fake, { panes: { ...initialPanes(), council: THREE } })
+    await act(async () => {
+      store.dispatch({ type: 'panes/council', council: TWO })
+      await store.chats.newChatEverywhere()
+    })
+    expect(calls[0].body.slot_config.slots).toEqual(THREE.slots)
+  })
+
+  test('without the dispatch-then-create race the ref is read: no argument, a click event or an invalid spec fall back to main’s default', async () => {
+    const fake = fakeTriplex()
+    let n = 0
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: () => jsonResponse(conv({ id: `c${(n += 1)}` }), 201) }])
+    mount(fake, { panes: { ...initialPanes(), council: THREE } })
+    for (const arg of [undefined, { type: 'click', target: {} }, { slots: { claude: { model: 'web:claude' } } }]) {
+      await act(async () => {
+        await store.chats.newChatEverywhere(arg)
+      })
+    }
+    expect(calls).toHaveLength(3)
+    for (const c of calls) expect(c.body.slot_config.slots).toEqual(THREE.slots)
+  })
+
+  test('createAdopted ignores any argument: Pre-parse always seats main’s default', async () => {
+    const fake = fakeTriplex()
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: jsonResponse(conv({ id: 'c9' }), 201) }])
+    mount(fake, { panes: { ...initialPanes(), council: THREE } })
+    await act(async () => {
+      await store.chats.createAdopted(TWO)
+    })
+    expect(calls[0].body.slot_config.slots).toEqual(THREE.slots)
+    expect(fake.openChats).not.toHaveBeenCalled()
+  })
+})

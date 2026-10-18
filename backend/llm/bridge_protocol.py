@@ -49,12 +49,18 @@ SessionState = Literal["ok", "logged_out", "challenge", "blocked", "unknown"]
 SESSION_STATES: tuple[str, ...] = get_args(SessionState)
 View = Literal["pane", "analyst"]
 DoneBy = Literal["done_selector", "stop_gone", "quiet"]
-# The sites with a Stage-1 adapter — the bridge's OWN vocabulary, decoupled from the council catalog
-# (`schemas.SlotId`, 7 vendors since 2026-09-27): an OpenRouter or Ollama agent never crosses the bridge,
-# and `gemini` stays an invalid slot on the wire exactly as bridge-v1.json says, until a protocol v2.
-BridgeSlot = Literal["claude", "chatgpt", "grok"]
+# The sites with a web adapter -- the bridge's OWN vocabulary, decoupled from the council catalog
+# (`schemas.SlotId`, 7 vendors since 2026-09-27): an OpenRouter or Ollama agent never crosses the
+# bridge. 2026-10-17: `gemini` joined by an IN-PLACE amendment of v1 (precedent: the `reread` frame,
+# 2026-10-15), not a protocol v2 -- Electron spawns its own backend from the same build, so both
+# sides always move together; only a dev shell attached to an older backend (`TRIPLEX_BACKEND_URL`)
+# meets the change, as a fatal 4001 "malformed hello" (one side's capture map lacks or adds the
+# required `gemini`). Appended LAST: the order is the catalog's, which `vendors.py` asserts
+# (`WEB_SITES == BRIDGE_SLOTS`). The canonical INVALID slot in bridge-v1.json is now `deepseek`, a
+# council vendor with no site.
+BridgeSlot = Literal["claude", "chatgpt", "grok", "gemini"]
 BRIDGE_SLOTS: tuple[str, ...] = get_args(BridgeSlot)
-BridgeRole = Literal["chatgpt", "claude", "grok", "analyst"]
+BridgeRole = Literal["chatgpt", "claude", "grok", "gemini", "analyst"]
 RejectCode = Literal[
     "view_busy",
     "logged_out",
@@ -96,11 +102,15 @@ class _Frame(BaseModel):
 
 # --------------------------------------------------------------------------- shared objects
 class CaptureMap(_Frame):
-    """Per-site capture switch; all three sites are always listed."""
+    """Per-site capture switch; every bridge site is always listed (2026-10-17: four).
+
+    ``gemini`` is REQUIRED, not defaulted: the corpus round-trip (``model_dump == example``) cannot
+    express an optional key, and "every site is always listed" is the rule both validators share."""
 
     claude: bool
     chatgpt: bool
     grok: bool
+    gemini: bool
 
 
 class AnalystChoice(_Frame):
@@ -140,7 +150,7 @@ class Hello(_Frame):
     protocol: Literal[1]
     token: str = Field(min_length=1)
     version: str
-    sites: list[BridgeSlot] = Field(min_length=1, max_length=3)
+    sites: list[BridgeSlot] = Field(min_length=1, max_length=4)  # a subset: 1..4, unique
     capture: CaptureMap
     analyst: AnalystChoice | None
 

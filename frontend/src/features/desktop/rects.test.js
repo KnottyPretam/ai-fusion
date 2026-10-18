@@ -26,57 +26,58 @@ describe('rectOf', () => {
 })
 
 describe('rectsFor', () => {
-  const viewports = { claude: el(RECTS.claude), chatgpt: el(RECTS.chatgpt), grok: el(RECTS.grok) }
+  const viewports = { claude: el(RECTS.claude), chatgpt: el(RECTS.chatgpt), grok: el(RECTS.grok), gemini: el(RECTS.gemini) }
 
-  test('split → a rect for all three', () => {
+  test('split → a rect for all four sites', () => {
     expect(rectsFor('split', 'chatgpt', viewports)).toEqual(RECTS)
   })
 
   test('tabs → one rect (the active slot) and null for the others, even though they measure', () => {
-    expect(rectsFor('tabs', 'chatgpt', viewports)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null })
-    expect(rectsFor('tabs', 'grok', viewports)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok })
+    expect(rectsFor('tabs', 'chatgpt', viewports)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null })
+    expect(rectsFor('tabs', 'grok', viewports)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, gemini: null })
   })
 
-  test('a hidden or missing viewport is null; the map always carries all three slots', () => {
-    expect(rectsFor('split', 'chatgpt', { claude: el(RECTS.claude) })).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null })
-    expect(rectsFor('split', 'chatgpt', { ...viewports, grok: el({ x: 0, y: 0, width: 0, height: 0 }) })).toEqual({ claude: RECTS.claude, chatgpt: RECTS.chatgpt, grok: null })
-    expect(rectsFor('split', 'chatgpt', null)).toEqual({ claude: null, chatgpt: null, grok: null })
+  test('a hidden or missing viewport is null; the map always carries all four sites', () => {
+    expect(rectsFor('split', 'chatgpt', { claude: el(RECTS.claude) })).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null, gemini: null })
+    expect(rectsFor('split', 'chatgpt', { ...viewports, grok: el({ x: 0, y: 0, width: 0, height: 0 }) })).toEqual({ claude: RECTS.claude, chatgpt: RECTS.chatgpt, grok: null, gemini: RECTS.gemini })
+    expect(rectsFor('split', 'chatgpt', null)).toEqual({ claude: null, chatgpt: null, grok: null, gemini: null })
   })
 
   test('tabs with an unknown active hides everything; an unknown mode shows everything measurable', () => {
-    expect(rectsFor('tabs', 'bing', viewports)).toEqual({ claude: null, chatgpt: null, grok: null })
+    expect(rectsFor('tabs', 'bing', viewports)).toEqual({ claude: null, chatgpt: null, grok: null, gemini: null })
     // a renderer column (a token/local council member) as the active tab hides every site view
-    expect(rectsFor('tabs', 'qwen', viewports)).toEqual({ claude: null, chatgpt: null, grok: null })
+    expect(rectsFor('tabs', 'qwen', viewports)).toEqual({ claude: null, chatgpt: null, grok: null, gemini: null })
     expect(rectsFor('stack', 'chatgpt', viewports)).toEqual(RECTS)
   })
 
   test('the map has no extra keys (main validates slot ∈ SLOTS)', () => {
-    expect(Object.keys(rectsFor('split', 'chatgpt', { ...viewports, analyst: el(RECTS.claude) }))).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(Object.keys(rectsFor('split', 'chatgpt', { ...viewports, analyst: el(RECTS.claude) }))).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
   })
 })
 
 describe('sameLayout', () => {
   test('compares rects by value and nulls by position', () => {
-    const a = rectsFor('split', 'chatgpt', { claude: RECTS.claude, chatgpt: RECTS.chatgpt, grok: RECTS.grok })
-    const b = rectsFor('split', 'chatgpt', { claude: { ...RECTS.claude }, chatgpt: { ...RECTS.chatgpt }, grok: { ...RECTS.grok } })
+    const a = rectsFor('split', 'chatgpt', { claude: RECTS.claude, chatgpt: RECTS.chatgpt, grok: RECTS.grok, gemini: RECTS.gemini })
+    const b = rectsFor('split', 'chatgpt', { claude: { ...RECTS.claude }, chatgpt: { ...RECTS.chatgpt }, grok: { ...RECTS.grok }, gemini: { ...RECTS.gemini } })
     expect(sameLayout(a, b)).toBe(true)
     expect(sameLayout(a, { ...b, grok: null })).toBe(false)
     expect(sameLayout(a, { ...b, grok: { ...RECTS.grok, width: 501 } })).toBe(false)
+    expect(sameLayout(a, { ...b, gemini: null })).toBe(false) // the fourth site is compared like the others
     expect(sameLayout(a, null)).toBe(false)
     expect(sameLayout(null, null)).toBe(true)
   })
 })
 
 describe('rectsFor / sameLayout: the analyst view (Stage 3)', () => {
-  const viewports = { claude: el(RECTS.claude), chatgpt: el(RECTS.chatgpt), grok: el(RECTS.grok) }
+  const viewports = { claude: el(RECTS.claude), chatgpt: el(RECTS.chatgpt), grok: el(RECTS.grok), gemini: el(RECTS.gemini) }
 
   test('the analyst key is emitted only through the option, in both modes; a zero-area viewport is null', () => {
     expect(rectsFor('split', 'chatgpt', viewports, { analyst: el(ANALYST_RECT) })).toEqual({ ...RECTS, analyst: ANALYST_RECT })
-    expect(rectsFor('tabs', 'grok', viewports, { analyst: el(ANALYST_RECT) })).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, analyst: ANALYST_RECT })
+    expect(rectsFor('tabs', 'grok', viewports, { analyst: el(ANALYST_RECT) })).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, gemini: null, analyst: ANALYST_RECT })
     expect(rectsFor('split', 'chatgpt', viewports, { analyst: null })).toEqual({ ...RECTS, analyst: null })
     expect(rectsFor('split', 'chatgpt', viewports, { analyst: el({ x: 0, y: 0, width: 0, height: 0 }) })).toEqual({ ...RECTS, analyst: null })
-    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, {}))).toEqual(['claude', 'chatgpt', 'grok'])
-    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, undefined))).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, {}))).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
+    expect(Object.keys(rectsFor('split', 'chatgpt', viewports, undefined))).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
   })
 
   test('sameLayout: an absent analyst key equals null; a present rect is compared field by field', () => {

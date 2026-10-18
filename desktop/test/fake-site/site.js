@@ -1,9 +1,17 @@
-/* desktop/test/fake-site/site.js — look-alike composers for chatgpt / claude / grok.
+/* desktop/test/fake-site/site.js — look-alike composers for chatgpt / claude / grok / gemini.
  *
- * Query: ?site=chatgpt|claude|grok  ?state=ok|loggedout|challenge|blocked|slow  ?sendDelayMs=N
+ * Query: ?site=chatgpt|claude|grok|gemini  ?state=ok|loggedout|challenge|blocked|slow  ?sendDelayMs=N
  *        ?thread=noise  (a rendered user/assistant exchange whose text and links look like every
  *        wall and banner rule — inside message containers, so the session must stay ok)
  *        ?composer=textarea  (grok only: the older textarea composer instead of the TipTap editor)
+ *        ?untrusted=ignore|stall  (2026-10-17, EVERY look-alike) how an UNTRUSTED submit — the adapter's
+ *        `el.click()` on the send button, its synthetic Enter — is treated: `ignore` drops it (nothing is sent;
+ *        window.__fake.untrustedDropped counts them), `stall` mounts the user turn, clears the composer and shows
+ *        the stop control FOREVER with no reply (window.__fake.stalled records the texts) — the public report of
+ *        gemini.google.com in an Electron 44 embed (2026-09-30): a synthetic insert + click showed Stop and
+ *        produced no usable reply, i.e. a submission the adapter's confirmation would ACCEPT. A trusted submit
+ *        (Playwright's page.keyboard / a real click — main's `webContents.sendInputEvent` in the app) is
+ *        unaffected. Without the key every submit counts, trusted or not, exactly as before.
  * Paths (SPA fallback): /c/<id> (after a submit), /auth/login|/login|/sign-in (login walls),
  * /challenges.cloudflare.com/* (the local stand-in for the Turnstile iframe; nothing leaves the box).
  *
@@ -39,7 +47,8 @@
  *                    opens, which is why the captured text's fence count carries no "is it finished?"
  *                    information — see the S9 note below)
  *   ?nostop=1        no stop button while streaming (the adapter's quiet detection)
- *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt)
+ *   ?nodone=1        chatgpt: no copy-turn done marker after the reply (quiet detection on chatgpt); gemini
+ *                    (2026-10-17): no thumbs
  *   ?blockAfterMs=N  N ms after a submit the "Unusual activity" alert appears and the reply freezes
  *                    (a blocked session mid-observe)
  *   ?doneLagMs=N     the END SIGNAL lands early: N ms before the last render the done marker is mounted
@@ -99,6 +108,23 @@
  *                     the reply block renders NO MarkdownRoot (a bare `div.text-size-chat`, as the measured
  *                     turn did), so no `assistantText` entry matches and the capture reads the exchange —
  *                     the shape that handed the user's own prompt back as the reply
+ *   (2026-10-17) GEMINI — HAND-BUILT from public sources (unmeasured, like DEFAULT_SELECTORS.gemini): a Quill composer
+ *   (`rich-textarea > div.ql-editor[contenteditable][role=textbox]`) with Quill's contenteditable `.ql-clipboard` as a
+ *   DECOY before it, a microphone button swapped for `button.send-button.submit[aria-label="Send message"]` once text
+ *   is in (grok's swap), no form. One EXCHANGE is a `div.conversation-container` holding the `user-query` (a
+ *   `cdk-visually-hidden` "You said" label, then `.query-text`) and, mounted INTO it when the reply begins, the
+ *   `model-response` (its own `cdk-visually-hidden` "Gemini said" label, then `message-content > div.markdown.
+ *   markdown-main-panel`, the text) — the container is never an assistant row, it holds the user turn. Done = the
+ *   thumbs of `message-actions` (`button[aria-label="Good response"]`, mat-icon `thumb_up`) mounted with the end
+ *   signal (?nodone=1 suppresses them); stop = `button[aria-label="Stop response"]`. ?thinking=1 adds an EXPANDED
+ *   `model-thoughts` panel above the answer with its own `message-content > div.markdown.markdown-main-panel` — the
+ *   reason the body cascade is scoped `:not(model-thoughts *)`. Code blocks are `code-block > div.code-block` with the
+ *   language in a header before the `pre` and none on the `code` (a custom element around block markup: the walk must
+ *   read it as a block). ?state=loggedout is GUEST MODE: the composer works, and the header carries a "Sign in" link
+ *   (`a[aria-label="Sign in"][href*="accounts.google.com/ServiceLogin"]`); signed in, the header carries the account
+ *   button (`a[aria-label^="Google Account:"]`, a SignOutOptions link) that must never read as a wall. The blocked
+ *   banner speaks Google's "unusual traffic"; ?reply=json answers a challenge with CLAUDE's planted defense (there is
+ *   no planted_factual gemini fixture, and none is added). Chat URLs stay `/c/<id>`, as the other look-alikes'.
  *   (2026-10-10) the USER TURN is each site's own markup, so the adapters project exercises every entry of
  *   USER_TURN_SELECTORS with real text, not only chatgpt's: chatgpt keeps `article[data-message-author-role=user]`;
  *   claude is `div[data-testid=user-message] > p.whitespace-pre-wrap` (the claude.ai redesign's user body); grok is
@@ -192,6 +218,9 @@
  *   claude   div.font-claude-response — the text is the container's whole content (assistantText is
  *            empty for claude); stop = button[aria-label="Stop response"]; no done marker
  *   grok     div#response-<id> > div.response-content-markdown; stop = button[aria-label="Stop"]; no done marker
+ *   gemini   (2026-10-17) model-response > … > message-content > div.markdown.markdown-main-panel, mounted INTO the
+ *            exchange's div.conversation-container; stop = button[aria-label="Stop response"]; done = the thumbs-up
+ *            button[aria-label="Good response"] in message-actions
  * The stop button takes the send button's slot (grok: the voice/submit slot) while streaming, as on
  * the real pages, and the slot is restored when the reply ends. Streaming re-renders the text element
  * from scratch every 40 ms with a growing prefix; every 5th render shows a SHORTER prefix — the
@@ -212,6 +241,9 @@
  *            editor and restores the voice button.
  *   grok&composer=textarea   textarea[aria-label="Ask Grok anything"], button[aria-label="Submit"]
  *            (disabled until input) — keeps the native-value-setter insertion path covered.
+ *   gemini   (2026-10-17) rich-textarea > div.ql-editor[contenteditable=true][role=textbox] after a contenteditable
+ *            div.ql-clipboard DECOY; button[aria-label="Send message"] exists only once the editor holds text (the
+ *            microphone holds the slot while it is empty), no form.
  *
  * Editing model (pins the insertion technique):
  *   - contenteditable: a JS model is updated from TRUSTED beforeinput/input events only
@@ -222,7 +254,9 @@
  *     instance-level `value` setter keeps the tracker in sync (so `el.value = x` + a synthetic
  *     input event is NOT seen as a change; the prototype setter + input event is).
  *
- * window.__fake = {submitted: [], site, state, variant, getText(), helperText(),
+ * window.__fake = {submitted: [], site, state, variant, getText(), helperText(), untrusted, untrustedDropped, stalled,
+ *                  stalledAt (2026-10-17: ?untrusted — the mode, the untrusted submits `ignore` dropped, the texts and
+ *                  the moment `stall` took),
  *                  reply: {enabled, ms, kind, chars, lulls, nostop, nodone, blockAfterMs, doneLagMs,
  *                  thinkMs,
  *                  twoTurns, remountMs, placeholderMs, webUrlMs}, replying,
@@ -252,10 +286,17 @@
     chatgpt: { title: 'ChatGPT', placeholder: 'Ask anything', loginHref: '/auth/login' },
     claude: { title: 'Claude', placeholder: 'How can I help you today?', loginHref: '/login' },
     grok: { title: 'Grok', placeholder: 'What do you want to know?', loginHref: '/sign-in' },
+    // 2026-10-17: guest mode has no login wall — the Sign-in link points at Google's accounts host (never followed here)
+    gemini: { title: 'Gemini', placeholder: 'Ask Gemini', loginHref: 'https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app' },
   }
   const LOGIN_PATHS = ['/auth/login', '/login', '/sign-in']
   const CHALLENGE_TITLE = 'Just a moment...'
   const BLOCKED_TEXT = 'Unusual activity has been detected from your device. Try again later.'
+  /** 2026-10-17: Google words its abuse wall "unusual traffic" (DEFAULT_SELECTORS.gemini.errorText), the others "unusual activity". */
+  const BLOCKED_TEXT_GEMINI = 'Our systems have detected unusual traffic from your computer network. Try again later.'
+  /** 2026-10-17: the signed-in gemini header's account button — a label that names the account, scrubbed by snapshots. */
+  const ACCOUNT_LABEL = 'Google Account: Fake User (fake.user@example.invalid)'
+  const ACCOUNT_HREF = 'https://accounts.google.com/SignOutOptions?hl=en&continue=https://gemini.google.com/app'
 
   /** Streaming cadence and the rewind rule (see the header). */
   const RENDER_MS = 40
@@ -296,6 +337,9 @@
     claude: `{"stance": "defend", "justification": "The BMI088 datasheet's GYRO_RANGE register (0x0F) lists five selectable full-scale ranges: 125, 250, 500, 1000 and 2000 deg/s, with 2000 deg/s the power-on default. The 1000 deg/s figure is one of the intermediate settings, not the maximum.", "revised_claim": null, "confidence": 0.95, "persuaded_by": null}`,
     grok: `{"stance": "defend", "justification": "The datasheet's gyroscope specification table gives the full-scale range as +/-125, +/-250, +/-500, +/-1000 and +/-2000 deg/s selected through GYRO_RANGE; 1000 deg/s is a mid-scale setting and the maximum is 2000 deg/s.", "revised_claim": null, "confidence": 0.93, "persuaded_by": null}`,
   }
+  // 2026-10-17: gemini answers a challenge with CLAUDE's planted defense — the fixture corpus has no gemini file and
+  // gets none (observe.spec.js re-derives it from claude.defense.1.jsonl)
+  CANNED_DEFENSE.gemini = CANNED_DEFENSE.claude
   const CANNED_CONVERGENCE = `{"statuses": [{"divergence_id": "d1", "status": "resolved"}]}`
   // The Pre-parse restatement: the planted_factual question ("What is the maximum gyroscope full-scale
   // range of the Bosch BMI088 IMU?") restated, keyed on the header the restate prompt opens with. No
@@ -388,8 +432,10 @@
   let state = params.get('state') || 'ok'
   if (LOGIN_PATHS.includes(path)) state = 'loggedout'
   const sendDelayMs = Math.max(0, Number(params.get('sendDelayMs')) || 0)
-  /** Composer variant: 'tiptap' (grok default), 'textarea' (grok&composer=textarea), 'prosemirror' (chatgpt/claude). */
-  const variant = site === 'grok' ? (params.get('composer') === 'textarea' ? 'textarea' : 'tiptap') : 'prosemirror'
+  /** Composer variant: 'tiptap' (grok default), 'textarea' (grok&composer=textarea), 'quill' (gemini, 2026-10-17), 'prosemirror' (chatgpt/claude). */
+  const variant = site === 'grok' ? (params.get('composer') === 'textarea' ? 'textarea' : 'tiptap') : site === 'gemini' ? 'quill' : 'prosemirror'
+  /** ?untrusted=ignore|stall (2026-10-17, every look-alike): what an UNTRUSTED submit does; null = it counts like any other. */
+  const untrusted = ['ignore', 'stall'].includes(params.get('untrusted')) ? params.get('untrusted') : null
   /** Stage 2 reply options (opt-in). */
   const replyOpts = {
     enabled: params.has('replyMs') || params.has('reply'),
@@ -408,8 +454,9 @@
     blockAfterMs: params.has('blockAfterMs') ? Math.max(0, Number(params.get('blockAfterMs')) || 0) : null,
     doneLagMs: params.has('doneLagMs') ? Math.max(0, Number(params.get('doneLagMs')) || 0) : null,
     twoTurns: params.get('twoTurns') === '1',
-    // ?thinking=1 — claude only (the widget is claude.ai's; chatgpt and grok keep their shapes)
-    thinking: params.get('thinking') === '1' && site === 'claude',
+    // ?thinking=1 — claude (its widget, S8) and gemini (an expanded `model-thoughts` panel, 2026-10-17); chatgpt and
+    // grok keep their shapes
+    thinking: params.get('thinking') === '1' && (site === 'claude' || site === 'gemini'),
     // the measured chatgpt lifecycle (see the header): a placeholder turn, then a gap with NO
     // assistant container at all, then the real reply
     // S10: the measured REASONING shape — the container mounts at once and stays EMPTY while the
@@ -505,6 +552,11 @@
     chatgptLayout,
     askUser: replyOpts.askUser ? { text: ASK_USER_TEXT, label: ASK_USER_LABEL } : null,
     askedAt: null,
+    // 2026-10-17: ?untrusted — the mode, the untrusted submits it dropped (`ignore`), the texts it stalled on (`stall`)
+    untrusted,
+    untrustedDropped: 0,
+    stalled: [],
+    stalledAt: null,
   }
   window.__fake = fake
 
@@ -521,7 +573,27 @@
   header.textContent = cfg.title
   app.appendChild(header)
 
-  if (state === 'loggedout') {
+  // 2026-10-17 (gemini): the header's account control. Signed out it is GUEST MODE — a "Sign in" link and a composer
+  // that still works (so this page goes on to mount one); signed in it is the account button, whose label names the
+  // account and whose link goes to SignOutOptions — neither of which may ever read as a login wall.
+  if (site === 'gemini') {
+    const link = document.createElement('a')
+    link.className = 'sign-in-link gb_A'
+    if (state === 'loggedout') {
+      link.setAttribute('aria-label', 'Sign in')
+      link.setAttribute('href', cfg.loginHref)
+      link.textContent = 'Sign in'
+    } else {
+      link.setAttribute('aria-label', ACCOUNT_LABEL)
+      link.setAttribute('href', ACCOUNT_HREF)
+      link.setAttribute('role', 'button')
+      link.textContent = 'FU'
+    }
+    link.addEventListener('click', (e) => e.preventDefault()) // nothing leaves the box
+    header.appendChild(link)
+  }
+
+  if (state === 'loggedout' && site !== 'gemini') {
     const wall = clone('tpl-login')
     wall.querySelector('a').setAttribute('href', cfg.loginHref)
     app.appendChild(wall)
@@ -546,7 +618,7 @@
   function showBlockedAlert() {
     const alert = document.createElement('div')
     alert.setAttribute('role', 'alert')
-    alert.textContent = BLOCKED_TEXT
+    alert.textContent = site === 'gemini' ? BLOCKED_TEXT_GEMINI : BLOCKED_TEXT
     app.insertBefore(alert, thread || null)
     app.setAttribute('data-state', 'blocked')
     fake.state = 'blocked'
@@ -643,9 +715,11 @@
   if (params.get('thread') === 'noise') {
     const user = document.createElement('article')
     user.setAttribute('data-message-author-role', 'user')
+    // 2026-10-17: gemini's phrases and wall too — "unusual traffic", and a "Sign in" link to accounts.google.com
     user.innerHTML =
       'How do I handle an API rate limit? Last time Something went wrong and it said You\'ve reached your limit — ' +
-      'see <a href="/auth/login">/auth/login</a>, <a href="/login">/login</a> and <a href="/sign-in">/sign-in</a>.'
+      'see <a href="/auth/login">/auth/login</a>, <a href="/login">/login</a> and <a href="/sign-in">/sign-in</a>; ' +
+      'Google said it saw unusual traffic, so <a aria-label="Sign in" href="https://accounts.google.com/ServiceLogin">Sign in</a> again.'
     newExchange()
     mountRow(user)
     const assistant = document.createElement('article')
@@ -686,10 +760,23 @@
     setSendEnabled(text.trim() !== '')
   }
 
-  function submit() {
+  /**
+   * `trusted` (2026-10-17): whether the event that asked for the submit was a TRUSTED one (a real key press or click
+   * — Playwright's page.keyboard / locator.click, main's sendInputEvent — rather than the adapter's `el.click()` or
+   * synthetic Enter). Only ?untrusted cares; without it every submit counts.
+   */
+  function submit(trusted = true) {
     if (!composer || !sendEnabled) return
     const text = composer.getText()
     if (text.trim() === '') return
+    if (!trusted && untrusted === 'ignore') {
+      fake.untrustedDropped += 1 // the site took no notice: the prompt stays in the composer, nothing is sent
+      return
+    }
+    if (!trusted && untrusted === 'stall') {
+      stallSubmit(text)
+      return
+    }
     fake.submitted.push(text)
     newExchange()
     const { row, textEl } = buildUserTurn()
@@ -715,6 +802,24 @@
       setTimeout(() => goUrl('replace', '/c/' + uuid + location.search), webUrlMs)
     }, 500)
     if (replyOpts.enabled) startReply(text)
+  }
+
+  /**
+   * ?untrusted=stall (2026-10-17): the PUBLIC failure of gemini.google.com under synthetic input — the user turn
+   * mounts, the composer empties and the stop control goes up and STAYS up, and no reply ever comes. Every signal
+   * the adapter's submit confirmation reads says "submitted" (stop control, emptied composer, one more message),
+   * which is the whole reason main types into gemini with trusted input instead of falling back to it.
+   */
+  function stallSubmit(text) {
+    fake.stalled.push(text)
+    fake.stalledAt = Date.now()
+    newExchange()
+    const { row, textEl } = buildUserTurn()
+    textEl.textContent = text
+    mountRow(row)
+    composer.clear()
+    setSendEnabled(false)
+    actions.streaming(true) // forever: nothing ever takes it down
   }
 
   function isSubmitKey(e) {
@@ -938,6 +1043,32 @@
       pre.appendChild(wrap)
       return pre
     }
+    if (site === 'gemini') {
+      // 2026-10-17 (public sources, unmeasured): a `code-block` CUSTOM element around block markup — the language in a
+      // header before the pre, a "Copy code" button beside it, and no language class on the code
+      const host = document.createElement('code-block')
+      const block = el('div', 'code-block')
+      const header = el('div', 'code-block-decoration header-formatted code-header')
+      const label = document.createElement('span')
+      label.textContent = lang
+      const buttons = el('div', 'buttons')
+      const copy = document.createElement('button')
+      copy.type = 'button'
+      copy.className = 'copy-button'
+      copy.setAttribute('aria-label', 'Copy code')
+      copy.textContent = 'Copy code'
+      buttons.appendChild(copy)
+      header.append(label, buttons)
+      const inner = el('div', 'formatted-code-block-internal-container')
+      const pre = document.createElement('pre')
+      code.className = 'code-container formatted'
+      code.setAttribute('data-test-id', 'code-content')
+      pre.appendChild(code)
+      inner.appendChild(pre)
+      block.append(header, inner)
+      host.appendChild(block)
+      return host
+    }
     if (site === 'claude') {
       const block = el('div', 'code-block')
       const header = el('div', 'code-header')
@@ -1123,6 +1254,38 @@
     return form
   }
 
+  /**
+   * ?thinking=1 on gemini (2026-10-17, public sources): an EXPANDED `model-thoughts` panel — a header button and a
+   * `[data-test-id=thoughts-content]` body that renders its OWN `message-content > div.markdown.markdown-main-panel`
+   * before the answer's. On screen and in no hidden state, so only the body cascade's `:not(model-thoughts *)`
+   * scoping keeps the thoughts out of a capture.
+   */
+  function buildGeminiThoughts() {
+    const thoughts = document.createElement('model-thoughts')
+    thoughts.className = 'model-thoughts'
+    const box = el('div', 'thoughts-container')
+    const head = document.createElement('button')
+    head.type = 'button'
+    head.className = 'thoughts-header-button'
+    head.setAttribute('data-test-id', 'thoughts-header-button')
+    head.textContent = 'Show thinking'
+    const body = el('div', 'thoughts-content-expanded')
+    body.setAttribute('data-test-id', 'thoughts-content')
+    const message = document.createElement('message-content')
+    message.className = 'thoughts-text'
+    const md = el('div', 'markdown markdown-main-panel')
+    for (const line of [THINKING_SUMMARY, THINKING_DETAIL]) {
+      const p = document.createElement('p')
+      p.textContent = line
+      md.appendChild(p)
+    }
+    message.appendChild(md)
+    body.appendChild(message)
+    box.append(head, body)
+    thoughts.appendChild(box)
+    return thoughts
+  }
+
   /** The per-site assistant container: `{container, textEl, markDone()}` (see the header for the shapes). */
   function buildAssistant() {
     if (site === 'chatgpt' && chatgptLayout === 'group' && currentGroup !== null) {
@@ -1175,6 +1338,45 @@
         },
       }
     }
+    if (site === 'gemini') {
+      // 2026-10-17: `model-response` (the container) > its screen-reader label, an optional EXPANDED thinking panel
+      // (?thinking=1) carrying its OWN `message-content > .markdown.markdown-main-panel`, then the answer's; the thumbs
+      // mount at the end signal. Mounted INTO the exchange's `div.conversation-container` (`mountAssistantNode`).
+      const response = document.createElement('model-response')
+      const inner = el('div', 'response-container')
+      const said = el('span', 'cdk-visually-hidden screen-reader-model-response-label')
+      said.textContent = 'Gemini said'
+      inner.appendChild(said)
+      if (replyOpts.thinking) inner.appendChild(buildGeminiThoughts())
+      const presented = el('div', 'presented-response-container')
+      const content = el('div', 'response-content')
+      const message = document.createElement('message-content')
+      message.className = 'model-response-text'
+      const md = el('div', 'markdown markdown-main-panel')
+      message.appendChild(md)
+      content.appendChild(message)
+      presented.appendChild(content)
+      inner.appendChild(presented)
+      response.appendChild(inner)
+      return {
+        container: response,
+        textEl: md,
+        markDone() {
+          if (replyOpts.nodone) return
+          const actionsBar = document.createElement('message-actions')
+          for (const [label, icon] of [['Good response', 'thumb_up'], ['Bad response', 'thumb_down'], ['Copy', 'content_copy']]) {
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.setAttribute('aria-label', label)
+            const glyph = document.createElement('mat-icon')
+            glyph.setAttribute('fonticon', icon)
+            b.append(glyph, label === 'Copy' ? 'Copy' : label === 'Good response' ? 'Up' : 'Down')
+            actionsBar.appendChild(b)
+          }
+          inner.appendChild(actionsBar)
+        },
+      }
+    }
     if (site === 'claude') {
       const box = document.createElement('div')
       box.className = 'font-claude-response reply'
@@ -1213,6 +1415,12 @@
       article.setAttribute('data-message-author-role', 'assistant')
       article.textContent = PLACEHOLDER_TEXT
       return article
+    }
+    if (site === 'gemini') {
+      // 2026-10-17: the turn element without its markdown body (not measured on gemini; kept symmetrical)
+      const response = document.createElement('model-response')
+      response.textContent = PLACEHOLDER_TEXT
+      return response
     }
     const box = document.createElement('div')
     box.className = site === 'claude' ? 'font-claude-response reply' : 'reply'
@@ -1280,6 +1488,23 @@
       msg.setAttribute('data-message-author-role', 'user')
       return { row: msg, textEl: msg }
     }
+    if (site === 'gemini') {
+      // 2026-10-17 (public sources, unmeasured): the exchange is a `div.conversation-container` — the ROW that mounts —
+      // holding the `user-query` now and the `model-response` once the reply begins (`buildAssistant` mounts into it)
+      const exchangeBox = el('div', 'conversation-container')
+      const query = document.createElement('user-query')
+      const bubble = el('span', 'user-query-container user-turn')
+      const content = el('div', 'query-content')
+      const said = el('span', 'cdk-visually-hidden screen-reader-user-query-label')
+      said.textContent = 'You said'
+      const textEl = el('div', 'query-text')
+      content.append(said, textEl)
+      bubble.appendChild(content)
+      query.appendChild(bubble)
+      exchangeBox.appendChild(query)
+      currentGroup = exchangeBox
+      return { row: exchangeBox, textEl }
+    }
     if (site === 'claude') {
       const msg = el('div', 'user-turn')
       msg.setAttribute('data-testid', 'user-message')
@@ -1310,9 +1535,24 @@
       exchange.rows.push({ node: built.block, slot: null, assistant: true })
       layoutSlots()
     } else {
-      mountRow(built.container, { assistant: true })
+      mountAssistantNode(built.container)
     }
     fake.containers += 1
+  }
+
+  /**
+   * Mount an assistant row (2026-10-17): on gemini INTO the exchange's `div.conversation-container` — the container
+   * holds the user turn and is never itself an assistant row — registered in the current exchange and the window
+   * trimmed in the same tick, exactly as `mountRow` does for every other site's row.
+   */
+  function mountAssistantNode(node) {
+    if (site !== 'gemini' || currentGroup === null || !currentGroup.isConnected) return mountRow(node, { assistant: true })
+    currentGroup.appendChild(node)
+    if (exchange === null) newExchange()
+    exchange.rows.push({ node, slot: null, assistant: true })
+    trimExchanges()
+    layoutSlots()
+    return node
   }
 
   /**
@@ -1349,7 +1589,7 @@
       return
     }
     const placeholder = buildPlaceholder()
-    mountRow(placeholder, { assistant: true })
+    mountAssistantNode(placeholder)
     fake.containers += 1
     fake.placeholderAt = Date.now()
     fake.replying = true
@@ -1493,10 +1733,17 @@
     } else if (site === 'claude') {
       b.setAttribute('data-testid', 'chat-input-stop') // claude.ai, 2026-10-10: the measured testid; the label stays
       b.setAttribute('aria-label', 'Stop response')
+    } else if (site === 'gemini') {
+      // 2026-10-17 (public sources): the send slot's stop state, its label and its language-neutral glyph
+      b.className = 'stop send-button'
+      b.setAttribute('aria-label', 'Stop response')
+      const glyph = document.createElement('mat-icon')
+      glyph.setAttribute('fonticon', 'stop')
+      b.appendChild(glyph)
     } else {
       b.setAttribute('aria-label', 'Stop')
     }
-    b.textContent = 'Stop'
+    b.append('Stop')
     b.addEventListener('click', () => {
       if (reply && fake.replying) {
         endReply()
@@ -1539,19 +1786,36 @@
     }
   }
 
+  /** grok's submit button (TipTap, measured 2026-09-16): a form submit control, rendered only once text is in. */
+  function makeGrokSubmit() {
+    const b = document.createElement('button')
+    b.className = 'send'
+    b.type = 'submit'
+    b.setAttribute('aria-label', 'Submit')
+    b.setAttribute('data-testid', 'chat-submit')
+    b.textContent = 'Send'
+    return b
+  }
+
+  /** gemini's send button (2026-10-17, public sources): `send-button submit`, its label and glyph; no form — its own click submits. */
+  function makeGeminiSubmit() {
+    const b = document.createElement('button')
+    b.className = 'send send-button submit'
+    b.type = 'button'
+    b.setAttribute('aria-label', 'Send message')
+    const glyph = document.createElement('mat-icon')
+    glyph.setAttribute('fonticon', 'arrow_upward')
+    b.append(glyph, 'Send')
+    return b
+  }
+
   /**
-   * grok (TipTap): like the real page, the slot renders EITHER the voice-mode button (editor
-   * empty) OR the submit button (editor holds text) — never a disabled submit button — and the
-   * stop button while a reply streams. The submit button therefore does not exist in the DOM until
-   * text is in.
+   * grok (TipTap) and gemini (Quill, 2026-10-17): like the real pages, the slot renders EITHER the voice / microphone
+   * button (editor empty) OR the submit button (editor holds text) — never a disabled submit button — and the stop
+   * button while a reply streams. The submit button therefore does not exist in the DOM until text is in.
+   * `submitButton` is returned so a look-alike without a form can wire its click.
    */
-  function swapActions(voiceButton) {
-    const submitButton = document.createElement('button')
-    submitButton.className = 'send'
-    submitButton.type = 'submit'
-    submitButton.setAttribute('aria-label', 'Submit')
-    submitButton.setAttribute('data-testid', 'chat-submit')
-    submitButton.textContent = 'Send'
+  function swapActions(voiceButton, submitButton) {
     const stopButton = makeStopButton()
     let hasText = false
     let streaming = false
@@ -1563,6 +1827,7 @@
       current = next
     }
     return {
+      submitButton,
       apply(on) {
         hasText = on
         render()
@@ -1576,7 +1841,8 @@
   }
 
   // --- ProseMirror look-alike (chatgpt, claude and grok's TipTap editor) --------------------
-  function mountProseMirror(el, placeholder) {
+  /** `emptyClass` (2026-10-17): the class the editor wears while empty — `is-empty` (ProseMirror), `ql-blank` (Quill). */
+  function mountProseMirror(el, placeholder, emptyClass = 'is-empty') {
     let model = ''
     let editTick = false // a trusted editing event happened since the last frame
     let framePending = false
@@ -1616,7 +1882,7 @@
         frag.appendChild(p)
       })
       el.replaceChildren(frag)
-      el.classList.toggle('is-empty', model === '')
+      el.classList.toggle(emptyClass, model === '')
       observer.takeRecords() // our own mutations are not "foreign"
     }
 
@@ -1627,13 +1893,13 @@
       if (!e.isTrusted) return // a synthetic input event never carries editor state
       editTick = true
       model = readDom()
-      el.classList.toggle('is-empty', model === '')
+      el.classList.toggle(emptyClass, model === '')
       onModelChange(model)
     })
     el.addEventListener('keydown', (e) => {
       if (isSubmitKey(e)) {
         e.preventDefault()
-        submit()
+        submit(e.isTrusted) // 2026-10-17: a synthetic Enter is an untrusted submit (?untrusted)
       }
     })
     const observer = new MutationObserver(() => {
@@ -1687,7 +1953,7 @@
     ta.addEventListener('keydown', (e) => {
       if (isSubmitKey(e)) {
         e.preventDefault()
-        submit()
+        submit(e.isTrusted) // 2026-10-17: a synthetic Enter is an untrusted submit (?untrusted)
       }
     })
     return {
@@ -1706,19 +1972,29 @@
     const box = clone(variant === 'textarea' ? 'tpl-grok-textarea' : 'tpl-' + site)
     if (variant === 'textarea') {
       composer = mountTextarea(box.querySelector("textarea[aria-label='Ask Grok anything']"), cfg.placeholder)
+    } else if (variant === 'quill') {
+      composer = mountProseMirror(box.querySelector('.ql-editor'), cfg.placeholder, 'ql-blank')
     } else {
       composer = mountProseMirror(box.querySelector('.ProseMirror'), cfg.placeholder)
     }
     const voice = box.querySelector('button.voice')
-    const button = box.querySelector('button.send')
-    actions = voice ? swapActions(voice) : toggleActions(button)
+    const button = voice ? null : box.querySelector('button.send')
+    actions = voice ? swapActions(voice, site === 'gemini' ? makeGeminiSubmit() : makeGrokSubmit()) : toggleActions(button)
     if (box.tagName === 'FORM') {
+      // 2026-10-17 (?untrusted): a form's `submit` event is the browser's own, trusted even when an untrusted
+      // `el.click()` set it off — so the trust of the CLICK that submitted is recorded on the way down and read here
+      let clickTrusted = null
+      box.addEventListener('click', (e) => {
+        clickTrusted = e.isTrusted
+      }, true)
       box.addEventListener('submit', (e) => {
         e.preventDefault()
-        submit()
+        const trusted = clickTrusted === null ? e.isTrusted : clickTrusted
+        clickTrusted = null
+        submit(trusted)
       })
     } else {
-      button.addEventListener('click', submit)
+      ;(button || actions.submitButton).addEventListener('click', (e) => submit(e.isTrusted))
     }
     app.appendChild(box)
   }

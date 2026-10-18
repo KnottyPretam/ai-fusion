@@ -32,10 +32,11 @@ const KEY = `sk-or-v1-${'c'.repeat(64)}`
 function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {}, inflight = {}, snapshotHtml = '<html><body>…</body></html>', timers = null, withAnalyst = false, theme = 'dark', noThemeSettings = false, withExport = true, exportResult = null, withCouncil = false, withKey = false, keyAvailable = true } = {}) {
   const ipcMain = fakeIpcMain()
   const renderer = fakeWebContents({ id: 1 })
-  const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }) }
+  const siteWc = { claude: fakeWebContents({ id: 11 }), chatgpt: fakeWebContents({ id: 12 }), grok: fakeWebContents({ id: 13 }), gemini: fakeWebContents({ id: 14 }) }
   const calls = []
   const health = {}
-  const current = { claude: 'https://claude.test/c/1', chatgpt: 'https://chatgpt.test/c/1', grok: 'javascript:alert(1)', ...urls }
+  // gemini (2026-10-17) sits on its newChatUrl unless a test says otherwise, so openChats keeps it
+  const current = { claude: 'https://claude.test/c/1', chatgpt: 'https://chatgpt.test/c/1', grok: 'javascript:alert(1)', gemini: 'http://127.0.0.1:5199/?site=gemini', ...urls }
   const adapters = {}
   for (const slot of Object.keys(siteWc)) {
     adapters[slot] = {
@@ -76,7 +77,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     },
   }
   const selectors = { current: () => ({ version: 1, chatgpt: { composer: ['#x'] }, claude: {}, grok: {} }), reload: () => calls.push(['selectors.reload']), lastError: () => null }
-  const capture = { claude: false, chatgpt: false, grok: false }
+  const capture = { claude: false, chatgpt: false, grok: false, gemini: false }
   const themeState = { value: theme }
   const themeApplied = []
   const councilState = { value: JSON.parse(JSON.stringify(CLASSIC)) }
@@ -208,7 +209,8 @@ const rejects = (p, re = /bad_request/) => assert.rejects(p, re)
 
 test('validators: unknown slot, non-string / oversize text, bad targets, bad direction, boolean, conversation id', () => {
   assert.equal(requireSlot('claude'), 'claude')
-  for (const bad of ['bing', '', null, undefined, 1, ['claude'], { toString: () => 'claude' }]) assert.throws(() => requireSlot(bad), /bad_request/)
+  assert.equal(requireSlot('gemini'), 'gemini', 'the fourth site (2026-10-17)')
+  for (const bad of ['bing', 'deepseek', '', null, undefined, 1, ['claude'], { toString: () => 'claude' }]) assert.throws(() => requireSlot(bad), /bad_request/)
   assert.deepEqual(requireTargets(['grok', 'claude', 'claude']), ['claude', 'grok'])
   assert.deepEqual(requireTargets([]), [])
   for (const bad of ['claude', null, ['claude', 'bing'], [1], { 0: 'claude' }]) assert.throws(() => requireTargets(bad), /bad_request/)
@@ -260,7 +262,7 @@ test('panes:getCouncil / panes:setCouncil: read, validate-then-persist, panes:co
   await rejects(ipcMain.invoke('panes:getCouncil', eventFrom(siteWc.claude)))
   await rejects(ipcMain.invoke('panes:setCouncil', eventFrom(siteWc.claude), TWO))
   await rejects(ipcMain.invoke('panes:setCouncil', fromRenderer, { slots: { claude: { model: 'web:claude' } } }))
-  await rejects(ipcMain.invoke('panes:setCouncil', fromRenderer, { slots: { ...TWO.slots, gemini: { model: 'web:gemini' } } }), /bad_request/)
+  await rejects(ipcMain.invoke('panes:setCouncil', fromRenderer, { slots: { ...TWO.slots, deepseek: { model: 'web:deepseek' } } }), /bad_request/, 'deepseek has no site (web:gemini is one since 2026-10-17)')
   assert.deepEqual(calls, [], 'nothing persisted by a refused call')
   assert.deepEqual(sent.filter(([c]) => c === 'panes:council'), [])
   const reordered = { slots: { qwen: TWO.slots.qwen, chatgpt: TWO.slots.chatgpt } }
@@ -269,6 +271,9 @@ test('panes:getCouncil / panes:setCouncil: read, validate-then-persist, panes:co
   assert.deepEqual(councilState.value, TWO)
   assert.deepEqual(sent.filter(([c]) => c === 'panes:council'), [['panes:council', TWO]])
   assert.deepEqual(await ipcMain.invoke('panes:getCouncil', fromRenderer), TWO)
+  // a {claude, gemini} web council is a legal default since gemini became a site
+  const webPair = { slots: { gemini: { model: 'web:gemini', effort: 'off' }, claude: { model: 'web:claude', effort: 'off' } } }
+  assert.deepEqual(await ipcMain.invoke('panes:setCouncil', fromRenderer, webPair), { slots: { claude: webPair.slots.claude, gemini: webPair.slots.gemini } })
   const bare = setup()
   await assert.rejects(bare.ipcMain.invoke('panes:getCouncil', bare.fromRenderer), /council_unavailable/)
   await assert.rejects(bare.ipcMain.invoke('panes:setCouncil', bare.fromRenderer, TWO), /council_unavailable/)
@@ -411,7 +416,8 @@ test('panes:getInfo reports version, dev, public sites, the layout once known an
   assert.equal(info.backend, null)
   assert.equal(info.layout, null)
   assert.equal(info.theme, 'dark', 'settings.json is what the renderer paints from')
-  assert.deepEqual(Object.keys(info.sites), ['claude', 'chatgpt', 'grok'])
+  assert.deepEqual(Object.keys(info.sites), ['claude', 'chatgpt', 'grok', 'gemini'])
+  assert.equal(info.sites.gemini.partition, 'persist:gemini')
   assert.deepEqual(info.sites.claude, { url: 'http://127.0.0.1:5199/?site=claude', newChatUrl: 'http://127.0.0.1:5199/?site=claude', partition: 'persist:claude' })
   assert.equal('hosts' in info.sites.claude, false)
   ipcMain.emit('panes:active', fromRenderer, { mode: 'tabs', active: 'grok' })
@@ -426,10 +432,10 @@ test('panes:getInfo reports version, dev, public sites, the layout once known an
 test('panes:getInfo replays the cached health, the zoom factor of every view and the bridge state (the renderer subscribes before it asks)', async () => {
   const { ipcMain, fromRenderer, views, sent, siteWc } = setup({ bridge: { connected: true, since: 1710000000000 } })
   const h = { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: '#p', send: 'b', reply: null, stop: null, error: null }, url: 'u', host: 'h', title: 't', ts: 1 }
-  const cache = { grok: h }
-  views.slots = () => ['claude', 'chatgpt', 'grok']
+  const cache = { grok: h, gemini: h }
+  views.slots = () => ['claude', 'chatgpt', 'grok', 'gemini']
   views.getHealth = (slot) => cache[slot] || null
-  views.zoomFactor = (slot) => (slot === 'claude' ? 1.5 : 1)
+  views.zoomFactor = (slot) => (slot === 'claude' ? 1.5 : slot === 'gemini' ? 0.9 : 1)
   const info = await ipcMain.invoke('panes:getInfo', fromRenderer)
   assert.equal(info.version, '0.1.0')
   assert.deepEqual(sent, [
@@ -437,6 +443,8 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
     ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
     ['panes:health', 'grok', h],
     ['panes:zoom', { slot: 'grok', factor: 1 }],
+    ['panes:health', 'gemini', h],
+    ['panes:zoom', { slot: 'gemini', factor: 0.9 }],
     ['panes:bridge', { connected: true, since: 1710000000000 }],
     ['panes:theme', { theme: 'dark' }],
   ])
@@ -463,7 +471,10 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
 test('panes:layout normalizes and applies; panes:active validates and stores', () => {
   const { ipcMain, fromRenderer, calls, layoutState } = setup()
   ipcMain.emit('panes:layout', fromRenderer, { claude: { x: 0.4, y: 1.6, width: 0, height: 10 }, chatgpt: null })
-  assert.deepEqual(calls, [['applyLayout', { claude: { x: 0, y: 2, width: 1, height: 10 }, chatgpt: null, grok: null, analyst: null }]])
+  assert.deepEqual(calls, [['applyLayout', { claude: { x: 0, y: 2, width: 1, height: 10 }, chatgpt: null, grok: null, gemini: null, analyst: null }]])
+  calls.length = 0
+  ipcMain.emit('panes:layout', fromRenderer, { gemini: { x: 10, y: 20, width: 300, height: 400 } })
+  assert.deepEqual(calls, [['applyLayout', { claude: null, chatgpt: null, grok: null, gemini: { x: 10, y: 20, width: 300, height: 400 }, analyst: null }]], 'the fourth site has a rect of its own')
   ipcMain.emit('panes:active', fromRenderer, { mode: 'split', active: 'claude' })
   assert.deepEqual(layoutState, { mode: 'split', active: 'claude' })
   ipcMain.emit('panes:active', fromRenderer, { mode: 'nope', active: 'claude' })
@@ -495,13 +506,16 @@ test('panes:inspect is a no-op outside dev', async () => {
 
 test('panes:getCapture / panes:setCapture read and write the settings switches', async () => {
   const { ipcMain, fromRenderer, calls, capture } = setup()
-  assert.deepEqual(await ipcMain.invoke('panes:getCapture', fromRenderer), { claude: false, chatgpt: false, grok: false })
+  assert.deepEqual(await ipcMain.invoke('panes:getCapture', fromRenderer), { claude: false, chatgpt: false, grok: false, gemini: false })
   assert.equal(await ipcMain.invoke('panes:setCapture', fromRenderer, 'grok', true), undefined)
   assert.deepEqual(calls, [['setCapture', 'grok', true]])
-  assert.deepEqual(capture, { claude: false, chatgpt: false, grok: true })
-  assert.deepEqual(await ipcMain.invoke('panes:getCapture', fromRenderer), { claude: false, chatgpt: false, grok: true })
+  assert.deepEqual(capture, { claude: false, chatgpt: false, grok: true, gemini: false })
+  assert.deepEqual(await ipcMain.invoke('panes:getCapture', fromRenderer), { claude: false, chatgpt: false, grok: true, gemini: false })
   await ipcMain.invoke('panes:setCapture', fromRenderer, 'grok', false)
   assert.equal(capture.grok, false)
+  await ipcMain.invoke('panes:setCapture', fromRenderer, 'gemini', true)
+  assert.equal(capture.gemini, true, 'the fourth site has its own switch')
+  await rejects(ipcMain.invoke('panes:setCapture', fromRenderer, 'deepseek', true))
 })
 
 test('panes:openChats: a differing link → navigated; the same link → kept; no link → new (or kept when already on newChatUrl); a busy view is kept; null leaves every pane where it is', async () => {
@@ -509,21 +523,25 @@ test('panes:openChats: a differing link → navigated; the same link → kept; n
     links: { claude: 'https://claude.test/c/old', chatgpt: 'https://chatgpt.test/c/1' },
     urls: { grok: 'http://127.0.0.1:5199/?site=grok' },
   })
-  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, CONV), { claude: 'navigated', chatgpt: 'kept', grok: 'kept' })
+  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, CONV), { claude: 'navigated', chatgpt: 'kept', grok: 'kept', gemini: 'kept' })
   assert.deepEqual(calls, [['loadUrl', 'claude', 'https://claude.test/c/old']])
   assert.deepEqual(sent, [['panes:turn', { slot: 'claude', phase: 'idle' }]])
   calls.length = 0
-  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, CONV), { claude: 'kept', chatgpt: 'kept', grok: 'kept' }, 'already there')
+  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, CONV), { claude: 'kept', chatgpt: 'kept', grok: 'kept', gemini: 'kept' }, 'already there')
   assert.deepEqual(calls, [])
-  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, 'unknown-conv'), { claude: 'new', chatgpt: 'new', grok: 'kept' })
+  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, 'unknown-conv'), { claude: 'new', chatgpt: 'new', grok: 'kept', gemini: 'kept' })
   assert.deepEqual(calls, [['newChat', 'claude'], ['newChat', 'chatgpt']])
   calls.length = 0
   sent.length = 0
-  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept' }, '§2: null = the open conversation was cleared — main leaves the panes where they are')
+  assert.deepEqual(await ipcMain.invoke('panes:openChats', fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept', gemini: 'kept' }, '§2: null = the open conversation was cleared — main leaves the panes where they are')
   assert.deepEqual(calls, [], 'no newChat / loadUrl for null')
   assert.deepEqual(sent, [], 'no panes:turn for null')
   const onChats = setup({ links: { claude: 'https://claude.test/c/1', chatgpt: 'https://chatgpt.test/c/1' } })
-  assert.deepEqual(await onChats.ipcMain.invoke('panes:openChats', onChats.fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept' }, 'panes sitting on chats stay on them after a delete')
+  assert.deepEqual(await onChats.ipcMain.invoke('panes:openChats', onChats.fromRenderer, null), { claude: 'kept', chatgpt: 'kept', grok: 'kept', gemini: 'kept' }, 'panes sitting on chats stay on them after a delete')
+  // the fourth site follows the same rule: a gemini link that differs is navigated, like any other pane's
+  const geminiLink = setup({ links: { gemini: 'https://gemini.test/app/abc123' } })
+  assert.equal((await geminiLink.ipcMain.invoke('panes:openChats', geminiLink.fromRenderer, CONV)).gemini, 'navigated')
+  assert.deepEqual(geminiLink.calls.filter(([c]) => c === 'loadUrl'), [['loadUrl', 'gemini', 'https://gemini.test/app/abc123']])
   assert.deepEqual(onChats.calls, [])
 
   const busy = setup({ links: { claude: 'https://claude.test/c/old' }, inflight: { claude: true } })
@@ -534,7 +552,7 @@ test('panes:openChats: a differing link → navigated; the same link → kept; n
   assert.equal((await failing.ipcMain.invoke('panes:openChats', failing.fromRenderer, CONV)).claude, 'kept', 'a failed load is reported as kept, not thrown')
 })
 
-test('panes:openChats opens the three panes in parallel and bounds each load: a pane still loading after OPEN_CHATS_LOAD_TIMEOUT_MS is reported kept while the others answer', async () => {
+test('panes:openChats opens every pane in parallel and bounds each load: a pane still loading after OPEN_CHATS_LOAD_TIMEOUT_MS is reported kept while the others answer', async () => {
   const timers = fakeTimers()
   const { ipcMain, fromRenderer, calls, sent } = setup({
     timers,
@@ -551,7 +569,7 @@ test('panes:openChats opens the three panes in parallel and bounds each load: a 
     ['loadUrl', 'claude', 'https://claude.test/c/hang-1'],
     ['loadUrl', 'chatgpt', 'https://chatgpt.test/c/hang-2'],
     ['loadUrl', 'grok', 'https://grok.test/c/ok'],
-  ], 'all three loads are issued before any of them settles (no serial await)')
+  ], 'all three loads are issued before any of them settles (no serial await); gemini sits on its newChatUrl and is kept')
   assert.equal(settled, null, 'two panes are still loading')
   assert.deepEqual(sent, [['panes:turn', { slot: 'grok', phase: 'idle' }]], 'the pane that loaded already reported')
   timers.advance(OPEN_CHATS_LOAD_TIMEOUT_MS - 1)
@@ -559,7 +577,7 @@ test('panes:openChats opens the three panes in parallel and bounds each load: a 
   assert.equal(settled, null)
   timers.advance(1)
   for (let i = 0; i < 4; i++) await tick()
-  assert.deepEqual(settled, { claude: 'kept', chatgpt: 'kept', grok: 'navigated' }, 'a load that never finishes within the bound is kept (the load itself goes on)')
+  assert.deepEqual(settled, { claude: 'kept', chatgpt: 'kept', grok: 'navigated', gemini: 'kept' }, 'a load that never finishes within the bound is kept (the load itself goes on)')
   assert.equal(timers.pending(), 0, 'the bounds are cleared')
   assert.equal(sent.length, 1, 'no panes:turn for the panes that were kept')
 })
@@ -630,8 +648,8 @@ test('dispose() removes every handler and listener', () => {
 test('requireAnalystChoice: null / undefined → null, a slot passes, anything else is bad_request', () => {
   assert.equal(requireAnalystChoice(null), null)
   assert.equal(requireAnalystChoice(undefined), null)
-  for (const slot of ['claude', 'chatgpt', 'grok']) assert.equal(requireAnalystChoice(slot), slot)
-  for (const bad of ['bing', '', 1, true, ['claude'], {}]) assert.throws(() => requireAnalystChoice(bad), /bad_request/)
+  for (const slot of ['claude', 'chatgpt', 'grok', 'gemini']) assert.equal(requireAnalystChoice(slot), slot)
+  for (const bad of ['bing', 'deepseek', '', 1, true, ['claude'], {}]) assert.throws(() => requireAnalystChoice(bad), /bad_request/)
 })
 
 test('panes:setAnalyst persists the choice (null included) and refuses an unknown slot; panes:showAnalyst takes a boolean only', async () => {

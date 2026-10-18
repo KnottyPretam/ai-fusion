@@ -17,7 +17,7 @@ import { FIXTURES_DIR } from './_fixture-lint.js'
 import { parseHtml } from './_dom.js'
 
 const require = createRequire(import.meta.url)
-const { createAdapter, toMarkdown, DEFAULT_SELECTORS, SLOTS } = require('../../../preload/site.cjs')
+const { createAdapter, toMarkdown, DEFAULT_SELECTORS, SLOTS, mergeSelectors, isScreenReaderOnly, turnChrome, TURN_CHROME_TAGS, TURN_CHROME_CLASSES } = require('../../../preload/site.cjs')
 
 const S = DEFAULT_SELECTORS
 /**
@@ -93,6 +93,27 @@ const EXPECTED = {
   // href is not a kept attribute, and grok's loggedOut cascade is href-only: a scrubbed snapshot of
   // the sign-in page can only be `unknown` (no composer). See README.md, consequence 1.
   'grok-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'unknown', messages: 0, assistant: 0 },
+  // 2026-10-17 — gemini. HAND-BUILT FROM PUBLIC SOURCES (2026-08…10-17: the voyager extension, the a8s-gemini-web
+  // driver, an Electron 44 Gemini embed's CDP-measured selectors, exporter userscripts), NOT recorded: replace each with
+  // a pruned real snapshot after the first live capture (README). Every entry they match is unmeasured.
+  // composer: a fresh /app — the Quill editor (entry 0) beside Quill's contenteditable `.ql-clipboard`, the microphone in
+  // the send slot (no send button while empty), and the signed-in header's account button (`Google Account: name`),
+  // which must never read as a wall.
+  'gemini-composer': { composer: 0, send: null, reply: null, stop: null, session: 'ok', messages: 0, assistant: 0 },
+  // logged-out: GUEST MODE — the composer is there and works (entry 0), and the header's "Sign in" link is the only
+  // sign of it. Its href is scrubbed away, so the `a[aria-label='Sign in']` entry (2) is what matches offline; the
+  // session must be `logged_out` WITH a composer.
+  'gemini-logged-out': { composer: 0, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
+  // streaming: one `div.conversation-container` holding the `user-query` and the `model-response` (2 messages, 1
+  // container — the exchange box itself is neither), the reply body `.markdown-main-panel` mid-stream, the stop
+  // control in the send slot (entry 0)
+  'gemini-streaming': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
+  // done: the finished turn's thumbs in `message-actions`, a `code-block` custom element around the fence, a copy button
+  // on the user's own query, and text back in the composer so the send button is up (entry 0)
+  'gemini-done': { composer: 0, send: 0, reply: 0, stop: null, session: 'ok', messages: 2, assistant: 1 },
+  // thinking: an EXPANDED `model-thoughts` panel whose own `message-content > .markdown.markdown-main-panel` comes before
+  // the answer's — the body cascade must read the answer alone — while the answer streams (stop entry 0)
+  'gemini-thinking': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
 }
 
 const fixture = (name) => fs.readFileSync(path.join(FIXTURES_DIR, `${name}.html`), 'utf8')
@@ -149,7 +170,8 @@ test('every state of every site has a fixture, and every fixture has an expectat
   for (const slot of [...SLOTS].sort()) for (const state of ['composer', 'done', 'logged-out', 'streaming']) wanted.push(`${slot}-${state}`)
   // Every site has the four states; a site may add a NAMED extra state measured later (2026-09-27:
   // `chatgpt-thinking`, the effort-picker composer mid-thought). Every file on disk has an expectation.
-  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status', 'grok-oct11-fresh']
+  // 2026-10-17: `gemini-thinking`, hand-built — the expanded thinking panel the body cascade must skip
+  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status', 'grok-oct11-fresh', 'gemini-thinking']
   assert.deepEqual(names, [...wanted, ...EXTRA].sort())
   assert.deepEqual(Object.keys(EXPECTED).sort(), names)
   assert.ok(fs.existsSync(path.join(FIXTURES_DIR, 'README.md')), 'the fixtures must document what is measured and what is not')
@@ -224,6 +246,13 @@ test('the done fixtures: the reply renders as markdown (a fence with the languag
     '…\n\n| … | … |\n| --- | --- |\n| … | … |\n\n…\n\n```json\n…\n```',
   )
   assert.deepEqual(S.grok.done, [])
+  // 2026-10-17 (hand-built): gemini's fence sits in a `code-block` CUSTOM element around block markup — read as a block
+  // (it used to collapse into one inline code span), its scrubbed header a stray `…` paragraph as on claude / grok, and no
+  // language (the code carries none, the header's token is scrubbed); the done marker is the thumbs-up
+  const gemini = adapterFor('gemini-done')
+  const [geminiTurn] = gemini.adapter.assistantContainers()
+  assert.equal(gemini.adapter.replyText(geminiTurn), '…\n\n- …\n- …\n\n…\n\n```\n…\n```')
+  assert.equal(gemini.adapter.findDone(geminiTurn).selector, S.gemini.done[0])
 })
 
 test('the assistantText cascade points at the reply BODY in every site\'s streaming and done fixture (S8: claude reads `.prose`, not the whole turn)', () => {
@@ -247,7 +276,10 @@ test('the assistantText cascade points at the reply BODY in every site\'s stream
 test('the logged-out fixtures write nothing: ready() rejects with the session state before touching the DOM', async () => {
   for (const slot of SLOTS) {
     const { adapter } = adapterFor(`${slot}-logged-out`)
-    assert.equal(adapter.findComposer(), null)
+    // 2026-10-17: gemini's signed-out page is GUEST MODE — its composer is there and works, and the session is still
+    // logged_out (the Sign-in link): "a composer" never means "signed in" on that site
+    if (slot === 'gemini') assert.equal(adapter.findComposer().selector, S.gemini.composer[0])
+    else assert.equal(adapter.findComposer(), null)
     const expected = slot === 'grok' ? 'composer_not_found' : 'logged_out' // grok: href dropped, see README.md
     await assert.rejects(adapter.ready(20), (e) => e.code === expected, `${slot}: ${expected}`)
   }
@@ -267,6 +299,14 @@ test('the composer fixtures are insertable: the composer is a contenteditable Pr
   assert.equal(grok.adapter.findComposer().el.localName, 'div')
   assert.equal(grok.adapter.findSendButton(), null)
   assert.ok(adapterFor('grok-done').adapter.findSendButton())
+  // 2026-10-17 (hand-built): gemini's Quill editor wins over Quill's own contenteditable `.ql-clipboard` — which a bare
+  // contenteditable entry would match too — and the send button exists only once text is in, as on grok
+  const gemini = adapterFor('gemini-composer')
+  assert.equal(gemini.doc.querySelectorAll("div[contenteditable='true']").length, 2, 'the fixture keeps the clipboard decoy')
+  assert.ok(gemini.adapter.findComposer().el.matches('.ql-editor'))
+  for (const entry of S.gemini.composer) assert.equal(gemini.doc.querySelectorAll(entry).length, 1, `${entry} matches the editor alone`)
+  assert.equal(gemini.adapter.findSendButton(), null)
+  assert.ok(adapterFor('gemini-done').adapter.findSendButton())
 })
 
 test('chatgpt-effort-streaming: the finished turn carries the "Rate response" done marker after its body, the streaming turn does not', () => {
@@ -326,4 +366,127 @@ test('claude-oct10-status: the redesign in its status phase — the `assistant-m
   assert.equal(adapter.findSendButton(), null, 'the send control swaps with the stop control')
   const settled = adapterFor('claude-virtualized')
   for (const c of settled.adapter.assistantContainers()) assert.equal(settled.adapter.findDone(c).selector, S.claude.done[0])
+})
+
+
+// ---- 2026-10-17: gemini (HAND-BUILT from public sources — see EXPECTED and the README) -------------------------------
+
+test('gemini-composer: the signed-in header\'s account button ("Google Account: name", the scrubbed label) never reads as a wall; the page is ok', () => {
+  const { doc, adapter } = adapterFor('gemini-composer')
+  const account = doc.querySelector("a[aria-label^='Google Account:']")
+  assert.ok(account, 'the fixture carries the account button')
+  assert.equal(account.getAttribute('aria-label'), 'Google Account: name')
+  for (const entry of S.gemini.loggedOut) assert.equal(doc.querySelectorAll(entry).length, 0, `${entry} must not match the account button`)
+  assert.equal(adapter.sessionState(), 'ok')
+})
+
+test('gemini-logged-out: GUEST MODE — composer present, the Sign-in link matched by its aria-label (the scrubbed fixture has no href), session logged_out; ready() rejects before any write', async () => {
+  const { doc, adapter } = adapterFor('gemini-logged-out')
+  assert.equal(doc.querySelectorAll(S.gemini.loggedOut[0]).length, 0, 'the href entries cannot match a scrubbed snapshot')
+  assert.equal(doc.querySelectorAll(S.gemini.loggedOut[2]).length, 1)
+  assert.ok(adapter.findComposer())
+  assert.equal(adapter.health().session, 'logged_out')
+  await assert.rejects(adapter.ready(20), (e) => e.code === 'logged_out')
+})
+
+test('gemini-streaming: the exchange box holds the user turn and the reply turn; the anchor rule pairs them (user-query → model-response), the "You said" / "Gemini said" labels are screen-reader-only, and the box itself is no container', () => {
+  const { doc, adapter } = adapterFor('gemini-streaming')
+  const box = doc.querySelector('div.conversation-container')
+  const turns = adapter.userTurns()
+  assert.equal(turns.length, 1)
+  assert.equal(turns[0].localName, 'user-query')
+  const [reply] = adapter.assistantContainers()
+  assert.equal(reply.localName, 'model-response')
+  assert.ok(box.contains(turns[0]) && box.contains(reply))
+  assert.equal(adapter.containerForAnchor(turns[0]), reply)
+  assert.ok(!adapter.assistantContainers().includes(box))
+  for (const label of doc.querySelectorAll('.cdk-visually-hidden')) assert.ok(isScreenReaderOnly(label))
+  assert.equal(adapter.replyReading(reply).bodyMatched, true)
+  assert.equal(adapter.replyReading(reply).heldUserTurn, false)
+})
+
+test('gemini-thinking: the thinking panel renders its own `.markdown-main-panel`, and the body cascade reads the ANSWER alone — an unscoped override would have captured the thoughts', () => {
+  const { doc, adapter } = adapterFor('gemini-thinking')
+  assert.equal(doc.querySelectorAll('.markdown-main-panel').length, 2, 'the thoughts body and the answer body')
+  assert.equal(doc.querySelectorAll('model-thoughts .markdown-main-panel').length, 1)
+  const [reply] = adapter.assistantContainers()
+  const blocks = adapter.replyBlocks(reply)
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].closest('model-thoughts'), null, 'the body block is outside the thinking panel')
+  assert.equal(adapter.replyText(reply), '- …')
+  // the second entry is scoped the same way
+  const second = createAdapter({ document: doc, site: 'gemini', selectors: mergeSelectors(DEFAULT_SELECTORS, { gemini: { assistantText: [S.gemini.assistantText[1]] } }).merged })
+  assert.equal(second.replyText(second.assistantContainers()[0]), '- …')
+  // the scoping is what does it: without `:not(model-thoughts *)` the thoughts ride in front of the answer
+  const unscoped = createAdapter({ document: doc, site: 'gemini', selectors: mergeSelectors(DEFAULT_SELECTORS, { gemini: { assistantText: ['.markdown-main-panel'] } }).merged })
+  assert.equal(unscoped.replyText(unscoped.assistantContainers()[0]), '…\n\n…\n\n- …')
+})
+
+test('gemini-done: the thumbs-up is the done marker, never the copy button on the user\'s own query (`data-test-id` — kept by the snapshot allow-list since 2026-10-17); the Bad-response and Copy buttons beside it are not markers either', () => {
+  const { doc, adapter } = adapterFor('gemini-done')
+  const [reply] = adapter.assistantContainers()
+  assert.equal(doc.querySelectorAll("user-query button[data-test-id='copy-button']").length, 1)
+  const done = adapter.findDone(reply)
+  assert.equal(done.selector, "button[aria-label='Good response']")
+  assert.equal(done.el.closest('message-actions') !== null, true)
+  assert.equal(doc.querySelectorAll("mat-icon[fonticon='thumb_up']").length, 1, 'the language-neutral glyph (`fonticon`, kept since 2026-10-17)')
+})
+
+// ---- 2026-10-17 review of the gemini adapter: a body-cascade MISS, and the challenge cascade ------------------------
+
+/** gemini-thinking with distinguishable text: the screen-reader label, the two thoughts and the answer. */
+function labelledThinking() {
+  const html = fixture('gemini-thinking')
+    .replace('<span class="cdk-visually-hidden screen-reader-model-response-label">…</span>', '<span class="cdk-visually-hidden screen-reader-model-response-label">SAID-LABEL</span>')
+    .replace(/<p>…<\/p>\s*<p>…<\/p>/, '<p>THOUGHT-ONE</p><p>THOUGHT-TWO</p>')
+    .replace('<li>…</li>', '<li>ANSWER</li>')
+  for (const marker of ['SAID-LABEL', 'THOUGHT-ONE', 'ANSWER']) assert.ok(html.includes(marker), `the fixture edit planted ${marker}`)
+  return html
+}
+
+test('gemini-thinking with the body cascade MISSING (every entry is unmeasured — a renamed class is a realistic first capture): the turn-level fallback reads the answer, never the thinking panel or the "Gemini said" label; the reading says no body matched and no user turn was held', () => {
+  const html = labelledThinking()
+  const hit = createAdapter({ document: parseHtml(html), site: 'gemini', selectors: DEFAULT_SELECTORS })
+  assert.equal(hit.replyText(hit.assistantContainers()[0]), '- ANSWER')
+  const miss = createAdapter({ document: parseHtml(html), site: 'gemini', selectors: mergeSelectors(DEFAULT_SELECTORS, { gemini: { assistantText: ['.renamed-body'] } }).merged })
+  const [reply] = miss.assistantContainers()
+  assert.equal(reply.localName, 'model-response')
+  assert.deepEqual(miss.replyBlocks(reply), [])
+  // before the review the whole container: `SAID-LABEL\n\nTHOUGHT-ONE\n\nTHOUGHT-TWO\n\n- ANSWER`
+  assert.deepEqual(miss.replyReading(reply), { text: '- ANSWER', bodyMatched: false, heldUserTurn: false })
+  // the panel's tag renamed as well: its class and its inner `.thoughts-container` still keep it out — of the
+  // fallback read, and of the default body cascade (`:not(.thoughts-container *)`)
+  const renamed = html.replace('<model-thoughts class="model-thoughts ng-star-inserted">', '<model-reasoning class="model-thoughts ng-star-inserted">').replace('</model-thoughts>', '</model-reasoning>')
+  assert.ok(renamed.includes('<model-reasoning'))
+  const renamedMiss = createAdapter({ document: parseHtml(renamed), site: 'gemini', selectors: mergeSelectors(DEFAULT_SELECTORS, { gemini: { assistantText: ['.renamed-body'] } }).merged })
+  assert.equal(renamedMiss.replyText(renamedMiss.assistantContainers()[0]), '- ANSWER')
+  const renamedHit = createAdapter({ document: parseHtml(renamed), site: 'gemini', selectors: DEFAULT_SELECTORS })
+  const [renamedReply] = renamedHit.assistantContainers()
+  assert.equal(renamedHit.replyBlocks(renamedReply).length, 1, 'the thoughts body is outside both scoped entries')
+  assert.equal(renamedHit.replyText(renamedReply), '- ANSWER')
+})
+
+test('turnChrome (the turn-level skip predicate) names gemini\'s thinking panel, its inner box and the CDK screen-reader label ONLY — never the generic sr-only / visually-hidden — and no claude / chatgpt / grok fixture carries anything it names, so their turn-level reads are byte-identical', () => {
+  assert.deepEqual([...TURN_CHROME_TAGS], ['model-thoughts'])
+  assert.deepEqual([...TURN_CHROME_CLASSES], ['model-thoughts', 'thoughts-container', 'cdk-visually-hidden'])
+  const doc = parseHtml('<div><model-thoughts id="a"></model-thoughts><div id="b" class="x thoughts-container"></div><span id="c" class="cdk-visually-hidden"></span><h6 id="d" class="sr-only"></h6><span id="e" class="visually-hidden"></span><div id="f" class="markdown"></div></div>')
+  const verdict = Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f'].map((id) => [id, turnChrome(doc.querySelector(`#${id}`))]))
+  assert.deepEqual(verdict, { a: true, b: true, c: true, d: false, e: false, f: false })
+  for (const v of [null, undefined, 'model-thoughts', {}]) assert.equal(turnChrome(v), false)
+  const classic = fs.readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.html') && !f.startsWith('gemini-'))
+  assert.ok(classic.length >= 20)
+  for (const f of classic) {
+    const all = parseHtml(fs.readFileSync(path.join(FIXTURES_DIR, f), 'utf8')).querySelectorAll('*')
+    assert.equal(all.filter((el) => turnChrome(el)).length, 0, `${f} carries nothing turnChrome names`)
+  }
+})
+
+test('gemini: an INVISIBLE reCAPTCHA scoring frame embedded in the page is no challenge (2026-10-17 review: the challenge cascade is empty until a wall is measured) — the session stays ok and ready() resolves', async () => {
+  const html = fixture('gemini-composer').replace('</chat-app>', '</chat-app><div style="width:0;height:0;visibility:hidden"><iframe title="reCAPTCHA" src="https://www.google.com/recaptcha/enterprise/anchor?ar=1&amp;size=invisible"></iframe></div>')
+  const doc = parseHtml(html)
+  assert.equal(doc.querySelectorAll("iframe[src*='recaptcha']").length, 1, 'the frame is on the page')
+  const adapter = createAdapter({ document: doc, site: 'gemini', selectors: DEFAULT_SELECTORS })
+  assert.equal(adapter.sessionState(), 'ok')
+  const ready = await adapter.ready(200) // the composer match, as the op handler reads it
+  assert.equal(ready.selector, S.gemini.composer[0])
 })

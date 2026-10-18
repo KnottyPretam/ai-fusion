@@ -22,7 +22,7 @@ test('subscribe(): capture / analyst / zoom / analystVisible setters notify AFTE
     throw new Error('boom')
   })
   s.setCapture('grok', true)
-  assert.deepEqual(events, [{ key: 'capture', value: { claude: false, chatgpt: false, grok: true } }])
+  assert.deepEqual(events, [{ key: 'capture', value: { claude: false, chatgpt: false, grok: true, gemini: false } }])
   assert.equal(readJson(s.file).capture.grok, true, 'saved before the listener ran')
   s.setAnalyst(null)
   s.setZoom('claude', 1.2)
@@ -39,5 +39,7 @@ test('subscribe(): capture / analyst / zoom / analystVisible setters notify AFTE
   s.setCapture('grok', false)
   assert.equal(events.length, 4, 'unsubscribed')
   assert.equal(typeof s.subscribe('nope'), 'function', 'a non-function subscriber is a no-op')
-  assert.deepEqual(s.getCapture(), { claude: false, chatgpt: false, grok: false })
+  assert.deepEqual(s.getCapture(), { claude: false, chatgpt: false, grok: false, gemini: false })
+  s.setCapture('gemini', true) // the fourth site's switch (2026-10-17) is one of main's own keys
+  assert.deepEqual(s.getCapture(), { claude: false, chatgpt: false, grok: false, gemini: true })
 })

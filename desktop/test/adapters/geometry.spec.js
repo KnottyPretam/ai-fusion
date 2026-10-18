@@ -12,12 +12,12 @@
 import { test, expect } from '@playwright/test'
 import { FAKE_ASSISTANT, DEFAULT_SELECTORS, open, request, replyState, withOverride } from './_harness.js'
 
-const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone' }
+const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone', gemini: 'done_selector' } // 2026-10-17: gemini's thumbs-up
 /** claude's 15 s `stopGoneGraceMs` is zeroed for the multi-exchange runs (as virtualized.spec.js does); it is not what is measured here. */
 const FAST = (site, extra = {}) => withOverride(site, { ...(site === 'claude' ? { stopGoneGraceMs: 0 } : {}), ...extra })
 const CONTAINER = FAKE_ASSISTANT
 const SCROLLER = "[data-testid='chat-transcript-scroller']"
-const USER_TURN = { chatgpt: "[data-message-author-role='user']", claude: "[data-testid='user-message']", grok: "[data-testid='user-message']" }
+const USER_TURN = { chatgpt: "[data-message-author-role='user']", claude: "[data-testid='user-message']", grok: "[data-testid='user-message']", gemini: 'user-query' }
 const PROMPT = (i) => `prompt ${i}: what is the maximum gyroscope full-scale range of the BMI088, and which register selects it?`
 
 function expectObserved(res, text, doneBy) {

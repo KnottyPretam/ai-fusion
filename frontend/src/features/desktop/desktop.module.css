@@ -28,6 +28,27 @@
 .theme:hover { color: var(--fg); }
 .version { flex: 0 0 auto; color: var(--fg-muted); font-size: 11px; }
 
+/* agents stepper (2026-10-17): `−  N agents  +` after the tabs, the add menu and its error row as
+   in-flow strips under the bar (the site views move down while they show, never under them) */
+.stepper { display: inline-flex; align-items: center; gap: 0; flex: 0 0 auto; }
+.stepperBtn { min-width: 24px; padding: 3px 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); line-height: 1; }
+.stepperBtn:first-child { border-radius: 4px 0 0 4px; }
+.stepperBtn:last-child { border-radius: 0 4px 4px 0; }
+.stepperBtn:hover:not(:disabled) { background: var(--primary-soft); }
+/* the muted ink + ground and the cursor carry "disabled" (the .actions rule's reasoning: 0.8 stays legible) */
+.stepperBtn:disabled { color: var(--fg-muted); background: var(--bg-muted); opacity: 0.8; cursor: not-allowed; }
+.stepperCount { padding: 3px 8px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--bg); color: var(--fg); white-space: nowrap; }
+.stepperMenu { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; flex: 0 0 auto; margin: 4px 4px 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-muted); font-size: 12px; }
+.stepperHint { flex: 1 0 100%; color: var(--fg-muted); }
+.stepperItem { padding: 3px 8px; border: 1px solid var(--border); border-left: 3px solid var(--slot-color, var(--border)); border-radius: 4px; background: var(--bg); color: var(--fg); text-align: left; }
+.stepperItem:hover:not([aria-disabled='true']) { background: var(--primary-soft); }
+.stepperItem[aria-disabled='true'] { color: var(--fg-muted); background: var(--bg-muted); cursor: not-allowed; }
+.stepperItem:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.stepperMore { border-left-width: 1px; font-style: italic; }
+.stepperError { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin: 4px 4px 0; padding: 4px 10px; border: 1px solid var(--err); border-radius: 6px; background: var(--bg); color: var(--err); font-size: 12px; }
+.stepperError span { flex: 1 1 auto; }
+.stepperError button { padding: 0 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg-muted); }
+
 /* first-run capture / terms-of-service notice (in the flow above the panes, never over a view) */
 .notice { flex: 0 0 auto; margin: 4px 4px 0; padding: 6px 10px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-soft); color: var(--fg); font-size: 12px; line-height: 1.45; }
 

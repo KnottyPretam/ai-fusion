@@ -14,7 +14,7 @@
 // 'navigated' (a recorded link that differs) | 'new' (no link → newChatUrl) | 'kept' (already
 // there, a turn in flight on that view, a link that failed or is still loading after
 // OPEN_CHATS_LOAD_TIMEOUT_MS); `null` = the open conversation was cleared: every pane is 'kept'
-// and nothing is navigated (§2). The three panes are opened in parallel. `panes:signOut(slot)`
+// and nothing is navigated (§2). The site panes are opened in parallel. `panes:signOut(slot)`
 // (clearStorageData on that partition only, then newChatUrl), `panes:snapshot(slot)` (adapter
 // `snapshot` → scrubbed HTML under `<userData>/snapshots/<slot>-<ts>.html` → {path}; the writer,
 // `saveDomSnapshot`, is view-agnostic since S11 and also writes `analyst-<ts>.html` for the
@@ -60,7 +60,7 @@
 // missing payload is a bad_request, not a clear: only an explicit `null` forgets the key.
 // `panes:active` accepts any catalog member as the active tab: a
 // token / local agent is a renderer COLUMN, not a site view, and shortcuts.js / menu.js treat it as
-// "no pane" for the pane-only actions. `panes:openChats` is unchanged (it navigates the three sites).
+// "no pane" for the pane-only actions. `panes:openChats` is unchanged (it navigates every site pane).
 //
 // No electron import: `ipcMain`, the view managers, settings, chats, `fs` and the timers are injected.
 
@@ -177,7 +177,7 @@ export function publicBridgeState(b) {
   return out
 }
 
-/** The names a DOM snapshot may be written under: the three panes and the hidden analyst page (S11). */
+/** The names a DOM snapshot may be written under: the site panes and the hidden analyst page (S11). */
 export const SNAPSHOT_NAMES = Object.freeze([...SLOTS, 'analyst'])
 /**
  * How many failure-path snapshots are kept per name (the newest): `analyst-*.html`, and — since the
@@ -563,7 +563,7 @@ export function registerIpc({
   handle('panes:openChats', async (event, convId) => {
     requireRenderer(event)
     const id = requireConvId(convId)
-    const results = await Promise.all(SLOTS.map((slot) => openChat(slot, id))) // the three loads run in parallel
+    const results = await Promise.all(SLOTS.map((slot) => openChat(slot, id))) // the site loads run in parallel
     const out = {}
     SLOTS.forEach((slot, i) => {
       out[slot] = results[i]

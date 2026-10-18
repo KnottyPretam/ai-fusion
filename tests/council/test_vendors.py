@@ -18,8 +18,12 @@ def test_catalog_is_slot_ids_in_order_with_the_classic_three_first():
 
 
 def test_web_sites_are_exactly_the_bridge_slots_and_stage2_sites_have_no_adapter():
-    assert vendors.WEB_SITES == BRIDGE_SLOTS == ("claude", "chatgpt", "grok")
-    assert vendors.STAGE2_SITES == ("gemini", "deepseek", "qwen")
+    # 2026-10-17: gemini became the fourth web site (bridge v1 amended in place), appended LAST so
+    # the bridge vocabulary keeps catalog order; the default council stays the classic three.
+    assert vendors.WEB_SITES == BRIDGE_SLOTS == ("claude", "chatgpt", "grok", "gemini")
+    assert vendors.BY_ID["gemini"].web_site and not vendors.BY_ID["gemini"].stage2_site
+    assert vendors.STAGE2_SITES == ("deepseek", "qwen")
+    assert DEFAULT_COUNCIL == vendors.WEB_SITES[:3]
     assert not vendors.BY_ID["mimo"].web_site and not vendors.BY_ID["mimo"].stage2_site
     for slot in vendors.WEB_SITES:
         assert not vendors.BY_ID[slot].stage2_site
@@ -58,7 +62,8 @@ def test_default_slot_spec_is_a_fresh_supported_spec():
     [
         ("web:claude", "claude"),
         ("web:chatgpt:analyst", "chatgpt"),
-        ("web:gemini", "gemini"),  # a vendor without an adapter is still a vendor
+        ("web:gemini", "gemini"),  # the fourth web site since 2026-10-17
+        ("web:deepseek", "deepseek"),  # a vendor without an adapter is still a vendor
         ("web:bing", None),
         ("ollama:qwen3:8b", "qwen"),
         ("ollama:deepseek-r1:14b", "deepseek"),

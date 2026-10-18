@@ -8,13 +8,13 @@
 // `rectsFor` emits that key only when the caller passes an `analyst` option (the analyst pane is
 // mounted), so a layout without it is byte-identical to Stage 1/2 and main (whose normalizeLayout
 // treats an absent key as hidden) hides the view.
-// Council (2026-09-27): only the three SITES have a view, so the layout ranges over SITES; a site
-// outside the council has no viewport element and reports null (hidden). A renderer COLUMN (a
-// token/local member) active in tabs mode hides every site: `active` is then not a site, so no
-// site is `shown`.
+// Council (2026-09-27): only the SITES have a view (four since 2026-10-17, Gemini included), so the
+// layout ranges over SITES; a site outside the council has no viewport element and reports null
+// (hidden). A renderer COLUMN (a token/local member) active in tabs mode hides every site: `active`
+// is then not a site, so no site is `shown`.
 import { SITES, isSiteId } from './slice.js'
 
-/** Every key a layout may carry (main's LAYOUT_KEYS): the three site panes plus the analyst view. */
+/** Every key a layout may carry (main's LAYOUT_KEYS): the site panes plus the analyst view. */
 export const LAYOUT_KEYS = [...SITES, 'analyst']
 
 function num(v) {
@@ -41,7 +41,7 @@ export function rectOf(target) {
 }
 
 /**
- * rectsFor(mode, active, viewports, options?) → `{claude: rect|null, chatgpt: rect|null, grok: rect|null}`.
+ * rectsFor(mode, active, viewports, options?) → `{<site>: rect|null}` for every SITE.
  *   viewports — `{slot: Element | DOMRect-like | null}`; a missing slot is hidden (an `analyst`
  *               entry in this map is ignored: the analyst is only reported through `options`).
  *   'tabs'    — only `active` is visible; every other slot is null even when it measures.

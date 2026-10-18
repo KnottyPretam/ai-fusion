@@ -4,13 +4,16 @@ docs/desktop-contract.md section 6 -- `GET /api/models` under `TRIPLEX_DESKTOP=1
 `desktop_catalog()` instead of the OpenRouter catalog: `web:<slot>` for the site panes,
 `web:<slot>:analyst` for the hidden analyst page on each site, then `ollama:<name>` for every name
 in `OLLAMA_MODELS` (default `hermes3`), in that order (sites in `SLOT_IDS` order). Since
-2026-09-27 the sites are `vendors.WEB_SITES` -- the three with a Stage-1 adapter, never the whole
-seven-vendor catalog -- and their names / vendors come from `vendors.CATALOG`. Every entry has
-`efforts == ["off"]` (the site or the local server decides; `reasoning.build` sends nothing),
+2026-09-27 the sites are `vendors.WEB_SITES` -- the sites with a web adapter, never the whole
+seven-vendor catalog: the classic three and, since 2026-10-17, Gemini (`web:gemini` "Gemini (web
+session)", `web:gemini:analyst`), four of each -- and their names / vendors come from
+`vendors.CATALOG`. Every entry has `efforts == ["off"]` (the site or the local server decides;
+`reasoning.build` sends nothing),
 `mandatory_reasoning False`, `structured_outputs False` (lenient JSON parse, never a strict
 `response_format`), no prices and no context length, and `raw == {"transport": "web" | "ollama"}`
-for the config bar's grouping. Vendors: `anthropic` / `openai` / `x-ai` for the panes,
-`triplex-analyst` for the analyst pages, `ollama` for local models.
+for the config bar's grouping. Vendors: each site's first OpenRouter prefix for the panes
+(`anthropic` / `openai` / `x-ai` / `google`), `triplex-analyst` for the analyst pages, `ollama`
+for local models.
 
 `tag_openrouter(models)` (2026-09-27) is what `routers/models.py` appends when a session key is
 configured: COPIES of the OpenRouter entries a council row can seat, each with

@@ -53,8 +53,9 @@ Where the contract is silent this module takes the simplest reading (listed for 
 `min(accept_timeout_s, timeout_s)`); a `result` that arrives without a preceding `accepted` is an
 implicit acceptance; `status().analyst` is the analyst slot string (or null) and
 `status().since` an ISO-8601 UTC timestamp; `health_ts` is the backend's receive time in epoch
-milliseconds; `status().sites` always lists the three slots; `detach` resets every cache so a
-disconnected status reports nothing stale.
+milliseconds; `status().sites` always lists every bridge slot (`BRIDGE_SLOTS`: four since
+2026-10-17, when gemini joined); `detach` resets every cache so a disconnected status reports
+nothing stale.
 """
 
 from __future__ import annotations
@@ -177,9 +178,10 @@ def current_conversation() -> str | None:
 def parse_web_model(model: str) -> tuple[str, View]:
     """`web:<slot>` -> (slot, "pane"); `web:<slot>:analyst` -> (slot, "analyst"); else ValueError.
 
-    The slot vocabulary is the bridge's own (`bridge_protocol.BRIDGE_SLOTS`, the sites with a
-    Stage-1 adapter), not the seven-vendor council catalog: `web:gemini` names a vendor a council
-    can seat on OpenRouter or Ollama, but no site adapter exists for it, so it is refused here."""
+    The slot vocabulary is the bridge's own (`bridge_protocol.BRIDGE_SLOTS`, the sites with a web
+    adapter -- claude, chatgpt, grok and, since 2026-10-17, gemini), not the seven-vendor council
+    catalog: `web:deepseek` names a vendor a council can seat on OpenRouter or Ollama, but no site
+    adapter exists for it, so it is refused here."""
     if not isinstance(model, str):
         raise ValueError(f"web model must be a string, got {type(model).__name__}")
     parts = model.split(":")

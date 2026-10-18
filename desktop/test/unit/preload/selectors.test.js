@@ -5,6 +5,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
+// 2026-10-17: the two pure main modules that carry the same site vocabulary (no electron import in either)
+import { SLOTS as MAIN_SLOTS, SITES as MAIN_SITES } from '../../../main/sites.js'
+import { SLOT_IDS as PROTOCOL_SLOTS } from '../../../main/protocol.js'
+
 const require = createRequire(import.meta.url)
 const { SLOTS, DEFAULT_SELECTORS, mergeSelectors, siteFor, hostMatches, siteSelectors, SESSION_STATES, REJECT_STATES, RESULT_CODES } = require('../../../preload/site.cjs')
 
@@ -15,19 +19,23 @@ const V2_LIST_KEYS = ['stop', 'assistant', 'assistantText', 'done']
 const V2_MS_KEYS = ['quietMs', 'settleMs', 'firstTokenMs', 'captureTimeoutMs', 'stopGoneGraceMs']
 /** 2026-09-27: the transcript's document order — `oldest-first` (chatgpt, claude) or `newest-first` (grok, measured). */
 const V2_STRING_KEYS = ['transcriptOrder']
+/** 2026-10-17: whether main types the prompt through Electron's trusted input — true only for gemini; every site carries it (22 keys). */
+const BOOL_KEYS = ['trustedInput']
 const V1_KEYS = ['chatUrlPattern', ...LIST_KEYS, ...MS_KEYS]
-const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS, ...V2_STRING_KEYS]
+const V2_KEYS = [...V2_LIST_KEYS, ...V2_MS_KEYS, ...V2_STRING_KEYS, ...BOOL_KEYS]
 const SAMPLE_CHAT_URL = {
   chatgpt: 'https://chatgpt.com/c/68c1a2b3-4d5e-6f70-8a9b-0c1d2e3f4a5b',
   claude: 'https://claude.ai/chat/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b',
   grok: 'https://grok.com/c/8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d',
+  gemini: 'https://gemini.google.com/app/1a2b3c4d5e6f7a8b',
 }
-const SAMPLE_HOME_URL = { chatgpt: 'https://chatgpt.com/', claude: 'https://claude.ai/new', grok: 'https://grok.com/' }
+const SAMPLE_HOME_URL = { chatgpt: 'https://chatgpt.com/', claude: 'https://claude.ai/new', grok: 'https://grok.com/', gemini: 'https://gemini.google.com/app' }
 
 const isStringList = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' && x !== '')
 
 test('SLOTS is the frozen slot order and the states/codes match contract §1/§2', () => {
-  assert.deepEqual(SLOTS, ['claude', 'chatgpt', 'grok'])
+  // 2026-10-17: gemini joined LAST — the bridge vocabulary in catalog order (vendors.WEB_SITES == BRIDGE_SLOTS)
+  assert.deepEqual(SLOTS, ['claude', 'chatgpt', 'grok', 'gemini'])
   assert.ok(Object.isFrozen(SLOTS))
   assert.deepEqual(SESSION_STATES, ['ok', 'logged_out', 'challenge', 'blocked', 'unknown'])
   assert.deepEqual(REJECT_STATES, ['logged_out', 'challenge', 'blocked'])
@@ -37,9 +45,9 @@ test('SLOTS is the frozen slot order and the states/codes match contract §1/§2
   )
 })
 
-test('DEFAULT_SELECTORS stays version 1 with exactly the three sites (v2 is additive per site; main\'s loader pins the version check, so an override written against v1 keeps working)', () => {
+test('DEFAULT_SELECTORS stays version 1 with exactly the four sites (v2 is additive per site; main\'s loader pins the version check, so an override written against v1 keeps working)', () => {
   assert.equal(DEFAULT_SELECTORS.version, 1)
-  assert.deepEqual(Object.keys(DEFAULT_SELECTORS).sort(), ['chatgpt', 'claude', 'grok', 'version'])
+  assert.deepEqual(Object.keys(DEFAULT_SELECTORS).sort(), ['chatgpt', 'claude', 'gemini', 'grok', 'version'])
   const { warnings } = mergeSelectors(DEFAULT_SELECTORS, { version: 1, chatgpt: { stop: ['button.x'] } })
   assert.deepEqual(warnings, [])
 })
@@ -48,6 +56,8 @@ for (const site of SLOTS) {
   test(`DEFAULT_SELECTORS.${site}: composer/send cascades, wall detection lists, timeouts`, () => {
     const s = DEFAULT_SELECTORS[site]
     assert.deepEqual(Object.keys(s).sort(), [...V1_KEYS, ...V2_KEYS].sort())
+    assert.equal(Object.keys(s).length, 22) // 2026-10-17: `trustedInput` made it 22 on every site
+    for (const k of BOOL_KEYS) assert.equal(typeof s[k], 'boolean', `${site}.${k} must be a boolean`)
     for (const k of LIST_KEYS) assert.ok(isStringList(s[k]), `${site}.${k} must be a non-empty-string list`)
     for (const k of V2_LIST_KEYS) assert.ok(Array.isArray(s[k]) && s[k].every((x) => typeof x === 'string' && x !== ''), `${site}.${k} must be a list of non-empty strings`)
     assert.ok(s.composer.length >= 1 && s.send.length >= 1, `${site}: composer and send must have entries`)
@@ -99,7 +109,12 @@ test('the placeholder shape is rejected on every site: claude through its hex-on
   assert.ok(new RegExp(DEFAULT_SELECTORS.grok.chatUrlPattern).test(`https://grok.com/c/${uuid}`))
 })
 
-test('the chatgpt/claude/grok cascades start with the entries the fake site is built around', () => {
+test('the chatgpt/claude/grok/gemini cascades start with the entries the fake site is built around', () => {
+  // 2026-10-17: the gemini look-alike is built around the first entries of its (unmeasured) cascades
+  assert.equal(DEFAULT_SELECTORS.gemini.composer[0], "rich-textarea div.ql-editor[contenteditable='true']")
+  assert.equal(DEFAULT_SELECTORS.gemini.send[0], "button[aria-label='Send message']")
+  assert.equal(DEFAULT_SELECTORS.gemini.stop[0], "button[aria-label='Stop response']")
+  assert.equal(DEFAULT_SELECTORS.gemini.done[0], "button[aria-label='Good response']")
   assert.equal(DEFAULT_SELECTORS.chatgpt.composer[0], '#prompt-textarea')
   assert.equal(DEFAULT_SELECTORS.chatgpt.send[0], "button[data-testid='send-button']")
   assert.equal(DEFAULT_SELECTORS.claude.composer[0], "div[contenteditable='true'].ProseMirror")
@@ -180,7 +195,7 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   for (const site of SLOTS) assert.deepEqual([DEFAULT_SELECTORS[site].quietMs, DEFAULT_SELECTORS[site].firstTokenMs, DEFAULT_SELECTORS[site].captureTimeoutMs], [2500, 90000, 600000])
   // S10: the settle window after an end signal is per site — chatgpt holds a long answer far longer
   // between two renders than the four throttle ticks every other site settles for.
-  assert.deepEqual(SLOTS.map((s) => DEFAULT_SELECTORS[s].settleMs), [400, 1200, 400])
+  assert.deepEqual(SLOTS.map((s) => DEFAULT_SELECTORS[s].settleMs), [400, 1200, 400, 400])
   // every v2 selector compiles (a bad selector would be skipped silently at runtime)
   for (const site of SLOTS) for (const k of V2_LIST_KEYS) for (const s of DEFAULT_SELECTORS[site][k]) assert.doesNotThrow(() => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 })
@@ -265,7 +280,7 @@ test('mergeSelectors: an override REPLACES per site per key (arrays and numbers)
 test('mergeSelectors: unknown sites/keys, type mismatches, non-string lists and a wrong version warn and are skipped', () => {
   const { merged, warnings } = mergeSelectors(DEFAULT_SELECTORS, {
     version: 2,
-    gemini: { composer: ['x'] },
+    deepseek: { composer: ['x'] }, // 2026-10-17: gemini is a site now; deepseek is the canonical unknown one
     chatgpt: { reply: ['button.reply'], composer: '#not-a-list', sendWaitMs: '5', send: ['ok', 42] },
     claude: 'nope',
   })
@@ -276,7 +291,7 @@ test('mergeSelectors: unknown sites/keys, type mismatches, non-string lists and 
     'chatgpt.send: expected a list of strings',
     'chatgpt.sendWaitMs: expected number, got string',
     'claude: expected an object',
-    'gemini: unknown site',
+    'deepseek: unknown site',
     'version: expected 1, got 2',
   ])
 })
@@ -297,6 +312,7 @@ const SITES = {
   chatgpt: { hosts: ['chatgpt.com', 'chat.openai.com', 'auth.openai.com', 'auth0.openai.com'] },
   claude: { hosts: ['claude.ai'] },
   grok: { hosts: ['grok.com', 'accounts.x.ai', 'x.com'] },
+  gemini: { hosts: ['gemini.google.com'] }, // 2026-10-17: exactly this host — never bare google.com
 }
 
 test('siteFor maps hosts and their subdomains to slots, case-insensitively, null when unknown', () => {
@@ -310,14 +326,17 @@ test('siteFor maps hosts and their subdomains to slots, case-insensitively, null
   assert.equal(siteFor('x.com', SITES), 'grok')
   assert.equal(siteFor('example.com', SITES), null)
   assert.equal(siteFor('notclaude.ai', SITES), null) // suffix without a dot boundary is not a subdomain
-  assert.equal(siteFor('accounts.google.com', SITES), null)
+  assert.equal(siteFor('accounts.google.com', SITES), null) // an SSO host, never a site
+  assert.equal(siteFor('gemini.google.com', SITES), 'gemini')
+  assert.equal(siteFor('www.google.com', SITES), null)
+  assert.equal(siteFor('google.com', SITES), null)
 })
 
 test('siteFor tolerates bad input and honours the fake-site table', () => {
   assert.equal(siteFor(undefined, SITES), null)
   assert.equal(siteFor('chatgpt.com', null), null)
   assert.equal(siteFor('chatgpt.com', { chatgpt: {} }), null)
-  const fake = { chatgpt: { hosts: ['127.0.0.1'] }, claude: { hosts: ['127.0.0.1'] }, grok: { hosts: ['127.0.0.1'] } }
+  const fake = { chatgpt: { hosts: ['127.0.0.1'] }, claude: { hosts: ['127.0.0.1'] }, grok: { hosts: ['127.0.0.1'] }, gemini: { hosts: ['127.0.0.1'] } }
   assert.equal(siteFor('127.0.0.1', fake), 'claude') // SLOTS order decides a tie
   assert.equal(siteFor('localhost', { extra: { hosts: ['localhost'] } }), 'extra')
 })
@@ -336,6 +355,76 @@ test('siteSelectors picks the site block from a full config, accepts a bare bloc
   assert.equal(siteSelectors(block, 'chatgpt'), block)
   assert.equal(siteSelectors(undefined, 'claude'), DEFAULT_SELECTORS.claude)
   assert.equal(siteSelectors({ version: 1 }, 'claude'), DEFAULT_SELECTORS.claude)
-  assert.equal(siteSelectors(undefined, 'gemini'), null)
+  assert.equal(siteSelectors(undefined, 'gemini'), DEFAULT_SELECTORS.gemini) // 2026-10-17: a site now
+  assert.equal(siteSelectors(undefined, 'deepseek'), null)
   assert.equal(siteSelectors(undefined, null), null)
+})
+
+// ---- 2026-10-17: gemini.google.com, the fourth site (seeded from public sources, UNMEASURED) ------------------------
+
+test('DEFAULT_SELECTORS.gemini is the plan table verbatim (2026-10-17, public sources, unmeasured): Quill composer, send absent until text, guest-mode loggedOut, model-response turns, a body scoped out of the thinking panel, thumbs-up done marker, trusted input on', () => {
+  const g = DEFAULT_SELECTORS.gemini
+  assert.equal(g.chatUrlPattern, '^https://gemini\\.google\\.com/(?:u/\\d+/)?(?:app|gem/[^/?#]+)/[A-Za-z0-9_-]+(?:[?#]|$)')
+  assert.deepEqual(g.composer, ["rich-textarea div.ql-editor[contenteditable='true']", "div.ql-editor[contenteditable='true'][role='textbox']"])
+  // Quill's hidden `.ql-clipboard` is contenteditable too: no entry may be a bare contenteditable
+  assert.ok(g.composer.every((s) => s.includes('ql-editor')), 'every gemini composer entry names the Quill editor')
+  assert.deepEqual(g.send, ["button[aria-label='Send message']", 'button.send-button.submit', '.send-button.submit button', "button:has(mat-icon[fonticon='arrow_upward'])"])
+  assert.deepEqual(g.stop, ["button[aria-label='Stop response']", 'button.send-button.stop', '.send-button.stop button', "button:has(mat-icon[fonticon='stop'])"])
+  // guest mode: a signed-out page has a working composer, so the Sign-in link is the ONLY evidence
+  assert.deepEqual(g.loggedOut, ["a[href*='accounts.google.com/ServiceLogin']", "a[href*='accounts.google.com/v3/signin']", "a[aria-label='Sign in']"])
+  assert.deepEqual(g.loggedOutUrl, ['accounts.google.com'])
+  // the turn element, never the exchange container that holds the user's query as well
+  assert.deepEqual(g.assistant, ['model-response'])
+  assert.ok(!g.assistant.some((s) => s.includes('conversation-container')))
+  // 2026-10-17 (review): scoped out of the panel's inner `.thoughts-container` too (gemini-dom-research)
+  assert.deepEqual(g.assistantText, ['.markdown-main-panel:not(model-thoughts *):not(.thoughts-container *)', 'message-content .markdown:not(model-thoughts *):not(.thoughts-container *)'])
+  assert.ok(g.assistantText.every((s) => s.endsWith(':not(model-thoughts *):not(.thoughts-container *)')), 'every body entry is scoped out of the thinking panel')
+  // the thumbs of a finished turn — never "Copy", which user turns and code blocks carry too
+  assert.deepEqual(g.done, ["button[aria-label='Good response']", "button:has(mat-icon[fonticon='thumb_up'])"])
+  assert.ok(!g.done.some((s) => /copy/i.test(s)))
+  assert.equal(g.transcriptOrder, 'oldest-first')
+  assert.deepEqual([g.captureTimeoutMs, g.settleMs, g.stopGoneGraceMs, g.quietMs, g.firstTokenMs], [600000, 400, 5000, 2500, 90000])
+  assert.deepEqual([g.composerWaitMs, g.sendWaitMs, g.submitVerifyMs], [15000, 4000, 5000])
+  assert.deepEqual(g.errorText, ['Something went wrong', 'unusual traffic'])
+  // 2026-10-17 (review): no challenge ELEMENT until a wall is measured — the cascade matches on presence alone, and an
+  // invisible reCAPTCHA scoring frame would refuse every turn; the title still counts, corroborated
+  assert.deepEqual(g.challenge, [])
+  assert.deepEqual(g.challengeTitle, ['Just a moment'])
+  assert.equal(g.trustedInput, true)
+})
+
+test('trustedInput is a boolean on every site and true ONLY for gemini (2026-10-17): the classic three keep the synthetic insertAndSubmit path', () => {
+  assert.deepEqual(Object.fromEntries(SLOTS.map((s) => [s, DEFAULT_SELECTORS[s].trustedInput])), { claude: false, chatgpt: false, grok: false, gemini: true })
+})
+
+test('gemini.chatUrlPattern: /app/<id> with an optional /u/<n>/ prefix and /gem/<gem>/<id> match; the new-chat /app, a bare Gem page and another host do not', () => {
+  const re = new RegExp(DEFAULT_SELECTORS.gemini.chatUrlPattern)
+  for (const yes of ['https://gemini.google.com/app/1a2b3c4d5e6f7a8b', 'https://gemini.google.com/u/1/app/1a2b3c4d5e6f7a8b', 'https://gemini.google.com/app/1a2b3c4d5e6f7a8b?hl=en', 'https://gemini.google.com/app/1a2b3c4d5e6f7a8b#x', 'https://gemini.google.com/gem/abc123def/0f1e2d3c4b5a']) assert.ok(re.test(yes), yes)
+  for (const no of ['https://gemini.google.com/app', 'https://gemini.google.com/app/', 'https://gemini.google.com/app?hl=en', 'https://gemini.google.com/gem/abc123def', 'https://gemini.google.com/app/WEB:1a2b', 'https://evil.example/app/1a2b3c4d', 'http://gemini.google.com/app/1a2b3c4d']) assert.ok(!re.test(no), no)
+})
+
+test('mergeSelectors: `trustedInput` is a BOOLEAN key (2026-10-17) — a boolean override validates and applies on any site (the kill switch), a string or number is refused and the default stays', () => {
+  const kill = mergeSelectors(DEFAULT_SELECTORS, { version: 1, gemini: { trustedInput: false }, chatgpt: { trustedInput: true } })
+  assert.deepEqual(kill.warnings, [])
+  assert.equal(kill.merged.gemini.trustedInput, false)
+  assert.equal(kill.merged.chatgpt.trustedInput, true)
+  assert.deepEqual(kill.merged.gemini.composer, DEFAULT_SELECTORS.gemini.composer, 'every other key stays')
+  for (const [bad, kind] of [['false', 'string'], [0, 'number'], [null, 'null'], [[], 'array']]) {
+    const r = mergeSelectors(DEFAULT_SELECTORS, { gemini: { trustedInput: bad } })
+    assert.deepEqual(r.warnings, [`gemini.trustedInput: expected boolean, got ${kind}`])
+    assert.equal(r.merged.gemini.trustedInput, true, 'never coerced: the default stays')
+  }
+})
+
+test('one site vocabulary across the process boundary (2026-10-17): site.cjs SLOTS == main/sites.js SLOTS == main/protocol.js SLOT_IDS, in catalog order, and every site\'s chat URL sits on its own first host', () => {
+  assert.deepEqual([...SLOTS], [...MAIN_SLOTS])
+  assert.deepEqual([...SLOTS], [...PROTOCOL_SLOTS])
+  for (const slot of SLOTS) {
+    assert.ok(MAIN_SITES[slot], `main/sites.js has no ${slot}`)
+    assert.equal(siteFor(new URL(SAMPLE_CHAT_URL[slot]).hostname, MAIN_SITES), slot, `${slot}: its sample chat URL belongs to its own hosts`)
+    assert.ok(new RegExp(DEFAULT_SELECTORS[slot].chatUrlPattern).test(SAMPLE_CHAT_URL[slot]))
+  }
+  // gemini's hosts are exact: never bare google.com (search results, Sites and every other Google page would be trapped)
+  assert.deepEqual([...MAIN_SITES.gemini.hosts], ['gemini.google.com'])
+  assert.equal(siteFor('www.google.com', MAIN_SITES), null)
 })

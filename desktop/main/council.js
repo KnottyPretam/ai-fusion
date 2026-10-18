@@ -6,8 +6,9 @@
 // for subset sends and every R-label assignment), each on ONE transport that is read off the model
 // string exactly as the backend reads it (`transport_kind`):
 //
-//   web:<site>      a subscription session in a native view — only for a site with a Stage-1
-//                   adapter (WEB_SITES = sites.js SLOTS), and only under ITS OWN slot key
+//   web:<site>      a subscription session in a native view — only for a site with an adapter
+//                   (WEB_SITES = sites.js SLOTS: claude, chatgpt, grok and, since 2026-10-17,
+//                   gemini), and only under ITS OWN slot key
 //                   (`{qwen: {model: 'web:chatgpt'}}` is a mismatch the backend would 422)
 //   ollama:<name>   a local Ollama model
 //   <org>/<model>   an OpenRouter slug (token based; the key lives in openrouter-key.js)
@@ -16,13 +17,15 @@
 // Two readers: `parseCouncil` is STRICT (the IPC boundary — anything off is a bad_request, nothing
 // is coerced) and `sanitizeCouncil` is TOLERANT (settings.json — a malformed member is dropped,
 // and fewer than COUNCIL_MIN survivors, or more than COUNCIL_MAX, fall back to the default council
-// rather than to a truncated one). Pure module: no electron import, no I/O.
+// rather than to a truncated one). Both READ 2..5 on purpose (2026-10-17): the editors cap a new
+// council at four, but five-member councils exist on disk and must keep loading. Pure module: no
+// electron import, no I/O.
 
 import { SLOTS } from './sites.js'
 
 /** The 7-vendor catalog in backend `SLOT_IDS` order — the classic three FIRST. */
 export const COUNCIL_SLOTS = Object.freeze(['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo'])
-/** The sites with a native view and a Stage-1 adapter (= `window.triplex.sites`); the only `web:` targets. */
+/** The sites with a native view and an adapter (= `window.triplex.sites`); the only `web:` targets. */
 export const WEB_SITES = SLOTS
 export const EFFORTS = Object.freeze(['off', 'low', 'medium', 'high'])
 export const COUNCIL_MIN = 2
@@ -37,17 +40,55 @@ const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
-/** A fresh copy of the classic three, every pane on its own web session at effort off. */
+/**
+ * A fresh copy of the default council: EVERY site with a native view, each on its own web session at
+ * effort off. 2026-10-17: that is four (claude, chatgpt, grok, gemini) since gemini became a site —
+ * the user asked for new chats to start with all four web sites, so this loops WEB_SITES and is NOT
+ * pinned to the classic three (the backend's schemas.DEFAULT_COUNCIL, the web app's default, stays three).
+ */
 export function DEFAULT_COUNCIL() {
   const slots = {}
   for (const slot of WEB_SITES) slots[slot] = { model: `web:${slot}`, effort: WEB_EFFORT }
   return { slots }
 }
 
+/** The classic three web sites in catalog order — what DEFAULT_COUNCIL() was before gemini joined. */
+export const LEGACY_SITES = Object.freeze(['claude', 'chatgpt', 'grok'])
+
+/**
+ * A fresh copy of the council DEFAULT_COUNCIL() produced before 2026-10-17 (the classic three on
+ * their web sessions at effort off). settings.js compares a stored council against it ONCE, to move
+ * a profile that only ever held the old default onto the new one (the `council-four-sites` migration).
+ */
+export function LEGACY_COUNCIL() {
+  const slots = {}
+  for (const slot of LEGACY_SITES) slots[slot] = { model: `web:${slot}`, effort: WEB_EFFORT }
+  return { slots }
+}
+
+/**
+ * sameCouncil(a, b) → true when both are `{slots}` councils with the same member set and, per member,
+ * the same model and effort (an absent effort reads as 'medium', as parseAgent does). Key order is
+ * irrelevant; anything that is not a council compares unequal to everything, itself included.
+ */
+export function sameCouncil(a, b) {
+  if (!isPlainObject(a) || !isPlainObject(a.slots) || !isPlainObject(b) || !isPlainObject(b.slots)) return false
+  const ka = Object.keys(a.slots).sort()
+  const kb = Object.keys(b.slots).sort()
+  if (ka.length !== kb.length || ka.some((k, i) => k !== kb[i])) return false
+  const effort = (m) => (m.effort === undefined ? 'medium' : m.effort)
+  return ka.every((k) => {
+    const x = a.slots[k]
+    const y = b.slots[k]
+    return isPlainObject(x) && isPlainObject(y) && x.model === y.model && effort(x) === effort(y)
+  })
+}
+
 /**
  * transportOf(model) → 'web' | 'ollama' | 'openrouter' | null. STRICT: `web:` counts only for a site
- * with an adapter (`web:gemini` → null until Stage 2; `web:chatgpt:analyst` → null, it is not a pane
- * model), `ollama:<name>` needs a name, and everything else must look like an `org/model` slug.
+ * with an adapter (`web:deepseek` → null, no such site; `web:chatgpt:analyst` → null, it is not a pane
+ * model; `web:gemini` is a site since 2026-10-17), `ollama:<name>` needs a name, and everything else
+ * must look like an `org/model` slug.
  */
 export function transportOf(model) {
   if (typeof model !== 'string' || model === '') return null

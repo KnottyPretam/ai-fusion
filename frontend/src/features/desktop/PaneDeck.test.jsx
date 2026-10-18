@@ -46,7 +46,7 @@ function mount(fake, over = {}, props = {}) {
 const lastLayout = (fake) => fake.setLayout.mock.calls.at(-1)[0]
 
 describe('PaneDeck: layout reporting', () => {
-  test('split → setLayout with rects for all three; setActive with the mode', () => {
+  test('split → setLayout with rects for all four sites (the default council since 2026-10-17); setActive with the mode', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'split', active: 'chatgpt' })
     expect(fake.setLayout).toHaveBeenCalled()
@@ -56,13 +56,13 @@ describe('PaneDeck: layout reporting', () => {
     expect(ro.instances.length).toBeGreaterThan(0)
     const observed = new Set()
     for (const inst of ro.instances) for (const t of inst.targets) observed.add(t.getAttribute('data-testid'))
-    expect(observed).toEqual(new Set(['pane-claude-viewport', 'pane-chatgpt-viewport', 'pane-grok-viewport']))
+    expect(observed).toEqual(new Set(['pane-claude-viewport', 'pane-chatgpt-viewport', 'pane-grok-viewport', 'pane-gemini-viewport']))
   })
 
   test('tabs → one rect and nulls; the inactive panes are hidden', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'tabs', active: 'chatgpt' })
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null })
     expect(screen.getByTestId('pane-claude')).not.toBeVisible()
     expect(screen.getByTestId('pane-chatgpt')).toBeVisible()
     expect(screen.getByTestId('pane-grok')).not.toBeVisible()
@@ -77,21 +77,21 @@ describe('PaneDeck: layout reporting', () => {
     const before = fake.setLayout.mock.calls.length
     fireEvent.click(screen.getByTestId('deck-tab-grok'))
     expect(fake.setLayout.mock.calls.length).toBeGreaterThan(before)
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, gemini: null })
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'tabs', active: 'grok' })
     expect(screen.getByTestId('probe')).toHaveTextContent('tabs:grok')
     // in tabs mode a tab click does not move the focus (the view becomes visible instead)
     expect(fake.focusPane).not.toHaveBeenCalled()
   })
 
-  test('a mode switch re-sends: tabs → split shows all three, split → tabs hides two', () => {
+  test('a mode switch re-sends: tabs → split shows all four, split → tabs hides three', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'tabs', active: 'claude' })
     fireEvent.click(screen.getByTestId('deck-mode-split'))
     expect(lastLayout(fake)).toEqual(RECTS)
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'split', active: 'claude' })
     fireEvent.click(screen.getByTestId('deck-mode-tabs'))
-    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null, gemini: null })
   })
 
   test('a viewport resize or window resize re-sends; an identical layout is not re-sent', () => {
@@ -304,7 +304,7 @@ describe('PaneDeck: shortcuts', () => {
     act(() => fake.emit.shortcut('tab-2'))
     expect(screen.getByTestId('probe')).toHaveTextContent('tabs:chatgpt')
     expect(screen.getByTestId('deck-tab-chatgpt')).toHaveAttribute('aria-selected', 'true')
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null })
     expect(fake.focusPane).not.toHaveBeenCalled()
     act(() => fake.emit.shortcut({ name: 'tab-3' }))
     expect(screen.getByTestId('probe')).toHaveTextContent('tabs:grok')
@@ -319,20 +319,20 @@ describe('PaneDeck: shortcuts', () => {
     mount(fake, { mode: 'split', active: 'chatgpt' })
     act(() => fake.emit.shortcut('toggle-mode'))
     expect(screen.getByTestId('probe')).toHaveTextContent('tabs:chatgpt')
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null })
     act(() => fake.emit.shortcut('toggle-mode'))
     expect(screen.getByTestId('probe')).toHaveTextContent('split:chatgpt')
     expect(lastLayout(fake)).toEqual(RECTS)
   })
 
-  test('focus-prompt focuses the composer ref; new-chat-all opens a new chat in all three', () => {
+  test('focus-prompt focuses the composer ref; new-chat-all opens a new chat in every site pane', () => {
     const fake = fakeTriplex()
     const promptRef = { current: { focus: vi.fn() } }
     mount(fake, { mode: 'split' }, { promptRef })
     act(() => fake.emit.shortcut('focus-prompt'))
     expect(promptRef.current.focus).toHaveBeenCalledTimes(1)
     act(() => fake.emit.shortcut('new-chat-all'))
-    expect(fake.newChat).toHaveBeenCalledWith(['claude', 'chatgpt', 'grok'])
+    expect(fake.newChat).toHaveBeenCalledWith(['claude', 'chatgpt', 'grok', 'gemini'])
     // unknown names are ignored
     expect(() => act(() => fake.emit.shortcut('tab-9'))).not.toThrow()
     expect(() => act(() => fake.emit.shortcut(null))).not.toThrow()
@@ -369,7 +369,7 @@ describe('PaneDeck: shortcuts', () => {
     act(() => store.dispatch({ type: 'panes/sendResult', results: {} }))
     act(() => fake.emit.shortcut('new-chat-all'))
     expect(fake.newChat).toHaveBeenCalledTimes(1)
-    expect(fake.newChat).toHaveBeenCalledWith(['claude', 'chatgpt', 'grok'])
+    expect(fake.newChat).toHaveBeenCalledWith(['claude', 'chatgpt', 'grok', 'gemini'])
     act(() => store.dispatch({ type: 'panes/sendStart' }))
     act(() => fake.emit.shortcut('new-chat-all'))
     expect(fake.newChat).toHaveBeenCalledTimes(1)
@@ -387,7 +387,7 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     expect(capture('chatgpt')).not.toBeChecked()
     expect(capture('grok')).not.toBeChecked()
     // the label is the plan's wording, once per pane
-    expect(screen.getAllByText(CAPTURE_LABEL)).toHaveLength(3)
+    expect(screen.getAllByText(CAPTURE_LABEL)).toHaveLength(4)
     expect(screen.getByLabelText(CAPTURE_LABEL, { selector: '[data-testid="pane-chatgpt-capture"]' })).toBe(capture('chatgpt'))
     fireEvent.click(capture('chatgpt'))
     expect(fake.setCapture).toHaveBeenCalledWith('chatgpt', true)
@@ -410,7 +410,7 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     expect(capture('claude')).toBeChecked()
   })
 
-  test('the notice shows the terms-of-service wording until all three switches have been touched once, and remembers that in localStorage', () => {
+  test('the notice shows the terms-of-service wording until all four switches have been touched once, and remembers that in localStorage', () => {
     const fake = fakeTriplex()
     const { unmount } = mount(fake, { mode: 'split' })
     const notice = screen.getByTestId('capture-notice')
@@ -418,6 +418,8 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     expect(notice).toHaveTextContent(/terms of service/)
     expect(notice).toHaveTextContent(/programmatically extract/)
     expect(notice).toHaveTextContent(/automated or non-human means/)
+    expect(notice).toHaveTextContent(/Google’s forbid “using automated means to access content/)
+    expect(notice).toHaveTextContent(/each of the four switches/)
     // the notice sits above the panes in the flow (never over a view)
     expect(screen.getByTestId('pane-deck').children[1]).toBe(notice)
     fireEvent.click(capture('claude'))
@@ -426,15 +428,17 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     fireEvent.click(capture('chatgpt')) // touching the same switch twice does not count for another
     expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
     fireEvent.click(capture('grok'))
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument() // Gemini's switch is on screen and untouched
+    fireEvent.click(capture('gemini'))
     expect(screen.queryByTestId('capture-notice')).toBeNull()
-    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true })
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true, gemini: true })
     unmount()
     mount(fakeTriplex(), { mode: 'split' })
     expect(screen.queryByTestId('capture-notice')).toBeNull()
   })
 
-  test('a partial or invalid stored map keeps the notice; a bare true hides it; a throwing storage never breaks the deck', () => {
-    localStorage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify({ claude: true, grok: true }))
+  test('a partial or invalid stored map keeps the notice; a bare true (the classic three) still asks for Gemini; a throwing storage never breaks the deck', () => {
+    localStorage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify({ claude: true, grok: true, gemini: true }))
     const first = mount(fakeTriplex(), { mode: 'split' })
     expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
     fireEvent.click(capture('chatgpt'))
@@ -444,8 +448,11 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     const second = mount(fakeTriplex(), { mode: 'split' })
     expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
     second.unmount()
+    // the Stage 2 `true` was written when three sites existed: Gemini's switch is still unset
     localStorage.setItem(CAPTURE_NOTICE_KEY, 'true')
     const third = mount(fakeTriplex(), { mode: 'split' })
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    fireEvent.click(capture('gemini'))
     expect(screen.queryByTestId('capture-notice')).toBeNull()
     third.unmount()
     vi.stubGlobal('localStorage', {
@@ -569,10 +576,10 @@ describe('PaneDeck: the analyst pane (Stage 3)', () => {
     expect(screen.getByTestId('pane-grok')).toBeVisible()
     expect(screen.getByTestId('pane-claude')).not.toBeVisible()
     expect(screen.getByTestId('pane-analyst-health')).toHaveTextContent('no health yet')
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, analyst: ANALYST_RECT })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, gemini: null, analyst: ANALYST_RECT })
     // switching the active pane keeps the analyst reported
     fireEvent.click(screen.getByTestId('deck-tab-chatgpt'))
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, analyst: ANALYST_RECT })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null, analyst: ANALYST_RECT })
   })
 
   test('onAnalyst merges only the keys sent and ignores malformed payloads; a partial stub renders the pane and hides without throwing', () => {
@@ -594,5 +601,46 @@ describe('PaneDeck: the analyst pane (Stage 3)', () => {
     expect(screen.getAllByTestId('pane-analyst')).toHaveLength(2)
     expect(() => fireEvent.click(screen.getAllByTestId('pane-analyst-hide')[1])).not.toThrow()
     unmount()
+  })
+})
+
+describe('PaneDeck: Gemini, the fourth site (2026-10-17)', () => {
+  const capture = (slot) => screen.getByTestId(`pane-${slot}-capture`)
+
+  test('a Gemini pane renders before its first event (no initial key in health / zoom / capture), then follows health, zoom, capture and the turn phase', async () => {
+    const fake = fakeTriplex({ getCapture: vi.fn(() => ({ claude: false, chatgpt: false, grok: false })) }) // a main that predates the key
+    mount(fake, { mode: 'split' })
+    expect(screen.getByTestId('pane-gemini')).toHaveAttribute('data-kind', 'site')
+    expect(screen.getByTestId('pane-gemini-health')).toHaveTextContent('no health yet')
+    expect(screen.getByTestId('pane-gemini-session')).toHaveAttribute('data-level', 'none')
+    expect(screen.getByTestId('pane-gemini-zoom-reset')).toHaveTextContent('100%')
+    expect(capture('gemini')).not.toBeChecked()
+    expect(screen.getByTestId('pane-gemini-phase')).toHaveTextContent('')
+    expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('data-session', 'unknown')
+    act(() => fake.emit.health('gemini', health({ session: 'logged_out', host: 'gemini.google.com', url: 'https://gemini.google.com/app', title: 'Gemini' })))
+    expect(screen.getByTestId('pane-gemini-session')).toHaveTextContent('SIGN IN')
+    expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('data-session', 'logged_out')
+    act(() => fake.emit.zoom({ slot: 'gemini', factor: 1.25 }))
+    expect(screen.getByTestId('pane-gemini-zoom-reset')).toHaveTextContent('125%')
+    act(() => fake.emit.turn({ slot: 'gemini', phase: 'replying' }))
+    expect(screen.getByTestId('pane-gemini-phase')).toHaveTextContent('replying…')
+    fireEvent.click(capture('gemini'))
+    expect(fake.setCapture).toHaveBeenCalledWith('gemini', true)
+    expect(capture('gemini')).toBeChecked()
+    fireEvent.click(screen.getByTestId('pane-gemini-newchat'))
+    expect(fake.newChat).toHaveBeenCalledWith(['gemini'])
+  })
+
+  test('with the classic three seated (Gemini’s view hidden) the notice hides once those three switches are set', () => {
+    mount(fakeTriplex(), { mode: 'split', council: { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } } })
+    expect(screen.queryByTestId('pane-gemini')).toBeNull()
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    for (const slot of ['claude', 'chatgpt', 'grok']) fireEvent.click(capture(slot))
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
+    // seating Gemini brings its untouched switch on screen, and the notice back with it
+    act(() => store.dispatch({ type: 'panes/council', council: { slots: { claude: { model: 'web:claude', effort: 'off' }, gemini: { model: 'web:gemini', effort: 'off' } } } }))
+    expect(screen.getByTestId('capture-notice')).toBeInTheDocument()
+    fireEvent.click(capture('gemini'))
+    expect(screen.queryByTestId('capture-notice')).toBeNull()
   })
 })

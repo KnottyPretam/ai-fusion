@@ -16,11 +16,14 @@
 
 export const PROTOCOL_VERSION = 1
 
-export const SLOT_IDS = Object.freeze(['claude', 'chatgpt', 'grok'])
+// The bridge's own site vocabulary (catalog order). 2026-10-17: `gemini` joined by an in-place
+// amendment of v1, as `reread` did (2026-10-15) — Electron spawns its own backend, so both sides move
+// together; `deepseek` is now the corpus's canonical invalid slot. Mirrors bridge_protocol.BRIDGE_SLOTS.
+export const SLOT_IDS = Object.freeze(['claude', 'chatgpt', 'grok', 'gemini'])
 export const SESSION_STATES = Object.freeze(['ok', 'logged_out', 'challenge', 'blocked', 'unknown'])
 export const VIEWS = Object.freeze(['pane', 'analyst'])
 export const DONE_BY = Object.freeze(['done_selector', 'stop_gone', 'quiet'])
-export const BRIDGE_ROLES = Object.freeze(['chatgpt', 'claude', 'grok', 'analyst'])
+export const BRIDGE_ROLES = Object.freeze(['chatgpt', 'claude', 'grok', 'gemini', 'analyst'])
 export const PURPOSES = Object.freeze(['chat', 'extraction', 'defense', 'convergence'])
 export const REJECT_CODES = Object.freeze(['view_busy', 'logged_out', 'challenge', 'blocked', 'analyst_not_chosen', 'unknown_site', 'view_crashed'])
 export const RESULT_CODES = Object.freeze(['composer_not_found', 'send_not_found', 'not_submitted', 'reply_not_found', 'timeout', 'cancelled', 'adapter_gone', 'site_error', 'navigation', 'view_crashed'])
@@ -124,7 +127,8 @@ const CLIENT = {
     if (f.protocol !== PROTOCOL_VERSION) fail(`hello.protocol: expected ${PROTOCOL_VERSION}`)
     nonEmptyStr(f.token, 'hello.token')
     str(f.version, 'hello.version')
-    if (!Array.isArray(f.sites) || f.sites.length < 1 || f.sites.length > 3) fail('hello.sites: expected 1..3 slots')
+    // a subset of the sites, so the bound is the vocabulary's own size (2026-10-17: 1..4, was 1..3)
+    if (!Array.isArray(f.sites) || f.sites.length < 1 || f.sites.length > SLOT_IDS.length) fail(`hello.sites: expected 1..${SLOT_IDS.length} slots`)
     for (const s of f.sites) oneOf(s, SLOT_IDS, 'hello.sites[]')
     if (new Set(f.sites).size !== f.sites.length) fail('hello.sites: must not repeat a slot')
     captureMap(f.capture, 'hello.capture')

@@ -60,8 +60,11 @@ test('buildSpawnSpec: ANALYST_MODEL pinned to \'\' when settings.analyst is null
   assert.equal(buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, env: {}, exists }).env.ANALYST_MODEL, '')
   const viaGetter = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { getAnalyst: () => 'grok' }, env: {}, exists })
   assert.equal(viaGetter.env.ANALYST_MODEL, 'web:grok:analyst')
-  const bogus = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'gemini' }, env: {}, exists })
+  // 2026-10-17: gemini is a site (a legal analyst), so the bogus id is a vendor with no site
+  const bogus = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'deepseek' }, env: {}, exists })
   assert.equal(bogus.env.ANALYST_MODEL, '')
+  const gemini = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, settings: { analyst: 'gemini' }, env: {}, exists })
+  assert.equal(gemini.env.ANALYST_MODEL, 'web:gemini:analyst', 'the fourth site can be the analyst')
   assert.equal(bogus.env.OPENROUTER_API_KEY, '', 'pinned empty even when the parent had no key')
   const ollama = buildSpawnSpec({ repoDir: REPO, userData: USER, token: TOKEN, env: { TRIPLEX_OLLAMA: '1', OLLAMA_BASE_URL: 'http://x', OLLAMA_MODELS: 'hermes3' }, exists })
   assert.equal(ollama.env.OLLAMA_BASE_URL, 'http://x')

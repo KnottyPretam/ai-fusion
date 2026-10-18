@@ -4,6 +4,9 @@ import { initialState, rootReducer } from '../../state/registry.js'
 import {
   ATTENTION_SESSIONS,
   CAPTURE_NOTICE_KEY,
+  CAPTURE_NOTICE_TEXT,
+  CLASSIC_SITES,
+  DRAWER_TAB_KEYS,
   NOT_CAPTURED,
   NOT_CAPTURED_MESSAGE_PREFIX,
   PERSIST_KEYS,
@@ -154,9 +157,10 @@ describe('panes slice: shape and reducer', () => {
 
 describe('panes slice: derivations', () => {
   test('selectedTargets keeps council order, drops unknown keys, and reads an absent member as on', () => {
-    expect(selectedTargets({ grok: true, claude: true, chatgpt: false, bing: true })).toEqual(['claude', 'grok'])
+    // the default council is every site (four since 2026-10-17): Gemini, absent from the map, is on
+    expect(selectedTargets({ grok: true, claude: true, chatgpt: false, bing: true })).toEqual(['claude', 'grok', 'gemini'])
     // absent = on: a freshly seated member is targeted before its checkbox was ever touched
-    expect(selectedTargets(null)).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(selectedTargets(null)).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
     expect(selectedTargets({ chatgpt: false }, ['chatgpt', 'qwen'])).toEqual(['qwen'])
     expect(selectedTargets({ qwen: false, gemini: true }, ['claude', 'gemini', 'qwen', 'mimo'])).toEqual(['claude', 'gemini', 'mimo'])
     // never a slot outside the council, whatever the map says
@@ -252,10 +256,12 @@ describe('panes slice: localStorage persistence', () => {
     expect(() => persistPanes(undefined, initialPanes())).not.toThrow()
   })
 
-  test('SLOT_IDS is the catalog order (classic three first) and SITES the three with a view', () => {
+  test('SLOT_IDS is the catalog order (classic three first); SITES the four with a view; the default council is every site', () => {
     expect(SLOT_IDS).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo'])
-    expect(SITES).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(SITES).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
+    expect(CLASSIC_SITES).toEqual(['claude', 'chatgpt', 'grok'])
     expect(DEFAULT_COUNCIL).toEqual(SITES)
+    expect(DEFAULT_COUNCIL).not.toBe(SITES) // a copy: a caller mutating one never changes the other
   })
 })
 
@@ -353,22 +359,30 @@ describe('panes slice: send-stream outcomes (Stage 2)', () => {
 describe('panes slice: capture-notice persistence (Stage 2)', () => {
   test('round-trips the touched map through triplex.panes.captureNoticeSeen; allCaptureTouched', () => {
     const storage = memoryStorage()
-    expect(loadCaptureTouched(storage)).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(loadCaptureTouched(storage)).toEqual({ claude: false, chatgpt: false, grok: false, gemini: false })
     persistCaptureTouched(storage, { claude: true, grok: 'yes' })
-    expect(storage.dump()).toEqual({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: true, chatgpt: false, grok: true }) })
-    expect(loadCaptureTouched(storage)).toEqual({ claude: true, chatgpt: false, grok: true })
+    expect(storage.dump()).toEqual({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: true, chatgpt: false, grok: true, gemini: false }) })
+    expect(loadCaptureTouched(storage)).toEqual({ claude: true, chatgpt: false, grok: true, gemini: false })
     expect(allCaptureTouched(loadCaptureTouched(storage))).toBe(false)
     persistCaptureTouched(storage, { claude: true, chatgpt: true, grok: true })
+    expect(allCaptureTouched(loadCaptureTouched(storage))).toBe(false) // Gemini's switch is still unset
+    persistCaptureTouched(storage, { claude: true, chatgpt: true, grok: true, gemini: true })
     expect(allCaptureTouched(loadCaptureTouched(storage))).toBe(true)
     expect(allCaptureTouched(null)).toBe(false)
+    // only the switches on screen count (PaneDeck passes the council's site panes)
+    const three = { claude: true, chatgpt: true, grok: true, gemini: false }
+    expect(allCaptureTouched(three, ['claude', 'chatgpt', 'grok'])).toBe(true)
+    expect(allCaptureTouched(three, ['claude', 'gemini'])).toBe(false)
+    expect(allCaptureTouched(three, [])).toBe(true) // no site pane at all: nothing to decide
   })
 
-  test('a bare true means all seen; junk, a missing key, a null storage and a throwing storage mean none', () => {
-    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: 'true' }))).toEqual({ claude: true, chatgpt: true, grok: true })
-    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: '{not json' }))).toEqual({ claude: false, chatgpt: false, grok: false })
-    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: 'yes', chatgpt: 1, gemini: true }) }))).toEqual({ claude: false, chatgpt: false, grok: false })
-    expect(loadCaptureTouched(memoryStorage())).toEqual({ claude: false, chatgpt: false, grok: false })
-    expect(loadCaptureTouched(null)).toEqual({ claude: false, chatgpt: false, grok: false })
+  test('a bare true means the classic three seen (Gemini not yet); junk, a missing key, a null storage and a throwing storage mean none', () => {
+    const none = { claude: false, chatgpt: false, grok: false, gemini: false }
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: 'true' }))).toEqual({ claude: true, chatgpt: true, grok: true, gemini: false })
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: '{not json' }))).toEqual(none)
+    expect(loadCaptureTouched(memoryStorage({ [CAPTURE_NOTICE_KEY]: JSON.stringify({ claude: 'yes', chatgpt: 1, gemini: true, qwen: true }) }))).toEqual({ ...none, gemini: true })
+    expect(loadCaptureTouched(memoryStorage())).toEqual(none)
+    expect(loadCaptureTouched(null)).toEqual(none)
     const broken = {
       getItem() {
         throw new Error('SecurityError')
@@ -377,7 +391,7 @@ describe('panes slice: capture-notice persistence (Stage 2)', () => {
         throw new Error('QuotaExceededError')
       },
     }
-    expect(loadCaptureTouched(broken)).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(loadCaptureTouched(broken)).toEqual({ claude: false, chatgpt: false, grok: false, gemini: false })
     expect(() => persistCaptureTouched(broken, { claude: true })).not.toThrow()
     expect(() => persistCaptureTouched(null, { claude: true })).not.toThrow()
     expect(() => persistCaptureTouched(memoryStorage(), null)).not.toThrow()
@@ -385,9 +399,9 @@ describe('panes slice: capture-notice persistence (Stage 2)', () => {
 
   test('defaults to the global localStorage', () => {
     localStorage.setItem(CAPTURE_NOTICE_KEY, JSON.stringify({ grok: true }))
-    expect(loadCaptureTouched()).toEqual({ claude: false, chatgpt: false, grok: true })
+    expect(loadCaptureTouched()).toEqual({ claude: false, chatgpt: false, grok: true, gemini: false })
     persistCaptureTouched(undefined, { claude: true, chatgpt: true, grok: true })
-    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true })
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: true, grok: true, gemini: false })
     localStorage.clear()
   })
 })
@@ -435,5 +449,66 @@ describe('panes slice: Stage 3 (bridge error, drawerOpen persistence, notCapture
     expect(notCapturedSlots({ ...turn, type: 'analyze' })).toEqual([])
     expect(notCapturedSlots(null)).toEqual([])
     expect(notCapturedSlots({ ...turn, errors: { bing: msg('bing'), chatgpt: 42 } })).toEqual([])
+  })
+})
+
+describe('panes slice: Gemini, the fourth site (2026-10-17)', () => {
+  test('the initial per-site maps stay the classic three (the frozen desktop-smoke pins them); the reducers accept Gemini', () => {
+    const s0 = initialPanes()
+    for (const key of ['targets', 'health', 'zoom', 'capture']) expect(Object.keys(s0[key])).toEqual(CLASSIC_SITES)
+    expect('gemini' in s0.health).toBe(false)
+    const h = health({ host: 'gemini.google.com', url: 'https://gemini.google.com/app', title: 'Gemini' })
+    const s1 = panesReducer(s0, { type: 'panes/health', slot: 'gemini', health: h })
+    expect(s1.health.gemini).toBe(h)
+    expect(healthText(s1.health.gemini)).toBe('composer ✓ send ✓ · signed in')
+    const s2 = panesReducer(s1, { type: 'panes/zoom', slot: 'gemini', factor: 1.1 })
+    expect(s2.zoom.gemini).toBe(1.1)
+    const s3 = panesReducer(s2, { type: 'panes/capture', capture: { claude: false, chatgpt: false, grok: false, gemini: true } })
+    expect(s3.capture).toEqual({ claude: false, chatgpt: false, grok: false, gemini: true })
+    const s4 = panesReducer(s3, { type: 'panes/capture', slot: 'gemini', on: false })
+    expect(s4.capture.gemini).toBe(false)
+    const s5 = panesReducer(s4, { type: 'panes/turn', slot: 'gemini', phase: 'replying' })
+    expect(s5.turn.gemini).toBe('replying')
+    expect(panesReducer(s5, { type: 'panes/analyst', slot: 'gemini' }).analyst.slot).toBe('gemini')
+    // a vendor without a site is still refused for the per-site maps
+    expect(panesReducer(s0, { type: 'panes/health', slot: 'deepseek', health: h })).toBe(s0)
+    expect(panesReducer(s0, { type: 'panes/zoom', slot: 'qwen', factor: 2 })).toBe(s0)
+    // the readers of a missing key: no health yet, off, on (target), not attention
+    expect(healthText(s0.health.gemini)).toBe('no health yet')
+    expect(healthLevel(s0.health.gemini)).toBe('none')
+    expect(!!s0.capture.gemini).toBe(false)
+    expect(selectedTargets(s0.targets, ['claude', 'gemini'])).toEqual(['claude', 'gemini'])
+  })
+
+  test('the capture notice names Google’s terms and four switches', () => {
+    expect(CAPTURE_NOTICE_TEXT).toMatch(/Google’s forbid “using automated means to access content from any of our services in violation of the machine-readable instructions on our web pages”/)
+    expect(CAPTURE_NOTICE_TEXT).toMatch(/each of the four switches/)
+    expect(CAPTURE_NOTICE_TEXT).not.toMatch(/three switches/)
+  })
+})
+
+describe('panes slice: drawerTab (2026-10-17)', () => {
+  test('starts on analyze and is not persisted', () => {
+    expect(initialPanes().drawerTab).toBe('analyze')
+    expect(initialPanes({ drawerTab: 'agents' }).drawerTab).toBe('analyze')
+    const storage = memoryStorage()
+    persistPanes(storage, { ...initialPanes(), drawerTab: 'agents' })
+    expect(Object.values(storage.dump()).some((v) => String(v).includes('agents'))).toBe(false)
+  })
+
+  test('panes/drawer {open, tab} opens on that tab; an unknown tab is ignored; a toggle keeps the tab; no change keeps identity', () => {
+    const s0 = initialPanes()
+    const s1 = panesReducer(s0, { type: 'panes/drawer', open: true, tab: 'agents' })
+    expect(s1).toMatchObject({ drawerOpen: true, drawerTab: 'agents' })
+    expect(panesReducer(s1, { type: 'panes/drawer', open: true, tab: 'agents' })).toBe(s1)
+    const s2 = panesReducer(s1, { type: 'panes/drawer', open: true, tab: 'bogus' })
+    expect(s2).toBe(s1)
+    const s3 = panesReducer(s1, { type: 'panes/drawer' })
+    expect(s3).toMatchObject({ drawerOpen: false, drawerTab: 'agents' })
+    const s4 = panesReducer(s3, { type: 'panes/drawer', open: true, tab: 'fusion' })
+    expect(s4).toMatchObject({ drawerOpen: true, drawerTab: 'fusion' })
+    // the tab can change while the drawer stays open
+    expect(panesReducer(s4, { type: 'panes/drawer', open: true, tab: 'settings' })).toMatchObject({ drawerOpen: true, drawerTab: 'settings' })
+    expect(DRAWER_TAB_KEYS).toEqual(['analyze', 'fusion', 'captured', 'agents', 'settings'])
   })
 })

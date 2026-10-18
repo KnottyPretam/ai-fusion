@@ -45,6 +45,17 @@ test('toMarkdown: a code block whose header sits OUTSIDE the <pre> (claude / gro
   assert.equal(md(`<div class="markdown"><p>text</p><div>Copy code</div></div>`), 'text')
 })
 
+test('toMarkdown (2026-10-17, gemini): a code block inside a CUSTOM element (`code-block > div.code-block > header + … > pre`) is a block — fenced with the header\'s language — never one inline code span; a custom element holding only inline content stays inline', () => {
+  const gemini = md(
+    `<div class="markdown markdown-main-panel"><p>Here it is:</p><code-block class="ng-star-inserted"><div class="code-block"><div class="code-block-decoration header-formatted"><span>json</span><div class="buttons"><button aria-label="Copy code">Copy code</button></div></div><div class="formatted-code-block-internal-container"><div class="animated-opacity"><pre><code class="code-container formatted" data-test-id="code-content">{"a": 1,\n  "b": [2, 3]}</code></pre></div></div></div></code-block><p>Done.</p></div>`,
+  )
+  assert.equal(gemini, 'Here it is:\n\n```json\n{"a": 1,\n  "b": [2, 3]}\n```\n\nDone.')
+  // nested custom elements around the block still count (the rule recurses through hyphenated tags)
+  assert.equal(md(`<div><response-element><code-block><div><pre><code>x = 1</code></pre></div></code-block></response-element></div>`), '```\nx = 1\n```')
+  // a custom element with no block inside is inline text, as any unknown inline element always was
+  assert.equal(md(`<div><p>a <source-footnote><sup>1</sup></source-footnote> b</p></div>`), 'a 1 b')
+})
+
 test('toMarkdown: a code block keeps its body byte for byte — indentation, blank lines and backticks — and one trailing newline is dropped', () => {
   const body = 'def f(x):\n    if x:\n\n        return "`x`"\n'
   const el = parseFragment(`<div class="markdown"><pre><code class="language-python">${body}</code></pre></div>`)

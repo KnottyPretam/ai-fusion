@@ -37,13 +37,15 @@ const DESKTOP = path.resolve(HERE, '..', '..', '..')
 const MAIN = path.join(DESKTOP, 'main', 'main.js')
 const REGISTER = path.join(HERE, '_register-fake-electron.mjs')
 const FAKE_BASE = 'http://127.0.0.1:5199'
-const SLOTS = ['claude', 'chatgpt', 'grok']
+const SLOTS = ['claude', 'chatgpt', 'grok', 'gemini']
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
 const ATTACH_URL = 'http://127.0.0.1:1'
 /** The key the fake's probes store (73 chars, the real format) and the two-member council they set. */
 const KEY = `sk-or-v1-${'a'.repeat(64)}`
 const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
 const CLASSIC = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
+/** The default council since 2026-10-17: every web site, gemini included. */
+const FOUR = { slots: { ...CLASSIC.slots, gemini: { model: 'web:gemini', effort: 'off' } } }
 const defaultsBody = (council, analyst_model) => ({ slot_config: { slots: council.slots, analyst_model, max_iterations: 2, materiality_min: 'medium', grounded: false } })
 
 function sitesJson(base = FAKE_BASE) {
@@ -66,7 +68,7 @@ function run(env) {
   return { status: r.status, report: line ? JSON.parse(line.slice('FAKE_ELECTRON_REPORT '.length)) : null, stderr: r.stderr, stdout: r.stdout }
 }
 
-test('happy path: userData, window, three hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, the Stage 3 analyst page, the council + key channels and pushes, crash recreate, bounds flush', () => {
+test('happy path: userData, window, four hardened views, IPC, shortcuts, health, the bridge round trip, Stage 2 channels, the Stage 3 analyst page, the council + key channels and pushes, crash recreate, bounds flush', () => {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-'))
   writeSelectorsOverride(userData)
   const { status, report, stderr, stdout } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson(), TRIPLEX_RENDERER_URL: 'http://localhost:5184' })
@@ -93,11 +95,12 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // renderer URL loads (default theme = dark, and loadWithRetry can retry for seconds)
   assert.equal(win.options.backgroundColor, '#0d1117', 'a dark launch paints the dark --bg, not Electron’s white')
 
-  // three views, one per slot, in SLOTS order, each on its partition with the site preload, unthrottled
-  // three panes + the lazily created analyst view (persist:chatgpt) + its replacement after
-  // setAnalyst('claude') + the pane recreated by the crash probe
-  assert.equal(report.views.length, 6, 'three panes, two analyst views, one recreated pane')
-  const views = report.views.slice(0, 3)
+  // four views (gemini since 2026-10-17), one per slot, in SLOTS order, each on its partition with the site
+  // preload, unthrottled; four panes + the lazily created analyst view (persist:chatgpt) + its replacement
+  // after setAnalyst('claude') + the gemini analyst view of the trusted-analyst probe + the pane recreated by
+  // the crash probe
+  assert.equal(report.views.length, 8, 'four panes, three analyst views, one recreated pane')
+  const views = report.views.slice(0, 4)
   SLOTS.forEach((slot, i) => {
     const wp = views[i].options.webPreferences
     assert.equal(wp.partition, `persist:${slot}`)
@@ -108,7 +111,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     assert.ok(wp.preload.endsWith(path.join('preload', 'site.cjs')))
     assert.equal(views[i].loads[0], `${FAKE_BASE}/?site=${slot}`)
   })
-  assert.deepEqual([...report.sessions].sort(), ['default', 'persist:chatgpt', 'persist:claude', 'persist:grok'])
+  assert.deepEqual([...report.sessions].sort(), ['default', 'persist:chatgpt', 'persist:claude', 'persist:gemini', 'persist:grok'])
 
   // every §2 channel is registered once; prompt:send (removed in Stage 2) is not registered at all
   const handles = report.ipcHandles
@@ -135,7 +138,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   for (const a of ['CommandOrControl+1', 'CommandOrControl+2', 'CommandOrControl+3', 'CommandOrControl+4', 'CommandOrControl+5', 'CommandOrControl+\\', 'CommandOrControl+L', 'CommandOrControl+Shift+N', 'CommandOrControl+=', 'CommandOrControl+-', 'CommandOrControl+0', 'CommandOrControl+R', 'F12']) {
     assert.ok(report.menu.accelerators.includes(a), a)
   }
-  for (const label of ['Pane 4', 'Pane 5', 'Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok']) {
+  for (const label of ['Pane 4', 'Pane 5', 'Reload pane', 'Inspect pane', 'Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok', 'Sign out of Gemini']) {
     assert.ok(report.menu.items.includes(label), label)
   }
 
@@ -150,7 +153,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.getInfoFromView, { ok: false, error: 'bad_request' }, 'a site view is not the renderer')
   assert.equal(p.adapterConfigView.ok, true)
   assert.equal(p.adapterConfigView.value.site, 'chatgpt')
-  assert.deepEqual(Object.keys(p.adapterConfigView.value.selectors), ['version', 'chatgpt', 'claude', 'grok'])
+  assert.deepEqual(Object.keys(p.adapterConfigView.value.selectors), ['version', 'chatgpt', 'claude', 'grok', 'gemini'])
   assert.equal(p.adapterConfigView.value.selectors.claude.chatUrlPattern, '^http://127\\.0\\.0\\.1:5199/c/[A-Za-z0-9]+', 'the override is merged')
   assert.equal(p.adapterConfigView.value.dev, true)
   assert.equal(p.adapterConfigPopup.value.site, null)
@@ -162,6 +165,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     { bounds: { x: 0, y: 100, width: 500, height: 600 }, visible: true },
     { bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false },
     { bounds: { x: 500, y: 100, width: 500, height: 600 }, visible: true },
+    { bounds: { x: 0, y: 0, width: 0, height: 0 }, visible: false },
   ])
   assert.deepEqual(p.getInfoAfterActive.value.layout, { mode: 'tabs', active: 'grok' })
 
@@ -178,7 +182,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // --- the bridge: attach mode → ws://127.0.0.1:1/api/bridge, hello with BRIDGE_TOKEN, nothing before open
   assert.deepEqual(p.socket, { url: 'ws://127.0.0.1:1/api/bridge', sentBeforeOpen: 0 })
   assert.equal(p.bridgeBeforeAck, 'connecting')
-  assert.deepEqual(p.hello, { type: 'hello', protocol: 1, token: 'wiring', version: '0.1.0', sites: SLOTS, capture: { claude: false, chatgpt: false, grok: false }, analyst: { slot: 'chatgpt' } }, 'hello.analyst reflects settings.analyst (default chatgpt)')
+  assert.deepEqual(p.hello, { type: 'hello', protocol: 1, token: 'wiring', version: '0.1.0', sites: SLOTS, capture: { claude: false, chatgpt: false, grok: false, gemini: false }, analyst: { slot: 'chatgpt' } }, 'hello.analyst reflects settings.analyst (default chatgpt)')
   assert.equal(p.bridgeAfterAck.connected, true)
   assert.equal(p.bridgeAfterAck.pingS, 20)
   // every panes:getInfo before the ack replayed {connected:false}; the ack itself sent exactly one connected:true
@@ -192,7 +196,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   // both with the attach token as Bearer, to the attached backend and nothing else
   assert.deepEqual(p.fetchesAfterAck, [
     { method: 'DELETE', path: '/api/session/openrouter_key', auth: 'Bearer wiring', body: null },
-    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(CLASSIC, 'web:chatgpt:analyst') },
+    { method: 'PUT', path: '/api/session/defaults', auth: 'Bearer wiring', body: defaultsBody(FOUR, 'web:chatgpt:analyst') },
   ])
   for (const f of report.fetches) assert.ok(f.url.startsWith(`${ATTACH_URL}/`), `every fetch targets the attached backend: ${f.url}`)
   // ...and the renderer, which reads the status once at mount and then only follows the event, hears
@@ -201,10 +205,10 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.keyStatesAfterAck, [{ configured: false, prefix: '', length: 0, pushed: true }], 'the connected edge announces panes:openRouterKey once the push settles')
 
   // capture switch → settings + a capture frame; a bad payload is refused
-  assert.deepEqual(p.getCapture, { ok: true, value: { claude: false, chatgpt: false, grok: false } })
+  assert.deepEqual(p.getCapture, { ok: true, value: { claude: false, chatgpt: false, grok: false, gemini: false } })
   assert.equal(p.setCapture.ok, true)
   assert.deepEqual(p.setCaptureBad, { ok: false, error: 'bad_request' })
-  assert.deepEqual(p.captureFrames, [{ type: 'capture', capture: { claude: true, chatgpt: false, grok: false } }])
+  assert.deepEqual(p.captureFrames, [{ type: 'capture', capture: { claude: true, chatgpt: false, grok: false, gemini: false } }])
 
   // health → renderer AND bridge
   assert.equal(p.health.length, 1)
@@ -251,12 +255,33 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.cancelResult.ok, false)
   assert.equal(p.cancelResult.code, 'cancelled')
 
+  // 2026-10-17: gemini takes the TRUSTED path end to end — main focuses the gemini view, the adapter prepares the
+  // composer, main types the request's own text with webContents.insertText, the adapter verifies it landed, main
+  // presses a trusted Enter (keyDown / char / keyUp) and the adapter confirms; capture is off, so no observe
+  const g = p.gemini
+  assert.deepEqual(g.accepted, { type: 'accepted', req_id: '9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b', view: 'pane', slot: 'gemini' })
+  assert.deepEqual(g.trace, ['op:ready', 'focus', 'op:prepareInput', 'insertText', 'op:verifyInput', 'input:keyDown', 'input:char', 'input:keyUp', 'op:confirmSubmit'])
+  assert.deepEqual(g.inserted, ['hi gemini'], 'exactly the request text, once')
+  assert.deepEqual(g.inputEvents, [{ type: 'keyDown', keyCode: 'Return' }, { type: 'char', keyCode: '\r' }, { type: 'keyUp', keyCode: 'Return' }])
+  assert.deepEqual(g.prepareMsg, { text: 'hi gemini', timeoutMs: 15000 })
+  assert.equal(g.verifyMsg.text, 'hi gemini')
+  assert.equal(g.verifyMsg.verifyMs, 1000)
+  assert.equal(typeof g.verifyMsg.sendWaitMs, 'number')
+  assert.deepEqual(g.confirmMsg, { text: 'hi gemini' }, 'the first confirmation asks for no click')
+  assert.deepEqual(g.otherPanesInserted, [0, 0, 0], 'the classic three are never typed into by main')
+  assert.equal(g.result.ok, true)
+  assert.equal(g.result.captured, false)
+  assert.equal(g.result.url, 'http://127.0.0.1:5199/?site=gemini')
+  assert.ok(stdout.includes('gemini: submitted by composer_cleared (insert: trusted, send: trusted-enter)'), 'the submit line names the trusted insert')
+  const logLines = `${stdout}\n${stderr}`.split('\n').filter((l) => !l.startsWith('FAKE_ELECTRON_REPORT '))
+  assert.equal(logLines.some((l) => l.includes('hi gemini')), false, 'the prompt never reaches a log line')
+
   // Stage 2 IPC: openChats navigates claude to its recorded link, the others stay on newChatUrl;
   // null (the open conversation was cleared) leaves every pane where it is — claude stays on /c/1
-  assert.deepEqual(p.openChats, { ok: true, value: { claude: 'navigated', chatgpt: 'kept', grok: 'kept' } })
+  assert.deepEqual(p.openChats, { ok: true, value: { claude: 'navigated', chatgpt: 'kept', grok: 'kept', gemini: 'kept' } })
   assert.equal(p.openChatsLoads.claude, 'http://127.0.0.1:5199/c/1?site=claude')
-  assert.deepEqual(p.openChatsNull, { ok: true, value: { claude: 'kept', chatgpt: 'kept', grok: 'kept' } })
-  assert.deepEqual(p.openChatsNullLoads, [0, 0, 0], 'nothing loaded for null')
+  assert.deepEqual(p.openChatsNull, { ok: true, value: { claude: 'kept', chatgpt: 'kept', grok: 'kept', gemini: 'kept' } })
+  assert.deepEqual(p.openChatsNullLoads, [0, 0, 0, 0], 'nothing loaded for null')
   // a request that arrives while a New-chat load is pending on its pane: accepted at once, `ready` only after the commit
   assert.deepEqual(p.pendingNavigation, { accepted: true, readyBeforeCommit: 0, readyAfterCommit: 1 })
   assert.equal(p.signOut.ok, true)
@@ -320,9 +345,33 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.deepEqual(p.analystNullState, { destroyed: true, spawnAnalystModel: '' })
   assert.equal(p.analystViewsAfterRestore, 2, 'choosing an analyst again stays lazy: no view until it is needed')
 
+  // 2026-10-17 (review): the trusted path through the ANALYST seam. gemini chosen as the analyst, a
+  // `web:gemini:analyst` request is typed by main into the HIDDEN analyst page's webContents (main.js
+  // webContentsFor('analyst', …) → analystViews.webContents()) — the request's own text, then the trusted Enter —
+  // and the visible gemini pane's webContents records nothing: no insert, no keystroke, no op, no focus, no phase
+  const GA_REQ = '3e4f5a6b-7c8d-4e9f-8a0b-2c3d4e5f6a7b'
+  const GA_TEXT = '<<<R1>>> gemini analyst claim'
+  const ga = p.geminiAnalyst
+  assert.equal(p.setAnalystGemini.ok, true, 'gemini may be the analyst')
+  assert.equal(ga.created, 1, 'the request creates the gemini analyst view lazily')
+  assert.equal(ga.partition, 'persist:gemini')
+  assert.equal(ga.visible, false, 'hidden')
+  assert.deepEqual(ga.accepted, { type: 'accepted', req_id: GA_REQ, view: 'analyst', slot: 'gemini' })
+  assert.deepEqual(ga.trace, ['op:ready', 'focus', 'op:prepareInput', 'insertText', 'op:verifyInput', 'input:keyDown', 'input:char', 'input:keyUp', 'op:confirmSubmit', 'op:observe'], 'the analyst view took the whole trusted sequence, then observed (the analyst always does)')
+  assert.deepEqual(ga.inserted, [GA_TEXT], 'insertText(the request text), once, on the ANALYST webContents')
+  assert.deepEqual(ga.inputEvents, [{ type: 'keyDown', keyCode: 'Return' }, { type: 'char', keyCode: '\r' }, { type: 'keyUp', keyCode: 'Return' }], 'followed by the three Enter input events')
+  assert.equal(ga.observeText, GA_TEXT, 'the observe anchors on the typed text')
+  assert.deepEqual(ga.paneUntouched, { inserted: 0, inputEvents: 0, trace: 0, adapterOps: 0, focused: 0, turnEvents: 0 }, 'the gemini PANE recorded nothing')
+  assert.equal(ga.result.ok, true)
+  assert.equal(ga.result.captured, true)
+  assert.equal(ga.result.text, '```json\n{"agreements": []}\n```')
+  assert.equal(p.geminiAnalystDestroyed, true, 'and the view is torn down when the analyst is switched off again')
+  assert.ok(stdout.includes('analyst page (gemini): submitted by composer_cleared (insert: trusted, send: trusted-enter)'), 'the analyst submit line names the trusted insert')
+  assert.equal(logLines.some((l) => l.includes(GA_TEXT)), false, 'the analyst prompt never reaches a log line')
+
   // --- council + key ----------------------------------------------------------------------------
   assert.equal(report.plainTextEncryption, true, 'TRIPLEX_E2E_APP=1 switches safeStorage to plaintext (the E2E box has no keyring)')
-  assert.deepEqual(p.getCouncil, { ok: true, value: CLASSIC }, 'the default council is the classic three on their web sessions')
+  assert.deepEqual(p.getCouncil, { ok: true, value: FOUR }, 'the default council is the four web sites on their web sessions (2026-10-17)')
   assert.deepEqual(p.setCouncilBad, { ok: false, error: 'bad_request' }, 'one member is below COUNCIL_MIN')
   assert.deepEqual(p.setCouncilForeign, { ok: false, error: 'bad_request' }, 'only the renderer may set the council')
   assert.deepEqual(p.setCouncil, { ok: true, value: TWO })
@@ -356,7 +405,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.shortcutTab4.prevented, true)
   assert.deepEqual(p.shortcutTab4.sent, [['panes:shortcut', { name: 'tab-4' }]], 'Ctrl+4 → tab-4')
   assert.deepEqual(p.activeColumn, { mode: 'tabs', active: 'qwen' }, 'a renderer column may be the active tab')
-  assert.deepEqual(p.columnActions, { reloadPrevented: true, zoomPrevented: true, reloads: [0, 0, 0], zooms: [0, 0, 0] }, 'Ctrl+R / Ctrl+= on a column: consumed, no pane touched')
+  assert.deepEqual(p.columnActions, { reloadPrevented: true, zoomPrevented: true, reloads: [0, 0, 0, 0], zooms: [0, 0, 0, 0] }, 'Ctrl+R / Ctrl+= on a column: consumed, no pane touched')
   assert.match(stderr, /\[shortcuts\] reload: the active tab is a renderer column/)
 
   // a socket drop → the banner state reaches the renderer; the client is scheduling a reconnect
@@ -401,6 +450,7 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
     ['panes:zoom', { slot: 'claude', factor: 1 }],
     ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
     ['panes:zoom', { slot: 'grok', factor: 1.2 }],
+    ['panes:zoom', { slot: 'gemini', factor: 1 }],
     ['panes:bridge', { connected: false }],
     ['panes:analyst', { slot: 'chatgpt', visible: false, health: null }],
     ['panes:theme', { theme: 'light' }],
@@ -467,14 +517,18 @@ test('happy path: userData, window, three hardened views, IPC, shortcuts, health
   assert.equal(p.recreatedPartition, 'persist:chatgpt')
 
   assert.deepEqual(p.settingsFile.window, { x: 10, y: 20, width: 900, height: 700, maximized: false })
-  assert.deepEqual(p.settingsFile.zoom, { claude: 1, chatgpt: 1, grok: 1.2 })
-  assert.deepEqual(p.settingsFile.capture, { claude: true, chatgpt: false, grok: false }, 'the capture switch persisted')
+  assert.deepEqual(p.settingsFile.zoom, { claude: 1, chatgpt: 1, grok: 1.2, gemini: 1 })
+  assert.deepEqual(p.settingsFile.migrations, ['council-four-sites'], 'a fresh profile carries the migration marker (2026-10-17)')
+  assert.deepEqual(p.settingsFile.capture, { claude: true, chatgpt: false, grok: false, gemini: false }, 'the capture switch persisted')
   assert.equal(p.settingsFile.analyst, 'chatgpt')
   assert.equal(p.settingsFile.analystVisible, false)
   assert.equal(p.settingsFile.theme, 'light', 'the theme choice is persisted for the next launch')
   assert.deepEqual(p.settingsFile.council, TWO, 'the default council is persisted')
   assert.equal(p.settingsFile.openrouterKey, null, 'cleared: no ciphertext left')
   for (const key of ['views', 'analystViews', 'orchestrator', 'settings', 'bridge', 'chats', 'backend', 'openRouterKey']) assert.ok(p.testGlobal.includes(key), key)
+
+  // gotcha 19, end to end: nothing ever ran script in, attached a debugger to or re-agented a webContents
+  assert.deepEqual(p.forbiddenCalls, [])
 
   // the token never reaches a log line
   assert.equal(stderr.includes('wiring'), false, 'BRIDGE_TOKEN is never logged')
@@ -501,6 +555,21 @@ test('saved window bounds are restored (clamped) on the next launch and maximize
   assert.equal(report.views[0].options.webPreferences.zoomFactor, 1.5, 'zoom from settings')
   assert.equal(report.views[0].zoom, 1.5)
   assert.ok(report.probes.replay.some(([c, m]) => c === 'panes:zoom' && m.slot === 'claude' && m.factor === 1.5), 'the persisted zoom is replayed to the renderer on did-finish-load')
+})
+
+test('a legacy profile (the classic three saved, no migrations key) launches on the four web sites: migrated once at load, logged, pushed as the defaults on the first connect, the marker persisted (2026-10-17)', () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-wiring-'))
+  fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ version: 1, zoom: { chatgpt: 1.4 }, analyst: 'chatgpt', council: CLASSIC }))
+  const { status, report, stdout, stderr } = run({ TRIPLEX_USER_DATA_DIR: userData, TRIPLEX_E2E_APP: '1', TRIPLEX_SITES_JSON: sitesJson() })
+  assert.equal(status, 0, stderr)
+  const p = report.probes
+  assert.deepEqual(p.getCouncil, { ok: true, value: FOUR }, 'the renderer reads four')
+  assert.deepEqual(p.fetchesAfterAck.find((f) => f.path === '/api/session/defaults').body, defaultsBody(FOUR, 'web:chatgpt:analyst'), 'syncKey pushes the migrated four on the connected edge')
+  const lines = `${stdout}\n${stderr}`.split('\n').filter((l) => l.includes('one-time migration council-four-sites'))
+  assert.equal(lines.length, 1, 'exactly one line names the migration')
+  assert.match(lines[0], /the classic three web sites \(claude, chatgpt, grok\) became the new default of four \(claude, chatgpt, grok, gemini\)/)
+  assert.deepEqual(p.settingsFile.migrations, ['council-four-sites'], 'the marker is on disk, so a later choice of three sticks')
+  assert.equal(p.settingsFile.zoom.chatgpt, 1.4, 'the rest of the profile survived the rewrite')
 })
 
 test('TRIPLEX_CHROMIUM_FLAGS: a flag outside the allow-list refuses to start (exit 2) before any window', () => {

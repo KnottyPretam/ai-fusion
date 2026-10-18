@@ -39,13 +39,14 @@ test('the template keeps <app title> / Panes / Edit and inserts Site before Edit
     [APP_TITLE, 'Panes', 'Site', 'Edit'],
   )
   const site = template[2]
-  // one "Sign out of <site>" per slot, in SLOTS order (claude, chatgpt, grok)
+  // one "Sign out of <site>" per slot, in SLOTS order (claude, chatgpt, grok, gemini — 2026-10-17)
   assert.deepEqual(
     site.submenu.map((i) => i.label || i.type),
-    ['Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'separator', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok'],
+    ['Reload selectors', 'Save DOM snapshot of the active pane', 'Show analyst page', 'separator', 'Sign out of Claude', 'Sign out of ChatGPT', 'Sign out of Grok', 'Sign out of Gemini'],
   )
+  assert.ok(site.submenu.every((i) => !String(i.label || '').includes('undefined')), 'every site has a label')
   assert.equal(findMenuItem(setup({ showAnalyst: false }).template, 'Show analyst page'), null, 'no analyst manager → no item')
-  assert.deepEqual(SITE_LABELS, { chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok' })
+  assert.deepEqual(SITE_LABELS, { chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini' })
   assert.ok(findMenuItem(template, 'Reload pane'), 'the Stage 1 items stay')
   assert.ok(findMenuItem(template, 'Inspect pane'), 'dev: Inspect pane present')
   assert.equal(findMenuItem(setup({ dev: false }).template, 'Inspect pane'), null)
@@ -59,10 +60,11 @@ test('clicking the items drives the actions: reload selectors, snapshot of the A
   findMenuItem(template, 'Show analyst page').click()
   findMenuItem(template, 'Sign out of Grok').click()
   findMenuItem(template, 'Sign out of ChatGPT').click()
+  findMenuItem(template, 'Sign out of Gemini').click()
   findMenuItem(template, 'Reload pane').click()
   await tick()
   await tick()
-  assert.deepEqual(calls, [['reloadSelectors'], ['saveSnapshot', 'claude'], ['showAnalyst'], ['signOut', 'grok'], ['signOut', 'chatgpt'], ['reload', 'claude']])
+  assert.deepEqual(calls, [['reloadSelectors'], ['saveSnapshot', 'claude'], ['showAnalyst'], ['signOut', 'grok'], ['signOut', 'chatgpt'], ['signOut', 'gemini'], ['reload', 'claude']])
   assert.ok(log.lines.some(([lvl, m]) => lvl === 'log' && m.includes('/snap/claude-1.html')), 'the snapshot path is logged')
 })
 

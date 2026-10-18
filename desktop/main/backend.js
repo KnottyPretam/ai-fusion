@@ -188,7 +188,7 @@ export function attachSpec(env = process.env, { log = console } = {}) {
     if (env[ALLOW_REMOTE_BACKEND_VAR] !== '1') {
       throw new Error(`TRIPLEX_BACKEND_URL names the non-loopback host ${u.hostname}; the desktop attaches only to a backend on this machine (127.0.0.1 / localhost). Set ${ALLOW_REMOTE_BACKEND_VAR}=1 to override — the bridge token, every prompt and every captured reply then leave this machine`)
     }
-    if (log && typeof log.warn === 'function') log.warn(`[backend] WARNING: ${ALLOW_REMOTE_BACKEND_VAR}=1 — attaching to the REMOTE backend host ${u.hostname}${u.protocol === 'http:' ? ' over cleartext http' : ''}: the bridge token, every prompt and every captured reply leave this machine, and that host can drive the three signed-in site views`)
+    if (log && typeof log.warn === 'function') log.warn(`[backend] WARNING: ${ALLOW_REMOTE_BACKEND_VAR}=1 — attaching to the REMOTE backend host ${u.hostname}${u.protocol === 'http:' ? ' over cleartext http' : ''}: the bridge token, every prompt and every captured reply leave this machine, and that host can drive the signed-in site views`)
   }
   const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80
   let token = typeof env.BRIDGE_TOKEN === 'string' ? env.BRIDGE_TOKEN : ''

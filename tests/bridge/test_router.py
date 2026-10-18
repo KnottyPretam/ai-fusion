@@ -286,14 +286,17 @@ def test_cache_frames_update_status(tc):
     with tc.websocket_connect("/api/bridge") as ws:
         ws.send_json(hello(token=TOKEN))
         assert ws.receive_json() == ACK
-        ws.send_json(
-            {"type": "capture", "capture": {"claude": False, "chatgpt": False, "grok": True}}
+        ws.send_json(  # every bridge site is listed: four since 2026-10-17 (gemini)
+            {
+                "type": "capture",
+                "capture": {"claude": False, "chatgpt": False, "grok": True, "gemini": True},
+            }
         )
         ws.send_json({"type": "health", "slot": "claude", "health": health})
         ws.send_json({"type": "analyst", "analyst": {"slot": "grok"}})
         wait_until(lambda: status(tc)["analyst"] == "grok")
         st = status(tc)
-        assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, False, True]
+        assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, False, True, True]
         assert st["sites"]["claude"]["health"] == health
         assert isinstance(st["sites"]["claude"]["health_ts"], int)
 

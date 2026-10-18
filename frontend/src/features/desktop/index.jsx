@@ -15,7 +15,8 @@
 // Stage 2: ONE ./chats.js instance per shell keeps the panes on the open conversation's chats
 // (`openChats(id)` on every id change except the one a Send's own create produces, which the panes
 // adopt — Decision 12) and implements "New chat everywhere", shared by the prompt-bar button and
-// the Ctrl+Shift+N shortcut handled in PaneDeck. Pre-parse (2026-09-23): the `preparse` slice
+// the Ctrl+Shift+N shortcut handled in PaneDeck, and the agents stepper's new chats (2026-10-17).
+// Pre-parse (2026-09-23): the `preparse` slice
 // (./preparseSlice.js) is registered here beside `panes` — a slice of its own, so the frozen
 // desktop-smoke.test.jsx (which checks `panes` sub-shapes only) never sees it.
 // Council (2026-09-27): the shell reads main's default council (`getCouncil()` → `panes/council`)
@@ -132,7 +133,7 @@ export default function DesktopShell() {
 
   return (
     <div className={css.shell} data-testid="desktop-shell">
-      <PaneDeck api={api} info={info} version={version} promptRef={promptRef} onNewChatAll={chats.newChatEverywhere} />
+      <PaneDeck api={api} info={info} version={version} promptRef={promptRef} onNewChatAll={chats.newChatEverywhere} chats={chats} />
       <PromptBar api={api} composerRef={promptRef} chats={chats} />
       <Drawer api={api} />
     </div>

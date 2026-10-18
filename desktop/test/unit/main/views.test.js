@@ -159,11 +159,11 @@ function setupManager({ zoom, ssoHosts, background } = {}) {
   return { manager, instances, sessions, children, timers, ipcMain, settings, healthEvents, opened, log }
 }
 
-test('createAll: three views, one per slot, each on its partition with hardened prefs; permissions installed per partition once', async () => {
-  const { manager, instances, sessions, children } = setupManager({ zoom: { claude: 1.5, chatgpt: 1, grok: 0.8 } })
+test('createAll: one view per slot (four since gemini joined, 2026-10-17), each on its partition with hardened prefs; permissions installed per partition once', async () => {
+  const { manager, instances, sessions, children } = setupManager({ zoom: { claude: 1.5, chatgpt: 1, grok: 0.8, gemini: 1.2 } })
   manager.createAll()
-  assert.equal(instances.length, 3)
-  assert.deepEqual(Object.keys(sessions).sort(), ['persist:chatgpt', 'persist:claude', 'persist:grok'])
+  assert.equal(instances.length, 4)
+  assert.deepEqual(Object.keys(sessions).sort(), ['persist:chatgpt', 'persist:claude', 'persist:gemini', 'persist:grok'])
   for (const ses of Object.values(sessions)) {
     assert.equal(typeof ses.requestHandler, 'function')
     assert.equal(ses.deviceHandler(), false)
@@ -182,14 +182,15 @@ test('createAll: three views, one per slot, each on its partition with hardened 
     assert.equal(v.webContents.listenerCount('did-create-window'), 1, 'child windows policed')
     assert.equal(v.webContents.listenerCount('select-bluetooth-device'), 1, 'Bluetooth chooser cancelled')
   })
-  assert.equal(children.length, 3)
+  assert.equal(children.length, 4)
   await Promise.resolve()
   assert.deepEqual(instances.map((v) => v.webContents.loads[0]), SLOTS.map((s) => `http://127.0.0.1:5199/?site=${s}`))
   assert.equal(instances[0].webContents.zoom, 1.5)
   assert.equal(instances[2].webContents.zoom, 0.8)
+  assert.equal(instances[3].webContents.zoom, 1.2, 'the gemini view has its own zoom')
   assert.equal(instances[0].options.webPreferences.zoomFactor, 1.5)
   manager.createAll()
-  assert.equal(instances.length, 3, 'idempotent')
+  assert.equal(instances.length, 4, 'idempotent')
 })
 
 test('every view cancels Bluetooth device requests, polices its child windows and redirects, and honours ssoHosts ([] under E2E)', () => {
@@ -240,7 +241,9 @@ test('applyLayout sets bounds / visibility now and again for a view created late
   assert.equal(manager.slotOfSender({ sender: instances[1].webContents, senderFrame: { parent: {} } }), null, 'sub-frames are not the view')
   assert.equal(manager.slotOfSender(eventFrom(fakeWebContents({ id: 9999 }))), null)
   assert.equal(manager.adapterFor('claude').slot, 'claude')
-  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 3, 'one adapter client per view')
+  assert.equal(instances[3].getVisible(), false, 'gemini is not in the layout: hidden')
+  assert.equal(manager.slotOfSender(eventFrom(instances[3].webContents)), 'gemini')
+  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 4, 'one adapter client per view')
 })
 
 test('zoom(slot, direction) steps, persists, applies to that view only and is re-applied on did-navigate', () => {
@@ -297,12 +300,12 @@ test('render-process-gone: health view_crashed is published, the view is recreat
   assert.equal(manager.adapterFor('chatgpt'), null)
   assert.equal(children.includes(crashed), false, 'removed from the window')
   assert.equal((await pendingReq.then(() => null, (e) => e.code)), 'view_crashed')
-  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 2, 'old client detached')
+  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 3, 'old client detached')
 
   timers.advance(RECREATE_DELAY_MS)
   await Promise.resolve()
-  assert.equal(instances.length, 4)
-  const fresh = instances[3]
+  assert.equal(instances.length, 5)
+  const fresh = instances[4]
   assert.equal(manager.get('chatgpt'), fresh)
   assert.equal(fresh.options.webPreferences.partition, 'persist:chatgpt')
   assert.deepEqual(fresh.getBounds(), { x: 300, y: 0, width: 300, height: 300 }, 'last layout re-applied')
@@ -310,8 +313,8 @@ test('render-process-gone: health view_crashed is published, the view is recreat
   assert.equal(fresh.webContents.zoom, 1.1, 'zoom re-applied')
   assert.equal(fresh.webContents.loads[0], 'http://127.0.0.1:5199/?site=chatgpt')
   assert.equal(manager.adapterFor('chatgpt').webContents, fresh.webContents)
-  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 3)
-  assert.deepEqual(created, [['claude', instances[0].webContents.id], ['chatgpt', crashed.webContents.id], ['grok', instances[2].webContents.id], ['chatgpt', fresh.webContents.id]])
+  assert.equal(ipcMain.listeners.get('triplex:adapter:result').length, 4)
+  assert.deepEqual(created, [['claude', instances[0].webContents.id], ['chatgpt', crashed.webContents.id], ['grok', instances[2].webContents.id], ['gemini', instances[3].webContents.id], ['chatgpt', fresh.webContents.id]])
   assert.equal(manager.slotOfSender(eventFrom(fresh.webContents)), 'chatgpt')
   assert.equal(manager.slotOfSender(eventFrom(crashed.webContents)), null)
 })
@@ -349,24 +352,24 @@ test('every site view is created on the theme ground; setBackgroundColor repaint
   let ground = BACKGROUND_LIGHT
   const { manager, instances, timers } = setupManager({ background: () => ground })
   manager.createAll()
-  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'no white rect under a light page')
+  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'no white rect under a light page')
 
   // the theme button: main hands the new ground to the manager, which repaints every live view
-  assert.equal(manager.setBackgroundColor(BACKGROUND_DARK), 3)
-  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_DARK, BACKGROUND_DARK, BACKGROUND_DARK])
+  assert.equal(manager.setBackgroundColor(BACKGROUND_DARK), 4)
+  assert.deepEqual(instances.map((v) => v.background), [BACKGROUND_DARK, BACKGROUND_DARK, BACKGROUND_DARK, BACKGROUND_DARK])
   assert.equal(manager.setBackgroundColor(''), 0, 'a junk colour is ignored')
 
   // a view created later (crash recreate) starts on the current ground, not the launch one
   instances[1].webContents.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 5 })
   timers.advance(RECREATE_DELAY_MS)
   await Promise.resolve()
-  assert.equal(instances.length, 4)
-  assert.equal(instances[3].background, BACKGROUND_DARK)
+  assert.equal(instances.length, 5)
+  assert.equal(instances[4].background, BACKGROUND_DARK)
 
   // a function that throws leaves the view unpainted and logs, it never breaks creation
   const bad = setupManager({ background: () => { throw new Error('boom') } })
   bad.manager.createAll()
-  assert.deepEqual(bad.instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'falls back to the light ground')
+  assert.deepEqual(bad.instances.map((v) => v.background), [BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT, BACKGROUND_LIGHT], 'falls back to the light ground')
   assert.ok(bad.log.lines.some(([l, m]) => l === 'warn' && m.includes('backgroundColor()')))
 })
 

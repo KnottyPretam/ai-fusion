@@ -12,8 +12,8 @@
 // `councilSlotConfig(council, analyst)` is the full SlotConfig a desktop conversation is created
 // with (`POST /api/conversations` takes a complete SlotConfig, backend/routers/conversations.py):
 // the council's slot specs — main's default council (`panes.council`, 2..5 members, each
-// `web:<site>` / an OpenRouter slug / `ollama:<name>`), else the three `web:<site>` pane models at
-// effort `off` (contract §6 spawn env) — the chosen analyst, and the frozen backend defaults for
+// `web:<site>` / an OpenRouter slug / `ollama:<name>`), else every site's `web:<site>` pane model at
+// effort `off` (four since 2026-10-17, Gemini included) — the chosen analyst, and the frozen backend defaults for
 // the rest (max_iterations 2, materiality medium, grounded off — `FUSION_MAX_ITERATIONS` /
 // `MATERIALITY_MIN` env overrides are not mirrored). `desktopSlotConfig(analyst)` is the
 // no-council alias. It is used by every desktop create path this feature owns (PromptBar's
@@ -116,7 +116,7 @@ export function persistAnalyst(storage = defaultStorage(), model) {
   }
 }
 
-/** The pane slot specs of the classic desktop conversation: the three sites' `web:<site>` at effort off (contract §6 spawn env). */
+/** The pane slot specs of the default desktop conversation: every site's `web:<site>` at effort off (four since 2026-10-17). */
 export function desktopSlots() {
   const slots = {}
   for (const slot of SITES) slots[slot] = { model: `web:${slot}`, effort: 'off' }
@@ -125,7 +125,7 @@ export function desktopSlots() {
 
 /**
  * The full SlotConfig a desktop conversation is created with: the council's slots (main's default
- * spec, validated; an invalid or missing one falls back to the three web panes), the analyst
+ * spec, validated; an invalid or missing one falls back to every web pane), the analyst
  * (defaults to the persisted choice) and the frozen backend defaults for the rest.
  */
 export function councilSlotConfig(council = null, analyst = loadAnalyst()) {
@@ -141,7 +141,7 @@ export function councilSlotConfig(council = null, analyst = loadAnalyst()) {
   }
 }
 
-/** The no-council alias: the three web panes plus the analyst (what every pre-council caller asked for). */
+/** The no-council alias: every web pane plus the analyst (what every pre-council caller asked for). */
 export function desktopSlotConfig(analyst = loadAnalyst()) {
   return councilSlotConfig(null, analyst)
 }

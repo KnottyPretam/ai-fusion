@@ -4,8 +4,8 @@
 //   Panes    the shortcut table of shortcuts.js (Pane 1…5, Toggle, Focus prompt, New chat
 //            everywhere, Zoom, Reload pane, Inspect pane (dev))
 //   Site     Reload selectors · Save DOM snapshot of the active pane · Show analyst page (reveals
-//            the hidden analyst view as the fourth tab) · Sign out of <site> for each of the three
-//            sites with a Stage-1 adapter (ChatGPT / Claude / Grok)
+//            the hidden analyst view as a tab) · Sign out of <site> for each site with a native
+//            view (Claude / ChatGPT / Grok / Gemini — gemini since 2026-10-17)
 //   Edit     the standard roles
 //
 // `autoHideMenuBar` keeps it hidden (Alt reveals it); the accelerators are the fallback for keys
@@ -18,7 +18,7 @@ import { SLOTS } from './sites.js'
 import { isCouncilSlot } from './council.js'
 import { APP_TITLE } from './branding.js'
 
-export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok' })
+export const SITE_LABELS = Object.freeze({ chatgpt: 'ChatGPT', claude: 'Claude', grok: 'Grok', gemini: 'Gemini' })
 
 /**
  * buildMenuTemplate({shortcuts, dev, getActive, actions, log}) → template (Menu.buildFromTemplate input)

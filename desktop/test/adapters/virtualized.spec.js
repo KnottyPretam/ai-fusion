@@ -12,7 +12,7 @@
 import { test, expect } from '@playwright/test'
 import { FAKE_ASSISTANT, SLOTS, open, request, fake, replyState, withOverride } from './_harness.js'
 
-const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone' }
+const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone', gemini: 'done_selector' } // 2026-10-17: gemini's thumbs-up
 /**
  * The per-site selectors these multi-exchange specs run under: claude's 15 s `stopGoneGraceMs` (a vanished
  * stop control has to STAY gone that long — pinned by observe.test.js and observe.spec.js) would put seven
@@ -23,7 +23,12 @@ const FAST = (site, extra = {}) => withOverride(site, { ...(site === 'claude' ? 
 const CONTAINER = FAKE_ASSISTANT
 const SCROLLER = "[data-testid='chat-transcript-scroller']"
 /** The user's own turn PER SITE — the fake renders each site's measured markup (2026-10-10), so every entry of USER_TURN_SELECTORS is exercised with real text. */
-const USER_TURN = { chatgpt: "[data-message-author-role='user']", claude: "[data-testid='user-message']", grok: "[data-testid='user-message']" }
+const USER_TURN = { chatgpt: "[data-message-author-role='user']", claude: "[data-testid='user-message']", grok: "[data-testid='user-message']", gemini: 'user-query' }
+/**
+ * Slots per exchange under ?order=reverse: a row each for the user turn and the reply — except gemini (2026-10-17), whose
+ * exchange is ONE row, the `div.conversation-container` that holds both turns (the reply mounts into it).
+ */
+const SLOTS_PER_EXCHANGE = { chatgpt: 2, claude: 2, grok: 2, gemini: 1 }
 
 const PROMPT = (i) => `prompt ${i}: what is the maximum gyroscope full-scale range of the BMI088, and which register selects it?`
 const SAME = 'Round 1 of 2.\n<<<YOUR CLAIM>>>\nselectable up to 2000 deg/s\n<<<END YOUR CLAIM>>>'
@@ -98,7 +103,7 @@ test.describe('a newest-first transcript (?order=reverse): "the last container" 
       expect(r.order).toBe('newest-first')
       expect(r.mountedAssistants).toBe(7)
       expect(r.trimmed).toBe(2)
-      await expect(page.locator(`${SCROLLER} > .slot`)).toHaveCount(14) // seven exchanges, a slot per row
+      await expect(page.locator(`${SCROLLER} > .slot`)).toHaveCount(7 * SLOTS_PER_EXCHANGE[site]) // seven exchanges, a slot per row
     })
   }
 })

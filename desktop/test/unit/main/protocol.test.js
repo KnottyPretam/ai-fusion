@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { validate, validateClientFrame, validateServerFrame, parseFrame, checkHealth, CLIENT_TYPES, SERVER_TYPES, REJECT_CODES, RESULT_CODES } from '../../../main/protocol.js'
+import { validate, validateClientFrame, validateServerFrame, parseFrame, checkHealth, CLIENT_TYPES, SERVER_TYPES, REJECT_CODES, RESULT_CODES, SLOT_IDS, BRIDGE_ROLES } from '../../../main/protocol.js'
 
 const CORPUS = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'protocol', 'bridge-v1.json')
 const corpus = JSON.parse(readFileSync(CORPUS, 'utf8'))
@@ -94,10 +94,36 @@ test('reread (2026-10-15): a pane slot, the typed text, a conversation that must
   assert.equal(validateServerFrame(base).ok, true)
   assert.equal(validate({ ...base, conversation_id: null }).ok, false, 'a re-read needs the chat its conversation recorded')
   assert.equal(validate({ ...base, conversation_id: '' }).ok, false)
-  assert.equal(validate({ ...base, slot: 'gemini' }).ok, false)
+  assert.equal(validate({ ...base, slot: 'gemini' }).ok, true, 'gemini is a site since 2026-10-17')
+  assert.equal(validate({ ...base, slot: 'deepseek' }).ok, false, 'a council vendor with no site')
   assert.equal(validate({ ...base, view: 'pane' }).ok, false, 'a pane only: there is no view key')
   assert.equal(validate({ ...base, timeout_s: 0 }).ok, false)
   assert.equal(validate({ ...base, text: 5 }).ok, false)
+})
+
+test('gemini (2026-10-17): the fourth bridge site, appended last; every capture map lists all four', () => {
+  assert.deepEqual([...SLOT_IDS], ['claude', 'chatgpt', 'grok', 'gemini'], 'catalog order, as bridge_protocol.BRIDGE_SLOTS')
+  assert.deepEqual([...BRIDGE_ROLES], ['chatgpt', 'claude', 'grok', 'gemini', 'analyst'])
+  const four = { claude: false, chatgpt: true, grok: false, gemini: true }
+  assert.equal(validate({ type: 'capture', capture: four }).ok, true)
+  // An out-of-date peer's three-key map is invalid: the key is required, never defaulted.
+  const { gemini: _dropped, ...three } = four
+  const r = validate({ type: 'capture', capture: three })
+  assert.equal(r.ok, false)
+  assert.match(r.error, /missing "gemini"/)
+  assert.equal(validate({ type: 'capture', capture: { ...four, deepseek: false } }).ok, false, 'a fifth key is unknown')
+  const hello = { type: 'hello', protocol: 1, token: 't', version: 'v', sites: ['claude', 'chatgpt', 'grok', 'gemini'], capture: four, analyst: { slot: 'gemini' } }
+  assert.equal(validate(hello).ok, true, 'four sites and a gemini analyst')
+  assert.equal(validate({ ...hello, sites: ['claude', 'chatgpt', 'grok'] }).ok, true, 'a subset of the sites is still a valid hello')
+  assert.equal(validate({ ...hello, capture: three }).ok, false, 'a three-site hello still lists four capture keys')
+  assert.match(validate({ ...hello, sites: ['claude', 'gemini', 'gemini'] }).error, /must not repeat/)
+  assert.match(validate({ ...hello, sites: ['claude', 'chatgpt', 'grok', 'gemini', 'claude'] }).error, /expected 1\.\.4 slots/)
+  assert.equal(validate({ ...hello, analyst: { slot: 'deepseek' } }).ok, false)
+  const req = { type: 'request', req_id: 'r', model: 'web:gemini', slot: 'gemini', view: 'pane', fresh: false, text: 't', role: 'gemini', purpose: 'chat', conversation_id: null, timeout_s: 1 }
+  assert.equal(validate(req).ok, true)
+  assert.equal(validate({ ...req, model: 'web:gemini:analyst', view: 'analyst', role: 'analyst', purpose: 'extraction', fresh: true }).ok, true)
+  assert.equal(validate({ ...req, model: 'web:deepseek', slot: 'deepseek' }).ok, false)
+  assert.equal(validate({ type: 'accepted', req_id: 'r', view: 'analyst', slot: 'gemini' }).ok, true)
 })
 
 test('health: matched.error is optional, every other key required; session is one of five states', () => {

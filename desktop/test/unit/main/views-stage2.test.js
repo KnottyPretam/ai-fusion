@@ -215,14 +215,14 @@ test('onNavigate reports did-navigate and main-frame did-navigate-in-page URLs; 
 
 test('pushConfig sends {op:"config", selectors} on triplex:adapter to every LIVE view and reports the count', () => {
   const { manager, wc } = setupManager()
-  const selectors = { version: 2, chatgpt: {}, claude: {}, grok: {} }
-  assert.equal(manager.pushConfig(selectors), 3)
-  for (const slot of ['claude', 'chatgpt', 'grok']) {
+  const selectors = { version: 2, chatgpt: {}, claude: {}, grok: {}, gemini: {} }
+  assert.equal(manager.pushConfig(selectors), 4)
+  for (const slot of ['claude', 'chatgpt', 'grok', 'gemini']) {
     const msgs = wc(slot).adapterMessages()
     assert.deepEqual(msgs.at(-1), { op: 'config', selectors })
   }
   wc('grok').destroy()
-  assert.equal(manager.pushConfig(selectors), 2, 'a dead view is skipped')
+  assert.equal(manager.pushConfig(selectors), 3, 'a dead view is skipped')
   assert.deepEqual(wc('claude').adapterMessages().filter((m) => m.op === 'config').length, 2)
 })
 

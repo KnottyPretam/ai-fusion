@@ -42,7 +42,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 // Kept in sync with desktop/package.json by the integrator (a sandboxed preload cannot read it).
 const VERSION = '0.1.0'
-const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok'])
+// The sites with a native view, catalog order (= main's sites.js SLOTS); gemini joined 2026-10-17.
+const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok', 'gemini'])
 
 function subscribe(channel) {
   return (cb) => {
@@ -60,7 +61,8 @@ function subscribe(channel) {
 const api = Object.freeze({
   version: VERSION,
   slots: SLOTS,
-  // 2026-09-27: `slots` is the list of SITES with a native view in this build (the same three); the
+  // 2026-09-27: `slots` is the list of SITES with a native view in this build (the same list; four
+  // since 2026-10-17, when gemini joined — contract only, the renderer keeps its own SITES); the
   // council a conversation seats is `slot_config.slots` (2..5 of the 7-vendor catalog) and lives in
   // the backend, with main's DEFAULT for new conversations under `getCouncil`/`setCouncil`.
   sites: SLOTS,

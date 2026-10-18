@@ -160,6 +160,13 @@ class FakeWebContents extends EventEmitter {
     this.reloads = 0
     this._destroyed = false
     this.mainFrame = { parent: null }
+    // 2026-10-17 (trusted input): what main typed, the input events it sent, one ordered trace of adapter ops /
+    // focus / keystrokes, and every call to an API main must NEVER use on a site page (gotcha 19)
+    this.inserted = []
+    this.inputEvents = []
+    this.trace = []
+    this.forbidden = []
+    this.debugger = { attach: () => this.forbidden.push('debugger.attach') }
     app.emit('web-contents-created', {}, this)
   }
   loadURL(u) {
@@ -168,6 +175,23 @@ class FakeWebContents extends EventEmitter {
   }
   send(channel, ...args) {
     this.sent.push([channel, ...args])
+    if (channel === 'triplex:adapter' && args[0] && typeof args[0].op === 'string' && args[0].op !== 'config') this.trace.push(`op:${args[0].op}`)
+  }
+  insertText(text) {
+    this.inserted.push(text)
+    this.trace.push('insertText')
+    return Promise.resolve()
+  }
+  sendInputEvent(event) {
+    this.inputEvents.push({ ...event })
+    this.trace.push(`input:${event.type}`)
+  }
+  executeJavaScript() {
+    this.forbidden.push('executeJavaScript')
+    return Promise.resolve(null)
+  }
+  setUserAgent() {
+    this.forbidden.push('setUserAgent')
   }
   isDestroyed() {
     return this._destroyed
@@ -186,6 +210,7 @@ class FakeWebContents extends EventEmitter {
   }
   focus() {
     this.focused += 1
+    this.trace.push('focus')
   }
   reload() {
     this.reloads += 1
@@ -481,6 +506,8 @@ const fetchSummary = (list) => list.map((f) => ({ method: f.method, path: new UR
 const KEY = `sk-or-v1-${'a'.repeat(64)}` // 73 chars, the real format
 const TWO = { slots: { chatgpt: { model: 'web:chatgpt', effort: 'off' }, qwen: { model: 'qwen/qwen3-235b-a22b', effort: 'low' } } }
 const CONV = 'a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6'
+/** The site panes createAll makes first, in SLOTS order (claude, chatgpt, grok, gemini — four since 2026-10-17). */
+const PANES = 4
 const HELLO_ACK = { type: 'hello_ack', protocol: 1, backend_version: '0.1.0', ping_s: 20 }
 const REQUEST = { type: 'request', req_id: '6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c', model: 'web:claude', slot: 'claude', view: 'pane', fresh: false, text: 'hi `x`', role: 'claude', purpose: 'chat', conversation_id: CONV, timeout_s: 600 }
 
@@ -502,9 +529,9 @@ async function probe() {
   probes.badSlot = await settle(ipcMain.invoke('panes:reload', renderer, 'bing'))
   probes.promptSendHandled = ipcMain.handlers.has('prompt:send')
   probes.newChatForeign = await settle(ipcMain.invoke('panes:newChat', mainFrameEvent(views[0].webContents), ['claude']))
-  // the three initial loads commit (the fake loadURL fires no events itself): every view's
-  // pendingNavigation settles, as it does in Electron once the site page is up
-  for (const v of views.slice(0, 3)) v.webContents.emit('did-navigate', {}, v.webContents.getURL(), 200, 'OK')
+  // the initial loads of the site panes (four since gemini joined, 2026-10-17) commit (the fake loadURL fires
+  // no events itself): every view's pendingNavigation settles, as it does in Electron once the site page is up
+  for (const v of views.slice(0, PANES)) v.webContents.emit('did-navigate', {}, v.webContents.getURL(), 200, 'OK')
 
   ipcMain.emit('panes:layout', renderer, { claude: { x: 0, y: 100.4, width: 500, height: 600 }, chatgpt: null, grok: { x: 500, y: 100, width: 500, height: 600 } })
   probes.layout = views.map((v) => ({ bounds: v.getBounds(), visible: v.getVisible() }))
@@ -596,13 +623,43 @@ async function probe() {
   await sleep(10)
   probes.cancelResult = ws ? ws.frames('result').find((f) => f.req_id === cancelReq.req_id) || null : null
 
+  // 2026-10-17: a gemini request takes the TRUSTED path (selectors: gemini.trustedInput = true) — main focuses the
+  // gemini view and types through webContents.insertText / sendInputEvent between the adapter's prepareInput,
+  // verifyInput and confirmSubmit; never executeJavaScript, never the debugger. Capture is off for gemini → no observe.
+  const v3 = views[3].webContents
+  const geminiReq = { ...REQUEST, req_id: '9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b', slot: 'gemini', model: 'web:gemini', role: 'gemini', text: 'hi gemini' }
+  const answerGemini = async (op, result) => {
+    const m = v3.sent.find(([c, msg]) => c === 'triplex:adapter' && msg && msg.op === op)
+    if (m) ipcMain.emit('triplex:adapter:result', mainFrameEvent(v3), { reqId: m[1].reqId, ok: true, op, ...result })
+    await sleep(10)
+    return m ? m[1] : null
+  }
+  if (ws) ws.receive(geminiReq)
+  await sleep(10)
+  const gReady = await answerGemini('ready', { composerSelector: 'rich-textarea div.ql-editor' })
+  const gPrepare = await answerGemini('prepareInput', { state: 'ready', composerSelector: 'rich-textarea div.ql-editor', composerChars: 0, focused: true, ms: 1 })
+  const gVerify = await answerGemini('verifyInput', { landed: 'all', composerChars: 8, expectedChars: 8, sendReady: true, assistantCount: 0, ms: 2 })
+  const gConfirm = await answerGemini('confirmSubmit', { confirmedBy: 'composer_cleared', stillHeld: false, sendSelector: null, assistantCount: 0, ms: 3, url: 'http://127.0.0.1:5199/?site=gemini' })
+  probes.gemini = {
+    accepted: ws ? ws.frames('accepted').find((f) => f.req_id === geminiReq.req_id) || null : null,
+    trace: v3.trace.slice(),
+    readyMsg: gReady ? { timeoutMs: gReady.timeoutMs } : null,
+    prepareMsg: gPrepare ? { text: gPrepare.text, timeoutMs: gPrepare.timeoutMs } : null,
+    verifyMsg: gVerify ? { text: gVerify.text, verifyMs: gVerify.verifyMs, sendWaitMs: gVerify.sendWaitMs } : null,
+    confirmMsg: gConfirm ? { text: gConfirm.text, clickFallback: gConfirm.clickFallback } : null,
+    inserted: v3.inserted.slice(),
+    inputEvents: v3.inputEvents.slice(),
+    otherPanesInserted: views.slice(0, PANES - 1).map((v) => v.webContents.inserted.length),
+    result: ws ? ws.frames('result').find((f) => f.req_id === geminiReq.req_id) || null : null,
+  }
+
   // Stage 2 IPC: openChats (recorded link → navigated; no link → kept when already on newChatUrl;
   // null → every pane kept, nothing loaded), signOut, snapshot
   probes.openChats = await settle(ipcMain.invoke('panes:openChats', renderer, CONV))
   probes.openChatsLoads = { claude: v0.loads.slice(-1)[0], chatgpt: views[1].webContents.loads.length, grok: v2.loads.length }
-  const loadsBeforeNull = views.slice(0, 3).map((v) => v.webContents.loads.length)
+  const loadsBeforeNull = views.slice(0, PANES).map((v) => v.webContents.loads.length)
   probes.openChatsNull = await settle(ipcMain.invoke('panes:openChats', renderer, null))
-  probes.openChatsNullLoads = views.slice(0, 3).map((v, i) => v.webContents.loads.length - loadsBeforeNull[i])
+  probes.openChatsNullLoads = views.slice(0, PANES).map((v, i) => v.webContents.loads.length - loadsBeforeNull[i])
 
   // a navigation main started elsewhere (New chat on the chatgpt pane) holds a request's `ready`
   // until that document commits (did-navigate); the bridge still sees `accepted` at once
@@ -736,6 +793,66 @@ async function probe() {
   await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'chatgpt'))
   probes.analystViewsAfterRestore = views.length - viewsBeforeAnalyst
 
+  // 2026-10-17 (review): the TRUSTED path through the ANALYST seam. With gemini chosen as the analyst, a
+  // `web:gemini:analyst` request must be typed by main into the HIDDEN analyst page's webContents — never into
+  // the visible gemini pane's. Which webContents a trusted keystroke reaches is decided by main.js's
+  // `webContentsFor(view, slot)`; the orchestrator tests only prove it names ('analyst', 'gemini'), so this is
+  // the probe that fails if main resolves the pane for an analyst turn. Runs after analystViewsAfterRestore and
+  // puts chatgpt back, so every probe after it sees the run exactly as before (one more view in report.views).
+  const viewsBeforeGeminiAnalyst = views.length
+  const geminiPane = views[3].webContents
+  const paneCounts = () => ({
+    inserted: geminiPane.inserted.length,
+    inputEvents: geminiPane.inputEvents.length,
+    trace: geminiPane.trace.length,
+    adapterOps: geminiPane.sent.filter(([c]) => c === 'triplex:adapter').length,
+    focused: geminiPane.focused,
+    turnEvents: win.webContents.sent.filter(([c]) => c === 'panes:turn').length,
+  })
+  const paneBefore = paneCounts()
+  probes.setAnalystGemini = await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'gemini'))
+  await sleep(10)
+  const GEMINI_ANALYST_REQ = { ...ANALYST_REQ, req_id: '3e4f5a6b-7c8d-4e9f-8a0b-2c3d4e5f6a7b', model: 'web:gemini:analyst', slot: 'gemini', text: '<<<R1>>> gemini analyst claim' }
+  if (ws) ws.receive(GEMINI_ANALYST_REQ)
+  await sleep(20)
+  const gav = views.length > viewsBeforeGeminiAnalyst ? views[views.length - 1] : null
+  const gawc = gav ? gav.webContents : null
+  const answerAnalyst = async (op, result) => {
+    const m = gawc ? gawc.sent.find(([c, msg]) => c === 'triplex:adapter' && msg && msg.op === op) : null
+    if (m) ipcMain.emit('triplex:adapter:result', mainFrameEvent(gawc), { reqId: m[1].reqId, ok: true, op, ...result })
+    await sleep(10)
+    return m ? m[1] : null
+  }
+  const gaUrl = 'http://127.0.0.1:5199/?site=gemini'
+  await answerAnalyst('ready', { composerSelector: 'rich-textarea div.ql-editor' })
+  await answerAnalyst('prepareInput', { state: 'ready', composerSelector: 'rich-textarea div.ql-editor', composerChars: 0, focused: true, ms: 1 })
+  await answerAnalyst('verifyInput', { landed: 'all', composerChars: 29, expectedChars: 29, sendReady: true, assistantCount: 0, ms: 2 })
+  await answerAnalyst('confirmSubmit', { confirmedBy: 'composer_cleared', stillHeld: false, sendSelector: null, assistantCount: 0, ms: 3, url: gaUrl })
+  const gaObserve = await answerAnalyst('observe', { text: '```json\n{"agreements": []}\n```', doneBy: 'quiet', ms: 12, url: gaUrl })
+  const paneAfter = paneCounts()
+  probes.geminiAnalyst = {
+    created: views.length - viewsBeforeGeminiAnalyst,
+    partition: gav ? gav.options.webPreferences.partition : null,
+    visible: gav ? gav.getVisible() : null,
+    accepted: ws ? ws.frames('accepted').find((f) => f.req_id === GEMINI_ANALYST_REQ.req_id) || null : null,
+    trace: gawc ? gawc.trace.slice() : null,
+    inserted: gawc ? gawc.inserted.slice() : null,
+    inputEvents: gawc ? gawc.inputEvents.slice() : null,
+    observeText: gaObserve ? gaObserve.text : null,
+    result: ws ? ws.frames('result').find((f) => f.req_id === GEMINI_ANALYST_REQ.req_id) || null : null,
+    paneUntouched: Object.fromEntries(Object.keys(paneBefore).map((k) => [k, paneAfter[k] - paneBefore[k]])),
+  }
+  // back to chatgpt THROUGH null: a partition switch while a view is live recreates it on the new partition
+  // at once (the setAnalyst('claude') probe above), while null tears it down — so the run ends with no
+  // analyst view, exactly as analystViewsAfterRestore left it
+  await settle(ipcMain.invoke('panes:setAnalyst', renderer, null))
+  await sleep(10)
+  probes.geminiAnalystDestroyed = gawc ? gawc.isDestroyed() : null
+  await settle(ipcMain.invoke('panes:setAnalyst', renderer, 'chatgpt'))
+  // each analyst change re-runs the session sync (the defaults carry analyst_model): let it settle before the
+  // council section counts its own fetches
+  await sleep(20)
+
   // --- theme: settings.json is the source, nativeTheme follows, the renderer is told ----------
   probes.themeAtStart = report.themeSource
   probes.themeInGetInfo = (await settle(ipcMain.invoke('panes:getInfo', renderer))).value.theme
@@ -796,8 +913,8 @@ async function probe() {
   // a renderer COLUMN as the active tab: accepted, and the pane-only shortcuts become handled no-ops
   ipcMain.emit('panes:active', renderer, { mode: 'tabs', active: 'qwen' })
   probes.activeColumn = (await settle(ipcMain.invoke('panes:getInfo', renderer))).value.layout
-  const reloadsBefore = views.slice(0, 3).map((v) => v.webContents.reloads)
-  const zoomsBefore = views.slice(0, 3).map((v) => v.webContents.zoom)
+  const reloadsBefore = views.slice(0, PANES).map((v) => v.webContents.reloads)
+  const zoomsBefore = views.slice(0, PANES).map((v) => v.webContents.zoom)
   const evR = { prevented: false, preventDefault() { this.prevented = true } }
   win.webContents.emit('before-input-event', evR, { type: 'keyDown', key: 'r', code: 'KeyR', control: true, shift: false, alt: false, meta: false, isAutoRepeat: false })
   const evZ = { prevented: false, preventDefault() { this.prevented = true } }
@@ -805,8 +922,8 @@ async function probe() {
   probes.columnActions = {
     reloadPrevented: evR.prevented,
     zoomPrevented: evZ.prevented,
-    reloads: views.slice(0, 3).map((v, i) => v.webContents.reloads - reloadsBefore[i]),
-    zooms: views.slice(0, 3).map((v, i) => v.webContents.zoom - zoomsBefore[i]),
+    reloads: views.slice(0, PANES).map((v, i) => v.webContents.reloads - reloadsBefore[i]),
+    zooms: views.slice(0, PANES).map((v, i) => v.webContents.zoom - zoomsBefore[i]),
   }
   ipcMain.emit('panes:active', renderer, { mode: 'tabs', active: 'grok' }) // back to a pane for the replay probe
 
@@ -872,6 +989,8 @@ async function probe() {
     return { prevented: e.prevented, chosen, listeners: wc.listenerCount('select-bluetooth-device') }
   }
   probes.bluetooth = { view: bluetooth(views[0].webContents), window: bluetooth(win.webContents), stray: bluetooth(stray) }
+  // gotcha 19, end to end: no webContents in the process was ever asked to run script, attach a debugger or change its UA
+  probes.forbiddenCalls = [...views, win].flatMap((v) => v.webContents.forbidden)
 
   // cached health + zoom + bridge state replayed on the renderer's did-finish-load and after panes:getInfo
   let sentFrom = win.webContents.sent.length

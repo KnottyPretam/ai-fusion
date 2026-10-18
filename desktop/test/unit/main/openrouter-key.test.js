@@ -62,7 +62,7 @@ test('isKeyShape / isLoopbackUrl / defaultsBody', () => {
   assert.deepEqual(defaultsBody(TWO, 'web:chatgpt:analyst'), { slot_config: { slots: TWO.slots, analyst_model: 'web:chatgpt:analyst', max_iterations: 2, materiality_min: 'medium', grounded: false } })
   assert.equal(defaultsBody(TWO).slot_config.analyst_model, '', 'no analyst → the backend\'s "none"')
   assert.equal(defaultsBody(TWO, null).slot_config.analyst_model, '')
-  assert.deepEqual(Object.keys(defaultsBody(DEFAULT_COUNCIL()).slot_config.slots), ['claude', 'chatgpt', 'grok'])
+  assert.deepEqual(Object.keys(defaultsBody(DEFAULT_COUNCIL()).slot_config.slots), ['claude', 'chatgpt', 'grok', 'gemini'], 'the default council is the four web sites (2026-10-17)')
   assert.notEqual(defaultsBody(TWO).slot_config.slots.qwen, TWO.slots.qwen, 'copied, not aliased')
   assert.equal(defaultsBody(null), null)
   assert.equal(defaultsBody({ slots: {} }), null)
@@ -425,7 +425,7 @@ test('sync calls coalesce: a call during a run returns that run\'s promise and t
     ['DELETE', KEY_PATH],
     ['PUT', DEFAULTS_PATH],
   ], 'one full run, then exactly one more with the latest state (a clear, the newer council)')
-  assert.deepEqual(Object.keys(calls[3].body.slot_config.slots), ['claude', 'chatgpt', 'grok'], 'the LAST args win')
+  assert.deepEqual(Object.keys(calls[3].body.slot_config.slots), ['claude', 'chatgpt', 'grok', 'gemini'], 'the LAST args win')
   assert.deepEqual(k.status(), { configured: false, prefix: '', length: 0, pushed: true })
   assert.equal(leakSurface({ log, calls: calls.filter((c) => c.path !== KEY_PATH) }).includes(KEY), false)
 })

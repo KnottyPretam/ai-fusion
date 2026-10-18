@@ -1,8 +1,15 @@
-// selectors.js — override replaces per key, unknown key warns, bad JSON keeps the last good config.
+// selectors.js — override replaces per key, unknown key warns, bad JSON keeps the last good config;
+// 2026-10-17: trustedInputFor (the merged boolean, else the adapter's default — true only for gemini) and the
+// hot kill switch `{"gemini":{"trustedInput":false}}`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createSelectorsLoader, mergeOverride, timeoutsFor, DEFAULT_SELECTORS } from '../../../main/selectors.js'
+import { createRequire } from 'node:module'
+import { createSelectorsLoader, mergeOverride, timeoutsFor, trustedInputFor, DEFAULT_SELECTORS, TRUSTED_VERIFY_MS } from '../../../main/selectors.js'
+import { SLOTS } from '../../../main/sites.js'
 import { fakeLog } from './_fakes.js'
+
+const require = createRequire(import.meta.url)
+const siteAdapter = require('../../../preload/site.cjs')
 
 function fileWith(contents) {
   const store = { text: contents }
@@ -19,7 +26,7 @@ function fileWith(contents) {
 }
 
 test('DEFAULT_SELECTORS come from site.cjs and every chatUrlPattern compiles', () => {
-  for (const slot of ['chatgpt', 'claude', 'grok']) {
+  for (const slot of SLOTS) {
     assert.ok(Array.isArray(DEFAULT_SELECTORS[slot].composer), slot)
     assert.doesNotThrow(() => new RegExp(DEFAULT_SELECTORS[slot].chatUrlPattern), slot)
   }
@@ -114,4 +121,36 @@ test('timeoutsFor reads the merged per-site budgets with defaults for missing / 
   assert.deepEqual(timeoutsFor(DEFAULT_SELECTORS, 'claude'), { composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000 })
   assert.deepEqual(timeoutsFor({ claude: { composerWaitMs: 1000, sendWaitMs: -1 } }, 'claude'), { composerWaitMs: 1000, sendWaitMs: 18000, submitVerifyMs: 5000 })
   assert.deepEqual(timeoutsFor(null, 'grok'), { composerWaitMs: 15000, sendWaitMs: 18000, submitVerifyMs: 5000 })
+})
+
+test('trustedInputFor: the adapter default is true for gemini only; a boolean in the merged config wins (the selectors.json kill switch); the loader hot-reloads it', () => {
+  for (const slot of ['claude', 'chatgpt', 'grok']) assert.equal(trustedInputFor(DEFAULT_SELECTORS, slot), false, `${slot}: the synthetic path`)
+  assert.equal(trustedInputFor(DEFAULT_SELECTORS, 'gemini'), true, 'gemini: main types with trusted input')
+  assert.equal(trustedInputFor(DEFAULT_SELECTORS, 'deepseek'), false, 'no site, no default')
+  assert.equal(trustedInputFor(null, 'gemini'), true, 'no config at all → the default')
+  assert.equal(trustedInputFor({ version: 1 }, 'gemini'), true, 'a config without the site → the default')
+  // the merged config's own boolean
+  const off = mergeOverride(DEFAULT_SELECTORS, JSON.stringify({ gemini: { trustedInput: false } }))
+  assert.equal(off.error, null)
+  assert.deepEqual(off.warnings, [])
+  assert.equal(trustedInputFor(off.merged, 'gemini'), false, 'the kill switch')
+  const on = mergeOverride(DEFAULT_SELECTORS, { chatgpt: { trustedInput: true } })
+  assert.equal(trustedInputFor(on.merged, 'chatgpt'), true, 'an A/B lever for another site')
+  assert.equal(trustedInputFor({ gemini: { trustedInput: 'no' } }, 'gemini'), true, 'a non-boolean is not an answer: the default stands')
+  // hot reload: main reads selectors.current() per turn, and a rewritten file flips the answer on the next load
+  const { store, readFile } = fileWith(JSON.stringify({ gemini: { trustedInput: false } }))
+  const loader = createSelectorsLoader({ filePath: '/x/selectors.json', readFile, log: fakeLog() })
+  loader.load()
+  assert.equal(trustedInputFor(loader.current(), 'gemini'), false)
+  store.text = JSON.stringify({ version: 1 })
+  loader.reload()
+  assert.equal(trustedInputFor(loader.current(), 'gemini'), true, 'deleting the override restores the default')
+  store.text = '{broken'
+  loader.reload()
+  assert.equal(trustedInputFor(loader.current(), 'gemini'), true, 'bad JSON keeps the last good config')
+})
+
+test('TRUSTED_VERIFY_MS is the adapter\'s own verifyInput window (main budgets exactly what the preload waits)', () => {
+  assert.equal(TRUSTED_VERIFY_MS, Number.isFinite(siteAdapter.TRUSTED_VERIFY_MS) ? siteAdapter.TRUSTED_VERIFY_MS : 1000)
+  assert.ok(TRUSTED_VERIFY_MS >= 0)
 })

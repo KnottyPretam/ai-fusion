@@ -24,12 +24,14 @@ export const SITE_SRC = fs.readFileSync(SITE_CJS, 'utf8')
  * group (`div.group.flex.flex-col:has([class~='group/user-message'])`, fixtures chatgpt-oct10-done /
  * -virtualized), while the fake renders the 2026-09-17 `article[data-message-author-role=assistant]` turn —
  * a real layout still, and the one the placeholder / remount lifecycle was measured on. claude's and grok's
- * rows carry their sites' measured testids, so theirs ARE the first entries.
+ * rows carry their sites' measured testids, so theirs ARE the first entries. gemini's (2026-10-17) is its cascade's
+ * only entry, `model-response` — hand-built from public sources, like the whole gemini look-alike.
  */
 export const FAKE_ASSISTANT = Object.freeze({
   chatgpt: "[data-message-author-role='assistant']",
   claude: DEFAULT_SELECTORS.claude.assistant[0],
   grok: DEFAULT_SELECTORS.grok.assistant[0],
+  gemini: DEFAULT_SELECTORS.gemini.assistant[0],
 })
 for (const site of SLOTS) {
   if (!DEFAULT_SELECTORS[site].assistant.includes(FAKE_ASSISTANT[site])) throw new Error(`_harness: FAKE_ASSISTANT.${site} is not in the site's assistant cascade`)
@@ -114,7 +116,8 @@ export function installFakeIpc({ site, selectors, dev }) {
  * transcript — the grok look-alike is newest-first by default, as grok.com is, and `order=forward` appends —,
  * the reply row mounted empty in the submit tick, the user's text rendered as markdown, an echo that
  * names its exchange; since 2026-10-11 `order=shuffle` scrambles the DOM order under the same translateY
- * placement every slotted row now has, see geometry.spec.js). `path` picks the page path (the SPA fallback serves index.html for
+ * placement every slotted row now has, see geometry.spec.js). Since 2026-10-17 `untrusted` (`ignore` | `stall`: what the
+ * look-alike does with an UNTRUSTED submit — trusted.spec.js). `path` picks the page path (the SPA fallback serves index.html for
  * /c/<id>).
  */
 export async function open(page, opts = {}) {
@@ -123,7 +126,8 @@ export async function open(page, opts = {}) {
   await page.addInitScript({ content: SITE_SRC })
   const q = new URLSearchParams({ site })
   // 2026-10-11: chatgptLayout (`group` = the exchange-group layout) and askUser (the ask-the-user widget turn), see exchange.spec.js
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn', 'chatgptLayout', 'askUser']
+  // 2026-10-17: untrusted (`ignore` | `stall`: how the look-alike treats an UNTRUSTED submit), see trusted.spec.js
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn', 'chatgptLayout', 'askUser', 'untrusted']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -132,6 +136,8 @@ export async function open(page, opts = {}) {
 
 export const request = (page, msg) => page.evaluate((m) => window.__triplexFakeIpc.request(m), msg)
 export const fake = (page) => page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
+/** ?untrusted (2026-10-17): the mode, the untrusted submits `ignore` dropped, the texts `stall` took. */
+export const trustState = (page) => page.evaluate(() => ({ untrusted: window.__fake.untrusted, dropped: window.__fake.untrustedDropped, stalled: window.__fake.stalled, stalledAt: window.__fake.stalledAt }))
 /**
  * The fake site's Stage 2 reply state, plus the S7-review lifecycle readings: the placeholder turn's
  * text and the three moments of ?remountMs (`placeholderAt`, `placeholderGoneAt`, `remountedAt`), every

@@ -39,12 +39,16 @@ const rowSlots = () => [...screen.getByTestId('agents-page').querySelectorAll('[
 const select = (id, value) => fireEvent.change(screen.getByTestId(id), { target: { value } })
 
 describe('AgentsPage: rows and their source', () => {
-  test('with no conversation the rows come from main’s default (panes.council), else the classic three web panes', () => {
+  test('with no conversation the rows come from main’s default (panes.council), else every site on its web session (four)', () => {
     const { unmount } = mount(fakeTriplex())
     expect(screen.getByTestId('agents-page')).toHaveAttribute('data-source', 'default')
-    expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok'])
-    for (const s of ['claude', 'chatgpt', 'grok']) expect(screen.getByTestId(`agents-transport-${s}-web`)).toBeChecked()
-    expect(screen.getByTestId('agents-summary')).toHaveTextContent('3 agents → R1…R3; labels are assigned per turn')
+    expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
+    for (const s of ['claude', 'chatgpt', 'grok', 'gemini']) expect(screen.getByTestId(`agents-transport-${s}-web`)).toBeChecked()
+    expect(screen.getByTestId('agents-model-gemini')).toHaveValue('web:gemini')
+    expect(screen.getByTestId('agents-summary')).toHaveTextContent('4 agents → R1…R4; labels are assigned per turn')
+    // four is the editor's cap (COUNCIL_EDIT_MAX)
+    expect(screen.getByTestId('agents-add')).toBeDisabled()
+    expect(screen.getByTestId('agents-add')).toHaveAttribute('title', 'At most four agents')
     expect(screen.getByTestId('agents-apply')).toBeDisabled()
     expect(screen.getByTestId('agents-apply')).toHaveAttribute('title', APPLY_TITLES.noConversation)
     unmount()
@@ -55,7 +59,11 @@ describe('AgentsPage: rows and their source', () => {
     expect(screen.getByTestId('agents-effort-gemini')).toHaveValue('medium')
     expect(screen.getByTestId('agents-transport-qwen-ollama')).toBeChecked()
     expect(screen.getByTestId('agents-model-qwen')).toHaveValue('ollama:qwen3')
-    expect(screen.getByTestId('agents-add')).toBeDisabled() // five seated
+    // a stored five still renders (every reader stays 2..5); the editor only never makes a fifth
+    expect(screen.getByTestId('agents-add')).toBeDisabled()
+    expect(screen.getByTestId('agents-add')).toHaveAttribute('title', 'At most four agents; this council has 5 from before (Remove trims it)')
+    expect(screen.getByTestId('agents-summary')).toHaveTextContent('5 agents → R1…R5')
+    expect(screen.queryByTestId('agents-error')).toBeNull() // five is still a valid council
   })
 
   test('with a conversation open the rows are ITS council and Apply is enabled on an empty one', () => {
@@ -75,13 +83,13 @@ describe('AgentsPage: rows and their source', () => {
     expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'qwen'])
     act(() => store.dispatch({ type: 'conversation/cleared' }))
     expect(screen.getByTestId('agents-page')).toHaveAttribute('data-source', 'default')
-    expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
   })
 })
 
 describe('AgentsPage: editing', () => {
   test('a vendor select lists this row’s vendor plus every unseated one; changing it moves the seat and resets transport / model', () => {
-    mount(fakeTriplex())
+    mount(fakeTriplex(), { panes: { council: { slots: CFG.slots } } }) // the classic three as main's default
     const vendor = screen.getByTestId('agents-vendor-grok')
     expect([...vendor.querySelectorAll('option')].map((o) => o.value)).toEqual(['grok', 'gemini', 'deepseek', 'qwen', 'mimo'])
     select('agents-vendor-grok', 'qwen')
@@ -111,20 +119,27 @@ describe('AgentsPage: editing', () => {
     expect(screen.getByTestId('agents-model-claude')).toHaveValue('web:claude')
   })
 
-  test('add seats the next unseated vendor up to five; remove unseats down to two; the error names the first invalid row', () => {
-    mount(fakeTriplex())
+  test('add seats the next unseated vendor up to four; remove unseats down to two; the error names the first invalid row', () => {
+    mount(fakeTriplex(), { panes: { council: { slots: CFG.slots } } })
+    expect(screen.getByTestId('agents-add')).toHaveAttribute('title', 'Seat Gemini (4 of 4)')
     fireEvent.click(screen.getByTestId('agents-add'))
     expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
-    fireEvent.click(screen.getByTestId('agents-add'))
-    expect(rowSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'deepseek'])
+    // Gemini is a site since 2026-10-17: it is seated on its web session, at effort off
+    expect(screen.getByTestId('agents-transport-gemini-web')).toBeChecked()
+    expect(screen.getByTestId('agents-model-gemini')).toHaveValue('web:gemini')
+    expect(screen.getByTestId('agents-effort-gemini')).toHaveValue('off')
     expect(screen.getByTestId('agents-add')).toBeDisabled()
-    expect(screen.getByTestId('agents-summary')).toHaveTextContent('5 agents → R1…R5')
+    expect(screen.getByTestId('agents-add')).toHaveAttribute('title', 'At most four agents')
+    expect(screen.getByTestId('agents-summary')).toHaveTextContent('4 agents → R1…R4')
+    fireEvent.click(screen.getByTestId('agents-add')) // disabled: nothing happens
+    expect(rowSlots()).toHaveLength(4)
     fireEvent.click(screen.getByTestId('agents-remove-claude'))
     fireEvent.click(screen.getByTestId('agents-remove-chatgpt'))
-    fireEvent.click(screen.getByTestId('agents-remove-grok'))
-    expect(rowSlots()).toEqual(['gemini', 'deepseek'])
+    expect(rowSlots()).toEqual(['grok', 'gemini'])
     expect(screen.getByTestId('agents-remove-gemini')).toBeDisabled()
     // an empty custom model on an OpenRouter row is a loud error, never a silent default
+    fireEvent.click(screen.getByTestId('agents-transport-gemini-openrouter'))
+    expect(screen.getByTestId('agents-model-gemini')).toHaveValue('google/gemini-2.5-pro')
     const custom = screen.getByTestId('agents-model-custom-gemini')
     select('agents-model-gemini', '')
     fireEvent.change(custom, { target: { value: '' } })
@@ -138,12 +153,12 @@ describe('AgentsPage: Apply, Save as default, the key', () => {
   test('Apply PUTs the FULL slot_config of the open conversation and lands the stored copy in the store', async () => {
     const calls = stubFetch([{ method: 'PUT', url: '/api/conversations/c1/slot_config', respond: ({ body }) => jsonResponse(body) }])
     mount(fakeTriplex(), { conversation: conv({ slot_config: CFG }), slotConfig: CFG })
-    fireEvent.click(screen.getByTestId('agents-add')) // + Gemini on OpenRouter
+    fireEvent.click(screen.getByTestId('agents-add')) // + Gemini on its web session (a site since 2026-10-17)
     fireEvent.click(screen.getByTestId('agents-apply'))
     await waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0].body).toEqual({
       ...CFG,
-      slots: { ...CFG.slots, gemini: { model: 'google/gemini-2.5-pro', effort: 'off' } },
+      slots: { ...CFG.slots, gemini: { model: 'web:gemini', effort: 'off' } },
     })
     await waitFor(() => expect(Object.keys(store.slotConfig.slots)).toEqual(['claude', 'chatgpt', 'grok', 'gemini']))
     expect(screen.queryByTestId('agents-error')).toBeNull()
@@ -175,6 +190,7 @@ describe('AgentsPage: Apply, Save as default, the key', () => {
     const fake = fakeTriplex()
     mount(fake)
     fireEvent.click(screen.getByTestId('agents-remove-grok'))
+    fireEvent.click(screen.getByTestId('agents-remove-gemini'))
     fireEvent.click(screen.getByTestId('agents-default'))
     await waitFor(() => expect(fake.setCouncil).toHaveBeenCalledTimes(1))
     expect(fake.setCouncil.mock.calls[0][0]).toEqual({ slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' } } })

@@ -6,7 +6,7 @@
 //   desk-drawer                        the container (data-open, data-tab)
 //   drawer-toggle                      open / close (`panes/drawer`; persisted as triplex.panes.drawerOpen)
 //   drawer-tab-analyze|fusion|captured|agents|settings   the tabs; clicking one opens the drawer on it
-//   drawer-panel-agents                Agents (2026-09-27): the council — 2..5 agents, each on a
+//   drawer-panel-agents                Agents (2026-09-27): the council — 2..4 agents, each on a
 //                                      web session / OpenRouter / local Ollama — and the OpenRouter
 //                                      key (./AgentsPage.jsx)
 //   drawer-capture-hint                "capture is off for <slots>" when the latest send turn of the
@@ -49,6 +49,9 @@
 // With no analyst that can answer at all, the Analyze tab shows that hint in place of the pane
 // (Decision 4: "Analyze disabled with a hint"), so no run burns a send turn into a degraded state.
 //
+// The selected tab lives in the panes slice (`panes.drawerTab`, 2026-10-17; `panes/drawer {open,
+// tab}`), not in local state, so the agents stepper's "More options…" can open the drawer on Agents.
+//
 // Auto-open: when the analyze stream starts (`streams.analyze` idle → streaming: the Analyze
 // button, not Fusion's auto-run, which streams under 'fusion') the drawer opens on the Analyze
 // tab so the report is visible where the user looks.
@@ -63,7 +66,7 @@ import SendPane from '../send/SendPane.jsx'
 import AgentsPage from './AgentsPage.jsx'
 import { analystSlotOf, isDesktopAnalyst, loadAnalyst, persistAnalyst } from './analyst.js'
 import { desktopApi } from './PaneDeck.jsx'
-import { DEFAULT_COUNCIL, SLOT_LABELS, councilOf, initialPanes, isSiteId, notCapturedSlots } from './slice.js'
+import { DEFAULT_COUNCIL, DRAWER_TAB_KEYS, SLOT_LABELS, councilOf, initialPanes, isSiteId, notCapturedSlots } from './slice.js'
 import css from './desktop.module.css'
 import { APP_NAME } from '../../branding.js'
 
@@ -71,7 +74,7 @@ export const DRAWER_TABS = [
   { key: 'analyze', label: 'Analyze', tip: 'What the answers agree on and where they differ, labelled R1…Rn. Needs captured replies.' },
   { key: 'fusion', label: 'Fusion', tip: 'Put each difference back to the models that hold it, round by round, and report what converged and what still stands.' },
   { key: 'captured', label: 'Captured', tip: 'The reply text read out of each site (or streamed from a token / local agent), as stored: this is exactly what Analyze and Fusion see.' },
-  { key: 'agents', label: 'Agents', tip: 'Assemble the council: two to five agents, each on a web session, OpenRouter or local Ollama; and the OpenRouter key.' },
+  { key: 'agents', label: 'Agents', tip: 'Assemble the council: two to four agents, each on a web session, OpenRouter or local Ollama; and the OpenRouter key.' },
   { key: 'settings', label: 'Settings', tip: 'Which page answers as the analyst, how many Fusion rounds, and the materiality floor for fusing a difference.' },
 ]
 export const TAB_KEYS = DRAWER_TABS.map((t) => t.key)
@@ -124,23 +127,19 @@ export default function Drawer({ api = desktopApi() }) {
   const streams = useSlice('streams') || {}
   const open = !!panes.drawerOpen
   const analystState = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
-  const [tab, setTab] = useState('analyze')
+  const tab = DRAWER_TAB_KEYS.includes(panes.drawerTab) ? panes.drawerTab : 'analyze'
   const [choice, setChoice] = useState(() => loadAnalyst())
 
   const analyzeStatus = streams.analyze ? streams.analyze.status : undefined
   const prevAnalyze = useRef(analyzeStatus)
   useEffect(() => {
-    if (analyzeStatus === 'streaming' && prevAnalyze.current !== 'streaming') {
-      setTab('analyze')
-      dispatch({ type: 'panes/drawer', open: true })
-    }
+    if (analyzeStatus === 'streaming' && prevAnalyze.current !== 'streaming') dispatch({ type: 'panes/drawer', open: true, tab: 'analyze' })
     prevAnalyze.current = analyzeStatus
   }, [analyzeStatus, dispatch])
 
   const select = (key) => {
     if (!TAB_KEYS.includes(key)) return
-    setTab(key)
-    if (!open) dispatch({ type: 'panes/drawer', open: true })
+    dispatch({ type: 'panes/drawer', open: true, tab: key })
   }
   const toggle = () => dispatch({ type: 'panes/drawer' })
 

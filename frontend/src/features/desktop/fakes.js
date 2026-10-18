@@ -5,7 +5,7 @@
 //                  saveDomSnapshot; `sendPrompt` is gone; Stage 3: setAnalyst/showAnalyst/onAnalyst;
 //                  Theme: setTheme/onTheme; Council (2026-09-27): sites, getCouncil/setCouncil/
 //                  onCouncil, getOpenRouterKey/setOpenRouterKey/onOpenRouterKey — `getCouncil` answers
-//                  the three web panes, `getOpenRouterKey` "not configured"; `emit.council(spec)` /
+//                  the classic three web panes (CFG), `getOpenRouterKey` "not configured"; `emit.council(spec)` /
 //                  `emit.openRouterKey(status)` drive the subscriptions)
 //                  with vi.fn() methods; `emit.health(slot, h)`
 //                  / `emit.shortcut(name)` / `emit.zoom({slot, factor})` / `emit.bridge({connected})`
@@ -27,10 +27,13 @@
 //                  `stubFetch` hands the route's `respond` the request's `signal` for that.
 import { vi } from 'vitest'
 
+// The four site viewports (gemini joined 2026-10-17). A council without a site reports that key as
+// null whatever it measures (no viewport element is mounted for it).
 export const RECTS = {
   claude: { x: 0, y: 40, width: 500, height: 600 },
   chatgpt: { x: 500, y: 40, width: 500, height: 600 },
   grok: { x: 1000, y: 40, width: 500, height: 600 },
+  gemini: { x: 1500, y: 40, width: 500, height: 600 },
 }
 
 export const CHANNELS = ['health', 'shortcut', 'zoom', 'bridge', 'turn', 'analyst', 'theme', 'council', 'openRouterKey']
@@ -41,7 +44,7 @@ export const KEY_UNSET = { configured: false, prefix: '', length: 0, pushed: fal
 export const KEY_SET = { configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }
 
 /** A rect for the analyst viewport (tests pass `{...RECTS, analyst: ANALYST_RECT}` to pinViewportRects). */
-export const ANALYST_RECT = { x: 1500, y: 40, width: 400, height: 600 }
+export const ANALYST_RECT = { x: 2000, y: 40, width: 400, height: 600 }
 
 export function fakeTriplex(over = {}) {
   const listeners = {}
@@ -60,8 +63,8 @@ export function fakeTriplex(over = {}) {
     })
   const api = {
     version: '0.1.0',
-    slots: ['claude', 'chatgpt', 'grok'],
-    sites: ['claude', 'chatgpt', 'grok'],
+    slots: ['claude', 'chatgpt', 'grok', 'gemini'],
+    sites: ['claude', 'chatgpt', 'grok', 'gemini'],
     getInfo: vi.fn(async () => ({ version: '0.1.0', dev: true, sites: {}, backend: null, layout: null })),
     setLayout: vi.fn(),
     setActive: vi.fn(),
@@ -76,11 +79,11 @@ export function fakeTriplex(over = {}) {
     onZoom: subscribe('zoom'),
     // Stage 2. `getCapture` hands the map back synchronously so the many synchronous specs stay
     // act()-clean (the preload's promise shape is covered by the capture specs with an async fake).
-    getCapture: vi.fn(() => ({ claude: false, chatgpt: false, grok: false })),
+    getCapture: vi.fn(() => ({ claude: false, chatgpt: false, grok: false, gemini: false })),
     setCapture: vi.fn(async () => {}),
     onBridge: subscribe('bridge'),
     onTurn: subscribe('turn'),
-    openChats: vi.fn(async () => ({ claude: 'kept', chatgpt: 'kept', grok: 'kept' })),
+    openChats: vi.fn(async () => ({ claude: 'kept', chatgpt: 'kept', grok: 'kept', gemini: 'kept' })),
     signOut: vi.fn(async () => {}),
   exportTurn: vi.fn(async () => ({ cancelled: false, formats: ['md'], files: { md: '/tmp/x.md' }, paths: ['/tmp/x.md'], defaultName: 'x' })),
     saveDomSnapshot: vi.fn(async () => ({ path: '/tmp/snapshot.html' })),
@@ -204,7 +207,7 @@ export function pinViewportRects(rects = RECTS) {
   const zero = { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }
   return vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function measure() {
     const id = typeof this.getAttribute === 'function' ? this.getAttribute('data-testid') : null
-    const m = /^pane-(claude|chatgpt|grok|analyst)-viewport$/.exec(id || '')
+    const m = /^pane-(claude|chatgpt|grok|gemini|analyst)-viewport$/.exec(id || '')
     const rect = m && rects[m[1]]
     return rect ? { ...rect, top: rect.y, left: rect.x, right: rect.x + rect.width, bottom: rect.y + rect.height } : zero
   })
@@ -262,9 +265,11 @@ export const DESKTOP_CATALOG = [
   { id: 'web:claude', name: 'Claude (web session)', vendor: 'anthropic', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'web:chatgpt', name: 'ChatGPT (web session)', vendor: 'openai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'web:grok', name: 'Grok (web session)', vendor: 'x-ai', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:gemini', name: 'Gemini (web session)', vendor: 'google', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'web:claude:analyst', name: 'Claude web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'web:chatgpt:analyst', name: 'ChatGPT web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'web:grok:analyst', name: 'Grok web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
+  { id: 'web:gemini:analyst', name: 'Gemini web session (hidden analyst page)', vendor: 'triplex-analyst', efforts: ['off'], structured_outputs: false, raw: { transport: 'web' } },
   { id: 'ollama:hermes3', name: 'hermes3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
   { id: 'ollama:qwen3', name: 'qwen3 (local Ollama)', vendor: 'ollama', efforts: ['off'], structured_outputs: false, raw: { transport: 'ollama' } },
   { id: 'openai/gpt-5', name: 'GPT-5', vendor: 'openai', efforts: ['low', 'medium', 'high'], structured_outputs: true, raw: { transport: 'openrouter' } },

@@ -46,8 +46,9 @@ describe('DesktopShell: composition', () => {
     expect(await screen.findByText('desktop v0.1.0 (dev)')).toBeInTheDocument()
     expect(screen.getByTestId('pane-claude-inspect')).toBeInTheDocument()
     // the frozen smoke test's assertion text is still present (once) but visually hidden
-    // the layout and active state reached main
-    expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual(RECTS)
+    // the layout and active state reached main (main's default council is the classic three here:
+    // the fake's getCouncil answers CFG, so the Gemini view is hidden)
+    expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual({ ...RECTS, gemini: null })
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'split', active: 'chatgpt' })
   })
 
@@ -105,7 +106,7 @@ describe('DesktopShell: shortcuts through the composed shell', () => {
     expect(screen.getByTestId('deck-tab-chatgpt')).toHaveAttribute('aria-selected', 'true')
     act(() => fake.emit.shortcut('tab-1'))
     expect(screen.getByTestId('deck-tab-claude')).toHaveAttribute('aria-selected', 'true')
-    expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null })
+    expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null, gemini: null })
   })
 
   test('a Send whose grok slot is rejected logged_out reveals that pane in tabs mode; the header shows the session once health arrives', async () => {
@@ -179,7 +180,7 @@ describe('DesktopShell: localStorage persistence', () => {
     expect(screen.getByTestId('prompt-target-claude')).not.toBeChecked()
     expect(screen.getByTestId('prompt-target-chatgpt')).toBeChecked()
     // the very first layout report already reflects the restored state (no split flash)
-    expect(fake.setLayout.mock.calls[0][0]).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok })
+    expect(fake.setLayout.mock.calls[0][0]).toEqual({ claude: null, chatgpt: null, grok: RECTS.grok, gemini: null })
     expect(fake.setActive.mock.calls[0][0]).toEqual({ mode: 'tabs', active: 'grok' })
   })
 
@@ -194,7 +195,7 @@ describe('DesktopShell: localStorage persistence', () => {
     fireEvent.click(screen.getByTestId('prompt-target-grok'))
     expect(JSON.parse(localStorage.getItem(PERSIST_KEYS.targets))).toEqual({ claude: true, chatgpt: true, grok: false })
     fireEvent.click(screen.getByTestId('pane-claude-capture'))
-    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: false, grok: false })
+    expect(JSON.parse(localStorage.getItem(CAPTURE_NOTICE_KEY))).toEqual({ claude: true, chatgpt: false, grok: false, gemini: false })
   })
 
   test('invalid stored values fall back to the defaults', () => {
@@ -222,5 +223,29 @@ describe('DesktopShell: localStorage persistence', () => {
     expect(() => renderWithStore(<DesktopShell />)).not.toThrow()
     expect(() => fireEvent.click(screen.getByTestId('deck-mode-tabs'))).not.toThrow()
     expect(screen.getByTestId('deck-mode-tabs')).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('DesktopShell: the agents stepper shares the shell’s chats instance (2026-10-17)', () => {
+  test('− in a conversation with a turn starts ONE new chat through the shared instance: openChats(newId) exactly once, the sidebar keeps the old one', async () => {
+    const CFG3 = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } }, analyst_model: 'web:chatgpt:analyst', max_iterations: 2, materiality_min: 'medium', grounded: false }
+    const turn = { id: 't1', type: 'send', prompt: 'q', slot_config: CFG3, responses: {}, usage: { calls: [], totals: {} } }
+    const calls = stubFetch([{ method: 'POST', url: '/api/conversations', respond: ({ body }) => jsonResponse(conv({ id: 'c9', slot_config: body.slot_config }), 201) }])
+    const fake = fakeTriplex()
+    vi.stubGlobal('triplex', fake)
+    renderWithStore(<DesktopShell />, { preloaded: { conversation: conv({ id: 'c1', slot_config: CFG3, turns: [turn] }), slotConfig: CFG3 } })
+    await waitFor(() => expect(fake.getCouncil).toHaveBeenCalled())
+    const stepper = screen.getByTestId('agents-stepper')
+    expect(stepper).toHaveAttribute('data-mode', 'new-chat')
+    expect(stepper).toHaveAttribute('data-count', '3')
+    fireEvent.click(screen.getByTestId('agents-stepper-remove'))
+    await waitFor(() => expect(seqOf(calls)).toEqual(['POST /api/conversations']))
+    expect(calls[0].body.slot_config.slots).toEqual({ claude: CFG3.slots.claude, chatgpt: CFG3.slots.chatgpt })
+    await waitFor(() => expect(screen.getByTestId('agents-stepper')).toHaveAttribute('data-count', '2'))
+    await act(() => new Promise((r) => setTimeout(r, 0)))
+    expect(fake.setCouncil).toHaveBeenCalledTimes(1)
+    expect(fake.openChats).toHaveBeenCalledTimes(1)
+    expect(fake.openChats).toHaveBeenCalledWith('c9')
+    expect(screen.queryByTestId('pane-grok')).toBeNull()
   })
 })

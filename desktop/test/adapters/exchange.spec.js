@@ -27,8 +27,10 @@ const FLAGS = ['bodyMatched', 'echoesPrompt', 'heldUserTurn']
 function expectCapture(res, { text, doneBy, flags }) {
   expect(res).toMatchObject({ ok: true, op: 'observe', text, doneBy })
   expect(res.text).toBe(text)
-  expect(Object.keys(res).sort()).toEqual(['bodyMatched', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
+  expect(Object.keys(res).sort()).toEqual(['bodyMatched', 'bodyMissed', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
   expect(FLAGS.map((f) => res[f])).toEqual(flags)
+  // 2026-10-17: chatgpt (every capture here) has a body cascade, so `bodyMissed` is exactly "no body matched"
+  expect(res.bodyMissed).toBe(!res.bodyMatched)
 }
 
 test.describe('chatgpt exchange-group layout (?chatgptLayout=group)', () => {
@@ -123,8 +125,9 @@ test.describe('chatgpt article layout', () => {
   })
 })
 
-test.describe('claude and grok', () => {
-  for (const site of ['claude', 'grok']) {
+test.describe('claude, grok and gemini', () => {
+  // 2026-10-17: gemini's `model-response` is a turn-level row with a matched body (`.markdown-main-panel`), like grok's
+  for (const site of ['claude', 'grok', 'gemini']) {
     test(`${site}: ?askUser=1 reads the line alone from the site's own body element; heldUserTurn false (a turn-level row), echoesPrompt false`, async ({ page }) => {
       await open(page, { site, replyMs: 300, askUser: 1 })
       const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
@@ -138,7 +141,7 @@ test.describe('claude and grok', () => {
       expect([res.heldUserTurn, res.echoesPrompt]).toEqual([false, false])
       // claude's assistantText is `.prose`, which the plain echo row does not render — its fallback is the whole
       // turn-level row, widget label included; grok's body is `.response-content-markdown`, matched
-      if (site === 'grok') expect([res.bodyMatched, res.text]).toEqual([true, askUser.text])
+      if (site === 'grok' || site === 'gemini') expect([res.bodyMatched, res.text]).toEqual([true, askUser.text])
       else expect([res.bodyMatched, res.text]).toEqual([false, `${askUser.text}\n\n${askUser.label}`])
     })
   }

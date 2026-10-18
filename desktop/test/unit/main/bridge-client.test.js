@@ -67,7 +67,7 @@ function fakeSocket(url) {
   return s
 }
 
-function setup({ health = {}, capture = { claude: false, chatgpt: true, grok: false }, analyst = null, onRequest, token = 'e2e' } = {}) {
+function setup({ health = {}, capture = { claude: false, chatgpt: true, grok: false, gemini: false }, analyst = null, onRequest, token = 'e2e' } = {}) {
   const sockets = []
   const timers = fakeTimers()
   const states = []
@@ -130,7 +130,7 @@ test('connect: the first and only frame on open is hello with the token, protoco
   last().open()
   assert.equal(last().sent.length, 1)
   const hello = last().sent[0]
-  assert.deepEqual(hello, { type: 'hello', protocol: 1, token: 'e2e', version: '0.1.0', sites: ['claude', 'chatgpt', 'grok'], capture: { claude: false, chatgpt: true, grok: false }, analyst: { slot: 'grok' } })
+  assert.deepEqual(hello, { type: 'hello', protocol: 1, token: 'e2e', version: '0.1.0', sites: ['claude', 'chatgpt', 'grok', 'gemini'], capture: { claude: false, chatgpt: true, grok: false, gemini: false }, analyst: { slot: 'grok' } })
   assert.equal(validate(hello).ok, true)
   assert.equal(client.status().state, 'open')
   assert.equal(client.isConnected(), false)
@@ -298,17 +298,17 @@ test('a socket drop mid-turn: the turn completes locally and every later frame i
 
 test('capture / analyst / health frames go out only while connected and only when valid', () => {
   const { client, last, handshake, log } = setup()
-  assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false }), false, 'not connected: nothing sent')
+  assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false, gemini: false }), false, 'not connected: nothing sent')
   client.connect()
   last().open()
   assert.equal(client.sendCapture(), false, 'open but no hello_ack yet (marked dirty: flushed after the ack)')
   last().receive(HELLO_ACK)
-  assert.deepEqual(last().frames('capture'), [{ type: 'capture', capture: { claude: false, chatgpt: true, grok: false } }], 'the refused change is re-sent from the live getter right after the ack')
-  assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false }), true)
+  assert.deepEqual(last().frames('capture'), [{ type: 'capture', capture: { claude: false, chatgpt: true, grok: false, gemini: false } }], 'the refused change is re-sent from the live getter right after the ack')
+  assert.equal(client.sendCapture({ claude: true, chatgpt: false, grok: false, gemini: false }), true)
   assert.equal(client.sendCapture(), true, 'defaults to getCapture()')
   assert.deepEqual(last().frames('capture').slice(1), [
-    { type: 'capture', capture: { claude: true, chatgpt: false, grok: false } },
-    { type: 'capture', capture: { claude: false, chatgpt: true, grok: false } },
+    { type: 'capture', capture: { claude: true, chatgpt: false, grok: false, gemini: false } },
+    { type: 'capture', capture: { claude: false, chatgpt: true, grok: false, gemini: false } },
   ])
   assert.equal(client.sendAnalyst('claude'), true)
   assert.equal(client.sendAnalyst(null), true)
@@ -329,21 +329,22 @@ test('capture / analyst / health frames go out only while connected and only whe
 })
 
 test('a capture / analyst change that lands between hello and hello_ack is flushed after the ack (health first), from the live getters; a change before open is carried by the hello itself', () => {
-  const capture = { claude: false, chatgpt: false, grok: false }
+  const capture = { claude: false, chatgpt: false, grok: false, gemini: false }
   const { client, last, log } = setup({ health: { chatgpt: HEALTH }, capture, analyst: 'grok' })
   client.connect()
   assert.equal(client.sendCapture({ ...capture, claude: true }), false, 'connecting: refused, not dirty (the hello carries the live value)')
   capture.claude = true
   last().open()
-  assert.deepEqual(last().sent[0].capture, { claude: true, chatgpt: false, grok: false }, 'the hello snapshots the getter at open')
+  assert.deepEqual(last().sent[0].capture, { claude: true, chatgpt: false, grok: false, gemini: false }, 'the hello snapshots the getter at open')
   capture.grok = true // the user flips grok while the ack is pending
+  capture.gemini = true // … and the fourth site (2026-10-17): every site rides in the map
   assert.equal(client.sendCapture({ ...capture }), false, 'open: refused …')
   assert.equal(client.sendAnalyst('claude'), false)
   assert.deepEqual(last().sent.length, 1, '… and nothing but the hello went out')
   last().receive(HELLO_ACK)
   assert.deepEqual(last().sent.slice(1), [
     { type: 'health', slot: 'chatgpt', health: HEALTH },
-    { type: 'capture', capture: { claude: true, chatgpt: false, grok: true } },
+    { type: 'capture', capture: { claude: true, chatgpt: false, grok: true, gemini: true } },
     { type: 'analyst', analyst: { slot: 'grok' } },
   ], 'health replayed first, then the dirty capture (live getter, grok:true) and the dirty analyst (live getter)')
   for (const f of last().sent) assert.equal(validate(f).ok, true, JSON.stringify(f))
@@ -366,7 +367,7 @@ test('a capture / analyst change that lands between hello and hello_ack is flush
   again.last().drop(1006)
   again.timers.advance(BACKOFF_MS[0])
   again.last().open()
-  assert.deepEqual(again.last().sent[0].capture, { claude: true, chatgpt: true, grok: true })
+  assert.deepEqual(again.last().sent[0].capture, { claude: true, chatgpt: true, grok: true, gemini: true })
   again.last().receive(HELLO_ACK)
   assert.deepEqual(again.last().sent.map((f) => f.type), ['hello'], 'the hello already carried it; nothing flushed')
 })

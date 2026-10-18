@@ -7,7 +7,7 @@
 // analyst chat memory (chatFor / chatOwner / noteChat); the selector hot reload.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ANALYST_CHAT_MEMORY, createAnalystViews, REVEAL_SESSIONS } from '../../../main/analyst-views.js'
+import { HIDDEN_FALLBACK_BOUNDS, ANALYST_CHAT_MEMORY, createAnalystViews, REVEAL_SESSIONS } from '../../../main/analyst-views.js'
 import { normalizeLayout } from '../../../main/layout.js'
 import { isPoliced } from '../../../main/policy.js'
 import { hasDeviceChooserPolicy } from '../../../main/permissions.js'
@@ -32,7 +32,7 @@ function health(session = 'ok', extra = {}) {
 }
 
 /** A manager over fakes; `instances` collects every WebContentsView built, `states` every onState. */
-function setup({ analyst = 'chatgpt', analystVisible = false, background } = {}) {
+function setup({ analyst = 'chatgpt', analystVisible = false, background, windowBounds = null } = {}) {
   const instances = []
   const sessions = new Map()
   const states = []
@@ -41,6 +41,7 @@ function setup({ analyst = 'chatgpt', analystVisible = false, background } = {})
   const sites = fakeSites()
   const settings = fakeSettings(undefined, { analyst, analystVisible })
   const contentView = { added: [], removed: [], addChildView: (v) => contentView.added.push(v), removeChildView: (v) => contentView.removed.push(v) }
+  if (windowBounds) contentView.getBounds = () => windowBounds
   const manager = createAnalystViews({
     WebContentsView: makeFakeWebContentsViewClass(instances),
     sessionFromPartition: (p) => {
@@ -113,6 +114,20 @@ test('nothing is created until something asks: adapterFor builds the view on per
   // a second call reuses the same view and the same client
   assert.equal(manager.adapterFor('chatgpt'), client)
   assert.equal(instances.length, 1)
+})
+
+test('a never-revealed analyst view gets real bounds while hidden — the window\'s content size, else 1280×800 — so its page paints and takes main\'s trusted Enter (2026-10-17)', () => {
+  assert.deepEqual({ ...HIDDEN_FALLBACK_BOUNDS }, { width: 1280, height: 800 })
+  const sized = setup({ windowBounds: { x: 0, y: 0, width: 1600.4, height: 900 } })
+  sized.manager.adapterFor('chatgpt')
+  assert.deepEqual(sized.instances[0].getBounds(), { x: 0, y: 0, width: 1600, height: 900 })
+  assert.equal(sized.instances[0].getVisible(), false, 'still hidden')
+  const bare = setup()
+  bare.manager.adapterFor('chatgpt')
+  assert.deepEqual(bare.instances[0].getBounds(), { x: 0, y: 0, width: 1280, height: 800 }, 'no getBounds on the window → the fallback')
+  const zero = setup({ windowBounds: { x: 0, y: 0, width: 0, height: 0 } })
+  zero.manager.adapterFor('chatgpt')
+  assert.deepEqual(zero.instances[0].getBounds(), { x: 0, y: 0, width: 1280, height: 800 }, 'a window reporting no size → the fallback')
 })
 
 test('adapterFor: null analyst → null (the orchestrator answers analyst_not_chosen), and a slot that is not the chosen one → null', () => {

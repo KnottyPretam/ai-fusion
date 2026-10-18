@@ -1,8 +1,10 @@
 """The vendor catalog behind the council (2026-09-27, "a council anyone can assemble"). Pure.
 
-Seven vendors, in `schemas.SLOT_IDS` order: the classic three (each with a Stage-1 web adapter --
-`WEB_SITES`, the bridge's own `BRIDGE_SLOTS`), then the four a council may also seat. Every agent
-runs on ONE transport, named by its model string exactly as before (`SlotSpec.model`):
+Seven vendors, in `schemas.SLOT_IDS` order: the classic three, then the four a council may also
+seat. The vendors with a web adapter are `WEB_SITES`, the bridge's own `BRIDGE_SLOTS`: the classic
+three and, since 2026-10-17, Gemini (gemini.google.com -- the user's own login, so its own model
+picker, Argon included). Every agent runs on ONE transport, named by its model string exactly as
+before (`SlotSpec.model`):
 
 - `web:<slot>`        a subscription session in the desktop app (only a site with an adapter);
 - `ollama:<name>`     a local model (the "uncensored" DeepSeek / Qwen / MiMo variants, typically);
@@ -36,8 +38,8 @@ class Vendor:
     prefixes: tuple[str, ...]  # OpenRouter slug orgs ("google/..."), the official models
     family_words: tuple[str, ...]  # model-family words on a slug tail, a name or an Ollama tag
     identity: str  # the organisation behind it, for a row's caption: "Alibaba"
-    web_site: bool  # has a Stage-1 web adapter (a `web:<slot>` model is allowed)
-    stage2_site: bool  # gets a web adapter in Stage 2 (a site, but no adapter yet)
+    web_site: bool  # has a web adapter (a `web:<slot>` model is allowed; a bridge slot)
+    stage2_site: bool  # a chat site that may get an adapter later (a site, but no adapter yet)
     default_model: str  # the OpenRouter slug a fresh row starts on
     default_effort: Effort = "medium"  # an effort that slug supports (the catalog is strict)
 
@@ -79,8 +81,10 @@ CATALOG: tuple[Vendor, ...] = (
         prefixes=("google",),
         family_words=("gemini",),
         identity="Google",
-        web_site=False,
-        stage2_site=True,
+        # 2026-10-17: a web site (bridge v1 amended in place). The slug stays: it is what a fresh
+        # OpenRouter row starts on; the web row is `web:gemini`.
+        web_site=True,
+        stage2_site=False,
         default_model="google/gemini-3.8-flash",
     ),
     Vendor(

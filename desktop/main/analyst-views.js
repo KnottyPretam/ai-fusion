@@ -63,6 +63,9 @@ export const ANALYST_CHAT_MEMORY = 50
  *   openExternal(url), onState(state), dev, log, setTimeout, clearTimeout, now,
  *   applyPermissions?, makeAdapterClient?, childWindowOptions?, ssoHosts?
  */
+/** A never-revealed analyst view's bounds when the window reports no size (2026-10-17; see setHiddenBounds). */
+export const HIDDEN_FALLBACK_BOUNDS = Object.freeze({ width: 1280, height: 800 })
+
 export function createAnalystViews({
   WebContentsView,
   sessionFromPartition,
@@ -196,6 +199,23 @@ export function createAnalystViews({
     }
   }
 
+  /** The window's content size (else HIDDEN_FALLBACK_BOUNDS) as a never-revealed view's bounds; never fatal. */
+  function setHiddenBounds(view) {
+    if (typeof view.setBounds !== 'function') return
+    let size = null
+    try {
+      const b = typeof contentView.getBounds === 'function' ? contentView.getBounds() : null
+      if (b && b.width > 0 && b.height > 0) size = { width: Math.round(b.width), height: Math.round(b.height) }
+    } catch (_e) {
+      size = null
+    }
+    try {
+      view.setBounds({ x: 0, y: 0, ...(size || HIDDEN_FALLBACK_BOUNDS) })
+    } catch (err) {
+      warn(`setBounds for the hidden analyst view failed: ${(err && err.message) || err}`)
+    }
+  }
+
   function create() {
     const slot = chosen()
     if (slot === null) return null
@@ -221,6 +241,12 @@ export function createAnalystViews({
     wc.on('did-navigate', () => applyZoom(e))
     wc.on('did-finish-load', () => applyZoom(e))
     contentView.addChildView(view)
+    // Real bounds while hidden (2026-10-17): a 0×0 view never paints, and Chromium drops input before a document's
+    // first paint, so main's trusted Enter (trusted-input.js) never reached a gemini analyst page while its
+    // insertText landed (measured in the app spec: innerWidth 0, rAF 0, no keydown). A view revealed and hidden
+    // again already keeps its last rect; this gives a never-revealed one the window's size. Nothing is shown:
+    // setVisible(false) follows at once, and a reveal sets the renderer's rect as before.
+    setHiddenBounds(view)
     // Hidden from the moment it is attached: the renderer decides when (and where) it is shown.
     try {
       view.setVisible(false)

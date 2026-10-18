@@ -127,7 +127,8 @@ async def test_disconnect_mid_request_is_bridge_disconnected(fake_desktop):
 
 @pytest.mark.parametrize(
     "model",
-    ["", "web:", "web:gemini", "web:claude:pane", "web:claude:analyst:x", "openai/gpt-5", "web"],
+    # web:deepseek: a council vendor with no site (gemini became one on 2026-10-17)
+    ["", "web:", "web:deepseek", "web:claude:pane", "web:claude:analyst:x", "openai/gpt-5", "web"],
 )
 async def test_bad_model_is_bridge_bad_model_and_sends_nothing(fake_desktop, model):
     desk = await fake_desktop({"*": "never"})
@@ -265,8 +266,10 @@ async def test_the_info_line_reports_no_end_signal_when_nothing_was_captured(fak
         ("web:claude", ("claude", "pane")),
         ("web:chatgpt", ("chatgpt", "pane")),
         ("web:grok", ("grok", "pane")),
+        ("web:gemini", ("gemini", "pane")),  # the fourth site since 2026-10-17
         ("web:chatgpt:analyst", ("chatgpt", "analyst")),
         ("web:grok:analyst", ("grok", "analyst")),
+        ("web:gemini:analyst", ("gemini", "analyst")),
     ],
 )
 def test_parse_web_model(model, expected):
@@ -279,7 +282,7 @@ def test_parse_web_model(model, expected):
         "",
         "web",
         "web:",
-        "web:gemini",
+        "web:deepseek",  # a council vendor with no site
         "web:claude:pane",
         "web:claude:analyst:x",
         "openai/gpt-5",
@@ -356,7 +359,7 @@ def test_build_request_validates_through_the_frozen_model():
             req_id="r",
             model="web:claude",
             messages=MSGS,
-            role="gemini",
+            role="deepseek",  # a council vendor, never a bridge role (gemini is one since 2026-10-17)
             purpose="chat",
             conversation_id=None,
             timeout_s=1,

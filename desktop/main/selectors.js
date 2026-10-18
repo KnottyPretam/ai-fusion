@@ -29,6 +29,11 @@ export const mergeSelectors = siteAdapter.mergeSelectors
  */
 export const INSERT_SETTLE_MS = Number.isFinite(siteAdapter.INSERT_SETTLE_MS) && siteAdapter.INSERT_SETTLE_MS >= 0 ? siteAdapter.INSERT_SETTLE_MS : 120
 export const WATCH_DEBOUNCE_MS = 250
+/**
+ * How long the adapter's `verifyInput` polls for a trusted insert to land (site.cjs exports it; 1000 ms
+ * when a build does not). The orchestrator budgets it once per trusted submit (2026-10-17).
+ */
+export const TRUSTED_VERIFY_MS = Number.isFinite(siteAdapter.TRUSTED_VERIFY_MS) && siteAdapter.TRUSTED_VERIFY_MS >= 0 ? siteAdapter.TRUSTED_VERIFY_MS : 1000
 
 function deepClone(v) {
   return v === undefined ? undefined : JSON.parse(JSON.stringify(v))
@@ -56,7 +61,7 @@ export function mergeOverride(defaults, override) {
  * createSelectorsLoader({filePath, defaults, readFile, log}) → loader
  *   loader.load()      read + merge; returns {config, warnings, error}; keeps the last good config
  *   loader.reload()    alias of load()
- *   loader.current()   the effective full config object ({version, chatgpt, claude, grok})
+ *   loader.current()   the effective full config object ({version, claude, chatgpt, grok, gemini})
  *   loader.lastError() string | null (bad JSON / unreadable file), cleared by the next good load
  *   loader.warnings()  the warnings of the last successful merge
  *   loader.filePath    the override path (or null when no override is configured)
@@ -214,4 +219,18 @@ export function chatUrlPatternFor(config, slot) {
   if (typeof block.chatUrlPattern === 'string' && block.chatUrlPattern !== '') return block.chatUrlPattern
   const d = DEFAULT_SELECTORS[slot]
   return d && typeof d.chatUrlPattern === 'string' ? d.chatUrlPattern : ''
+}
+
+/**
+ * Whether main types into this site with TRUSTED input (trusted-input.js) instead of the adapter's
+ * synthetic insert + click (2026-10-17). The merged config's boolean `trustedInput` when it has one — a
+ * `{"gemini":{"trustedInput":false}}` in selectors.json is a kill switch that takes effect on the next
+ * turn, because main reads `selectors.current()` per turn and the loader hot-reloads the file — else the
+ * adapter's own default (true only for gemini), else false.
+ */
+export function trustedInputFor(config, slot) {
+  const block = blockFor(config, slot)
+  if (typeof block.trustedInput === 'boolean') return block.trustedInput
+  const d = DEFAULT_SELECTORS[slot]
+  return !!(d && d.trustedInput === true)
 }

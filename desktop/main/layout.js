@@ -7,7 +7,7 @@
 
 import { SLOTS } from './sites.js'
 
-/** Every key a layout may carry: the three panes plus the Stage 3 analyst view. */
+/** Every key a layout may carry: the site panes (sites.js SLOTS) plus the Stage 3 analyst view. */
 export const LAYOUT_KEYS = Object.freeze([...SLOTS, 'analyst'])
 
 const RECT_KEYS = ['x', 'y', 'width', 'height']

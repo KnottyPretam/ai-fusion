@@ -33,8 +33,11 @@ function fixtureText(name) {
 const fenced = (json) => '```json\n' + json + '\n```'
 
 /** The per-site stop button (selectors v2 `stop`, first entry) and the done signal each site ends on. */
-const STOP = { chatgpt: DEFAULT_SELECTORS.chatgpt.stop[0], claude: DEFAULT_SELECTORS.claude.stop[0], grok: DEFAULT_SELECTORS.grok.stop[0] }
-const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone' }
+const STOP = { chatgpt: DEFAULT_SELECTORS.chatgpt.stop[0], claude: DEFAULT_SELECTORS.claude.stop[0], grok: DEFAULT_SELECTORS.grok.stop[0], gemini: DEFAULT_SELECTORS.gemini.stop[0] }
+// 2026-10-17: gemini ends by its thumbs-up (the look-alike mounts them with the end signal, as the public sources say)
+const DONE_BY = { chatgpt: 'done_selector', claude: 'stop_gone', grok: 'stop_gone', gemini: 'done_selector' }
+/** The planted defense each look-alike answers a challenge with: gemini's is claude's (2026-10-17 — no gemini fixture is added). */
+const DEFENSE_OF = { gemini: 'claude' }
 const CHATGPT_DONE = DEFAULT_SELECTORS.chatgpt.done[0]
 
 /** A reply long enough that a partial taken a few hundred ms into a multi-second stream is non-empty. */
@@ -46,9 +49,11 @@ function expectObserved(res, text, doneBy) {
   expect(Number.isInteger(res.ms)).toBe(true)
   expect(res.ms).toBeGreaterThanOrEqual(0)
   expect(res.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//)
-  // 2026-10-11: the three reading flags ride beside the text on the INTERNAL result (never the bridge frame)
-  expect(Object.keys(res).sort()).toEqual(['bodyMatched', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
-  for (const flag of ['bodyMatched', 'echoesPrompt', 'heldUserTurn']) expect(typeof res[flag]).toBe('boolean')
+  // 2026-10-11: the reading flags ride beside the text on the INTERNAL result (never the bridge frame); `bodyMissed`
+  // since 2026-10-17 — a CONFIGURED body cascade that matched nothing, so never beside a matched body
+  expect(Object.keys(res).sort()).toEqual(['bodyMatched', 'bodyMissed', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'ok', 'op', 'reqId', 'text', 'url'])
+  for (const flag of ['bodyMatched', 'bodyMissed', 'echoesPrompt', 'heldUserTurn']) expect(typeof res[flag]).toBe('boolean')
+  if (res.bodyMatched) expect(res.bodyMissed).toBe(false)
 }
 
 function expectPartialOf(res, full) {
@@ -98,7 +103,8 @@ for (const site of SLOTS) {
       await open(page, { site, reply: 'json', replyMs: 0 })
       const sent = await request(page, { op: 'insertAndSubmit', text: 'plain question, no key' })
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, quietMs: 300 })
-      expectObserved(res, 'Echo: plain question, no key', site === 'chatgpt' ? 'done_selector' : 'quiet')
+      // a site with a done marker (chatgpt, gemini) still sees it on an instant reply; the others end on quiet
+      expectObserved(res, 'Echo: plain question, no key', DONE_BY[site] === 'done_selector' ? 'done_selector' : 'quiet')
     })
   })
 }
@@ -166,7 +172,7 @@ test.describe('?reply=json', () => {
   const CONVERGENCE = fenced(fixtureText('analyst.convergence.1.jsonl'))
   // S12: the fake site's pre-parse restatement (test/fake-site/site.js CANNED_PREPARSE), keyed on `Question to restate:`
   const CANNED_PREPARSE = `{"question": "What is the maximum selectable full-scale range of the gyroscope in the Bosch BMI088 IMU?"}`
-  const DEFENSE = Object.fromEntries(SLOTS.map((s) => [s, fenced(fixtureText(`${s}.defense.1.jsonl`))]))
+  const DEFENSE = Object.fromEntries(SLOTS.map((s) => [s, fenced(fixtureText(`${DEFENSE_OF[s] || s}.defense.1.jsonl`))]))
 
   // Stage 3: the fake site renders the fence as REAL code-block chrome (a header carrying the
   // language, a Copy button, the body in <pre><code>) — inside the <pre> on chatgpt, before it on
@@ -185,7 +191,11 @@ test.describe('?reply=json', () => {
       await expect(page.locator(`${container} .code-header`)).toContainText('json') // grok's header also holds its copy button
       expect(await page.locator(`${container} .md button`).count()).toBeGreaterThan(0)
       if (site === 'grok') await expect(page.locator(`${container} code[class]`)).toHaveCount(0) // the header is the only language clue
-      else await expect(page.locator(`${container} code.language-json`)).toHaveCount(1)
+      else if (site === 'gemini') {
+        // 2026-10-17: a `code-block` CUSTOM element around the block, no language class — the header is the only clue
+        await expect(page.locator(`${container} code-block pre`)).toHaveCount(1)
+        await expect(page.locator(`${container} code[class*='language-']`)).toHaveCount(0)
+      } else await expect(page.locator(`${container} code.language-json`)).toHaveCount(1)
       // the capture is the fence and nothing else — the chrome text IS in the container's innerText
       const shown = await replyState(page)
       expect(shown.replyText).toContain('Copy')
@@ -219,12 +229,12 @@ test.describe('?reply=json', () => {
     expect(EXTRACTION.endsWith('}\n```')).toBe(true)
   })
 
-  for (const site of ['claude', 'grok']) {
-    test(`${site}: YOUR CLAIM → this site's DefenseReply (${site}.defense.1), verbatim`, async ({ page }) => {
+  for (const site of ['claude', 'grok', 'gemini']) {
+    test(`${site}: YOUR CLAIM → this site's DefenseReply (${DEFENSE_OF[site] || site}.defense.1), verbatim`, async ({ page }) => {
       await open(page, { site, reply: 'json', replyMs: 300 })
       const sent = await request(page, { op: 'insertAndSubmit', text: 'Round 1 of 2.\n<<<YOUR CLAIM>>>\nselectable up to 2000 deg/s\n<<<END YOUR CLAIM>>>' })
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
-      expectObserved(res, DEFENSE[site], 'stop_gone')
+      expectObserved(res, DEFENSE[site], DONE_BY[site])
       expect(JSON.parse(DEFENSE[site].slice('```json\n'.length, -'\n```'.length)).stance).toBe('defend')
     })
   }
@@ -692,6 +702,20 @@ test('snapshot: the scrubbed DOM passes the fixture lint, keeps structure and th
   expect((html.match(/…/g) || []).length).toBeGreaterThan(3) // title, header, the messages, the buttons
 })
 
+test('snapshot (gemini, 2026-10-17): the account button\'s label leaves only `Google Account: name`, the `fonticon` / `data-test-id` attributes survive for calibration, and the result passes the fixture lint', async ({ page }) => {
+  await open(page, { site: 'gemini', replyMs: 0, thinking: 1 })
+  const sent = await request(page, { op: 'insertAndSubmit', text: 'snapshot me' })
+  expect((await request(page, { op: 'observe', baselineCount: sent.assistantCount })).ok).toBe(true)
+  await expect(page.locator("a[aria-label^='Google Account: Fake User']")).toHaveCount(1) // the page names the account…
+  const { html } = await request(page, { op: 'snapshot' })
+  expect(lintText(html)).toEqual([])
+  expect(html).toContain('aria-label="Google Account: name"') // …the snapshot does not
+  for (const s of ['Fake User', 'example.invalid', 'SignOutOptions', 'snapshot me', 'Echo']) expect(html).not.toContain(s)
+  for (const s of ['fonticon="thumb_up"', 'fonticon="mic"', 'data-test-id="thoughts-content"', '<model-response>', '<user-query>', 'class="ql-editor', 'class="ql-clipboard"']) expect(html).toContain(s)
+  const attrs = new Set([...html.matchAll(/ ([a-z-]+)="/g)].map((m) => m[1]))
+  for (const a of attrs) expect(SNAPSHOT_KEEP_ATTRS).toContain(a)
+})
+
 test('ready waits for the composer after a loadURL to /c/<id> (the page mounts late); a further loadURL re-boots the preload', async ({ page }) => {
   await open(page, { site: 'grok', state: 'slow', path: '/c/1a2b3c4d5e6f7a8b' })
   const h = await request(page, { op: 'health' })
@@ -765,6 +789,8 @@ test.describe("?thinking=1 — claude's doubled thinking summary", () => {
     expectObserved(res, [thinking.summary, thinking.summary, thinking.detail, ANSWER].join('\n\n'), 'stop_gone')
     // the fallback is chrome-noisy, never lossy: the whole answer is still there
     expect(res.text.endsWith(ANSWER)).toBe(true)
+    // 2026-10-17: no body cascade configured, so nothing MISSED — `bodyMissed` names a configured cascade's miss only
+    expect([res.bodyMatched, res.heldUserTurn, res.bodyMissed]).toEqual([false, false, false])
   })
 
   test('a rendered markdown answer under the widget still round-trips as GFM through `.prose`', async ({ page }) => {
@@ -780,8 +806,57 @@ test.describe("?thinking=1 — claude's doubled thinking summary", () => {
     await expect(page.locator('.font-claude-response .prose table th')).toHaveCount(2)
   })
 
+  // 2026-10-17 — gemini's thinking panel (public sources, unmeasured): an EXPANDED `model-thoughts` above the answer that
+  // renders its OWN `message-content > .markdown.markdown-main-panel`. It is on screen and in no hidden state, so the
+  // only thing between the thoughts and the capture is the body cascade's `:not(model-thoughts *)` scoping.
+  test('gemini: the thinking panel is ON SCREEN with its own markdown body, and the capture is the answer alone (done_selector)', async ({ page }) => {
+    await open(page, { site: 'gemini', thinking: 1, replyMs: 400 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, ANSWER, 'done_selector')
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    expect(res.text).not.toContain(thinking.summary)
+    expect(res.text).not.toContain(thinking.detail)
+    await expect(page.locator('model-response .markdown-main-panel')).toHaveCount(2) // the thoughts' body and the answer's
+    await expect(page.locator('model-thoughts .markdown-main-panel')).toBeVisible()
+    await expect(page.locator('model-thoughts')).toContainText(thinking.detail)
+  })
+
+  test('gemini: an UNSCOPED body entry (`.markdown-main-panel`) captures the thoughts in front of the answer — the scoping is what keeps them out', async ({ page }) => {
+    await open(page, { site: 'gemini', thinking: 1, replyMs: 400, selectors: withOverride('gemini', { assistantText: ['.markdown-main-panel'] }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    expectObserved(res, [thinking.summary, thinking.detail, ANSWER].join('\n\n'), 'done_selector')
+  })
+
+  // 2026-10-17 (review of the gemini adapter): every gemini body entry is unmeasured, so a cascade MISS is a realistic
+  // first capture. The turn-level fallback then reads the `model-response` itself — and leaves its thinking panel and its
+  // `cdk-visually-hidden` "Gemini said" label out (`turnChrome`); the result says `bodyMissed` so main can keep the DOM.
+  test('gemini: a body cascade that MISSES (a renamed class) still captures the answer alone — never the thoughts, never the "Gemini said" label — and says bodyMissed', async ({ page }) => {
+    await open(page, { site: 'gemini', thinking: 1, replyMs: 400, selectors: withOverride('gemini', { assistantText: ['.renamed-body'] }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, ANSWER, 'done_selector')
+    const thinking = await page.evaluate(() => window.__fake.thinking)
+    expect(res.text).not.toContain(thinking.summary)
+    expect(res.text).not.toContain(thinking.detail)
+    expect(res.text).not.toContain('Gemini said')
+    expect([res.bodyMatched, res.heldUserTurn, res.bodyMissed]).toEqual([false, false, true])
+    await expect(page.locator('model-response .cdk-visually-hidden')).toHaveText('Gemini said') // the label IS in the turn
+    await expect(page.locator('model-response .renamed-body')).toHaveCount(0)
+  })
+
+  test('gemini: the body cascade matching reports bodyMissed false (the thinking capture above, flags only)', async ({ page }) => {
+    await open(page, { site: 'gemini', thinking: 1, replyMs: 400 })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
+    expectObserved(res, ANSWER, 'done_selector')
+    expect([res.bodyMatched, res.heldUserTurn, res.bodyMissed]).toEqual([true, false, false])
+  })
+
   for (const site of ['chatgpt', 'grok']) {
-    test(`?thinking=1 is claude-only: ${site} keeps its shape`, async ({ page }) => {
+    test(`?thinking=1 is claude's and gemini's only: ${site} keeps its shape`, async ({ page }) => {
       await open(page, { site, thinking: 1, replyMs: 0 })
       const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, quietMs: 300 })

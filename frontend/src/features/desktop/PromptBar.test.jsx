@@ -175,7 +175,8 @@ describe('PromptBar: Send through useSendTurn', () => {
     enter()
     type('go')
     expect(sendBtn()).toBeEnabled()
-    for (const slot of ['claude', 'chatgpt', 'grok']) fireEvent.click(screen.getByTestId(`prompt-target-${slot}`))
+    // no slotConfig preloaded: the default council, every site (Gemini included)
+    for (const slot of ['claude', 'chatgpt', 'grok', 'gemini']) fireEvent.click(screen.getByTestId(`prompt-target-${slot}`))
     expect(sendBtn()).toBeDisabled()
     expect(sendBtn().title).toMatch(/at least one target/)
     enter()
@@ -468,10 +469,12 @@ describe('PromptBar: bridge banner', () => {
 })
 
 describe('PromptBar: Stage 3 (bridge error text, the desktop create body)', () => {
+  // no default from main yet: every site on its web session (four since 2026-10-17)
   const DESKTOP_SLOTS = {
     claude: { model: 'web:claude', effort: 'off' },
     chatgpt: { model: 'web:chatgpt', effort: 'off' },
     grok: { model: 'web:grok', effort: 'off' },
+    gemini: { model: 'web:gemini', effort: 'off' },
   }
 
   test('the bridge banner shows the error main sends with a disconnected state, and drops it once connected', () => {

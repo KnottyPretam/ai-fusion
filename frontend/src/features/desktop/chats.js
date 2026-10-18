@@ -17,7 +17,7 @@
 //   * "New chat everywhere" (the prompt-bar button and the Ctrl+Shift+N `new-chat-all` shortcut)
 //     = `createConversation` + `openChats(newId)` (plan row); from Stage 3 the conversation is
 //     created with `councilSlotConfig(panes.council)` (./analyst.js: main's default council — the
-//     three web panes when none — plus the chosen analyst), like PromptBar's first-Send create. The id last handed to main is
+//     web panes when none, four since 2026-10-17 — plus the chosen analyst), like PromptBar's first-Send create. The id last handed to main is
 //     remembered so the `conversation/loaded` the create dispatches does not open the same chats a
 //     second time (a double `loadURL` would reload the panes mid-navigation).
 //   * Pre-parse (2026-09-23): a first Pre-parse with no conversation selected needs an id — the
@@ -26,6 +26,12 @@
 //     (Decision 12). `createAdopted()` is `newChatEverywhere` minus the navigation: the same create,
 //     the same last-opened mark (so the `loaded` the create dispatches is not a switch), and no
 //     `openChats`; the first Send then adopts the panes' current chats.
+//   * The agents stepper (2026-10-17, ./AgentStepper.jsx) starts a new chat with a CHANGED council
+//     and hands the spec over explicitly: `newChatEverywhere(council)`. `councilRef` below is only
+//     assigned at render, so a create issued straight after the `panes/council` dispatch (in the
+//     same async handler, before React re-renders) would otherwise seat the stale default. An
+//     argument that is not a valid spec — a click event passed by accident, nothing at all (the
+//     prompt-bar button, the Ctrl+Shift+N shortcut) — falls back to the ref.
 // Both are refused while any feature stream runs (the sidebar disables New the same way: a switch
 // mid-stream would book the in-flight turn into the wrong conversation) and while a create is in
 // flight. Every `window.triplex` call is optional-chained: the hook works under a partial stub
@@ -38,6 +44,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createConversation } from '../../api/http.js'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { councilSlotConfig } from './analyst.js'
+import { normalizeCouncil } from './slice.js'
 
 export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse'] // preparse: the panes must not navigate while the composer waits on the analyst
 
@@ -106,13 +113,14 @@ export function useOpenChats(api, { enabled = true } = {}) {
   // scheduled, not synchronous), so the effect sees no switch; only "New chat everywhere" then
   // asks main to open the new conversation's chats.
   const create = useCallback(
-    async (navigate) => {
+    async (navigate, council) => {
       if (busyRef.current || streamingRef.current) return null
       busyRef.current = true
       setBusy(true)
       setError(null)
       try {
-        const conv = await createConversation(dispatch, { slot_config: councilSlotConfig(councilRef.current) })
+        const spec = normalizeCouncil(council) ? council : councilRef.current
+        const conv = await createConversation(dispatch, { slot_config: councilSlotConfig(spec) })
         lastOpened.current = conv.id
         if (navigate) settle(api?.openChats?.(conv.id))
         return conv
@@ -127,7 +135,8 @@ export function useOpenChats(api, { enabled = true } = {}) {
     [api, dispatch],
   )
 
-  const newChatEverywhere = useCallback(() => create(true), [create])
+  /** `council` (optional): the spec the new conversation seats, instead of main's default (header). */
+  const newChatEverywhere = useCallback((council) => create(true, council), [create])
 
   /** Pre-parse's create: the conversation exists, the panes keep the chats they show (header). */
   const createAdopted = useCallback(() => create(false), [create])

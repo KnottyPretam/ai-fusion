@@ -363,7 +363,9 @@ def test_pane_slot_is_a_council_pane_seated_on_that_pane():
     )
     assert feature.pane_slot("web:claude", panes) == "claude"
     assert feature.pane_slot("web:claude:analyst", panes) is None
-    assert feature.pane_slot("web:gemini", panes) is None  # no adapter: parse_web_model refuses
+    assert feature.pane_slot("web:deepseek", panes) is None  # no adapter: parse_web_model refuses
+    # gemini is a site since 2026-10-17, but this council does not seat it: no thread to mirror into
+    assert feature.pane_slot("web:gemini", panes) is None
     assert feature.pane_slot("anthropic/claude-opus-5.5", panes) is None
     assert feature.pane_slot("ollama:hermes3", panes) is None
     two = SlotConfig(

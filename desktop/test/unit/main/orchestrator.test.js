@@ -6,7 +6,7 @@
 // every emitted frame passes protocol.validate().
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, suspectReason, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES, SUSPECT_SNAPSHOT_KIND, REREAD_FIRST_ROW_MS } from '../../../main/orchestrator.js'
+import { createOrchestrator, createMutex, insertAndSubmitBudgetMs, observeBudgetMs, rejectFromHealth, compileChatUrlPattern, suspectReason, BODY_MISS_SUSPECT_SITES, TIMEOUT_GRACE_MS, CHAT_URL_WAIT_MS, NAVIGATION_WAIT_MS, INSERT_SETTLE_MS, STRUCTURED_PURPOSES, SUSPECT_SNAPSHOT_KIND, REREAD_FIRST_ROW_MS } from '../../../main/orchestrator.js'
 import { INSERT_SETTLE_MS as SELECTORS_INSERT_SETTLE_MS } from '../../../main/selectors.js'
 import { AdapterRequestError } from '../../../main/adapter-client.js'
 import { validate } from '../../../main/protocol.js'
@@ -848,6 +848,30 @@ test('not suspect: a body-matched read of an exchange, a turn-level fallback (cl
     assert.equal(final.text, SUSPECT_TEXT)
     assert.equal(log.lines.some(([, m]) => m.includes('suspect')), false, JSON.stringify(flags))
   }
+})
+
+test('suspectReason (2026-10-17): bodyMissed is suspect on gemini only — the turn-level read is how claude and grok always read', () => {
+  assert.deepEqual(BODY_MISS_SUSPECT_SITES, ['gemini'])
+  assert.equal(suspectReason({ bodyMatched: false, heldUserTurn: false, bodyMissed: true }, 'gemini'), 'body_missed')
+  for (const slot of ['claude', 'chatgpt', 'grok', null]) {
+    assert.equal(suspectReason({ bodyMatched: false, heldUserTurn: false, bodyMissed: true }, slot), null, String(slot))
+  }
+  assert.equal(suspectReason({ bodyMatched: true, heldUserTurn: false, bodyMissed: false }, 'gemini'), null)
+  assert.equal(suspectReason({ bodyMissed: 'true' }, 'gemini'), null, 'booleans only')
+  assert.equal(suspectReason({ echoesPrompt: true, bodyMissed: true }, 'gemini'), 'echoes_prompt', 'the text flag still names the worse outcome first')
+})
+
+test('a gemini pane capture with bodyMissed:true saves gemini-suspect-<ts>.html under body_missed; the same flags on claude save nothing', async () => {
+  // no trustedInputFor dep here, so gemini submits through the synthetic path; the suspect rule is the observe's
+  const gem = await capturedTurn({ failureSnapshot: 'ok', clients: [...SLOTS, 'gemini'] }, { echoesPrompt: false, bodyMatched: false, heldUserTurn: false, bodyMissed: true }, 'gemini')
+  assert.deepEqual(gem.snapshots, [['pane', 'gemini', { kind: 'suspect' }]])
+  assert.equal(gem.final.ok, true)
+  assert.equal(gem.final.text, SUSPECT_TEXT)
+  const line = gem.log.lines.map(([, m]) => m).find((m) => m.includes('suspect'))
+  assert.match(line, /^\[orchestrator\] gemini: suspect capture \(body_missed\) — DOM snapshot saved to \/tmp\/snapshots\/gemini-suspect-1\.html$/)
+  const cl = await capturedTurn({ failureSnapshot: 'ok' }, { echoesPrompt: false, bodyMatched: false, heldUserTurn: false, bodyMissed: true }, 'claude')
+  assert.deepEqual(cl.snapshots, [])
+  assert.equal(cl.log.lines.some(([, m]) => m.includes('suspect')), false)
 })
 
 test('a snapshot dep that rejects, answers null, or is not wired: one line says so and the result is still delivered OK and unchanged', async () => {

@@ -1,7 +1,8 @@
 # DOM fixtures (hand-built, scrubbed shape) — Stage 3, workstream `capture-hardening`
 
-Twelve fixtures: `<site>-<state>.html` for `chatgpt` / `claude` / `grok` × `composer` / `streaming`
-/ `done` / `logged-out`. They exist so the selector cascades of `desktop/preload/site.cjs`
+Twelve fixtures at first: `<site>-<state>.html` for `chatgpt` / `claude` / `grok` × `composer` / `streaming`
+/ `done` / `logged-out` — since 2026-10-17 `gemini` too (five files, HAND-BUILT from public sources, see the last
+section), plus the measured extras listed further down. They exist so the selector cascades of `desktop/preload/site.cjs`
 (`DEFAULT_SELECTORS`, contract §4) and the session rules (contract §3) can be exercised offline,
 with no browser and no dependency: `test/unit/preload/fixtures.test.js` parses each file with the
 tiny DOM in `test/unit/preload/_dom.js`, runs the REAL `createAdapter()` over it and asserts the
@@ -16,10 +17,12 @@ tiny DOM in `test/unit/preload/_dom.js`, runs the REAL `createAdapter()` over it
   snapshot*, `scrubDom`) goes to `~/.config/triplex-desktop/snapshots/` and is never committed.
 - **Scrubbed shape** (what `scrubDom` emits, contract §3): only the attributes in
   `SNAPSHOT_KEEP_ATTRS` (`id class role contenteditable aria-label data-testid
-  data-message-author-role data-lexical-editor type disabled placeholder translate`), every text
+  data-message-author-role data-lexical-editor type disabled placeholder translate`, and since 2026-10-17
+  `data-test-id fonticon` — Google's own test attribute and a `mat-icon`'s glyph name), every text
   node replaced by `…`, no `script`/`style`/`link`/`meta`/`img`/`svg`/`iframe`/`video`/`audio`.
   `test/unit/preload/fixture-lint.test.js` enforces that shape, and the lint (`@`, `/c/`, `/chat/`,
-  a uuid, `googleusercontent`, `x.com/`) on top of it.
+  a uuid, `googleusercontent`, `x.com/`; since 2026-10-17 gemini's `/app/<id>` / `/gem/<id>` and a
+  `Google Account: <name>` label — `scrubValue` leaves `Google Account: name`) on top of it.
 - **Reformatted for review.** `scrubDom` emits one line; these are indented, so the whitespace
   between tags is the only difference from a scrubber fixed point (the shape test re-scrubs the
   parsed file and checks the result is stable).
@@ -66,6 +69,7 @@ tiny DOM in `test/unit/preload/_dom.js`, runs the REAL `createAdapter()` over it
 | grok assistant (`div[id^=response-]`), text (`.response-content-markdown`), stop (`button[aria-label=Stop]`), user bubble (`.message-bubble`) | unverified |
 | grok code block: a header row (language + copy button) before the `pre` | unverified |
 | grok logged out: sign-in links only (see consequence 1) | unverified |
+| gemini — every `gemini-*.html` (composer, logged-out, streaming, done, thinking) | **HAND-BUILT FROM PUBLIC SOURCES (2026-10-17)**, nothing measured by this app — see the last section |
 
 `id="response-uuid"` in the grok fixtures is what `scrubValue` makes of `id="response-<uuid>"` — the
 literal word, not an id.
@@ -337,3 +341,35 @@ composer never shows submit), and the page was settled: no stop control.
 
 Carried into `site.cjs` (the capture section, dated): `transcriptOrder` is the DOM **fallback** direction only; the
 diag line gained `geom=<yes|no|->` after `order=`.
+
+## gemini-composer / -logged-out / -streaming / -done / -thinking.html (2026-10-17) — HAND-BUILT, not recorded
+
+**These five are NOT snapshots.** gemini.google.com joined as the fourth site on 2026-10-17 and nobody had captured it
+through this app yet, so the files were written by hand from public sources dated 2026-08…10-17 — the voyager
+extension's turn selectors and its Oct-2026 menu fixture, the a8s-gemini-web driver's UI notes (2026-09-23/24), the
+CDP-measured selectors of an Electron 44 Gemini embed (2026-08-21), and three exporter userscripts — the same sources
+`DEFAULT_SELECTORS.gemini` is seeded from, and just as UNMEASURED. They are still a fixed point of `scrubDom` and pass the
+lint, like every fixture here. **Replace each with a pruned real snapshot after the first live capture** (menu → *Save
+DOM snapshot*, or the `gemini-failed-*` / `gemini-suspect-*` files a failed or suspect capture saves by itself), update
+`EXPECTED` in `test/unit/preload/fixtures.test.js`, and move the measured entries into `DEFAULT_SELECTORS.gemini` with
+dated comments.
+
+| fixture | what it shows | health |
+|---|---|---|
+| `gemini-composer` | a fresh `/app`: `rich-textarea > div.ql-editor[contenteditable][role=textbox]` beside Quill's contenteditable `div.ql-clipboard`, the microphone in the send slot, and the signed-in header's account button (`a[aria-label='Google Account: name']` — the scrubbed label) | `{composer 0, send null, reply null, stop null, session ok, messages 0, assistant 0}` |
+| `gemini-logged-out` | GUEST MODE: the same working composer, and a header `a[aria-label='Sign in']` — its `href` (`accounts.google.com/ServiceLogin…`) is scrubbed away, so the cascade's aria-label entry (2) is what matches offline; live, the href entries match first | `{composer 0, send null, reply null, stop null, session logged_out, …}` — a composer AND logged_out |
+| `gemini-streaming` | one `div.conversation-container` holding the `user-query` (a `cdk-visually-hidden` "You said" label, `.query-text`) and the `model-response` (its own label, `message-content > div.markdown.markdown-main-panel`), the stop control in the send slot | `{composer 0, send null, reply 0, stop 0, session ok, messages 2, assistant 1}` |
+| `gemini-done` | the finished turn's `message-actions` (Good response / Bad response / Copy, each with its `mat-icon fonticon`), a copy button (`data-test-id=copy-button`) on the user's own query, a `code-block` CUSTOM element around the fence, text back in the composer | `{composer 0, send 0, reply 0, stop null, session ok, messages 2, assistant 1}` |
+| `gemini-thinking` | an EXPANDED `model-thoughts` panel whose `[data-test-id=thoughts-content]` renders its OWN `message-content > div.markdown.markdown-main-panel` before the answer's, while the answer streams | `{composer 0, send null, reply 0, stop 0, session ok, messages 2, assistant 1}` |
+
+What `test/unit/preload/fixtures.test.js` pins on them: no composer entry can reach the clipboard decoy; the account
+button is no wall and guest mode is one; the anchor rule pairs the `user-query` with its `model-response` and the
+exchange box is never a container; the body cascade (`.markdown-main-panel:not(model-thoughts *):not(.thoughts-container *)`
+and the second entry) reads the answer alone, while an unscoped `.markdown-main-panel` would read the thoughts in front of
+it — and (2026-10-17 review) when the body cascade MISSES altogether, the turn-level fallback still reads the answer alone,
+the thinking panel and the `cdk-visually-hidden` "Gemini said" label left out (`turnChrome`, which nothing in a claude /
+chatgpt / grok fixture carries); an invisible reCAPTCHA frame added to `gemini-composer` leaves the session ok; the thumbs-up
+is the done marker, never a copy button; and the `code-block` custom element is read as a BLOCK (since 2026-10-17
+`toMarkdown` treats a hyphenated tag that holds a block as one — before that the whole fence collapsed into one inline
+code span). The scrubbed header text `…` stays a stray paragraph, as on claude and grok (consequence 3), and the fence
+has no language: the code carries no class and the header's token is scrubbed.

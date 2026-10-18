@@ -1,7 +1,8 @@
 // council.js (2026-09-27, "a council anyone can assemble") — the pure half of the Agents page.
 //
-// A council is 2..5 agents from the 7-vendor catalog, each on ONE transport: a subscription web
-// session (`web:<site>`, only the three sites with a Stage-1 adapter), token based through
+// A council is 2..5 agents from the 7-vendor catalog (2..4 from the editors since 2026-10-17:
+// COUNCIL_EDIT_MAX), each on ONE transport: a subscription web session (`web:<site>`, only the
+// SITES with an adapter — claude, chatgpt, grok and, since 2026-10-17, gemini), token based through
 // OpenRouter (an `org/model` slug, one key for every vendor) or local Ollama (`ollama:<name>`).
 // Transport IS the model string (backbone rule 1), so a row is {slot, transport, model, effort}
 // and `specFromRows` / `rowsFromSpec` convert to and from the `{slots: {slot: {model, effort}}}`
@@ -11,8 +12,15 @@ import { COUNCIL_MAX, COUNCIL_MIN, SITES, SLOT_IDS, SLOT_LABELS, SLOT_VENDORS, i
 
 export const TRANSPORTS = ['web', 'openrouter', 'ollama']
 export const TRANSPORT_LABELS = { web: 'Subscription (web session)', openrouter: 'Token based (OpenRouter)', ollama: 'Local (Ollama)' }
+/**
+ * The most agents an EDITOR seats (2026-10-17): the agents stepper and the Agents page's Add never
+ * make a fifth. Every reader still accepts five (COUNCIL_MAX, normalizeCouncil, validateCouncil,
+ * main's parseCouncil, the backend), because five-member conversations exist on disk — lowering a
+ * reader would silently drop them.
+ */
+export const COUNCIL_EDIT_MAX = 4
 export const TRANSPORT_TITLES = {
-  web: 'Your own login on the site, in a native pane; no key, no token cost. Stage 1: ChatGPT, Claude and Grok.',
+  web: 'Your own login on the site, in a native pane; no key, no token cost. Claude, ChatGPT, Grok and Gemini.',
   openrouter: 'Called through OpenRouter with the one key saved below; tokens and cost are metered. The only way to run the uncensored DeepSeek / Qwen / MiMo variants hosted there.',
   ollama: 'A model on the local Ollama server (ollama pull <name>); no key, no cost, your machine does the work.',
 }
@@ -21,7 +29,7 @@ export const EFFORTS = ['off', 'low', 'medium', 'high']
 export const OPENROUTER_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:-]+$/
 export const OLLAMA_ID = /^ollama:\S+$/
 
-/** The transports a vendor supports in Stage 1: a site has all three, the others token or local. */
+/** The transports a vendor supports: a site has all three, the others token or local. */
 export function transportsFor(slot) {
   return isSiteId(slot) ? TRANSPORTS : ['openrouter', 'ollama']
 }
@@ -85,7 +93,7 @@ export function specFromRows(rows) {
   return { slots }
 }
 
-/** The rows of the classic desktop council: the three sites on their web sessions. */
+/** The rows of the default desktop council: every site on its web session (four since 2026-10-17). */
 export function defaultRows() {
   return SITES.map((slot) => ({ slot, transport: 'web', model: webModelFor(slot), effort: 'off' }))
 }

@@ -7,9 +7,10 @@ LLM layer sends the effort as configured and `reasoning.build` coerces at reques
 
 Since 2026-09-27 the checks run over the config's COUNCIL (`schemas.council_of`, 2..5 slots in
 catalog order), and a `web:` model is checked FIRST: a subscription session belongs to exactly one
-site, so `web:<site>` on any other slot, a site without a Stage-1 adapter (`web:gemini` -- a vendor
-the council can seat on OpenRouter or Ollama only, until a Stage-2 adapter exists), or a string the
-bridge could not parse (`web:claude:foo`, `web:`) is 422 `web_slot_mismatch{slot, model}`.
+site, so `web:<site>` on any other slot, a site without a web adapter (`web:deepseek` -- a vendor
+the council can seat on OpenRouter or Ollama only; `web:gemini` has been legal since 2026-10-17,
+when gemini joined `BRIDGE_SLOTS`), or a string the bridge could not parse (`web:claude:foo`,
+`web:`) is 422 `web_slot_mismatch{slot, model}`.
 `web:<slot>` and `web:<slot>:analyst` on the slot's own site both pass -- the bridge decides the
 view. The bridge would refuse such a model at Send time anyway (`bridge.parse_web_model`, whose
 grammar this mirrors); refusing it at PUT time keeps the mistake out of the document.
@@ -37,8 +38,8 @@ def _meta(model: str) -> ModelMeta | None:
 
 def web_slot_mismatch(slot: SlotId, model: str) -> bool:
     """True when `model` is a `web:` string whose site is not this slot, is a site without a
-    Stage-1 adapter, or is not of the form the bridge parses (`web:<slot>` / `web:<slot>:analyst`;
-    both pass on the slot's own site -- the bridge decides the view)."""
+    web adapter (not in `BRIDGE_SLOTS`), or is not of the form the bridge parses (`web:<slot>` /
+    `web:<slot>:analyst`; both pass on the slot's own site -- the bridge decides the view)."""
     if not isinstance(model, str) or not model.startswith("web:"):
         return False
     parts = model.split(":")

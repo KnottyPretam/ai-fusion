@@ -91,7 +91,8 @@
 //     `<template shadowrootmode="open">`, and kept attribute VALUES have every identity token
 //     replaced WHOLE (a uuid → `uuid`, an e-mail address → `email`, an `@handle` → `handle`,
 //     `x.com/<profile…>` → `x-com/profile`, `/c/<id>` and `/chat/<id>` → `/c-/id` / `/chat-/id`,
-//     `googleusercontent` → `img-host`) — never just the delimiter the fixture lint
+//     `googleusercontent` → `img-host`; since 2026-10-17 gemini's `/app/<id>` → `/app-/id`, `/gem/<gem>/<id>` →
+//     `/gem-/id` and `Google Account: <name…>` → `Google Account: name`) — never just the delimiter the fixture lint
 //     (`test/unit/preload/_fixture-lint.js`) keys on, so nothing of an account survives and the
 //     output passes the lint by construction.
 //   * `config`: a full config is re-merged onto DEFAULT_SELECTORS (every key present, unknown keys
@@ -204,6 +205,11 @@
 // DOM as `<slot>-suspect-<ts>.html` (main/orchestrator.js `suspectReason`). Replayed offline by the fake site's
 // `?chatgptLayout=group` + `?askUser=1` and pinned by `test/adapters/exchange.spec.js` and
 // `test/unit/preload/exchange.test.js`.
+// 2026-10-17 (review of the gemini adapter): the TURN-LEVEL fallback has a skip predicate too, `turnChrome` —
+// gemini's thinking panel (`model-thoughts`, `.thoughts-container`) and its `cdk-visually-hidden` "Gemini said"
+// label, nothing any classic site carries — so a gemini body-cascade miss reads the answer, not the thoughts in
+// front of it; and the observe result says `bodyMissed` (a configured body cascade matched nothing) so main can
+// keep that DOM. Pinned by `test/unit/preload/fixtures.test.js` (gemini-thinking) and `test/adapters/observe.spec.js`.
 //
 // S10 — the capture ended mid-reply once the answers got LONG. Evidence from a real Analyze on
 // 2026-09-20, after the user raised the reasoning effort inside chatgpt and claude (the three replies
@@ -229,11 +235,32 @@
 // ticks S9 introduced), and main sends the analyst view a multiple of it. Pinned by the S10 block of
 // `test/unit/preload/observe.test.js`, the long-fenced-reply spec in `test/adapters/observe.spec.js`
 // (fake site `?replyChars` / `?lulls`) and `test/unit/main/orchestrator.test.js`.
+//
+// 2026-10-17 — gemini.google.com, the fourth site. Its `DEFAULT_SELECTORS.gemini` block is SEEDED FROM PUBLIC
+// SOURCES (browser extensions, userscripts and two open-source Gemini drivers, dated 2026-08…10-17) and is
+// UNMEASURED: nothing in it has been read off a live page by this app yet, and the fixtures
+// `test/fixtures/dom/gemini-*.html` are hand-built to the same sources. The live calibration replaces both.
+// Two things are different about this site and shape everything below:
+//   1. Signed out, Gemini is GUEST MODE — a working composer on a lesser model, a "Sign in" link in the header.
+//      "No composer" therefore never means "logged out" here; the `loggedOut` cascade has to match that link,
+//      or a signed-out pane reads `ok` and answers from the wrong model.
+//   2. Gemini is publicly reported (2026-09-30, an Electron 44 embed) to ignore UNTRUSTED input: a synthetic
+//      insert plus `el.click()` showed the Stop state and produced no usable reply. `confirmSubmission` would
+//      take that Stop for a submission (`stop_button`), so a synthetic path with a fallback on `not_submitted`
+//      never falls back. Main types the prompt itself through Electron's TRUSTED `webContents.insertText` /
+//      `sendInputEvent` (never CDP, never a user-agent change, never `executeJavaScript` with the prompt —
+//      gotcha 19), and this adapter gets three ops that bracket main's keystrokes: `prepareInput` (session gate,
+//      focus, caret at the end), `verifyInput` (what landed: all / partial / none, as lengths) and
+//      `confirmSubmit` (did the trusted Enter submit; one click fallback on request). The per-site key
+//      `trustedInput` (true only for gemini) is what main reads to choose that path; the adapter never asks
+//      main to type, and a page can never make it.
 
 ;(() => {
   'use strict'
 
-  const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok'])
+  // 2026-10-17: gemini joined last — the bridge's site vocabulary in catalog order (vendors.WEB_SITES == BRIDGE_SLOTS
+  // == main/protocol.js SLOT_IDS == main/sites.js SLOTS == this list)
+  const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok', 'gemini'])
 
   const SESSION_STATES = Object.freeze(['ok', 'logged_out', 'challenge', 'blocked', 'unknown'])
   /** Session states that reject an op before any DOM write (contract §3). */
@@ -263,6 +290,12 @@
   const VERIFY_TAIL_CHARS = 20
   /** After an insertion, let the editor's own reconciliation frame run before reading back. */
   const INSERT_SETTLE_MS = 60
+  /**
+   * `verifyInput` (2026-10-17): how long the composer is watched for main's TRUSTED insertion to land before
+   * the reading is final. `webContents.insertText` commits in one go, so this is the editor's own re-render, not
+   * the typing; a message may carry `verifyMs`. Main budgets the same figure (TRUSTED_VERIFY_MS).
+   */
+  const TRUSTED_VERIFY_MS = 1000
   const MAX_SHADOW_DEPTH = 8
   /** Upper bound on the parent/host walk of `containsDeep` (a real thread is nowhere near this deep). */
   const MAX_ANCESTOR_HOPS = 512
@@ -284,6 +317,11 @@
     'disabled',
     'placeholder',
     'translate',
+    // 2026-10-17 (gemini): Google's own test attribute is `data-test-id` (with the second hyphen), and `fonticon`
+    // names a `mat-icon` glyph — the language-neutral half of the send / stop / done cascades. Without them
+    // neither a fixture nor a self-saved failure snapshot could show what those entries key on.
+    'data-test-id',
+    'fonticon',
   ])
   const VOID_TAGS = Object.freeze(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
   /** What every non-blank text node becomes in a snapshot. */
@@ -308,17 +346,24 @@
     "[data-testid='assistant-message']", // claude assistant turns (2026-10-10 redesign); grok's bubbles carry it too
     "div[id^='response-']", // grok rows (user AND assistant: every row is one)
     '.message-bubble', // grok user/assistant bubbles
+    'user-query', // gemini user turns (2026-10-17, public sources — unmeasured)
+    'model-response', // gemini assistant turns (2026-10-17, public sources — unmeasured)
   ])
   const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
-  /** The user's OWN turn, per site — what tells an exchange-shaped container apart from a single reply (2026-09-27). */
-  const USER_TURN_SELECTORS = Object.freeze(["[data-message-author-role='user']", "[data-testid='user-message']", "[class~='group/user-message']"])
   /**
-   * Screen-reader-only class tokens (Tailwind's `sr-only`, Bootstrap's `visually-hidden`): text a sighted
+   * The user's OWN turn, per site — what tells an exchange-shaped container apart from a single reply (2026-09-27),
+   * and what the anchor rule matches the typed text against. `user-query` is gemini's custom element (2026-10-17,
+   * unmeasured): without it the anchor rule, and with it the capture on a long chat, would find no turn at all.
+   */
+  const USER_TURN_SELECTORS = Object.freeze(["[data-message-author-role='user']", "[data-testid='user-message']", "[class~='group/user-message']", 'user-query'])
+  /**
+   * Screen-reader-only class tokens (Tailwind's `sr-only`, Bootstrap's `visually-hidden`, Angular CDK's
+   * `cdk-visually-hidden` — gemini's "You said" / "Gemini said" headings, 2026-10-17): text a sighted
    * reader never sees — chatgpt.com's "You said:" / "ChatGPT said:" headings — and so chrome, never the
    * visible answer. Dropped ONLY by the exchange-fallback read (`exchangeText`, 2026-10-11): a reply body
    * the `assistantText` cascade matched, and a turn-level container, read exactly as they always did.
    */
-  const SR_ONLY_CLASSES = Object.freeze(['sr-only', 'visually-hidden'])
+  const SR_ONLY_CLASSES = Object.freeze(['sr-only', 'visually-hidden', 'cdk-visually-hidden'])
 
   /** `el` carries a screen-reader-only class token (see SR_ONLY_CLASSES). */
   function isScreenReaderOnly(el) {
@@ -348,6 +393,32 @@
   }
 
   /**
+   * The skip predicate of the TURN-LEVEL fallback read (2026-10-17, review of the gemini adapter): what
+   * `replyReading` leaves out of a container that holds no user turn when no `assistantText` entry matched in
+   * it. gemini's `model-response` holds, beside the answer, the thinking panel (`model-thoughts` /
+   * `.model-thoughts`, its `.thoughts-container` rendering its OWN `message-content > .markdown`) and the
+   * Angular CDK screen-reader label (`cdk-visually-hidden`, "Gemini said"). Every gemini body entry is
+   * unmeasured, so a cascade miss is a realistic first capture — and read whole, that container handed main
+   * the label and the model's thoughts in front of the answer, as a success (a review probe over fixture
+   * gemini-thinking). Gemini's own tags and classes ONLY: no claude / chatgpt / grok markup carries any of
+   * them, so their turn-level reads stay byte for byte what they were — the generic `sr-only` /
+   * `visually-hidden` stay IN a turn-level read (chatgpt's per-turn "ChatGPT said:" heading among them), as
+   * the 2026-10-11 scope rule says.
+   */
+  const TURN_CHROME_TAGS = Object.freeze(['model-thoughts'])
+  const TURN_CHROME_CLASSES = Object.freeze(['model-thoughts', 'thoughts-container', 'cdk-visually-hidden'])
+
+  /** `el` is gemini's thinking panel or its screen-reader label (see TURN_CHROME_TAGS / TURN_CHROME_CLASSES). */
+  function turnChrome(el) {
+    if (!el || typeof el !== 'object') return false
+    if (TURN_CHROME_TAGS.includes(tagNameOf(el))) return true
+    const raw = safeTrue(() => typeof el.getAttribute === 'function') ? el.getAttribute('class') : null
+    const classes = raw === null || raw === undefined ? (typeof el.className === 'string' ? el.className : '') : String(raw)
+    for (const c of classes.split(/\s+/)) if (c !== '' && TURN_CHROME_CLASSES.includes(c)) return true
+    return false
+  }
+
+  /**
    * What `countAssistant()` counts: assistant-role containers only (+ a v2 `assistant` cascade).
    * This is the `assistantCount` handed to main (contract §2/§3) — Stage 2's observe baseline — so
    * the user's own turn, appended after the sample, is never mistaken for the reply.
@@ -366,6 +437,9 @@
     '.font-claude-message', // claude (older markup)
     "[data-testid='assistant-message']", // claude (2026-10-10 redesign); on grok the site's own cascade wins first
     "div[id^='response-']:has([data-testid='assistant-message'])", // grok (2026-09-27): only a row that holds an assistant bubble
+    // gemini (2026-10-17, public sources — unmeasured): the turn element itself, NEVER `div.conversation-container`,
+    // which holds the user's `user-query` too and would turn every gemini reply into an exchange-shaped container
+    'model-response',
   ])
 
   /**
@@ -389,6 +463,12 @@
    * v1 keeps working (main's loader warns on any other version). Override: <userData>/selectors.json.
    * Empty `stop` + `done` ⇒ quiet detection (claude and grok have no done marker; their stop
    * buttons are the done signal, quiet the fallback).
+   * `trustedInput` (2026-10-17, a BOOLEAN — the one non-list, non-number, non-direction key): whether main types
+   * the prompt itself through Electron's trusted input (`prepareInput` → `webContents.insertText` →
+   * `verifyInput` → a trusted Enter → `confirmSubmit`) instead of asking this adapter for `insertAndSubmit`. True
+   * only for gemini; the adapter never reads it. Every site carries the key so an override of it validates
+   * (`mergeSelectors` refuses a key a site does not have), and `{"gemini": {"trustedInput": false}}` in
+   * selectors.json is the hot kill switch.
    */
   const DEFAULT_SELECTORS = {
     version: 1,
@@ -468,6 +548,7 @@
       // (BRIDGE_TIMEOUT_S), the most a pane capture can be given without a backend change.
       captureTimeoutMs: 600000,
       stopGoneGraceMs: 0, // chatgpt ends by its done marker; a vanished stop control counts at once (contract §4, 2026-09-27)
+      trustedInput: false, // 2026-10-17: the synthetic insertAndSubmit path, proven on this site
     },
     claude: {
       chatUrlPattern: '^https://claude\\.ai/chat/[0-9a-f-]+',
@@ -535,6 +616,7 @@
       // (`stopNow=true stopSeen=true`, its "Flagging … considerations" header the only text) and finished
       // minutes later, after the capture had given up. The whole pane grant, as chatgpt has.
       captureTimeoutMs: 600000,
+      trustedInput: false, // 2026-10-17: the synthetic insertAndSubmit path, proven on this site
     },
     grok: {
       chatUrlPattern: '^https://grok\\.com/(c|chat)/[A-Za-z0-9-]+(?:[?#]|$)',
@@ -582,6 +664,67 @@
       firstTokenMs: 90000,
       captureTimeoutMs: 600000, // 2026-10-15: the whole pane grant, as chatgpt and claude — grok's thinking modes run for minutes too
       stopGoneGraceMs: 0, // grok's stop control has not been seen to flicker; a vanished one counts at once (contract §4, 2026-09-27)
+      trustedInput: false, // 2026-10-17: the synthetic insertAndSubmit path, proven on this site
+    },
+    // 2026-10-17 — gemini.google.com. EVERY entry below is SEEDED FROM PUBLIC SOURCES dated 2026-08…10-17 (the
+    // voyager extension's turn selectors and Oct-2026 menu fixture, the a8s-gemini-web driver's UI notes of
+    // 2026-09-23/24, the CDP-measured selectors of an Electron 44 Gemini embed of 2026-08-21, three exporter
+    // userscripts) and is UNMEASURED by this app. The live calibration (docs/desktop-verification.md) replaces
+    // what it contradicts, with dated comments, and the hand-built `gemini-*` fixtures with pruned real snapshots.
+    gemini: {
+      // a new chat is `/app`; after the first turn `/app/<hex id>`, with an optional `/u/<n>/` account prefix, and a
+      // Gem's chat is `/gem/<gem id>/<chat id>`. Ends the id at the segment like chatgpt's (a placeholder URL, if this
+      // site has one, then matches nothing). The id alphabet is unmeasured.
+      chatUrlPattern: '^https://gemini\\.google\\.com/(?:u/\\d+/)?(?:app|gem/[^/?#]+)/[A-Za-z0-9_-]+(?:[?#]|$)',
+      // Quill: `rich-textarea > div.ql-editor`. NEVER a bare `div[contenteditable='true']` — Quill's hidden
+      // `.ql-clipboard` is contenteditable too, and an insertion "verified" against it would vanish (grok's helper
+      // textarea, 2026-09-16, all over again).
+      composer: ["rich-textarea div.ql-editor[contenteditable='true']", "div.ql-editor[contenteditable='true'][role='textbox']"],
+      // absent while the composer is empty (a microphone button holds the slot, as grok's voice button does), so
+      // submit() and verifyInput poll it only after the text is in; the `fonticon` entry is the language-neutral one
+      // both class shapes the public sources report (classes on the button, or on a wrapper of it) — with the
+      // fonticon entry, a match that does not depend on the account's UI language (review 2026-10-17)
+      send: ["button[aria-label='Send message']", 'button.send-button.submit', '.send-button.submit button', "button:has(mat-icon[fonticon='arrow_upward'])"],
+      // GUEST MODE (see the header): signed out, the composer WORKS, so this cascade is the only thing between a
+      // signed-out pane and an `ok` session. The account avatar (`a[aria-label^='Google Account:']`, a link to
+      // SignOutOptions) matches none of these.
+      loggedOut: ["a[href*='accounts.google.com/ServiceLogin']", "a[href*='accounts.google.com/v3/signin']", "a[aria-label='Sign in']"],
+      loggedOutUrl: ['accounts.google.com'],
+      // 2026-10-17 (review): EMPTY until a wall is measured. `challenge` is matched on PRESENCE alone, and a page that
+      // embeds Google's invisible reCAPTCHA v3 / Enterprise scoring frame (`size=invisible`, 0×0) would read
+      // `challenge` on every sample — every Send, prepareInput and analyst turn refused before anything is typed.
+      // Google's visible CAPTCHA wall is `www.google.com/sorry/`, a main-frame navigation off gemini.google.com that
+      // policy.js hands to the system browser, so in the pane an iframe entry could only ever match the false case.
+      // `challengeTitle` stays: it counts only when corroborated (no composer, or the exact interstitial title).
+      challenge: [],
+      challengeTitle: ['Just a moment'],
+      // MEASURE: Google's own wording for its abuse wall is "unusual traffic"; the CDK live announcer is an
+      // `aria-live` region, so a false "blocked" from it would show here first
+      errorText: ['Something went wrong', 'unusual traffic'],
+      composerWaitMs: 15000,
+      sendWaitMs: 4000, // as chatgpt's: a short courtesy poll, a trusted Enter is the submit on this site
+      submitVerifyMs: 5000,
+      stop: ["button[aria-label='Stop response']", 'button.send-button.stop', '.send-button.stop button', "button:has(mat-icon[fonticon='stop'])"],
+      // the turn element — not `div.conversation-container`, which holds the user's `user-query` as well
+      assistant: ['model-response'],
+      // the reply BODY, scoped OUT of the thinking panel: an expanded `model-thoughts` renders its own
+      // `message-content` with its own markdown before the answer's (public sources), so an unscoped entry would
+      // capture the model's thoughts as the reply (fixture gemini-thinking pins it); `.thoughts-container` too
+      // (2026-10-17 review, gemini-dom-research): the panel's inner box, should the custom element be renamed.
+      // A miss here is read through `turnText`, which leaves the panel and the "Gemini said" label out as well
+      assistantText: [
+        '.markdown-main-panel:not(model-thoughts *):not(.thoughts-container *)',
+        'message-content .markdown:not(model-thoughts *):not(.thoughts-container *)',
+      ],
+      // the thumbs-up of a finished turn — not "Copy", which user turns and code blocks carry too
+      done: ["button[aria-label='Good response']", "button:has(mat-icon[fonticon='thumb_up'])"],
+      transcriptOrder: 'oldest-first', // every loaded turn stays mounted, newest last (public sources)
+      quietMs: 2500,
+      settleMs: 400,
+      firstTokenMs: 90000,
+      captureTimeoutMs: 600000, // the whole pane grant, as every other site since 2026-10-15
+      stopGoneGraceMs: 5000, // chosen, not measured: a done marker is expected; a stop control that vanished must stay gone 5 s
+      trustedInput: true, // see the header: main types the prompt through Electron's trusted input on this site
     },
   }
 
@@ -644,6 +787,8 @@
           warnings.push(`${site}.${key}: unknown key`)
           continue
         }
+        // the kinds are 'array' | 'number' | 'string' | 'boolean' (2026-10-17: `trustedInput`) — a `"false"` string
+        // or a `0` for a boolean key is refused like any other mismatch, never coerced
         const want = kindOf(defaults[site][key])
         const got = kindOf(block[key])
         if (want !== got) {
@@ -1089,6 +1234,9 @@
    */
   function scrubValue(v) {
     return String(v)
+      // 2026-10-17 (gemini): the account button's label is "Google Account: <name> (<address>)" — everything after
+      // the prefix is the account, so all of it goes (the name would otherwise survive the e-mail rule below)
+      .replace(/(Google Account:)[\s\S]*/i, '$1 name')
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, 'uuid')
       .replace(/googleusercontent/gi, 'img-host')
       .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)*/g, 'email') // the whole address, local part and domain
@@ -1097,6 +1245,9 @@
       .replace(/x\.com\/[^\s"'<>]*/gi, 'x-com/profile') // a profile link, path included
       .replace(/\/(c|chat)\/[^\s"'<>/]+/g, '/$1-/id') // a chat id
       .replace(/\/(c|chat)\//g, '/$1-/') // a token-less chat path
+      // 2026-10-17 (gemini): `/gem/<gem id>/<chat id>` (both ids — a Gem is the account's own) and `/app/<chat id>`
+      .replace(/\/gem\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?/g, '/gem-/id')
+      .replace(/\/app\/[A-Za-z0-9_-]{6,}/g, '/app-/id')
   }
 
   function tagNameOf(node) {
@@ -1332,8 +1483,17 @@
     return MD_SKIP_TAGS.includes(tagNameOf(el)) || mdHidden(el, ctx) || mdExcluded(el, ctx)
   }
 
+  /**
+   * A block element: one of MD_BLOCK_TAGS — or (2026-10-17) a CUSTOM element (a hyphenated tag) that holds a block.
+   * A custom tag says nothing about its layout, and gemini renders its reply's code inside one (`code-block >
+   * div.code-block > … > pre`, public sources): read as inline content, the walk turned the whole fenced block into
+   * one inline code span — an analyst's fenced JSON lost its fence and its line breaks. Only hyphenated tags are
+   * affected, which no other site's reply markup carries, so their captures are byte-identical.
+   */
   function mdIsBlock(el) {
-    return MD_BLOCK_TAGS.includes(tagNameOf(el))
+    const tag = tagNameOf(el)
+    if (MD_BLOCK_TAGS.includes(tag)) return true
+    return tag.includes('-') && mdChildren(el).some((c) => mdNodeType(c) === 1 && mdIsBlock(c))
   }
 
   /**
@@ -1785,7 +1945,7 @@
 
   /**
    * createAdapter({document, window, site, selectors, now = Date.now, timers}) — contract §3.
-   * `selectors` may be the full config (`{version, chatgpt, claude, grok}`, re-merged onto
+   * `selectors` may be the full config (`{version, chatgpt, claude, grok, gemini}`, re-merged onto
    * DEFAULT_SELECTORS so every key exists) or one site's block (taken as-is).
    * `timers` ({setTimeout, clearTimeout}) is injectable for tests; `now` stamps `ts`/`ms` and
    * drives timeouts. Every async op takes an optional `{signal}` (AbortSignal-like) and rejects
@@ -1814,6 +1974,10 @@
     // 2026-09-27 (virtualized transcripts): what the observe that follows a submit anchors on.
     let lastInserted = null // the text insertAndSubmit last typed — the anchor when the observe message carries none
     let preSubmit = null // the pre-submit baseline submit() takes (see takeBaseline); cleared by the next insert
+    // 2026-10-17 (trusted input): the input `prepareInput` prepared for main to type — {text, before, alreadyPresent,
+    // messageBaseline, assistantCount}; `messageBaseline` is set once `verifyInput` saw ALL of it land. Replaced by
+    // the next prepareInput, cleared by insertAndSubmit and by a confirmed `confirmSubmit`.
+    let pending = null
 
     /**
      * The document's open shadow roots, walked (`querySelectorAll('*')`) at most once per SAMPLE:
@@ -2398,7 +2562,8 @@
      * document order (a match nested in another is skipped — `containsDeep`, so a shadow-root
      * descendant of another match never has its text captured twice), joined by a blank line — a
      * turn rendered as several blocks (a summary before the answer, text around a tool block) is
-     * captured whole, not truncated to its first block; without a match the container itself.
+     * captured whole, not truncated to its first block; without a match the container itself (since
+     * 2026-10-17 without gemini's thinking panel and screen-reader label — `turnText`).
      * The markdown container is preferred (that is what the `assistantText` cascade points at) and
      * innerText is the fallback — see `blockText`. That fallback is why a site whose cascade matches
      * nothing still captures its reply: it can never be the reason an answer goes missing, only the
@@ -2428,7 +2593,20 @@
       // that paused to ask the user a question mounted no body at all, and the fallback handed main
       // `#### You said:` and the user's own prompt as the reply.
       if (heldUserTurn) return { text: findStop() ? '' : exchangeText(container), bodyMatched: false, heldUserTurn: true }
-      return { text: blockText(container), bodyMatched: false, heldUserTurn: false }
+      // 2026-10-17: a turn-level container is read without gemini's thinking panel and screen-reader label
+      // (`turnText`); on every other site nothing matches that predicate and this is `blockText(container)`
+      return { text: turnText(container), bodyMatched: false, heldUserTurn: false }
+    }
+
+    /**
+     * A TURN-LEVEL container's text when its body cascade matched nothing (2026-10-17): the markdown render with
+     * `turnChrome` left out, else the rendered text under the same predicate. With nothing under the container
+     * that `turnChrome` answers for — every claude / chatgpt / grok turn — this IS `blockText(container)`, byte
+     * for byte (`toMarkdown` only skips what the predicate names; `readTextExcluding` is `readText` then).
+     */
+    function turnText(container) {
+      const md = toMarkdown(container, { window: win, exclude: turnChrome })
+      return isBlank(md) ? readTextExcluding(container, turnChrome) : md
     }
 
     /**
@@ -2549,17 +2727,34 @@
       return makeEvent('InputEvent', 'Event', 'input', { bubbles: true, cancelable: false, composed: true, inputType: 'insertText', data: text })
     }
 
-    /** contenteditable: focus, explicit Range collapsed at the end, execCommand('insertText'), then InputEvent('input'). */
-    function insertViaExecCommand(el, text) {
+    /**
+     * Focus `el` and put the caret at its END: an explicit Range collapsed at the end for a contenteditable, the
+     * selection range at the value's length for a text field. Shared by the synthetic insertion (below) and by
+     * `prepareInput` (2026-10-17), where the trusted text main types next lands exactly where the caret is — so
+     * a leftover draft is appended to, never overwritten, and never split. Throws what the DOM throws (the
+     * synthetic path's `attempt` catches it, `prepareInput` reports it).
+     */
+    function placeCaretAtEnd(el) {
       const doc = el.ownerDocument || document
       const view = doc.defaultView || win
       focusEl(el)
+      if (isTextField(el)) {
+        const end = readText(el).length
+        if (typeof el.setSelectionRange === 'function') el.setSelectionRange(end, end)
+        return
+      }
       const range = doc.createRange()
       range.selectNodeContents(el)
       range.collapse(false)
       const selection = view && typeof view.getSelection === 'function' ? view.getSelection() : doc.getSelection()
       selection.removeAllRanges()
       selection.addRange(range)
+    }
+
+    /** contenteditable: focus, explicit Range collapsed at the end, execCommand('insertText'), then InputEvent('input'). */
+    function insertViaExecCommand(el, text) {
+      const doc = el.ownerDocument || document
+      placeCaretAtEnd(el)
       const ok = doc.execCommand('insertText', false, text) === true
       dispatch(el, inputEvent(text))
       return ok
@@ -2776,6 +2971,7 @@
       if (typeof text !== 'string' || text === '') throw new AdapterError('site_error', 'insertAndSubmit: text must be a non-empty string')
       lastInserted = text // the observe anchor when its message carries no `text` (2026-09-27)
       preSubmit = null // cleared by the next insert; submit() takes the new one
+      pending = null // 2026-10-17: a synthetic insert (main's fallback when a trusted one landed nothing) ends any prepared input
       const composer = await requireSessionOk({ signal })
       await insertText(text, { signal })
       const s = await submit(undefined, { signal, text })
@@ -2787,6 +2983,134 @@
         confirmedBy: s.confirmedBy,
         ms: Math.round(clock() - t0),
       }
+    }
+
+    // ---- trusted input (2026-10-17) ----------------------------------------------------------
+    //
+    // On a site whose `trustedInput` is true (gemini) main does not send `insertAndSubmit`. It types the bridge
+    // request's own text into the view that request named with Electron's TRUSTED input — `webContents.insertText`
+    // and a `sendInputEvent` Enter, never CDP, never `executeJavaScript` with the prompt (gotcha 19) — and these
+    // three ops bracket its keystrokes, all under main's insert mutex:
+    //   prepareInput   session gate (a wall / challenge / banner rejects before anything is typed), focus the
+    //                  composer, caret at the end; remembers the composer's text as it stood (`already_present`
+    //                  when it already holds exactly this prompt — the leftover of a failed attempt — so main types
+    //                  nothing and a retry can never double the prompt)
+    //   verifyInput    what landed: `all` (the previous text followed by the prompt, whitespace-insensitive — the
+    //                  synthetic insertion's own rule), `none` (nothing changed: main may fall back to ONE synthetic
+    //                  insertAndSubmit), `partial` (anything else: main stops with not_submitted and a snapshot — the
+    //                  prompt is never typed twice). On `all` it takes the pre-submit baseline and the message count
+    //                  exactly as submit() does before its first attempt, after a non-fatal wait for the send button.
+    //   confirmSubmit  did main's trusted Enter submit (submit()'s own confirmation: a stop control once the
+    //                  composer let go of the prompt, an emptied composer, a new message); a miss re-baselines for
+    //                  main's next Enter, and `clickFallback` adds ONE click on the send button while the prompt is
+    //                  provably still in the composer.
+    // The results carry lengths, counts and booleans only — never a character of the prompt or the page. Each op
+    // occupies the one-in-flight slot like any other. The adapter never asks main to type; a page cannot either.
+
+    /** The composer (or a node inside it) holds the document's focus — where main's trusted keystrokes will land. */
+    function isFocused(el) {
+      return safeTrue(() => {
+        const active = (el.ownerDocument || document).activeElement
+        return !!active && (active === el || (typeof el.contains === 'function' && el.contains(active) === true))
+      })
+    }
+
+    /** The prepared input for `op`, or `site_error`: none prepared, or a message naming a different text. */
+    function requirePending(op, text) {
+      if (pending === null) throw new AdapterError('site_error', `${op}: no prepared input (prepareInput first)`)
+      if (typeof text === 'string' && text !== '' && text !== pending.text) throw new AdapterError('site_error', `${op}: the text is not the prepared input`)
+      return pending
+    }
+
+    /** prepareInput op: session gate → focus + caret at the end; `{state: 'ready'|'already_present', composerSelector, composerChars, focused, ms}`. */
+    async function prepareInput(text, { timeoutMs, signal } = {}) {
+      const t0 = clock()
+      if (typeof text !== 'string' || text === '') throw new AdapterError('site_error', 'prepareInput: text must be a non-empty string')
+      lastInserted = text // the observe anchor, as insertAndSubmit sets it
+      preSubmit = null // verifyInput takes the new one once the text is in
+      pending = null
+      const composer = await requireSessionOk({ timeoutMs, signal })
+      throwIfAborted(signal)
+      const el = composer.el
+      const before = squash(readText(el))
+      const alreadyPresent = before === squash(text)
+      // 2026-10-17 review: a composer holding only the START of this prompt is what a `partial` trusted insert
+      // leaves behind; typing the whole prompt after it would submit fragment + prompt (verifyInput would read
+      // `all` against before + text). Refused before anything is focused or typed — the user clears it.
+      if (!alreadyPresent && before !== '' && squash(text).startsWith(before)) {
+        return { state: 'partial_present', composerSelector: composer.selector, composerChars: before.length, focused: isFocused(el), ms: Math.round(clock() - t0) }
+      }
+      try {
+        placeCaretAtEnd(el)
+      } catch (e) {
+        throw new AdapterError('site_error', `prepareInput: the caret could not be placed in the composer (${String((e && e.name) || 'error')})`)
+      }
+      pending = { text, before, alreadyPresent, messageBaseline: null, assistantCount: null }
+      return {
+        state: alreadyPresent ? 'already_present' : 'ready',
+        composerSelector: composer.selector,
+        composerChars: before.length, // non-whitespace characters, as every length these ops report
+        focused: isFocused(el),
+        ms: Math.round(clock() - t0),
+      }
+    }
+
+    /** verifyInput op: `{landed: 'all'|'partial'|'none', composerChars, expectedChars, sendReady, assistantCount, ms}` (see above). */
+    async function verifyInput(text, { verifyMs, sendWaitMs, signal } = {}) {
+      const t0 = clock()
+      const p = requirePending('verifyInput', text)
+      const expected = p.alreadyPresent ? p.before : p.before + squash(p.text)
+      let current = null // the last reading: null while no composer is on the page
+      const read = () => {
+        const c = findComposer()
+        current = c ? squash(readText(c.el)) : null
+        return current === expected
+      }
+      const all = await poll(read, { intervalMs: CONFIRM_POLL_MS, timeoutMs: nonNegativeInt(verifyMs, TRUSTED_VERIFY_MS), signal })
+      const composerChars = current === null ? 0 : current.length
+      if (!all) {
+        // a composer that is GONE is `partial`, never `none`: nothing says the text did not land and get sent, and
+        // `none` is the one answer on which main types the prompt a second time
+        const landed = current !== null && current === p.before ? 'none' : 'partial'
+        return { landed, composerChars, expectedChars: expected.length, sendReady: false, assistantCount: countAssistant(), ms: Math.round(clock() - t0) }
+      }
+      // all of it is in: the send button usually appears with the text (gemini, grok); not seeing it is not fatal —
+      // main's Enter is the submit, and confirmSubmit is the judge
+      const button = await poll(() => findSendButton(), { intervalMs: SEND_POLL_MS, timeoutMs: nonNegativeInt(sendWaitMs, nonNegativeInt(sel.sendWaitMs, 18000)), signal })
+      // exactly submit()'s samples before its first attempt: the observe's pre-submit baseline, the assistantCount
+      // main hands back as `baselineCount`, and the message count a submission is confirmed against
+      preSubmit = sampled(() => takeBaseline(undefined, true))
+      p.assistantCount = preSubmit.ids.size
+      p.messageBaseline = countMessages()
+      return { landed: 'all', composerChars, expectedChars: expected.length, sendReady: button !== null, assistantCount: p.assistantCount, ms: Math.round(clock() - t0) }
+    }
+
+    /** confirmSubmit op: `{confirmedBy: 'stop_button'|'composer_cleared'|'assistant_count'|null, stillHeld, sendSelector, assistantCount, ms}`. */
+    async function confirmSubmit(text, { clickFallback = false, signal } = {}) {
+      const t0 = clock()
+      const p = requirePending('confirmSubmit', text)
+      if (p.messageBaseline === null) throw new AdapterError('site_error', 'confirmSubmit: the prepared input was not seen to land in full (verifyInput first)')
+      const verifyMs = nonNegativeInt(sel.submitVerifyMs, 5000)
+      let confirmedBy = await confirmSubmission(verifyMs, p.messageBaseline, signal, p.text)
+      let sendSelector = null // the button the click fallback pressed; null when main's Enter did it
+      if (!confirmedBy) {
+        // re-baseline for main's next Enter, as submit() does before its own: the count only ever goes DOWN (a
+        // placeholder mounted inside the window must not lift the observe baseline — submit()'s note)
+        p.assistantCount = Math.min(p.assistantCount, countAssistant())
+        p.messageBaseline = countMessages()
+        if (clickFallback === true && composerHolds(p.text)) {
+          const button = findSendButton()
+          if (button) {
+            sendSelector = button.selector
+            clickEl(button.el)
+            confirmedBy = await confirmSubmission(verifyMs, p.messageBaseline, signal, p.text)
+            if (!confirmedBy) p.messageBaseline = countMessages()
+          }
+        }
+      }
+      const result = { confirmedBy: confirmedBy || null, stillHeld: composerHolds(p.text), sendSelector, assistantCount: p.assistantCount, ms: Math.round(clock() - t0) }
+      if (confirmedBy) pending = null // consumed: a stray second confirm cannot re-confirm a submission
+      return result
     }
 
     // ---- capture (Stage 2) ------------------------------------------------------------------
@@ -2891,7 +3215,10 @@
      *   flags         (2026-10-11, the internal result only — never the bridge frame) `bodyMatched`: the
      *                 last sample read a matched body block; `heldUserTurn`: the container it read was an
      *                 exchange; `echoesPrompt`: the final text carries the typed prompt (the anchor probes
-     *                 over its projection — two of three, or the whole of a short text; false with no text)
+     *                 over its projection — two of three, or the whole of a short text; false with no text);
+     *                 `bodyMissed` (2026-10-17): the site HAS an `assistantText` cascade and none of its
+     *                 entries matched in the container the last sample read — the text is the container's
+     *                 own (the turn-level or the exchange fallback), so the body selectors need the DOM
      * `quietMs` / `timeoutMs` / `firstTokenMs` / `settleMs` / `incompleteGraceMs` in the message
      * override the selectors; a missing `baselineCount` means the current count; `text` (2026-09-27) is
      * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in;
@@ -3352,7 +3679,13 @@
             // three, or the whole of a short text). A reply that quotes the prompt is reported, not hidden:
             // main saves the DOM as evidence and delivers the text unchanged.
             const echoesPrompt = probes !== null && anchorMatches(probes, text)
-            settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0), bodyMatched, heldUserTurn, echoesPrompt }))
+            // 2026-10-17 (review of the gemini adapter): a body cascade that is CONFIGURED but matched nothing is
+            // said outright: `bodyMatched:false` alone cannot tell main "no body cascade" from "the cascade
+            // missed", and a turn-level miss is no exchange (`heldUserTurn:false`), so nothing flagged it. Every
+            // gemini body entry is unmeasured: its first live miss is the very DOM the calibration needs (main's
+            // `suspectReason` decides which sites it saves a snapshot for)
+            const bodyMissed = !bodyMatched && nonEmptyCascade(sel.assistantText).length > 0
+            settle(() => resolve({ text, doneBy: r, ms: Math.round(clock() - t0), bodyMatched, heldUserTurn, echoesPrompt, bodyMissed }))
             return
           }
           if (container && observed === document) observeTarget(container.parentNode || container)
@@ -3407,6 +3740,10 @@
       countMessages,
       countAssistant,
       ready,
+      // 2026-10-17: the three ops that bracket main's TRUSTED keystrokes (see "trusted input" above)
+      prepareInput,
+      verifyInput,
+      confirmSubmit,
       url: href,
       setSelectors,
       // ---- Stage 2 --------------------------------------------------------------------------
@@ -3434,6 +3771,13 @@
     return JSON.stringify(rest)
   }
 
+  /**
+   * The ops that occupy a view's ONE in-flight slot (a second one answers `busy`; `cancel{target}` aborts it).
+   * 2026-10-17: the trusted-input trio joined — main sends them one at a time under its insert mutex, and a
+   * concurrent observe on the same view must still be refused while one of them runs.
+   */
+  const SLOT_OPS = Object.freeze(['ready', 'insertAndSubmit', 'observe', 'snapshot', 'prepareInput', 'verifyInput', 'confirmSubmit'])
+
   function errorResult(reqId, op, e) {
     const code = e && isResultCode(e.code) ? e.code : 'site_error'
     const res = { reqId, ok: false, op, code, message: String((e && e.message) || e || code) }
@@ -3449,7 +3793,8 @@
    *             is not null; a null site leaves the preload inert (SSO popups, unknown pages).
    * Listens on 'triplex:adapter', answers on 'triplex:adapter:result', and publishes
    * 'triplex:adapter:health' on every change plus a 10 s heartbeat. One op in flight per view:
-   * a second ready/insertAndSubmit/observe/snapshot answers `busy`; `cancel{target}` aborts it.
+   * a second ready/insertAndSubmit/observe/snapshot/prepareInput/verifyInput/confirmSubmit (SLOT_OPS)
+   * answers `busy`; `cancel{target}` aborts it.
    * Messages that arrive before `adapter:config` settles are parked and replayed in order once
    * an adapter exists (dropped when the preload stays inert), so main never waits its full
    * budget for a request that landed during boot.
@@ -3513,6 +3858,13 @@
         return { ...r, url: adapter.url() }
       }
       if (op === 'snapshot') return adapter.snapshot({ signal })
+      // 2026-10-17 (trusted input): lengths, counts and booleans only — the prompt is a message field and never echoed
+      if (op === 'prepareInput') return adapter.prepareInput(msg.text, { timeoutMs: msg.timeoutMs, signal })
+      if (op === 'verifyInput') return adapter.verifyInput(msg.text, { verifyMs: msg.verifyMs, sendWaitMs: msg.sendWaitMs, signal })
+      if (op === 'confirmSubmit') {
+        const r = await adapter.confirmSubmit(msg.text, { clickFallback: msg.clickFallback === true, signal })
+        return { ...r, url: adapter.url() }
+      }
       throw new AdapterError('site_error', `unknown op ${String(op)}`)
     }
 
@@ -3559,7 +3911,7 @@
         reply({ reqId, ok: true, op: 'cancel', cancelled: false })
         return
       }
-      if (op === 'ready' || op === 'insertAndSubmit' || op === 'observe' || op === 'snapshot') {
+      if (SLOT_OPS.includes(op)) {
         if (inFlight !== null) {
           reply({ reqId, ok: false, op, code: 'busy', message: `op ${inFlight.op} (${inFlight.reqId}) in flight` })
           return
@@ -3750,6 +4102,9 @@
       isScreenReaderOnly,
       isUserTurn,
       exchangeChrome,
+      TURN_CHROME_TAGS,
+      TURN_CHROME_CLASSES,
+      turnChrome,
       scrubDom,
       toMarkdown,
       MD_SKIP_TAGS,
@@ -3767,6 +4122,8 @@
       CONFIRM_POLL_MS,
       VERIFY_TAIL_CHARS,
       INSERT_SETTLE_MS,
+      TRUSTED_VERIFY_MS,
+      SLOT_OPS,
       OBSERVE_THROTTLE_MS,
       OBSERVE_POLL_MS,
       SNAPSHOT_DROP_TAGS,

@@ -15,15 +15,15 @@ import pytest
 from backend import api_errors
 from backend.features import reread as reread_feature
 from backend.llm import mock
-from backend.llm.bridge_protocol import BRIDGE_SLOTS
-from backend.schemas import AnalyzeTurn, ContinueTurn, RefactorTurn, SendTurn
+from backend.schemas import DEFAULT_COUNCIL, AnalyzeTurn, ContinueTurn, RefactorTurn, SendTurn
 from backend.store import conversations as store
 from tests.bridge.conftest import NOT_CAPTURED, planted, planted_script
 from tests.e2e.conftest import one, scenario_prompt
 from tests.helpers import parse_sse_text
 
 PROMPT = scenario_prompt("planted_factual")
-CHAT = {slot: planted(f"{slot}.chat.1.jsonl") for slot in BRIDGE_SLOTS}
+# The default council's slots -- `BRIDGE_SLOTS` also holds `gemini` since 2026-10-17 (no seat here).
+CHAT = {slot: planted(f"{slot}.chat.1.jsonl") for slot in DEFAULT_COUNCIL}
 # What the adapter reported on 2026-10-15 at 06:42 (claude.ai, still thinking at its 300 s budget).
 STILL_ANSWERING = (
     "the reply was still in progress after 300000 ms [containers=1 followed=0 connected=true "
@@ -258,7 +258,7 @@ def test_resolve_refuses_a_model_that_is_not_a_web_pane(make_conversation):
 
 def test_resolve_analyze_and_refactor_are_quiet_any_other_later_turn_is_stale(make_conversation):
     conv = make_conversation(responses={"claude": None, "chatgpt": "b", "grok": "c"})
-    _web(conv, *BRIDGE_SLOTS)
+    _web(conv, *DEFAULT_COUNCIL)
     turn = conv.turns[0]
     cfg = conv.slot_config.model_copy(deep=True)
     conv.turns.append(AnalyzeTurn(of_turn=turn.id, status="degraded", error="x", slot_config=cfg))

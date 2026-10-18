@@ -326,7 +326,13 @@ async def test_status_reflects_hello_and_later_cache_frames(attached: FakeConnec
         v == {"capture": True, "health": None, "health_ts": None} for v in st["sites"].values()
     )
 
-    hub.dispatch({"type": "capture", "capture": {"claude": False, "chatgpt": True, "grok": False}})
+    # Every bridge site is listed -- four since gemini joined on 2026-10-17.
+    hub.dispatch(
+        {
+            "type": "capture",
+            "capture": {"claude": False, "chatgpt": True, "grok": False, "gemini": True},
+        }
+    )
     hub.dispatch({"type": "analyst", "analyst": None})
     health = {
         "composer": True,
@@ -348,7 +354,7 @@ async def test_status_reflects_hello_and_later_cache_frames(attached: FakeConnec
     }
     hub.dispatch({"type": "health", "slot": "grok", "health": health})
     st = hub.status()
-    assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, True, False]
+    assert [st["sites"][s]["capture"] for s in BRIDGE_SLOTS] == [False, True, False, True]
     assert st["analyst"] is None
     assert st["sites"]["grok"]["health"] == health
     assert (

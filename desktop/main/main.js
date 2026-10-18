@@ -27,7 +27,7 @@
 //                quit is held until the child is gone; a port that already answers is refused and
 //                reported in the bridge banner as `panes:bridge {connected:false, error}`)
 //                — the renderer window (preload/renderer.cjs, sandbox, pinned to the renderer URL's
-//                origin), the three site views (views.js), the orchestrator (one bridge request →
+//                origin), the site views (views.js), the orchestrator (one bridge request →
 //                one turn), the bridge client (hello{token} → hello_ack → request/result, capture /
 //                health frames, backoff, `panes:bridge`), shortcuts + the application menu
 //                (menu.js), every IPC channel (ipc.js), the cached health + zoom + bridge state +
@@ -63,11 +63,12 @@ import { applyPermissionPolicy, attachDeviceChooserPolicy } from './permissions.
 import { isExternalUrl, originOf, frameOriginMatches, attachOriginPolicy, attachDefaultDenyPolicy } from './policy.js'
 import { createSettings, asTheme, DEFAULT_THEME } from './settings.js'
 import { createOpenRouterKey, isLoopbackUrl, KEY_ERRORS } from './openrouter-key.js'
-import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor } from './selectors.js'
+import { createSelectorsLoader, timeoutsFor, captureTimeoutsFor, chatUrlPatternFor, trustedInputFor } from './selectors.js'
 import { createViewManager, buildWindowOptions, loadWithRetry, backgroundFor, LOAD_RETRY_MS } from './views.js'
 import { APP_TITLE, iconPath } from './branding.js'
 import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
+import { createTrustedInput } from './trusted-input.js'
 import { registerIpc, saveDomSnapshot } from './ipc.js'
 import { exportTurn } from './export.js'
 import { createShortcuts } from './shortcuts.js'
@@ -102,7 +103,7 @@ function fail(code, message) {
 }
 
 // The profile FIRST, then the name. On Linux `app.getName()` is both the WM_CLASS the dock labels
-// the window with AND the default userData directory — which holds the three logged-in sessions.
+// the window with AND the default userData directory — which holds the logged-in site sessions.
 // Pinning the resolved path before renaming means the taskbar can say "Solomon's Judgment" while
 // the profile stays exactly where it is (~/.config/triplex-desktop), signed in.
 app.setPath('userData', env.TRIPLEX_USER_DATA_DIR ? path.resolve(env.TRIPLEX_USER_DATA_DIR) : app.getPath('userData'))
@@ -248,7 +249,7 @@ function createWindow() {
 
   // The renderer never opens windows itself and never leaves its own origin: window.open, a
   // navigation or a server-side redirect elsewhere goes to the system browser (window.triplex,
-  // which drives three logged-in sessions, must never follow the window to a foreign page).
+  // which drives the logged-in site sessions, must never follow the window to a foreign page).
   attachOriginPolicy(win.webContents, rendererOrigin(), { openExternal, log: console })
   attachDeviceChooserPolicy(win.webContents)
   win.webContents.on('render-process-gone', (_event, details) => {
@@ -364,8 +365,8 @@ function resolveBackend(userData) {
 }
 
 /**
- * The three site pages are never styled by Triplex (no CSS injection into pages we do not own):
- * they are told what the system prefers, and chatgpt.com / claude.ai / grok.com apply their OWN
+ * The site pages are never styled by Triplex (no CSS injection into pages we do not own):
+ * they are told what the system prefers, and chatgpt.com / claude.ai / grok.com / gemini.google.com apply their OWN
  * dark themes through `prefers-color-scheme`. A site pinned to light in its own settings stays
  * light, which is correct — that is the user's choice on that site.
  *
@@ -513,6 +514,12 @@ function start() {
     timeoutsFor: (slot) => timeoutsFor(selectors.current(), slot),
     captureTimeoutsFor: (slot) => captureTimeoutsFor(selectors.current(), slot),
     chatUrlPatternFor: (slot) => chatUrlPatternFor(selectors.current(), slot),
+    // 2026-10-17: trusted input for a site whose merged selectors say so (gemini) — read per turn, so a
+    // `trustedInput:false` in selectors.json is a hot kill switch. Main types only the bridge request's own
+    // text into the view that request named (the hidden analyst page's for an analyst turn); never the
+    // debugger, never executeJavaScript (gotcha 19).
+    trustedInputFor: (slot) => trustedInputFor(selectors.current(), slot),
+    trustedInput: createTrustedInput({ webContentsFor: (view, slot) => (view === 'analyst' ? analystViews.webContents() : views.webContents(slot)) }),
     getHealth: (slot) => views.getHealth(slot),
     setHealth: (slot, h) => views.setHealth(slot, h),
     getCapture: () => settings.getCapture(),

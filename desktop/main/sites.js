@@ -1,10 +1,12 @@
-// desktop/main/sites.js — the three embedded sites with a Stage-1 adapter and the SSO host allow-list.
+// desktop/main/sites.js — the embedded sites with an adapter and the SSO host allow-list.
 // Contract §5 of docs/desktop-contract.md. Pure module: no electron import, no I/O.
-// A council (council.js) may seat up to five agents from a seven-vendor catalog; only these three
+// A council (council.js) may seat up to five agents from a seven-vendor catalog; only these sites
 // have a native view — the others are OpenRouter / Ollama agents drawn by the renderer.
+// 2026-10-17: gemini.google.com joined as the fourth site (the classic three stay first: SLOTS is in
+// catalog order and must equal protocol.js SLOT_IDS, site.cjs SLOTS and the backend's BRIDGE_SLOTS).
 
 /** The sites with a native view, in view order (matches `window.triplex.slots` / `.sites`). */
-export const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok'])
+export const SLOTS = Object.freeze(['claude', 'chatgpt', 'grok', 'gemini'])
 
 /** Site table exactly as in contract §5. `hosts` also covers every subdomain of each entry. */
 export const SITES = Object.freeze({
@@ -29,6 +31,18 @@ export const SITES = Object.freeze({
     // auth.grok.com/set-cookie → auth.cursor.com/set-cookie → grok.com. Off the list, a hop was
     // handed to the system browser, which received the session while the pane sat on Google's page.
     hosts: ['grok.com', 'accounts.x.ai', 'x.com', 'auth.x.ai', 'auth.grokusercontent.com', 'auth.cursor.com'],
+  },
+  gemini: {
+    url: 'https://gemini.google.com/app',
+    newChatUrl: 'https://gemini.google.com/app',
+    partition: 'persist:gemini',
+    // EXACTLY gemini.google.com (2026-10-17): `hosts` also covers every subdomain, so a bare
+    // `google.com` would keep www.google.com/search links (and sites.google.com user content) inside
+    // the pane instead of handing them to the browser. Google's sign-in hosts (accounts.google.com,
+    // accounts.youtube.com) are SSO_HOSTS already; any further hop joins here only after a measured
+    // `[policy] external <hook> <origin+path>` line, as an exact host with a dated comment (the grok
+    // precedent above).
+    hosts: ['gemini.google.com'],
   },
 })
 

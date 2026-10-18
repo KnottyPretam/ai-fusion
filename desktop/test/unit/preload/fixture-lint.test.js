@@ -30,12 +30,18 @@ test('lintText flags every pattern with its line, and passes clean markup', () =
     ['<div id="response-8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d">', 'uuid'],
     ['<div class="avatar lh3.googleusercontent.com">', 'googleusercontent (an avatar host)'],
     ['<a aria-label="https://x.com/someone">', 'x.com/ (a profile link)'],
+    // 2026-10-17 (gemini): a chat path, a Gem path, and the account button's label with its holder's name
+    ['<a data-test-id="https://gemini.google.com/app/1a2b3c4d5e6f7a8b">', 'gemini chat path /app/<id> or /gem/<id>'],
+    ['<a data-test-id="/gem/9f8e7d6c5b4a/0f1e2d3c4b5a">', 'gemini chat path /app/<id> or /gem/<id>'],
+    ['<a aria-label="Google Account: Jane Doe">', 'Google Account: <name> (an account label)'],
   ]
   bad.forEach(([line, name], i) => {
     const findings = lintText(`<html>\n${line}\n</html>`)
     assert.ok(findings.some((f) => f.name === name && f.line === 2), `case ${i}: expected ${name} on line 2, got ${JSON.stringify(findings)}`)
   })
-  assert.equal(LINT_PATTERNS.length, 6)
+  assert.equal(LINT_PATTERNS.length, 8)
+  // the scrubbed forms are clean: the token-less placeholders and the label with the word `name`
+  assert.deepEqual(lintText('<a aria-label="Google Account: name" data-test-id="/app-/id /gem-/id /app /gem/">'), [])
   // case-insensitive where identity hides in case; the uuid pattern needs the full 8-4-4-4-12 shape
   assert.equal(lintText('GOOGLEUSERCONTENT X.COM/me').length, 2)
   assert.deepEqual(lintText('1234-5678-abcd'), [])
@@ -47,7 +53,7 @@ test('every desktop/test/fixtures/dom/*.html passes the lint, and there really a
   assert.ok(FIXTURES_DIR.endsWith(path.join('desktop', 'test', 'fixtures', 'dom')), FIXTURES_DIR)
   assert.deepEqual(findings, [], `fixture lint findings: ${JSON.stringify(findings, null, 2)}`)
   for (const f of files) assert.ok(f.endsWith('.html'))
-  assert.equal(files.length, 20, 'three sites × composer / streaming / done / logged-out, plus chatgpt-thinking, chatgpt-effort-streaming, the three <site>-virtualized snapshots (2026-09-27), chatgpt-oct10-done / claude-oct10-status (2026-10-10) and grok-oct11-fresh (2026-10-11)')
+  assert.equal(files.length, 25, 'four sites × composer / streaming / done / logged-out (gemini\'s HAND-BUILT, 2026-10-17), plus chatgpt-thinking, chatgpt-effort-streaming, the three <site>-virtualized snapshots (2026-09-27), chatgpt-oct10-done / claude-oct10-status (2026-10-10), grok-oct11-fresh (2026-10-11) and gemini-thinking (2026-10-17, hand-built)')
 })
 
 test('every committed fixture is in the scrubbed shape: allow-listed attributes only, every text node `…`, no dropped tags', () => {
@@ -130,4 +136,24 @@ test('scrubDom output passes the lint although the page carried every pattern in
   assert.ok(!html.includes('href='))
   assert.ok(!html.includes('profile'))
   for (const leaked of ['someone', 'example.com', 'abc', 'def', '(at)']) assert.ok(!html.includes(leaked), `leaked: ${leaked}`)
+})
+
+test('scrubDom defeats the gemini patterns (2026-10-17): the account label loses everything after its prefix, and both ids of a Gem path and the id of an /app path go whole', () => {
+  const doc = {
+    documentElement: el('html', {}, [
+      el('body', {}, [
+        el('a', { 'aria-label': 'Google Account: Jane Q. Doe (jane.doe@example.com)', class: 'gb_A', href: 'https://accounts.google.com/SignOutOptions' }, [text('JD')]),
+        el('div', { 'data-test-id': 'conversation /app/1a2b3c4d5e6f7a8b', id: 'chat-/gem/9f8e7d6c5b4a/0f1e2d3c4b5a' }, [text('history')]),
+        el('mat-icon', { fonticon: 'thumb_up', class: 'google-symbols' }, []),
+      ]),
+    ]),
+  }
+  const html = scrubDom(doc)
+  assert.deepEqual(lintText(html), [], html)
+  assert.ok(html.includes('aria-label="Google Account: name"'), html)
+  assert.ok(html.includes('data-test-id="conversation /app-/id"'), html)
+  assert.ok(html.includes('id="chat-/gem-/id"'), html)
+  assert.ok(html.includes('fonticon="thumb_up"'), 'fonticon is a kept attribute (2026-10-17): the language-neutral half of the gemini cascades')
+  for (const leaked of ['Jane', 'Doe', 'example.com', '1a2b3c4d5e6f7a8b', '9f8e7d6c5b4a', '0f1e2d3c4b5a', 'SignOutOptions']) assert.ok(!html.includes(leaked), `leaked: ${leaked}`)
+  assert.ok(SNAPSHOT_KEEP_ATTRS.includes('data-test-id') && SNAPSHOT_KEEP_ATTRS.includes('fonticon'))
 })

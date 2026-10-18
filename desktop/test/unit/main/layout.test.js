@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { normalizeLayout, normalizeRect, applyLayout, LAYOUT_KEYS } from '../../../main/layout.js'
 import { fakeView } from './_fakes.js'
 
-test('LAYOUT_KEYS = the three slots plus analyst', () => {
-  assert.deepEqual([...LAYOUT_KEYS], ['claude', 'chatgpt', 'grok', 'analyst'])
+test('LAYOUT_KEYS = the site slots (four since 2026-10-17) plus analyst', () => {
+  assert.deepEqual([...LAYOUT_KEYS], ['claude', 'chatgpt', 'grok', 'gemini', 'analyst'])
 })
 
 test('normalizeLayout rounds every coordinate', () => {
@@ -24,8 +24,9 @@ test('normalizeLayout: null, missing and malformed rects are hidden (null)', () 
   assert.equal(out.claude, null)
   assert.deepEqual(out.chatgpt, { x: 1, y: 2, width: 3, height: 4 })
   assert.equal(out.grok, null)
+  assert.equal(out.gemini, null, 'a site the layout does not mention is hidden')
   assert.equal(out.analyst, null)
-  assert.deepEqual(Object.keys(out), ['claude', 'chatgpt', 'grok', 'analyst'])
+  assert.deepEqual(Object.keys(out), ['claude', 'chatgpt', 'grok', 'gemini', 'analyst'])
 })
 
 test('normalizeLayout drops unknown keys and hides everything for a non-object', () => {

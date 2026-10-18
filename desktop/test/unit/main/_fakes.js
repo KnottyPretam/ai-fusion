@@ -174,7 +174,7 @@ export function fakeSession(partition) {
 }
 
 /** A minimal settings-like object for the view managers (zoom per slot + the Stage 3 analyst keys). */
-export function fakeSettings(zoom = { claude: 1, chatgpt: 1, grok: 1 }, { analyst = 'chatgpt', analystVisible = false } = {}) {
+export function fakeSettings(zoom = { claude: 1, chatgpt: 1, grok: 1, gemini: 1 }, { analyst = 'chatgpt', analystVisible = false } = {}) {
   return {
     zoom: { ...zoom },
     saves: 0,
@@ -319,10 +319,10 @@ export function fakeLog() {
   return log
 }
 
-/** Site table pointing the three sites (the ones with a Stage-1 adapter) at a loopback fake site. */
+/** Site table pointing every site with an adapter (sites.js SLOTS — gemini since 2026-10-17) at a loopback fake site. */
 export function fakeSites(base = 'http://127.0.0.1:5199') {
   const out = {}
-  for (const slot of ['claude', 'chatgpt', 'grok']) {
+  for (const slot of ['claude', 'chatgpt', 'grok', 'gemini']) {
     out[slot] = { url: `${base}/?site=${slot}`, newChatUrl: `${base}/?site=${slot}`, partition: `persist:${slot}`, hosts: ['127.0.0.1', 'localhost'] }
   }
   return out

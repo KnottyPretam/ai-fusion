@@ -24,7 +24,9 @@
 //      ends the wait.
 //   4. `ready` (composer present, session ok, no stop button) with the composer budget.
 //   5. mutex ⟨ focus the view → insertAndSubmit ⟩: the insert phases of parallel requests never
-//      overlap; the renderer's focus is restored once the last queued insert has finished.
+//      overlap; the renderer's focus is restored once the last queued insert has finished. A site
+//      whose selectors say `trustedInput` (gemini) runs the TRUSTED sequence instead, under the same
+//      one mutex hold (below, 2026-10-17).
 //   6. chat-URL wait, in the background: the view's URL right after the submit, else the first
 //      did-navigate / did-navigate-in-page matching the site's chatUrlPattern within
 //      CHAT_URL_WAIT_MS → chats.set(conversation_id, slot, url). Only matching URLs are ever
@@ -86,7 +88,8 @@
 // `heldUserTurn:true` (no reply body matched; a whole exchange was read) saves `<slot>-suspect-<ts>.html`
 // through the same snapshot dep (newest 20 of its kind), logs ONE line naming the file and the flag, and is
 // delivered unchanged. Measured 2026-10-11 14:41 on chatgpt.com: the ask-the-user widget turn, captured as a
-// success with the user's own prompt as the reply, left no evidence at all.
+// success with the user's own prompt as the reply, left no evidence at all. Since 2026-10-17 a gemini capture
+// whose body cascade missed (`bodyMissed`, BODY_MISS_SUSPECT_SITES) is suspect too, reason `body_missed`.
 // Re-read (2026-10-15; `reread`, the bridge's `reread` frame): read a PANE's reply to `frame.text` again,
 // typing nothing — for a Send whose capture gave up while the site was still answering (measured that
 // morning: a claude.ai reply still thinking at the 300 s budget, `stopNow=true`, finished minutes later and
@@ -98,14 +101,35 @@
 // and a first-row deadline of REREAD_FIRST_ROW_MS (the row exists: the Send typed it). `requireAnchor` makes a
 // chat without that prompt a `reply_not_found`, never somebody else's reply. A chat the pane already shows is
 // never reloaded: a reload abandons a reply still being written (the S11 rule). Capture off → `captured:false`.
+// Trusted input (2026-10-17; `trustedSubmit`): gemini.google.com is publicly reported to ignore UNTRUSTED input
+// in an Electron-44 embed — a synthetic insert plus `el.click()` showed Stop and no usable reply, a false
+// confirmation the adapter's own submit would accept (so a fallback keyed on `not_submitted` never fires). For
+// a site whose merged selectors say `trustedInput` (selectors.js trustedInputFor; a hot kill switch in
+// selectors.json), main types the request's own text itself, through trusted-input.js (webContents.insertText /
+// sendInputEvent — never the debugger, never executeJavaScript, gotcha 19). All inside ONE mutex hold, so focus
+// cannot interleave with another pane's insert:
+//   focus → adapter `prepareInput` (session check, composer focused, caret at the end, the before-text noted)
+//   → trusted insertText (unless `already_present`), raced against TRUSTED_INSERT_MS; a rejection or a timeout
+//     still asks the page what landed
+//   → adapter `verifyInput`: 'none' → ONE synthetic insertAndSubmit (nothing was typed, so nothing is typed
+//     twice); 'partial' → `not_submitted` (the failure snapshot follows, SUBMIT_EVIDENCE_CODES) and the prompt is
+//     never re-typed; 'all' → trusted Enter → adapter `confirmSubmit`
+//   → unconfirmed while the composer still holds the prompt: one more trusted Enter → `confirmSubmit
+//     {clickFallback:true}` (one click of the send button) → still unconfirmed → `not_submitted`.
+//     Unconfirmed with the prompt gone from the composer → `not_submitted` at once (pressing again could post
+//     whatever is there now).
+// Every op gets its own budget (+ TIMEOUT_GRACE_MS) and `cancelled()` is checked between steps. The classic
+// three never take this path: their payloads, budgets and log line are byte-identical. The submit line names
+// `insert: trusted` and the send (`trusted-enter` | `<selector> click-fallback`), never the text.
 // Pure module: every collaborator is injected (see createOrchestrator) so node --test drives it.
 
 import { SLOTS } from './sites.js'
 import { AdapterRequestError } from './adapter-client.js'
-import { INSERT_SETTLE_MS } from './selectors.js'
+import { INSERT_SETTLE_MS, TRUSTED_VERIFY_MS } from './selectors.js'
 import { RESULT_CODES } from './protocol.js'
+import { TRUSTED_PAINT_MS } from './trusted-input.js'
 
-export { INSERT_SETTLE_MS }
+export { INSERT_SETTLE_MS, TRUSTED_VERIFY_MS }
 
 /** Grace added to the preload's own budget so main's timeout fires after the adapter's, not before. */
 export const TIMEOUT_GRACE_MS = 3000
@@ -126,6 +150,23 @@ const RESULT_CODE_SET = new Set(RESULT_CODES)
  */
 export function insertAndSubmitBudgetMs({ composerWaitMs, sendWaitMs, submitVerifyMs, insertSettleMs = INSERT_SETTLE_MS }) {
   return composerWaitMs + sendWaitMs + 2 * submitVerifyMs + 2 * insertSettleMs
+}
+
+/** How long main waits for a trusted `webContents.insertText` to return before asking the page what landed (2026-10-17). */
+export const TRUSTED_INSERT_MS = 5000
+
+/**
+ * The worst case of the TRUSTED submit sequence (2026-10-17): `prepareInput` waits up to composerWaitMs for an
+ * ok session and the composer, the trusted insert TRUSTED_INSERT_MS, `verifyInput` polls TRUSTED_VERIFY_MS for
+ * the text and then up to sendWaitMs for the send control, and the confirmations take submitVerifyMs each — the
+ * first Enter's, then the second Enter's with its click fallback (two windows); each Enter follows one capture of
+ * at most TRUSTED_PAINT_MS (trusted-input.js). A trusted site's submit budget
+ * is this PLUS insertAndSubmitBudgetMs, because a trusted insert that landed nothing falls back to one synthetic
+ * insertAndSubmit.
+ */
+export function trustedSubmitBudgetMs({ composerWaitMs, sendWaitMs, submitVerifyMs, trustedInsertMs = TRUSTED_INSERT_MS, trustedVerifyMs = TRUSTED_VERIFY_MS, trustedPaintMs = TRUSTED_PAINT_MS }) {
+  // two Enters at most, each after one pre-Enter capture (trusted-input.js paintOnce, 2026-10-17)
+  return composerWaitMs + trustedInsertMs + trustedVerifyMs + sendWaitMs + 3 * submitVerifyMs + 2 * trustedPaintMs
 }
 
 /** The adapter's worst case for one observe: the first container within firstTokenMs, then the capture cap. */
@@ -189,12 +230,22 @@ export const SUSPECT_SNAPSHOT_KIND = 'suspect'
  * from; the second catches the shape even when the fallback read has already stripped the prompt out.
  * A result with neither flag (an adapter that predates them) is never suspect.
  */
-export function suspectReason(observed) {
+export function suspectReason(observed, slot = null) {
   if (!observed || typeof observed !== 'object') return null
   if (observed.echoesPrompt === true) return 'echoes_prompt'
   if (observed.bodyMatched === false && observed.heldUserTurn === true) return 'exchange_fallback'
+  if (observed.bodyMissed === true && BODY_MISS_SUSPECT_SITES.includes(slot)) return 'body_missed'
   return null
 }
+
+/**
+ * Sites whose turn-level read (no `assistantText` entry matched inside the reply container: the adapter's
+ * `bodyMissed`) is itself suspect (2026-10-17). gemini only: every gemini selector is unmeasured, its reply
+ * container also holds the thinking panel and a screen-reader label (the adapter's `turnText` skips both),
+ * and the first live miss is the DOM the calibration needs. claude and grok read at the turn level as a
+ * matter of course, so a body miss there is not evidence of anything.
+ */
+export const BODY_MISS_SUSPECT_SITES = Object.freeze(['gemini'])
 
 /**
  * What the settled re-read needs of the grant, worst case: the reload wait, `ready`, the re-read
@@ -300,6 +351,10 @@ function adapterFailure(e) {
  *   onNavigate?(slot, cb)          cb(url) on did-navigate / did-navigate-in-page; returns unsubscribe
  *   newChatUrl?(slot)              the site's newChatUrl (for `fresh:true`)
  *   onTurn?(slot, phase, code?)    `panes:turn` for the renderer
+ *   trustedInputFor?(slot)         2026-10-17: true → the TRUSTED submit sequence for that site (selectors.js
+ *                                  trustedInputFor over the merged config, read per turn); absent → never
+ *   trustedInput?                  {insertText(view, slot, text), pressEnter(view, slot)} (trusted-input.js);
+ *                                  trustedInputFor true without it → the synthetic path plus one warning per turn
  *   saveFailureSnapshot?(view, slot, {kind}?) → Promise<string|null>   S11: write that view's scrubbed DOM under
  *                                  snapshots/ (ipc.js saveDomSnapshot) and resolve with the path; called
  *                                  BEFORE a settled re-read reloads the page; a rejection is logged, never fatal.
@@ -327,6 +382,8 @@ export function createOrchestrator({
   newChatUrl = null,
   onTurn = null,
   saveFailureSnapshot = null,
+  trustedInputFor = null,
+  trustedInput = null,
   mutex = createMutex(),
   now = Date.now,
   log = console,
@@ -338,6 +395,18 @@ export function createOrchestrator({
   const settle = Number.isFinite(insertSettleMs) && insertSettleMs >= 0 ? insertSettleMs : INSERT_SETTLE_MS
   const warn = (m) => log && typeof log.warn === 'function' && log.warn(`[orchestrator] ${m}`)
   const info = (m) => log && typeof log.log === 'function' && log.log(`[orchestrator] ${m}`)
+
+  /** Whether `slot` is to be typed with trusted input (the per-turn selectors read; any throw → false). */
+  const trustedWanted = (slot) => {
+    if (typeof trustedInputFor !== 'function') return false
+    try {
+      return trustedInputFor(slot) === true
+    } catch (e) {
+      warn(`${slot}: trustedInputFor threw (${(e && e.message) || e}); using the synthetic insert`)
+      return false
+    }
+  }
+  const trustedWired = () => !!(trustedInput && typeof trustedInput.insertText === 'function' && typeof trustedInput.pressEnter === 'function')
 
   /** slot → {reqId, view, controller, started} while a turn is in flight on that view. */
   const active = new Map()
@@ -356,7 +425,7 @@ export function createOrchestrator({
     return Math.max(Math.floor(granted / 2), granted - CAPTURE_CEILING_MARGIN_MS)
   }
 
-  const budgets = (slot, view, timeoutS) => {
+  const budgets = (slot, view, timeoutS, trusted = false) => {
     const t = (typeof timeoutsFor === 'function' && timeoutsFor(slot)) || {}
     const composer = Number.isFinite(t.composerWaitMs) ? t.composerWaitMs : 15000
     const send = Number.isFinite(t.sendWaitMs) ? t.sendWaitMs : 18000
@@ -376,7 +445,9 @@ export function createOrchestrator({
     // sized for someone watching a reply arrive; the analyst's is sized for a model thinking.
     const capturePatience = view === 'analyst' ? ANALYST_CAPTURE_PATIENCE : 1
     const wanted = (Number.isFinite(c.captureTimeoutMs) ? c.captureTimeoutMs : 300000) * capturePatience
-    const submitMs = insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle })
+    const syntheticSubmitMs = insertAndSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify, insertSettleMs: settle })
+    // A trusted site (2026-10-17) may run the whole trusted sequence AND then the one synthetic fallback.
+    const submitMs = trusted ? trustedSubmitBudgetMs({ composerWaitMs: composer, sendWaitMs: send, submitVerifyMs: verify }) + syntheticSubmitMs : syntheticSubmitMs
     // The grant covers the WHOLE request, so the ceiling has to leave room for main's own pre-capture
     // work on this turn too — waiting for the composer, inserting, submitting — and not just for the
     // bridge margin. A capture sized against the grant alone outlives it by however long the submit
@@ -389,6 +460,9 @@ export function createOrchestrator({
     return {
       readyMs: composer,
       submitMs,
+      syntheticSubmitMs,
+      sendWaitMs: send,
+      submitVerifyMs: verify,
       quietMs,
       settleMs,
       firstTokenMs,
@@ -642,7 +716,11 @@ export function createOrchestrator({
     const elapsed = () => Math.max(0, Math.round(now() - started))
     const signal = entry.controller.signal
     const client = seam.client
-    const b = budgets(slot, entry.view, request && request.timeout_s)
+    // 2026-10-17: a site whose selectors say `trustedInput` is typed by main (trustedSubmit) when the trusted
+    // input is wired; its submit budget then covers the trusted sequence AND the one synthetic fallback.
+    const trustedSite = trustedWanted(slot)
+    const useTrusted = trustedSite && trustedWired()
+    const b = budgets(slot, entry.view, request && request.timeout_s, useTrusted)
     const { readyMs, submitMs, quietMs, settleMs, firstTokenMs, captureTimeoutMs, observeMs, incompleteGraceMs } = b
     const emitPhase = (p, code) => {
       if (seam.phases) phase(slot, p, code)
@@ -680,17 +758,26 @@ export function createOrchestrator({
       await client.request('ready', { timeoutMs: readyMs }, { timeoutMs: readyMs + TIMEOUT_GRACE_MS, signal })
       cancelled()
       // 5. insert under the mutex (a hidden analyst view takes focus too — the Stage 0 spike)
+      if (trustedSite && !useTrusted) warn(`${label}: trustedInput is on for ${slot} but no trusted input is wired; using the synthetic insert`)
+      let how = null // the trusted path's {insert, send}, for the submit line
       submitted = await underMutex(async () => {
         cancelled()
         emitPhase('typing')
         if (typeof seam.focus === 'function') await seam.focus()
+        if (useTrusted) {
+          const r = await trustedSubmit(request, entry, b, cancelled)
+          how = r.how
+          return r.submitted
+        }
         return client.request('insertAndSubmit', { text: request.text }, { timeoutMs: submitMs + TIMEOUT_GRACE_MS, signal })
       })
       emitPhase('submitted')
       // ONE line per submit (S11): which confirmation the adapter saw and which send button it pressed
       // (or the Enter fallback), so a capture that then reads nothing can be told apart from a prompt
-      // that was never really sent — without reading the page again.
-      info(`${label}: submitted by ${submitted.confirmedBy} (send: ${submitted.sendSelector || 'enter-fallback'})`)
+      // that was never really sent — without reading the page again. A trusted submit (2026-10-17) also
+      // names how the text went in; neither line ever carries the text.
+      if (how) info(`${label}: submitted by ${submitted.confirmedBy} (insert: ${how.insert}, send: ${how.send})`)
+      else info(`${label}: submitted by ${submitted.confirmedBy} (send: ${submitted.sendSelector || 'enter-fallback'})`)
       // 6. chat-URL wait, in the background (never delays the result)
       chatWatch = seam.recordsChat ? watchChatUrl(slot, convId) : { url: () => null, stop: () => {} }
       const resultUrl = () => chatWatch.url() || (typeof submitted.url === 'string' && submitted.url) || seam.url()
@@ -734,7 +821,7 @@ export function createOrchestrator({
       // text is the adapter's. Pane only: the analyst page never renders an exchange, and its replies are
       // JSON documents that quote nothing. The view is still reserved, so the snapshot op never meets `busy`.
       if (entry.view === 'pane') {
-        const reason = suspectReason(observed)
+        const reason = suspectReason(observed, slot)
         if (reason) await saveSuspectEvidence(slot, label, reason)
       }
       const finalUrl = (typeof observed.url === 'string' && observed.url) || resultUrl()
@@ -764,6 +851,129 @@ export function createOrchestrator({
       // original failure stands.
       const recovered = await settledReread(request, entry, e, submitted, b, elapsed)
       return recovered || failure
+    }
+  }
+
+  /**
+   * Race main's trusted insert against TRUSTED_INSERT_MS and the turn's abort signal. Resolves with
+   * `{ok:true}`, `{error}` (a rejection, or `timeout`) or `{aborted:true}`; never rejects. The page is asked
+   * what landed whatever the outcome (an insert that "failed" may still have typed part of the text).
+   */
+  function raceTrustedInsert(view, slot, text, signal) {
+    return new Promise((resolve) => {
+      let finished = false
+      let timer = null
+      const onAbort = () => finish({ aborted: true })
+      const finish = (outcome) => {
+        if (finished) return
+        finished = true
+        if (timer !== null) clearT(timer)
+        signal.removeEventListener('abort', onAbort)
+        resolve(outcome)
+      }
+      if (signal.aborted) {
+        finish({ aborted: true })
+        return
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      timer = setT(() => finish({ error: new AdapterRequestError('timeout', `the trusted insert did not return within ${TRUSTED_INSERT_MS} ms`) }), TRUSTED_INSERT_MS)
+      let pending
+      try {
+        pending = Promise.resolve(trustedInput.insertText(view, slot, text))
+      } catch (e) {
+        pending = Promise.reject(e)
+      }
+      pending.then(
+        () => finish({ ok: true }),
+        (e) => finish({ error: e }),
+      )
+    })
+  }
+
+  /**
+   * The TRUSTED submit sequence (header, 2026-10-17), run by turn() inside its one mutex hold after the view
+   * was focused. Resolves with `{submitted, how}`: `submitted` is shaped like an insertAndSubmit result
+   * ({submitted, composerSelector, sendSelector, assistantCount, confirmedBy, url}; assistantCount is
+   * verifyInput's pre-Enter sample — the observe baseline — as confirmSubmit last reported it) and `how` is
+   * {insert, send} for the submit line. Rejects with an AdapterRequestError (`not_submitted`, `cancelled`, an
+   * adapter code) that turn()'s one failure funnel reports. The text goes to the page as a message field and
+   * to trusted-input.js; nothing here logs it.
+   */
+  async function trustedSubmit(request, entry, b, cancelled) {
+    const { slot } = request
+    const { seam, label, view } = entry
+    const client = seam.client
+    const signal = entry.controller.signal
+    const text = request.text
+    const confirmed = (c) => !!(c && typeof c.confirmedBy === 'string' && c.confirmedBy !== '')
+    // (1) the page side: session ok, composer focused, caret at the end, what it held before noted
+    const prep = await client.request('prepareInput', { text, timeoutMs: b.readyMs }, { timeoutMs: b.readyMs + TIMEOUT_GRACE_MS, signal })
+    cancelled()
+    // a composer without the document's focus is where a trusted insert lands nothing (verifyInput then says so)
+    // a composer holding only the start of this prompt (what a `partial` insert left): typing would send fragment +
+    // prompt, so nothing is typed and the user clears the composer (review 2026-10-17)
+    if (prep && prep.state === 'partial_present') {
+      throw new AdapterRequestError('not_submitted', 'the composer already holds the start of this prompt (left by an earlier insert); clear the composer in the pane and send again')
+    }
+    if (prep && prep.focused === false) warn(`${label}: the composer did not take the focus; the trusted insert may land nothing`)
+    // (2) main types — unless the composer already holds exactly this prompt (never typed twice)
+    if (!prep || prep.state !== 'already_present') {
+      const outcome = await raceTrustedInsert(view, slot, text, signal)
+      cancelled() // an abort during the insert ends the turn here: no verify, no Enter
+      if (outcome.error) {
+        const f = adapterFailure(outcome.error)
+        warn(`${label}: trusted insert ${f.code} — ${f.message}; asking the page what landed`)
+      }
+    }
+    // (3) what landed decides everything that follows
+    // both windows are sent, so the adapter's worst case and main's budget are the same two numbers
+    const verify = await client.request('verifyInput', { text, verifyMs: TRUSTED_VERIFY_MS, sendWaitMs: b.sendWaitMs }, { timeoutMs: TRUSTED_VERIFY_MS + b.sendWaitMs + TIMEOUT_GRACE_MS, signal })
+    cancelled()
+    const landed = verify && verify.landed
+    if (landed === 'none') {
+      // Provably nothing typed, so one synthetic attempt cannot double the prompt.
+      warn(`${label}: the trusted insert landed nothing; one synthetic insertAndSubmit`)
+      const r = await client.request('insertAndSubmit', { text }, { timeoutMs: b.syntheticSubmitMs + TIMEOUT_GRACE_MS, signal })
+      return { submitted: r, how: { insert: 'synthetic (trusted landed nothing)', send: (r && r.sendSelector) || 'enter-fallback' } }
+    }
+    if (landed === 'partial') {
+      const got = Number.isFinite(verify.composerChars) ? verify.composerChars : '?'
+      const want = Number.isFinite(verify.expectedChars) ? verify.expectedChars : '?'
+      throw new AdapterRequestError('not_submitted', `the trusted insert landed only part of the prompt (composer ${got} chars, ${want} expected); not re-typed`)
+    }
+    if (landed !== 'all') throw new AdapterRequestError('site_error', `verifyInput answered landed=${String(landed).slice(0, 40)}`)
+    // (4) trusted Enter, then the page's confirmation
+    await trustedInput.pressEnter(view, slot)
+    cancelled()
+    let conf = await client.request('confirmSubmit', { text }, { timeoutMs: b.submitVerifyMs + TIMEOUT_GRACE_MS, signal })
+    cancelled()
+    let send = 'trusted-enter'
+    if (!confirmed(conf)) {
+      if (!conf || conf.stillHeld !== true) {
+        throw new AdapterRequestError('not_submitted', 'the trusted Enter was not confirmed and the composer no longer holds the prompt; not pressed again')
+      }
+      // (5) the prompt is provably still in the composer: one more Enter, and the send button as a last resort
+      info(`${label}: the trusted Enter was not confirmed and the prompt is still in the composer; pressing Enter once more`)
+      await trustedInput.pressEnter(view, slot)
+      cancelled()
+      conf = await client.request('confirmSubmit', { text, clickFallback: true }, { timeoutMs: 2 * b.submitVerifyMs + TIMEOUT_GRACE_MS, signal })
+      cancelled()
+      if (!confirmed(conf)) throw new AdapterRequestError('not_submitted', 'neither two trusted Enters nor the send button submitted the prompt')
+      if (typeof conf.sendSelector === 'string' && conf.sendSelector !== '') send = `${conf.sendSelector} click-fallback`
+    }
+    // The observe baseline: verifyInput's pre-Enter sample, as lowered by a confirmSubmit miss (the adapter
+    // re-baselines DOWN only, exactly as submit() does before its own Enter fallback); verify's when absent.
+    const baseline = Number.isInteger(conf.assistantCount) && conf.assistantCount >= 0 ? conf.assistantCount : verify.assistantCount
+    return {
+      submitted: {
+        submitted: true,
+        composerSelector: (prep && prep.composerSelector) || null,
+        sendSelector: send === 'trusted-enter' ? null : conf.sendSelector,
+        assistantCount: baseline,
+        confirmedBy: conf.confirmedBy,
+        url: typeof conf.url === 'string' ? conf.url : '',
+      },
+      how: { insert: 'trusted', send },
     }
   }
 

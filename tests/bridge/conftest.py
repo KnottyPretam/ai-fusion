@@ -39,6 +39,7 @@ import pytest
 
 from backend.llm import bridge
 from backend.llm.bridge_protocol import BRIDGE_SLOTS
+from backend.schemas import DEFAULT_COUNCIL
 from tests.e2e.conftest import fixture_text
 
 SCENARIO = "planted_factual"
@@ -70,9 +71,12 @@ def planted(name: str) -> str:
 def planted_script(
     overrides: dict[Any, Any] | None = None, *, analyst: str = "chatgpt"
 ) -> dict[Any, Any]:
-    """Every (slot, view, purpose) the planted_factual flow needs, from the committed fixtures."""
+    """Every (slot, view, purpose) the planted_factual flow needs, from the committed fixtures.
+
+    Over the DEFAULT council (the classic three), not `BRIDGE_SLOTS`: since 2026-10-17 the bridge
+    also speaks `gemini`, which the default council does not seat and the corpus has no fixture for."""
     script: dict[Any, Any] = {}
-    for slot in BRIDGE_SLOTS:
+    for slot in DEFAULT_COUNCIL:
         script[(slot, "pane", "chat")] = planted(f"{slot}.chat.1.jsonl")
         script[(slot, "pane", "defense")] = planted(f"{slot}.defense.1.jsonl")
     script[(analyst, "analyst", "extraction")] = planted("analyst.extraction.1.jsonl")
@@ -119,7 +123,7 @@ async def attached() -> FakeConnection:
 
 @pytest.fixture
 def web_env(monkeypatch):
-    for slot in BRIDGE_SLOTS:
+    for slot in DEFAULT_COUNCIL:  # the slots `config` reads `SLOT_<KEY>_MODEL` for
         monkeypatch.setenv(f"SLOT_{slot.upper()}_MODEL", f"web:{slot}")
         monkeypatch.setenv(f"SLOT_{slot.upper()}_EFFORT", "off")
     monkeypatch.setenv("ANALYST_MODEL", "web:chatgpt:analyst")

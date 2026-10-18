@@ -22,7 +22,7 @@ function memoryStorage(init = {}) {
 
 describe('analyst choice: pure helpers', () => {
   test('analystKind / isDesktopAnalyst / analystSlotOf classify the three legal states and the rest', () => {
-    for (const slot of ['claude', 'chatgpt', 'grok']) {
+    for (const slot of ['claude', 'chatgpt', 'grok', 'gemini']) {
       expect(analystKind(`web:${slot}:analyst`)).toBe('web')
       expect(isDesktopAnalyst(`web:${slot}:analyst`)).toBe(true)
       expect(analystSlotOf(`web:${slot}:analyst`)).toBe(slot)
@@ -36,7 +36,8 @@ describe('analyst choice: pure helpers', () => {
       expect(analystSlotOf(none)).toBeNull()
     }
     // pre-pivot OpenRouter slugs, pane models, malformed strings
-    for (const other of ['openai/gpt-5.6-luna', 'web:chatgpt', 'web:gemini:analyst', 'ollama:', 'web:chatgpt:analyst ', 42]) {
+    // `web:deepseek:analyst`: a vendor with no site (gemini became one on 2026-10-17)
+    for (const other of ['openai/gpt-5.6-luna', 'web:chatgpt', 'web:deepseek:analyst', 'ollama:', 'web:chatgpt:analyst ', 42]) {
       expect(analystKind(other)).toBe('other')
       expect(isDesktopAnalyst(other)).toBe(false)
       expect(analystSlotOf(other)).toBeNull()
@@ -44,7 +45,8 @@ describe('analyst choice: pure helpers', () => {
   })
 
   test('the fixed web analyst ids and names mirror the desktop catalog', () => {
-    expect(WEB_ANALYST_IDS).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst'])
+    expect(WEB_ANALYST_IDS).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst'])
+    expect(webAnalystName('gemini')).toBe('Gemini web session (hidden analyst page)')
     expect(webAnalystId('grok')).toBe('web:grok:analyst')
     expect(webAnalystName('chatgpt')).toBe('ChatGPT web session (hidden analyst page)')
     expect(DEFAULT_ANALYST).toBe('web:chatgpt:analyst')
@@ -105,11 +107,12 @@ describe('analyst choice: localStorage mirror', () => {
 })
 
 describe('desktopSlotConfig', () => {
-  test('is the full SlotConfig of a desktop conversation: web:* panes at effort off, the chosen analyst, the backend defaults', () => {
+  test('is the full SlotConfig of a desktop conversation: web:* panes at effort off (all four sites), the chosen analyst, the backend defaults', () => {
     expect(desktopSlots()).toEqual({
       claude: { model: 'web:claude', effort: 'off' },
       chatgpt: { model: 'web:chatgpt', effort: 'off' },
       grok: { model: 'web:grok', effort: 'off' },
+      gemini: { model: 'web:gemini', effort: 'off' },
     })
     expect(desktopSlotConfig('ollama:hermes3')).toEqual({
       slots: desktopSlots(),

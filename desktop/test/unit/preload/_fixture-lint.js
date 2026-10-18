@@ -4,7 +4,9 @@
 //
 // A scrubbed real-DOM snapshot must carry no identity: an e-mail (`@`), a chat path (`/c/`,
 // `/chat/`), a uuid (chat / message ids), an avatar host (`googleusercontent`) or a profile link
-// (`x.com/`). The patterns are deliberately blunt — a false positive costs a manual edit, a false
+// (`x.com/`) — and since 2026-10-17 gemini's chat paths (`/app/<id>`, `/gem/<id>`) and its account
+// button's label (`Google Account: <name>`; `scrubValue` leaves `Google Account: name`). The English
+// label only: a Gemini account in another UI language words it differently. The patterns are deliberately blunt — a false positive costs a manual edit, a false
 // negative ships someone's account into the repo.
 
 import fs from 'node:fs'
@@ -22,6 +24,10 @@ export const LINT_PATTERNS = Object.freeze([
   { name: 'uuid', re: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i },
   { name: 'googleusercontent (an avatar host)', re: /googleusercontent/i },
   { name: 'x.com/ (a profile link)', re: /x\.com\//i },
+  // 2026-10-17 (gemini): a chat or Gem id — scrubValue leaves `/app-/id` / `/gem-/id`, which this never matches
+  { name: 'gemini chat path /app/<id> or /gem/<id>', re: /\/(?:app|gem)\/[A-Za-z0-9_-]{6,}/ },
+  // 2026-10-17 (gemini): the account button's label carries the holder's name; scrubValue leaves `Google Account: name`
+  { name: 'Google Account: <name> (an account label)', re: /Google Account:(?!\s*name\b)/i },
 ])
 
 /** Every `{name, line}` finding in `text` (1-based line numbers); `[]` when it is clean. */

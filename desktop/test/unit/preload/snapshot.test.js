@@ -22,7 +22,8 @@ const comment = (s) => ({ nodeType: 8, data: s })
 
 test('the drop list and the attribute allow-list are the contract lists, frozen', () => {
   assert.deepEqual([...SNAPSHOT_DROP_TAGS], ['script', 'style', 'link', 'meta', 'img', 'svg', 'iframe', 'video', 'audio'])
-  assert.deepEqual([...SNAPSHOT_KEEP_ATTRS], ['id', 'class', 'role', 'contenteditable', 'aria-label', 'data-testid', 'data-message-author-role', 'data-lexical-editor', 'type', 'disabled', 'placeholder', 'translate'])
+  // 2026-10-17 (gemini): Google's `data-test-id` and the `fonticon` of a mat-icon — the language-neutral cascade entries
+  assert.deepEqual([...SNAPSHOT_KEEP_ATTRS], ['id', 'class', 'role', 'contenteditable', 'aria-label', 'data-testid', 'data-message-author-role', 'data-lexical-editor', 'type', 'disabled', 'placeholder', 'translate', 'data-test-id', 'fonticon'])
   assert.ok(Object.isFrozen(SNAPSHOT_DROP_TAGS) && Object.isFrozen(SNAPSHOT_KEEP_ATTRS))
 })
 

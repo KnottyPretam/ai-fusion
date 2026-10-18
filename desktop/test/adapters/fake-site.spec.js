@@ -16,12 +16,19 @@ import { FAKE_ASSISTANT } from './_harness.js' // the `assistant` entry each loo
 const require = createRequire(import.meta.url)
 const { DEFAULT_SELECTORS, SLOTS } = require('../../preload/site.cjs')
 
-const LOGIN_LINK = { chatgpt: 'a[href="/auth/login"]', claude: 'a[href="/login"]', grok: 'a[href="/sign-in"]' }
+const LOGIN_LINK = {
+  chatgpt: 'a[href="/auth/login"]',
+  claude: 'a[href="/login"]',
+  grok: 'a[href="/sign-in"]',
+  gemini: 'a[aria-label="Sign in"][href*="accounts.google.com/ServiceLogin"]', // 2026-10-17: guest mode's header link
+}
 /** grok (TipTap): the action slot while the editor is empty — the real page's voice-mode button. */
 const VOICE_BUTTON = "button[type='button'][aria-label='Enter voice mode']"
 /** grok (TipTap): the submit button, rendered only once the editor holds text. */
 const GROK_SUBMIT = "button[type='submit'][aria-label='Submit'][data-testid='chat-submit']"
 const GROK_HELPER = 'textarea.helper'
+/** The empty composer's action slot per swap-style look-alike: grok's voice button, gemini's microphone (2026-10-17). */
+const EMPTY_SLOT = { grok: VOICE_BUTTON, gemini: "button[type='button'][aria-label='Microphone']" }
 
 const fakeState = (page) =>
   page.evaluate(() => ({ site: window.__fake.site, state: window.__fake.state, submitted: window.__fake.submitted, text: window.__fake.getText() }))
@@ -29,8 +36,8 @@ const helperText = (page) => page.evaluate(() => window.__fake.helperText())
 
 for (const site of SLOTS) {
   const sel = DEFAULT_SELECTORS[site]
-  // grok renders the submit button only once the editor holds text; the others keep a disabled one
-  const submitAppearsOnInput = site === 'grok'
+  // grok and gemini (2026-10-17) render the submit button only once the editor holds text; the others keep a disabled one
+  const submitAppearsOnInput = site === 'grok' || site === 'gemini'
 
   test.describe(site, () => {
     test('first cascade entries for composer and send exist; send starts disabled (grok: absent until input)', async ({ page }) => {
@@ -38,7 +45,7 @@ for (const site of SLOTS) {
       await expect(page.locator(sel.composer[0])).toHaveCount(1)
       if (submitAppearsOnInput) {
         await expect(page.locator(sel.send[0])).toHaveCount(0)
-        await expect(page.locator(VOICE_BUTTON)).toHaveCount(1)
+        await expect(page.locator(EMPTY_SLOT[site])).toHaveCount(1)
       } else {
         await expect(page.locator(sel.send[0])).toHaveCount(1)
         await expect(page.locator(sel.send[0])).toBeDisabled()
@@ -56,21 +63,36 @@ for (const site of SLOTS) {
       await page.locator(sel.send[0]).click()
       await expect.poll(() => fakeState(page)).toEqual({ site, state: 'ok', submitted: [text], text: '' })
       if (submitAppearsOnInput) {
-        await expect(page.locator(sel.send[0])).toHaveCount(0) // gone again: the voice button is back
-        await expect(page.locator(VOICE_BUTTON)).toHaveCount(1)
+        await expect(page.locator(sel.send[0])).toHaveCount(0) // gone again: the voice / microphone button is back
+        await expect(page.locator(EMPTY_SLOT[site])).toHaveCount(1)
       } else {
         await expect(page.locator(sel.send[0])).toBeDisabled()
       }
       await expect(page).toHaveURL(/\/c\/[A-Za-z0-9-]+/)
     })
 
-    test('logged-out wall shows the login link and no composer', async ({ page }) => {
-      await page.goto(`/?site=${site}&state=loggedout`)
-      await expect(page.locator(LOGIN_LINK[site])).toHaveCount(1)
-      await expect(page.locator(sel.loggedOut[0])).toHaveCount(1)
-      for (const s of sel.composer) await expect(page.locator(s)).toHaveCount(0)
-      expect((await fakeState(page)).state).toBe('loggedout')
-    })
+    if (site === 'gemini') {
+      // 2026-10-17: signed out, gemini.google.com is GUEST MODE — no wall, a working composer and a Sign-in link
+      test('guest mode shows the Sign-in link AND a working composer (typing still enables send)', async ({ page }) => {
+        await page.goto(`/?site=${site}&state=loggedout`)
+        await expect(page.locator(LOGIN_LINK[site])).toHaveCount(1)
+        for (const entry of [sel.loggedOut[0], sel.loggedOut[2]]) await expect(page.locator(entry)).toHaveCount(1)
+        await expect(page.locator(sel.composer[0])).toHaveCount(1)
+        await expect(page.locator("a[aria-label^='Google Account:']")).toHaveCount(0)
+        await page.locator(sel.composer[0]).click()
+        await page.keyboard.type('a guest can type')
+        await expect(page.locator(sel.send[0])).toBeEnabled()
+        expect((await fakeState(page)).state).toBe('loggedout')
+      })
+    } else {
+      test('logged-out wall shows the login link and no composer', async ({ page }) => {
+        await page.goto(`/?site=${site}&state=loggedout`)
+        await expect(page.locator(LOGIN_LINK[site])).toHaveCount(1)
+        await expect(page.locator(sel.loggedOut[0])).toHaveCount(1)
+        for (const s of sel.composer) await expect(page.locator(s)).toHaveCount(0)
+        expect((await fakeState(page)).state).toBe('loggedout')
+      })
+    }
   })
 }
 
@@ -533,4 +555,66 @@ test.describe('the virtualized-transcript options (2026-09-27)', () => {
     expect(r.replyText).toBe('Echo: pending row')
     await expect(page.locator(GROK.assistant[0])).toHaveCount(1) // the row carries the measured assistant bubble
   })
+})
+
+// ---- 2026-10-17: ?untrusted=ignore|stall (every look-alike) and the gemini exchange shape ------------------------------
+
+test.describe('?untrusted — how a look-alike treats an UNTRUSTED submit (the adapter\'s el.click() / synthetic Enter); a trusted one always counts', () => {
+  for (const site of ['claude', 'chatgpt', 'gemini']) {
+    const sel = DEFAULT_SELECTORS[site]
+    test(`${site}: ignore drops a synthetic click AND a synthetic Enter (the prompt stays, nothing is sent); a real Enter then submits`, async ({ page }) => {
+      await page.goto(`/?site=${site}&untrusted=ignore`)
+      await page.locator(sel.composer[0]).click()
+      await page.keyboard.type('only trusted counts')
+      await expect(page.locator(sel.send[0])).toBeEnabled()
+      await page.evaluate((s) => document.querySelector(s).click(), sel.send[0]) // untrusted
+      await page.evaluate((s) => {
+        const ed = document.querySelector(s)
+        ed.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }))
+      }, sel.composer[0])
+      expect(await page.evaluate(() => [window.__fake.untrusted, window.__fake.untrustedDropped, window.__fake.submitted.length])).toEqual(['ignore', 2, 0])
+      expect((await fakeState(page)).text).toBe('only trusted counts')
+      await page.locator(sel.composer[0]).press('Enter') // trusted
+      await expect.poll(() => fakeState(page)).toEqual({ site, state: 'ok', submitted: ['only trusted counts'], text: '' })
+    })
+
+    test(`${site}: stall — a synthetic click mounts the user turn, empties the composer and shows Stop FOREVER, with no reply`, async ({ page }) => {
+      await page.goto(`/?site=${site}&untrusted=stall&replyMs=100`)
+      await page.locator(sel.composer[0]).click()
+      await page.keyboard.type('stall me')
+      await page.evaluate((s) => document.querySelector(s).click(), sel.send[0]) // untrusted
+      await expect(page.locator(sel.stop[0])).toHaveCount(1)
+      await page.waitForTimeout(600) // ?replyMs=100 would long have answered a real submit
+      await expect(page.locator(sel.stop[0])).toHaveCount(1)
+      await expect(page.locator(FAKE_ASSISTANT[site])).toHaveCount(0)
+      expect(await page.evaluate(() => [window.__fake.stalled, window.__fake.submitted.length, window.__fake.getText()])).toEqual([['stall me'], 0, ''])
+    })
+  }
+
+  test('grok (a <form>): ignore tells the click that set the form submit off apart from the submit event itself — an untrusted click is dropped, a real one submits', async ({ page }) => {
+    const sel = DEFAULT_SELECTORS.grok
+    await page.goto('/?site=grok&untrusted=ignore')
+    await page.locator(sel.composer[0]).click()
+    await page.keyboard.type('form site')
+    await expect(page.locator(sel.send[0])).toHaveCount(1)
+    await page.evaluate((s) => document.querySelector(s).click(), sel.send[0])
+    expect(await page.evaluate(() => [window.__fake.untrustedDropped, window.__fake.submitted.length])).toEqual([1, 0])
+    await page.locator(sel.send[0]).click()
+    await expect.poll(() => fakeState(page)).toEqual({ site: 'grok', state: 'ok', submitted: ['form site'], text: '' })
+  })
+})
+
+test('gemini: a submit mounts `div.conversation-container > user-query`, the reply mounts its `model-response` INTO it (message-content > .markdown-main-panel), and the thumbs come with the end — the container itself is never an assistant row', async ({ page }) => {
+  const sel = DEFAULT_SELECTORS.gemini
+  await page.goto('/?site=gemini&replyMs=200')
+  await page.locator(sel.composer[0]).click()
+  await page.keyboard.type('exchange shape')
+  await page.locator(sel.composer[0]).press('Enter')
+  await expect(page.locator('div.conversation-container > user-query .query-text')).toHaveText('exchange shape')
+  await expect(page.locator('div.conversation-container > model-response message-content .markdown-main-panel')).toHaveText('Echo: exchange shape')
+  await expect(page.locator(sel.done[0])).toHaveCount(1)
+  await expect(page.locator("model-response mat-icon[fonticon='thumb_up']")).toHaveCount(1)
+  await expect(page.locator('user-query .cdk-visually-hidden')).toHaveText('You said')
+  await expect(page.locator('div.conversation-container')).toHaveCount(1)
+  await expect(page.locator(sel.assistant[0])).toHaveCount(1)
 })

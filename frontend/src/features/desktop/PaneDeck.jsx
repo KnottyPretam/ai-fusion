@@ -12,8 +12,8 @@
 // Stage 2 capture: `pane-<slot>-capture` is the per-site switch (off by default, plan Decision 3),
 // read from main with `getCapture()` on mount (the value is main's, persisted in settings.json) and
 // written with `setCapture(slot, on)` — optimistic in the slice, reverted if main rejects. The ToS
-// wording sits next to every switch (title) and in `capture-notice`, shown until each of the three
-// switches has been set once (`triplex.panes.captureNoticeSeen` in localStorage, slice.js). The
+// wording sits next to every switch (title) and in `capture-notice`, shown until each site switch
+// on screen has been set once (`triplex.panes.captureNoticeSeen` in localStorage, slice.js). The
 // switch is disabled during a send: main reads it at observe time and a flip mid-turn would change
 // what that turn captures. `pane-<slot>-phase` shows the turn phase main reports over `onTurn`.
 // Anything that navigates a view — new-chat-all, the per-pane Reload / New chat buttons — is
@@ -32,7 +32,7 @@
 // to the active pane; `panes.active` only ever names a slot), reported to main under the layout
 // key 'analyst' (contract §2) only while mounted: an absent key is "hidden" for main.
 // Council (2026-09-27): the deck is MIXED. The council — the open conversation's `slotConfig`, else
-// main's default (`panes.council`), else the classic three — is mapped in catalog order: a member
+// main's default (`panes.council`), else every site (DEFAULT_COUNCIL) — is mapped in catalog order: a member
 // on a WEB SESSION (`web:<site>`, so a site vendor on its own login) is today's native pane
 // (`SitePane`, `pane-<slot>[data-kind=site]`), any other member (an OpenRouter or local Ollama
 // agent — a site vendor seated on OpenRouter included: nothing is typed into its page) is a
@@ -43,12 +43,19 @@
 // is null and main hides the view. `setActive` sends the real active, column or site (main accepts
 // either). The layout reporter re-observes whenever the council changes (a viewport appears or
 // disappears). An `active` outside the council is moved to its first member.
+// Agents stepper (2026-10-17): `−  N agents  +` (./AgentStepper.jsx) sits in the deck bar right
+// after the tabs; its add menu and its error row are in-flow strips right after the bar, rendered
+// only while open / failed, so the capture notice stays the deck's second child otherwise. With a
+// `chats` prop (DesktopShell's shared ./chats.js instance) its new chats go through that instance.
+// Gemini (2026-10-17) is the fourth site: nothing here is per-site; the capture notice now hides
+// once every site pane ON SCREEN has had its switch set (slice.allCaptureTouched).
 // Every `window.triplex` call is optional-chained: the deck renders under a partial stub and
 // under the web app, where the object is absent. Renderer chrome never overlaps a viewport
 // (deck bar and notice above, header above, prompt bar / drawer below — see desktop.module.css).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { SlotColumn } from '../send/index.jsx'
+import { AgentStepper, AgentStepperError, AgentStepperMenu, useAgentStepper } from './AgentStepper.jsx'
 import { LAYOUT_KEYS, rectsFor, sameLayout } from './rects.js'
 import { themeLabel, themeTitle, useTheme } from './theme.js'
 import {
@@ -159,14 +166,14 @@ function zoomPercent(factor) {
   return `${Math.round((Number(factor) || 1) * 100)}%`
 }
 
-export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null, onNewChatAll = null }) {
+export default function PaneDeck({ api = desktopApi(), info = null, version = null, promptRef = null, onNewChatAll = null, chats = null }) {
   const dispatch = useDispatch()
   const panes = useSlice('panes') || initialPanes()
   const slotConfig = useSlice('slotConfig')
   const { mode, active, health, lastSend, zoom, sending, capture, turn } = panes
   const analyst = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
   const analystVisible = !!analyst.visible
-  // The council on screen: the open conversation's, else main's default, else the classic three.
+  // The council on screen: the open conversation's, else main's default, else every site.
   const council = councilOf(slotConfig) || councilOf(panes.council) || DEFAULT_COUNCIL
   const councilKey = council.join(',')
   const modelOf = (slot) => (slotConfig && slotConfig.slots && slotConfig.slots[slot] ? slotConfig.slots[slot].model : panes.council && panes.council.slots && panes.council.slots[slot] ? panes.council.slots[slot].model : isSiteId(slot) ? `web:${slot}` : '')
@@ -177,6 +184,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const [theme, cycleTheme] = useTheme(api, info)
   const latest = useRef({ mode, active, sending, onNewChatAll, council, sitePanes })
   latest.current = { mode, active, sending, onNewChatAll, council, sitePanes }
+  const stepper = useAgentStepper({ api, chats })
 
   useLayoutReporter(api, mode, active, viewports, analystVisible, `${councilKey}|${sitePanes.join(',')}`)
 
@@ -296,7 +304,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   useEffect(() => {
     persistCaptureTouched(undefined, touched)
   }, [touched])
-  const noticeOpen = !allCaptureTouched(touched)
+  const noticeOpen = !allCaptureTouched(touched, sitePanes)
 
   const toggleCapture = (slot, on) => {
     if (latest.current.sending) return // the switch is disabled during a send; guard the handler too
@@ -357,6 +365,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
             )
           })}
         </div>
+        <AgentStepper stepper={stepper} />
         {analystVisible ? (
           <button
             type="button"
@@ -390,6 +399,8 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
         </button>
         {version ? <span className={css.version}>{`desktop v${version}${dev ? ' (dev)' : ''}`}</span> : null}
       </div>
+      {stepper.open ? <AgentStepperMenu stepper={stepper} /> : null}
+      <AgentStepperError stepper={stepper} />
       {noticeOpen ? (
         <div className={css.notice} data-testid="capture-notice" role="note" aria-label="Capture and the sites' terms of service">
           <strong>Capture reply text:</strong> {CAPTURE_NOTICE_TEXT}

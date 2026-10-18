@@ -9,7 +9,7 @@ import DesktopShell from './index.jsx'
 import Drawer, { ANALYZE_BLOCKED_HINT, councilAnswersText } from './Drawer.jsx'
 import PaneDeck from './PaneDeck.jsx'
 import PromptBar from './PromptBar.jsx'
-import { initialPanes } from './slice.js'
+import { SITES, initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { CFG, CFG2, CFG5, DESKTOP_CATALOG, KEY_SET, KEY_UNSET, RECTS, conv, fakeTriplex, health, installFakeResizeObserver, jsonResponse, modelsState, pinViewportRects, stubFetch, syncFrames } from './fakes.js'
@@ -67,8 +67,9 @@ describe('PaneDeck: a mixed council', () => {
     expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('data-kind', 'column')
     expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('title', 'Gemini — OpenRouter agent')
     expect(screen.getByTestId('deck-tab-qwen')).toHaveAttribute('title', 'Qwen — local Ollama agent')
-    expect(Object.keys(lastLayout(fake)).sort()).toEqual(['chatgpt', 'claude', 'grok'])
-    expect(lastLayout(fake)).toEqual(RECTS)
+    expect(Object.keys(lastLayout(fake)).sort()).toEqual(['chatgpt', 'claude', 'gemini', 'grok'])
+    // Gemini is a SITE since 2026-10-17, but seated on OpenRouter here: a column, so its view stays hidden
+    expect(lastLayout(fake)).toEqual({ ...RECTS, gemini: null })
   })
 
   test('two web sites: the third site is not rendered and its rect is null (main hides the view)', () => {
@@ -77,7 +78,7 @@ describe('PaneDeck: a mixed council', () => {
     mountDeck(fake, { conversation: conv({ slot_config: cfg }), slotConfig: cfg })
     expect(paneSlots()).toEqual(['claude', 'grok'])
     expect(screen.queryByTestId('pane-chatgpt')).toBeNull()
-    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: RECTS.grok })
+    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: RECTS.grok, gemini: null })
     // the persisted active (chatgpt) is outside this council: it moves to the first member
     expect(store.panes.active).toBe('claude')
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'split', active: 'claude' })
@@ -90,27 +91,27 @@ describe('PaneDeck: a mixed council', () => {
     expect(screen.getByTestId('pane-chatgpt')).toHaveAttribute('data-kind', 'column') // ChatGPT on OpenRouter is a column too
     expect(screen.getByTestId('pane-qwen')).not.toHaveAttribute('hidden')
     expect(screen.getByTestId('pane-chatgpt')).toHaveAttribute('hidden')
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: null, gemini: null })
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'tabs', active: 'qwen' })
   })
 
   test('tabs mode with a column active hides every site view; Ctrl+4 / Ctrl+5 reach the 4th and 5th member; tab-5 on a three-council is a no-op', () => {
     const fake = fakeTriplex()
     mountDeck(fake, { panes: { mode: 'tabs', active: 'chatgpt' }, conversation: conv({ slot_config: CFG5 }), slotConfig: CFG5 })
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: RECTS.chatgpt, grok: null, gemini: null })
     expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('title', 'Gemini — OpenRouter agent (Ctrl+4)')
     act(() => fake.emit.shortcut('tab-4'))
     expect(store.panes.active).toBe('gemini')
     expect(screen.getByTestId('deck-tab-gemini')).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('pane-gemini')).not.toHaveAttribute('hidden')
     expect(screen.getByTestId('pane-chatgpt')).toHaveAttribute('hidden')
-    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: null, chatgpt: null, grok: null, gemini: null })
     expect(fake.setActive).toHaveBeenLastCalledWith({ mode: 'tabs', active: 'gemini' })
     act(() => fake.emit.shortcut({ name: 'tab-5' }))
     expect(store.panes.active).toBe('qwen')
     act(() => fake.emit.shortcut('tab-1'))
     expect(store.panes.active).toBe('claude')
-    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null })
+    expect(lastLayout(fake)).toEqual({ claude: RECTS.claude, chatgpt: null, grok: null, gemini: null })
     // split mode: clicking a column tab activates it but focuses no view
     fireEvent.click(screen.getByTestId('deck-mode-split'))
     fake.focusPane.mockClear()
@@ -136,7 +137,7 @@ describe('PaneDeck: a mixed council', () => {
     // the default's arrival re-observes: a new council with three sites brings the three viewports back
     act(() => store.dispatch({ type: 'panes/council', council: { slots: CFG5.slots } }))
     expect(paneSlots()).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'qwen'])
-    expect(lastLayout(fake)).toEqual(RECTS)
+    expect(lastLayout(fake)).toEqual({ ...RECTS, gemini: null }) // CFG5 seats Gemini on OpenRouter: a column
   })
 })
 
@@ -342,7 +343,7 @@ describe('DesktopShell: the council and key mirrors', () => {
     expect(store.panes.council).toEqual({ slots: CFG.slots })
   })
 
-  test('a getCouncil that rejects leaves the default null and the classic three on screen', async () => {
+  test('a getCouncil that rejects leaves the default null and every site on screen (four since 2026-10-17)', async () => {
     const fake = fakeTriplex({ getCouncil: vi.fn(async () => Promise.reject(new Error('bad_request'))), getOpenRouterKey: vi.fn(() => { throw new Error('no') }) })
     vi.stubGlobal('triplex', fake)
     renderWithStore(
@@ -354,6 +355,7 @@ describe('DesktopShell: the council and key mirrors', () => {
     await waitFor(() => expect(fake.getCouncil).toHaveBeenCalled())
     await act(() => new Promise((r) => setTimeout(r, 0)))
     expect(store.panes.council).toBeNull()
-    expect(paneSlots()).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(paneSlots()).toEqual(SITES)
+    expect(screen.getByTestId('agents-stepper')).toHaveAttribute('data-count', '4')
   })
 })

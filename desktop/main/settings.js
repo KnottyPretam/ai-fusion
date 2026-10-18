@@ -2,12 +2,13 @@
 //
 //   {"version":1,
 //    "window":{"x","y","width","height","maximized"},
-//    "zoom":{"claude":1,"chatgpt":1,"grok":1},
-//    "capture":{"claude":false,"chatgpt":false,"grok":false},
+//    "zoom":{"claude":1,"chatgpt":1,"grok":1,"gemini":1},
+//    "capture":{"claude":false,"chatgpt":false,"grok":false,"gemini":false},
 //    "analyst":"chatgpt","analystVisible":false,
 //    "theme":"dark",
 //    "council":{"slots":{"claude":{"model":"web:claude","effort":"off"}, …}},
-//    "openrouterKey":"<base64 safeStorage ciphertext>"|null}
+//    "openrouterKey":"<base64 safeStorage ciphertext>"|null,
+//    "migrations":["council-four-sites"]}
 //
 // Main owns these keys (window bounds / zoom / capture / analyst / theme / council / openrouterKey;
 // the renderer mirrors layout, active tab and targets in localStorage). `theme` is the ONE source of truth for the
@@ -15,11 +16,19 @@
 // dark themes) and reports it to the renderer, which paints its own palette from it; the
 // renderer's `triplex.theme` localStorage entry is only a first-paint mirror. `council` (2026-09-27)
 // is the DEFAULT council for new conversations — 2..5 members of the 7-vendor catalog, validated by
-// council.js (a malformed member is dropped on load, fewer than two survivors fall back to the classic
-// three — each said in the log by name, never silently). `openrouterKey` is only ever safeStorage CIPHERTEXT (base64; openrouter-key.js encrypts and
+// council.js (a malformed member is dropped on load, fewer than two survivors fall back to the default
+// council — every web site — each said in the log by name, never silently). `openrouterKey` is only ever safeStorage CIPHERTEXT (base64; openrouter-key.js encrypts and
 // decrypts, this module never sees the key): the sanitiser keeps a base64 string and drops anything
 // else, so a plaintext key can never be read back out of this file — an OpenRouter key carries `-`,
 // which base64 does not.
+//
+// `migrations` (2026-10-17) lists the one-time migrations already EVALUATED on this profile, so none runs
+// twice. The only one is `council-four-sites`: a stored council deep-equal to the old default (the classic
+// three on web sessions at effort off) becomes the new default of four web sites, with one info line.
+// Its marker records that the rule was evaluated, not that it changed anything — a customised council is
+// left alone but marked, and a later deliberate choice of the three sticks. It stays inert (no change, no
+// marker) while DEFAULT_COUNCIL() still equals the legacy three, i.e. until gemini is a site.
+// SETTINGS_VERSION stays 1: an older build ignores the key, and its sanitiser drops it on its next save.
 //
 // Writes are tmp-in-same-dir + rename. Window bounds are
 // debounced (`queueWindowBounds`) and clamped at launch to the work area of the display that
@@ -29,7 +38,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SLOTS } from './sites.js'
-import { DEFAULT_COUNCIL, parseCouncil, sanitizeCouncil, sanitizeCouncilReport } from './council.js'
+import { DEFAULT_COUNCIL, LEGACY_COUNCIL, parseCouncil, sameCouncil, sanitizeCouncil, sanitizeCouncilReport } from './council.js'
 
 export const SETTINGS_VERSION = 1
 export const SETTINGS_FILE = 'settings.json'
@@ -41,6 +50,61 @@ export const ANALYST_CHOICES = Object.freeze([...SLOTS, null])
 /** The three-way theme choice (contract §5 `settings.theme`; 'system' follows the OS). */
 export const THEMES = Object.freeze(['light', 'dark', 'system'])
 export const DEFAULT_THEME = 'dark'
+/** The one-time migration that moves a profile holding the old default council onto the four web sites (2026-10-17). */
+export const COUNCIL_FOUR_SITES = 'council-four-sites'
+/** What a migration id looks like; `migrations` keeps well-formed ids it does not know (a downgrade then an upgrade must not re-run a newer one). */
+export const MIGRATION_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
+export const MAX_MIGRATIONS = 32
+const NUMBER_WORDS = Object.freeze({ 2: 'two', 3: 'three', 4: 'four', 5: 'five' })
+
+/**
+ * True once the default council is no longer the legacy three — i.e. gemini is a site. Until then the
+ * council-four-sites migration would "move" the three onto themselves and mark itself done too early.
+ */
+export function councilMigrationReady(defaultCouncil = DEFAULT_COUNCIL()) {
+  return !sameCouncil(defaultCouncil, LEGACY_COUNCIL())
+}
+
+/** The well-formed, unique migration ids of `raw` (at most MAX_MIGRATIONS); anything else → []. */
+export function sanitizeMigrations(raw) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  for (const id of raw) {
+    if (typeof id === 'string' && MIGRATION_ID_RE.test(id) && !out.includes(id)) out.push(id)
+    if (out.length >= MAX_MIGRATIONS) break
+  }
+  return out
+}
+
+/**
+ * migrateSettings(doc, {defaultCouncil}) → {doc, changed, notes}. Pure: `doc` (a sanitized settings
+ * document) is not touched; the returned doc is a copy. Applies every one-time migration whose marker
+ * is absent from `doc.migrations`:
+ *   council-four-sites — when ready (councilMigrationReady): a council deep-equal to LEGACY_COUNCIL()
+ *   becomes `defaultCouncil` (one note for the log); in every case the marker is added. Not ready → nothing.
+ * `changed` is true when the doc differs (a moved council OR a new marker — both must reach the file).
+ */
+export function migrateSettings(doc, { defaultCouncil = DEFAULT_COUNCIL() } = {}) {
+  const out = JSON.parse(JSON.stringify(isPlainObject(doc) ? doc : {}))
+  const notes = []
+  let changed = false
+  const done = sanitizeMigrations(out.migrations)
+  if (!done.includes(COUNCIL_FOUR_SITES) && councilMigrationReady(defaultCouncil)) {
+    if (sameCouncil(out.council, LEGACY_COUNCIL())) {
+      const fresh = JSON.parse(JSON.stringify(defaultCouncil))
+      out.council = fresh
+      const n = Object.keys(fresh.slots).length
+      notes.push(
+        `council: the classic three web sites (${Object.keys(LEGACY_COUNCIL().slots).join(', ')}) became the new default of ` +
+          `${NUMBER_WORDS[n] || n} (${Object.keys(fresh.slots).join(', ')}) — one-time migration ${COUNCIL_FOUR_SITES}`,
+      )
+    }
+    done.push(COUNCIL_FOUR_SITES)
+    changed = true
+  }
+  out.migrations = done
+  return { doc: out, changed, notes }
+}
 
 /** `theme` if it is one of THEMES, else `fallback` (default: null — "not a theme"). */
 export function asTheme(value, fallback = null) {
@@ -75,6 +139,8 @@ export function defaultSettings() {
     theme: DEFAULT_THEME,
     council: DEFAULT_COUNCIL(),
     openrouterKey: null,
+    // a fresh profile already holds the new default, so the migration is evaluated by construction
+    migrations: councilMigrationReady() ? [COUNCIL_FOUR_SITES] : [],
   }
 }
 
@@ -143,12 +209,16 @@ export function sanitizeSettings(raw) {
   out.theme = asTheme(raw.theme, out.theme)
   out.council = sanitizeCouncil(raw.council)
   out.openrouterKey = asCiphertext(raw.openrouterKey) // never plaintext: anything that is not base64 is dropped
+  // From the FILE only, never the default: a file without the key has evaluated no migration yet, even
+  // though a fresh profile's defaults carry the marker (migrateSettings decides on the file's own list).
+  out.migrations = sanitizeMigrations(raw.migrations)
   return out
 }
 
 /**
  * createSettings({dir, fs, screen, setTimeout, clearTimeout, debounceMs, log}) → settings
- *   load()                         read <dir>/settings.json (missing / corrupt → defaults + warning)
+ *   load()                         read <dir>/settings.json (missing / corrupt → defaults + warning), then the
+ *                                  one-time migrations (migrateSettings: one info line each, saved when changed)
  *   get()                          a deep copy of the current document
  *   file                           the absolute path
  *   save()                         atomic write now
@@ -181,6 +251,10 @@ export function createSettings({
 
   const warn = (m) => {
     if (log && typeof log.warn === 'function') log.warn(`[settings] ${m}`)
+  }
+  const info = (m) => {
+    if (log && typeof log.info === 'function') log.info(`[settings] ${m}`)
+    else if (log && typeof log.log === 'function') log.log(`[settings] ${m}`)
   }
 
   /** subscribe(cb) → unsubscribe; cb({key, value}) after every explicit setter has saved (Stage 2: capture → bridge frame). */
@@ -219,6 +293,15 @@ export function createSettings({
     } catch (e) {
       warn(`${file} is not valid JSON (${(e && e.message) || e}); using defaults`)
       doc = defaultSettings()
+      return get()
+    }
+    // One-time migrations (2026-10-17). No notify(): subscribers attach after load, and main's syncKey
+    // on the next bridge connect pushes the migrated council to PUT /api/session/defaults anyway.
+    const m = migrateSettings(doc)
+    if (m.changed) {
+      doc = m.doc
+      for (const note of m.notes) info(note)
+      save()
     }
     return get()
   }

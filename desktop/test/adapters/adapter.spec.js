@@ -53,8 +53,10 @@ function expectSubmitted(res, sel) {
 
 for (const site of SLOTS) {
   const sel = DEFAULT_SELECTORS[site]
-  // health.send while the composer is empty: grok renders no submit button until text is in
-  const sendWhenEmpty = site !== 'grok'
+  // health.send while the composer is empty: grok and gemini (2026-10-17) render no submit button until text is in
+  const sendWhenEmpty = site !== 'grok' && site !== 'gemini'
+  // 2026-10-17: gemini signed out is GUEST MODE — the composer is there and works; the Sign-in link is the wall
+  const guestMode = site === 'gemini'
 
   test.describe(site, () => {
     test('boots under the fake IPC: asks adapter:config once, registers one handler, publishes health', async ({ page }) => {
@@ -123,8 +125,9 @@ for (const site of SLOTS) {
       const ready = await request(page, { op: 'ready', timeoutMs: 500 })
       expect(ready).toMatchObject({ ok: false, op: 'ready', code: 'logged_out' })
       const h = await request(page, { op: 'health' })
-      expect(h.health).toMatchObject({ composer: false, send: false, session: 'logged_out' })
-      expect(h.health.matched.composer).toBeNull()
+      expect(h.health).toMatchObject({ composer: guestMode, send: false, session: 'logged_out' })
+      if (guestMode) expect(h.health.matched.composer).toBe(sel.composer[0]) // a working composer, and still logged_out
+      else expect(h.health.matched.composer).toBeNull()
       await expect.poll(async () => (await ipcState(page)).healths.some((x) => x.session === 'logged_out')).toBe(true)
     })
 
@@ -490,5 +493,40 @@ test.describe('grok (TipTap)', () => {
     const second = await request(page, { op: 'insertAndSubmit', text })
     expect(second).toMatchObject({ ok: true, submitted: true, composerSelector: "textarea[aria-label='Ask Grok anything']", sendSelector: "button[aria-label='Submit']" })
     expect((await fake(page)).submitted).toEqual([text]) // once — not doubled
+  })
+})
+
+// 2026-10-17 — gemini (HAND-BUILT look-alike from public sources; DEFAULT_SELECTORS.gemini is unmeasured): Quill's
+// contenteditable clipboard decoy, the signed-in account button, and guest mode, against the real site.cjs.
+test.describe('gemini (Quill, guest mode)', () => {
+  const sel = DEFAULT_SELECTORS.gemini
+
+  test('the Quill editor is the composer — never `.ql-clipboard`, the contenteditable decoy a bare entry would pick FIRST; the prompt lands in the editor alone', async ({ page }) => {
+    await open(page, { site: 'gemini' })
+    expect(await page.evaluate(() => document.querySelector("div[contenteditable='true']").className)).toBe('ql-clipboard') // the decoy comes first
+    const res = await request(page, { op: 'insertAndSubmit', text: TRICKY })
+    expectSubmitted(res, sel)
+    expect((await fake(page)).submitted).toEqual([TRICKY])
+    expect(await page.evaluate(() => document.querySelector('.ql-clipboard').textContent)).toBe('')
+    // every gemini composer entry names the editor; none can reach the decoy
+    for (const entry of sel.composer) expect(await page.evaluate((s) => [...document.querySelectorAll(s)].map((e) => e.className.split(' ')[0]), entry)).toEqual(['ql-editor'])
+  })
+
+  test('signed in, the header\'s account button (a "Google Account: …" label, a SignOutOptions link) never reads as a wall: ok, ready, and a Send submits', async ({ page }) => {
+    await open(page, { site: 'gemini' })
+    await expect(page.locator("a[aria-label^='Google Account:']")).toHaveCount(1)
+    expect((await request(page, { op: 'health' })).health).toMatchObject({ session: 'ok', composer: true, send: false })
+    expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
+  })
+
+  test('guest mode: the composer is rendered and editable, the Sign-in link (matched by its href entry live) makes the session logged_out, and nothing is typed', async ({ page }) => {
+    await open(page, { site: 'gemini', state: 'loggedout' })
+    await expect(page.locator(sel.composer[0])).toHaveCount(1)
+    await expect(page.locator(sel.loggedOut[0])).toHaveCount(1) // the live href entry, not only the aria-label one
+    const h = await request(page, { op: 'health' })
+    expect(h.health).toMatchObject({ composer: true, session: 'logged_out' })
+    const res = await request(page, { op: 'prepareInput', text: 'never focused' })
+    expect(res).toMatchObject({ ok: false, op: 'prepareInput', code: 'logged_out' })
+    expect(await page.evaluate(() => document.activeElement === document.querySelector('.ql-editor'))).toBe(false)
   })
 })

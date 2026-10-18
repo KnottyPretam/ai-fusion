@@ -17,7 +17,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -34,7 +35,8 @@
           "capture": {
             "claude": false,
             "chatgpt": true,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": {
             "slot": "chatgpt"
@@ -53,10 +55,32 @@
           "capture": {
             "claude": true,
             "chatgpt": true,
-            "grok": true
+            "grok": true,
+            "gemini": true
           },
           "analyst": {
             "slot": "grok"
+          }
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "c4ca4238a0b923820dcc509a6f75849b",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok",
+            "gemini"
+          ],
+          "capture": {
+            "claude": true,
+            "chatgpt": false,
+            "grok": false,
+            "gemini": true
+          },
+          "analyst": {
+            "slot": "gemini"
           }
         }
       ],
@@ -73,7 +97,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -90,7 +115,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -107,7 +133,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -124,7 +151,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -141,7 +169,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null,
           "user_agent": "Chrome"
@@ -159,10 +188,11 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": {
-            "slot": "gemini"
+            "slot": "deepseek"
           }
         },
         {
@@ -178,7 +208,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": "chatgpt"
         },
@@ -194,7 +225,8 @@
           ],
           "capture": {
             "claude": false,
-            "chatgpt": false
+            "chatgpt": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -205,12 +237,13 @@
           "version": "0.1.0",
           "sites": [
             "claude",
-            "gemini"
+            "deepseek"
           ],
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -223,7 +256,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
@@ -240,7 +274,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           }
         },
         {
@@ -255,7 +290,44 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
+            "grok": false,
+            "gemini": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "grok"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
             "grok": false
+          },
+          "analyst": null
+        },
+        {
+          "type": "hello",
+          "protocol": 1,
+          "token": "abc",
+          "version": "0.1.0",
+          "sites": [
+            "claude",
+            "chatgpt",
+            "gemini",
+            "gemini"
+          ],
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         }
@@ -269,32 +341,8 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
-          }
-        },
-        {
-          "type": "capture",
-          "capture": {
-            "claude": true,
-            "chatgpt": false,
-            "grok": true
-          }
-        }
-      ],
-      "invalid": [
-        {
-          "type": "capture",
-          "capture": {
-            "claude": true,
-            "chatgpt": false
-          }
-        },
-        {
-          "type": "capture",
-          "capture": {
-            "claude": "yes",
-            "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": false
           }
         },
         {
@@ -303,7 +351,7 @@
             "claude": true,
             "chatgpt": false,
             "grok": true,
-            "gemini": true
+            "gemini": false
           }
         },
         {
@@ -311,12 +359,59 @@
           "capture": {
             "claude": false,
             "chatgpt": false,
-            "grok": false
+            "grok": false,
+            "gemini": true
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "type": "capture",
+          "capture": {
+            "claude": true,
+            "chatgpt": false,
+            "gemini": false
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": "yes",
+            "chatgpt": false,
+            "grok": false,
+            "gemini": false
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": true,
+            "chatgpt": false,
+            "grok": true,
+            "gemini": false,
+            "deepseek": true
+          }
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false,
+            "gemini": false
           },
           "analyst": null
         },
         {
           "type": "capture"
+        },
+        {
+          "type": "capture",
+          "capture": {
+            "claude": false,
+            "chatgpt": false,
+            "grok": false
+          }
         }
       ]
     },
@@ -337,6 +432,12 @@
           "type": "analyst",
           "analyst": {
             "slot": "claude"
+          }
+        },
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "gemini"
           }
         }
       ],
@@ -360,6 +461,12 @@
         },
         {
           "type": "analyst"
+        },
+        {
+          "type": "analyst",
+          "analyst": {
+            "slot": "deepseek"
+          }
         }
       ]
     },
@@ -453,6 +560,28 @@
             "title": "Claude",
             "ts": 1710000003000
           }
+        },
+        {
+          "type": "health",
+          "slot": "gemini",
+          "health": {
+            "composer": true,
+            "send": false,
+            "reply": true,
+            "stop": false,
+            "session": "ok",
+            "matched": {
+              "composer": "rich-textarea div.ql-editor[contenteditable='true']",
+              "send": null,
+              "reply": "model-response",
+              "stop": null,
+              "error": null
+            },
+            "url": "https://gemini.google.com/app/1a2b3c4d5e6f7a8b",
+            "host": "gemini.google.com",
+            "title": "Gemini",
+            "ts": 1710000004000
+          }
         }
       ],
       "invalid": [
@@ -480,7 +609,7 @@
         },
         {
           "type": "health",
-          "slot": "gemini",
+          "slot": "deepseek",
           "health": {
             "composer": true,
             "send": true,
@@ -645,6 +774,12 @@
           "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
           "view": "pane",
           "slot": "grok"
+        },
+        {
+          "type": "accepted",
+          "req_id": "4d3c2b1a-0f9e-4d8c-b7a6-5f4e3d2c1b0a",
+          "view": "pane",
+          "slot": "gemini"
         }
       ],
       "invalid": [
@@ -880,6 +1015,16 @@
           "code": "view_crashed",
           "message": "renderer process gone (crashed)",
           "partial": null
+        },
+        {
+          "type": "result",
+          "req_id": "4d3c2b1a-0f9e-4d8c-b7a6-5f4e3d2c1b0a",
+          "ok": true,
+          "captured": true,
+          "text": "At sea level water boils at 100 °C (212 °F).",
+          "url": "https://gemini.google.com/app/1a2b3c4d5e6f7a8b",
+          "ms": 15360,
+          "done_by": "done_selector"
         }
       ],
       "invalid": [
@@ -1136,6 +1281,32 @@
           "purpose": "chat",
           "conversation_id": null,
           "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "4d3c2b1a-0f9e-4d8c-b7a6-5f4e3d2c1b0a",
+          "model": "web:gemini",
+          "slot": "gemini",
+          "view": "pane",
+          "fresh": false,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "gemini",
+          "purpose": "chat",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
+        },
+        {
+          "type": "request",
+          "req_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+          "model": "web:gemini:analyst",
+          "slot": "gemini",
+          "view": "analyst",
+          "fresh": true,
+          "text": "You are the analyst.\n\nCompare the four positions below.",
+          "role": "analyst",
+          "purpose": "extraction",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 1800
         }
       ],
       "invalid": [
@@ -1225,7 +1396,7 @@
           "view": "pane",
           "fresh": false,
           "text": "What is the boiling point of water at sea level?",
-          "role": "gemini",
+          "role": "deepseek",
           "purpose": "chat",
           "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
           "timeout_s": 600
@@ -1293,6 +1464,19 @@
           "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
           "timeout_s": 600,
           "max_tokens": 8000
+        },
+        {
+          "type": "request",
+          "req_id": "6f1d2c3b-4a5e-4f60-8b7c-9d0e1f2a3b4c",
+          "model": "web:deepseek:analyst",
+          "slot": "deepseek",
+          "view": "analyst",
+          "fresh": true,
+          "text": "What is the boiling point of water at sea level?",
+          "role": "analyst",
+          "purpose": "extraction",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
         }
       ]
     },
@@ -1314,6 +1498,14 @@
           "text": "Compare the two plans below.\n\nPlan A: ...",
           "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
           "timeout_s": 300
+        },
+        {
+          "type": "reread",
+          "req_id": "2b1a0f9e-8d7c-4b6a-9f5e-4d3c2b1a0f9e",
+          "slot": "gemini",
+          "text": "What is the boiling point of water at sea level?",
+          "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
+          "timeout_s": 600
         }
       ],
       "invalid": [
@@ -1335,7 +1527,7 @@
         {
           "type": "reread",
           "req_id": "3e2d1c0b-9a8f-4e7d-8c6b-5a4f3e2d1c0b",
-          "slot": "gemini",
+          "slot": "deepseek",
           "text": "What is the boiling point of water at sea level?",
           "conversation_id": "a3c1e2d4-5b6f-4a78-9c0d-e1f2a3b4c5d6",
           "timeout_s": 600

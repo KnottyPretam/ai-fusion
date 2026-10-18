@@ -1,4 +1,4 @@
-/* desktop/test/fake-site/site.css — minimal look-alike chrome for the three composers. */
+/* desktop/test/fake-site/site.css — minimal look-alike chrome for the four composers. */
 :root {
   --accent: #10a37f;
   --border: #d0d0d0;
@@ -7,6 +7,7 @@
 [data-site='chatgpt'] { --accent: #10a37f; }
 [data-site='claude'] { --accent: #c96442; }
 [data-site='grok'] { --accent: #111; }
+[data-site='gemini'] { --accent: #1a73e8; }
 
 body {
   margin: 0;
@@ -92,6 +93,22 @@ button.voice {
   background: #fff;
   cursor: pointer;
 }
+/* 2026-10-17 (gemini): Quill's `rich-textarea` host and editor. The editor keeps runs of spaces like the
+   ProseMirror look-alikes; `.ql-clipboard` is Quill's paste catcher, parked off-screen as Quill parks it (a
+   contenteditable DECOY that no gemini composer entry may ever match). */
+rich-textarea { display: block; flex: 1; position: relative; }
+.ql-clipboard { position: absolute; left: -10000px; top: 50%; height: 1px; overflow-y: hidden; }
+.ql-editor {
+  min-height: 24px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px;
+  outline: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ql-editor p { margin: 0; }
+mat-icon { display: inline-block; width: 14px; height: 14px; vertical-align: middle; }
 .ProseMirror, textarea {
   flex: 1;
   min-height: 24px;
@@ -164,6 +181,7 @@ button.send[disabled] { opacity: 0.35; cursor: not-allowed; }
   background: #f1f1f1;
 }
 .markdown,
+.markdown-main-panel,
 .MarkdownRoot-fake,
 .font-claude-response,
 .response-content-markdown {
@@ -293,3 +311,16 @@ main.thread.scroller > .slot {
   flex-direction: column;
   gap: 8px;
 }
+
+/* --- 2026-10-17: gemini's exchange — `div.conversation-container > user-query + model-response` — and its
+   screen-reader-only labels (Angular CDK's `cdk-visually-hidden`: clipped, never display:none), the thinking
+   panel (`model-thoughts`, expanded: on screen, which is why the body cascade must scope it out) and the
+   thumbs of a finished turn (`message-actions`). */
+.conversation-container { display: flex; flex-direction: column; gap: 8px; }
+user-query { display: flex; flex-direction: column; align-items: flex-end; }
+model-response { display: block; align-self: flex-start; max-width: 70%; padding: 8px 12px; border-radius: 12px; background: #f1f1f1; }
+.cdk-visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+model-thoughts { display: block; margin-bottom: 6px; color: var(--muted); font-size: 0.9em; }
+message-actions { display: flex; gap: 4px; margin-top: 6px; }
+message-actions button { padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; cursor: pointer; }
+.sign-in-link { margin-left: 12px; font-weight: 400; }

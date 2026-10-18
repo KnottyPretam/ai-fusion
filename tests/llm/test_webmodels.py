@@ -12,11 +12,13 @@ from fastapi import HTTPException
 from backend.features.slot_config import validate_slot_config
 from backend.llm import catalog, webmodels
 from backend.schemas import DEFAULT_COUNCIL, ModelMeta, SlotConfig, SlotSpec
+from backend.vendors import WEB_SITES
 from tests.llm.conftest import BASE_URL, MODELS_URL
 
 EFFORTS = ["off", "low", "medium", "high"]
-PANES = ["web:claude", "web:chatgpt", "web:grok"]
-ANALYSTS = ["web:claude:analyst", "web:chatgpt:analyst", "web:grok:analyst"]
+# The four web sites, catalog order: gemini joined on 2026-10-17 (bridge v1 amended in place).
+PANES = ["web:claude", "web:chatgpt", "web:grok", "web:gemini"]
+ANALYSTS = ["web:claude:analyst", "web:chatgpt:analyst", "web:grok:analyst", "web:gemini:analyst"]
 
 
 def _ids(models: list[ModelMeta]) -> list[str]:
@@ -43,14 +45,18 @@ def test_vendors_and_names():
     assert by_id["web:claude"].vendor == "anthropic"
     assert by_id["web:chatgpt"].vendor == "openai"
     assert by_id["web:grok"].vendor == "x-ai"
+    assert by_id["web:gemini"].vendor == "google"
     assert by_id["web:claude"].name == "Claude (web session)"
     assert by_id["web:chatgpt"].name == "ChatGPT (web session)"
     assert by_id["web:grok"].name == "Grok (web session)"
-    for slot in DEFAULT_COUNCIL:
+    assert by_id["web:gemini"].name == "Gemini (web session)"
+    assert tuple(webmodels.SITE_NAMES) == WEB_SITES
+    for slot in WEB_SITES:
         analyst = by_id[f"web:{slot}:analyst"]
         assert analyst.vendor == "triplex-analyst"
         assert analyst.name == f"{webmodels.SITE_NAMES[slot]} web session (hidden analyst page)"
     assert by_id["web:chatgpt:analyst"].name == "ChatGPT web session (hidden analyst page)"
+    assert by_id["web:gemini:analyst"].name == "Gemini web session (hidden analyst page)"
     assert by_id["ollama:hermes3"].vendor == "ollama"
     assert by_id["ollama:hermes3"].name == "hermes3 (local Ollama)"
 
@@ -76,7 +82,7 @@ def test_ollama_models_env(monkeypatch, value, names):
     assert webmodels.ollama_models() == names
     ollama_ids = [m.id for m in webmodels.desktop_catalog() if m.id.startswith("ollama:")]
     assert ollama_ids == [f"ollama:{n}" for n in names]
-    assert len(webmodels.desktop_catalog()) == 6 + len(names)
+    assert len(webmodels.desktop_catalog()) == len(PANES) + len(ANALYSTS) + len(names)
 
 
 def test_ollama_models_default(monkeypatch):
@@ -209,6 +215,30 @@ def test_validate_slot_config_rejects_a_web_string_the_bridge_could_not_parse(mo
         validate_slot_config(_config("off", claude=model, chatgpt="web:chatgpt", grok="web:grok"))
     assert ei.value.status_code == 422
     assert ei.value.detail == {"error": "web_slot_mismatch", "slot": "claude", "model": model}
+
+
+def test_validate_slot_config_accepts_web_gemini_on_its_own_slot_since_2026_10_17():
+    """gemini is a web site now: `web:gemini` / `web:gemini:analyst` pass on the gemini slot, on any
+    other slot they are a mismatch, and a council vendor with no site (`web:deepseek`) still is."""
+    four = ("claude", "chatgpt", "grok", "gemini")
+    for model in ("web:gemini", "web:gemini:analyst"):
+        validate_slot_config(
+            SlotConfig(
+                slots={s: SlotSpec(model=f"web:{s}", effort="off") for s in four}
+                | {"gemini": SlotSpec(model=model, effort="off")},
+                analyst_model="web:gemini:analyst",
+            )
+        )
+    for slot, model in (("claude", "web:gemini"), ("deepseek", "web:deepseek")):
+        seats = {s: SlotSpec(model=f"web:{s}", effort="off") for s in DEFAULT_COUNCIL}
+        cfg = SlotConfig(
+            slots=seats | {slot: SlotSpec(model=model, effort="off")},
+            analyst_model="web:chatgpt:analyst",
+        )
+        with pytest.raises(HTTPException) as ei:
+            validate_slot_config(cfg)
+        assert ei.value.status_code == 422
+        assert ei.value.detail == {"error": "web_slot_mismatch", "slot": slot, "model": model}
 
 
 def test_validate_slot_config_still_rejects_a_known_model_at_an_unsupported_effort():

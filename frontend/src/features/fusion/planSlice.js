@@ -36,12 +36,12 @@ export const DEFAULT_MODEL_DESKTOP = 'web:claude'
 /** The web-app default: OpenRouter, on the key in `.env` (verified live 2026-09-27). */
 export const DEFAULT_MODEL = 'anthropic/claude-opus-5.5'
 
-// The three sites with a native pane and a Stage-1 adapter (backend/llm/bridge_protocol.py
-// BRIDGE_SLOTS). Mirrored per feature — features never import each other's internals — the way
-// config/index.jsx and desktop/slice.js carry their own copies. Display data for the picker only;
-// no Triplex-authored string that reaches a model is built here.
-export const SITES = ['claude', 'chatgpt', 'grok']
-export const SITE_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+// The sites with a native pane and an adapter (backend/llm/bridge_protocol.py BRIDGE_SLOTS;
+// gemini joined 2026-10-17). Mirrored per feature — features never import each other's internals —
+// the way config/index.jsx and desktop/slice.js carry their own copies. Display data for the picker
+// only; no Triplex-authored string that reaches a model is built here.
+export const SITES = ['claude', 'chatgpt', 'grok', 'gemini']
+export const SITE_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini' }
 
 export const WEB_PANE_GROUP = "your web sessions (typed into this conversation's chat)"
 export const WEB_ANALYST_GROUP = 'hidden analyst pages'
@@ -120,7 +120,7 @@ function isSlug(id) {
 /**
  * The picker's `<optgroup>`s: `[{label, options: [{id, name}]}]`, empty groups dropped.
  *
- * Desktop: the three web panes FIRST (the plan is typed into this conversation's chat for that
+ * Desktop: the web panes FIRST (the plan is typed into this conversation's chat for that
  * site), then the hidden analyst pages, local Ollama models (`raw.transport === 'ollama'`) and — only
  * with a configured key — the OpenRouter entries the desktop catalog carries (`raw.transport ===
  * 'openrouter'`, structured outputs first). Browser: the OpenRouter catalog, structured first, with

@@ -6,19 +6,29 @@ import { APP_NAME } from '../../branding.js'
 //   { mode: 'tabs'|'split', active: slot, targets: {slot: bool},
 //     health: {site: Health|null}, lastSend: {slot: {ok, code, message, ms, composerSelector, sendSelector}},
 //     sending: bool, zoom: {site: number}, capture: {site: bool} (S2), bridge: {connected: bool} (S2),
-//     turn: {site: phase} (S2), drawerOpen: bool (S3), analyst: {slot: site|null, visible, health} (S3),
+//     turn: {site: phase} (S2), drawerOpen: bool (S3), drawerTab: DRAWER_TAB_KEYS[i] (2026-10-17),
+//     analyst: {slot: site|null, visible, health} (S3),
 //     council: {slots: {slot: {model, effort}}} | null (2026-09-27), openRouterKey: KeyStatus | null (2026-09-27) }
 //
 // Council (2026-09-27, "a council anyone can assemble"): a conversation seats 2..5 of the 7-vendor
-// catalog (`SLOT_IDS`); only the three SITES have a native view, so `health` / `zoom` / `capture` /
-// `turn` stay PER-SITE maps (the frozen desktop-smoke.test.jsx pins their three-key literals),
-// while `active` and `targets` range over the whole catalog — a token/local member is a renderer
-// column that can be the active tab and a Send target. `targets[k] !== false` means ON, so a
-// member the map has never seen (a freshly seated Qwen) is targeted by default; `selectedTargets`
-// intersects with the council. `council` is main's DEFAULT for new conversations (`getCouncil`,
-// replayed on `panes:council`), stored as the spec main hands over and validated here (2..5 known
-// slots, each with a string model); `openRouterKey` is main's key STATUS ({configured, prefix,
-// length, pushed, error?}) — the key itself never reaches the renderer.
+// catalog (`SLOT_IDS`); only the SITES have a native view, so `health` / `zoom` / `capture` /
+// `turn` stay PER-SITE maps, while `active` and `targets` range over the whole catalog — a
+// token/local member is a renderer column that can be the active tab and a Send target.
+// `targets[k] !== false` means ON, so a member the map has never seen (a freshly seated Qwen) is
+// targeted by default; `selectedTargets` intersects with the council. `council` is main's DEFAULT
+// for new conversations (`getCouncil`, replayed on `panes:council`), stored as the spec main hands
+// over and validated here (2..5 known slots, each with a string model); `openRouterKey` is main's
+// key STATUS ({configured, prefix, length, pushed, error?}) — the key itself never reaches the
+// renderer.
+//
+// Gemini (2026-10-17): gemini.google.com is the fourth SITE (bridge v1 amended in place). The
+// frozen desktop-smoke.test.jsx pins THREE-key literals for the initial `targets` / `health` /
+// `zoom` / `capture`, so `initialPanes` builds those maps from CLASSIC_SITES while every reducer
+// accepts all four SITES: a gemini key arrives with its first event (main's getCapture map, a
+// health / zoom report), and every reader tolerates the missing key until then (health → "no
+// health yet", zoom → 100%, `!!capture[slot]` → off, a target absent from the map → on).
+// `drawerTab` (2026-10-17) is the drawer's tab, moved here from Drawer.jsx's local state so the
+// agents stepper's "More options…" can open the drawer on Agents; it is not persisted.
 //
 // Health is the object `site.cjs` publishes over 'panes:health' (contract §3):
 //   { composer: bool, send: bool, reply, stop, session: 'ok'|'logged_out'|'challenge'|'blocked'|'unknown',
@@ -37,7 +47,9 @@ import { APP_NAME } from '../../branding.js'
 //   panes/bridge     {connected, since?, error?}   `error` (S3) is kept only while disconnected: main
 //                                                 names why a backend could not be spawned (port_in_use)
 //   panes/turn       {slot, phase}                phase string from triplex.onTurn
-//   panes/drawer     {open?}                      boolean sets, omitted toggles
+//   panes/drawer     {open?, tab?}                boolean sets, omitted toggles; `tab` (2026-10-17, one of
+//                                                 DRAWER_TAB_KEYS) also picks the drawer tab — callers that
+//                                                 pass a tab always pass `open: true` (an omitted `open` toggles)
 //   panes/analyst    {slot?, visible?, health?}   merges the keys present
 //   panes/council    {council}                    main's default council spec (validated; null clears)
 //   panes/openRouterKey {status}                  main's key status object (null clears)
@@ -77,14 +89,26 @@ import { APP_NAME } from '../../branding.js'
 // Mirrored from features/send/slice.js (features never import across each other; state/* is frozen):
 // the 7-vendor catalog in backend/schemas.py SLOT_IDS order, the classic three first.
 export const SLOT_IDS = ['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo']
-export const DEFAULT_COUNCIL = SLOT_IDS.slice(0, 3)
+// Every READER stays 2..5: five-member conversations exist on disk and the backend's frozen
+// COUNCIL_MAX is 5. Only the editors (the agents stepper, the Agents page's Add) stop at four —
+// council.js COUNCIL_EDIT_MAX.
 export const COUNCIL_MIN = 2
 export const COUNCIL_MAX = 5
 export const SLOT_VENDORS = { claude: 'anthropic', chatgpt: 'openai', grok: 'x-ai', gemini: 'google', deepseek: 'deepseek', qwen: 'qwen', mimo: 'xiaomi' }
 export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini', deepseek: 'DeepSeek', qwen: 'Qwen', mimo: 'MiMo' }
-/** The sites with a native WebContentsView and a Stage-1 adapter (= the preload's `sites`). */
-export const SITES = ['claude', 'chatgpt', 'grok']
+/** The sites with a native WebContentsView and an adapter (= the preload's `sites`); gemini joined 2026-10-17. */
+export const SITES = ['claude', 'chatgpt', 'grok', 'gemini']
+/** The three sites the initial per-site maps are built from (the frozen desktop-smoke.test.jsx pins them; header). */
+export const CLASSIC_SITES = ['claude', 'chatgpt', 'grok']
+/**
+ * The deck's fallback council (no conversation open, main's default not read yet): every site on
+ * its web session — new desktop chats start with all four (2026-10-17, the user's call). The web
+ * app's and the backend's default stay the classic three (features/send/slice.js, schemas.py).
+ */
+export const DEFAULT_COUNCIL = [...SITES]
 export const MODES = ['tabs', 'split']
+/** The drawer's tabs (Drawer.jsx DRAWER_TABS, mirrored here because Drawer imports this module). */
+export const DRAWER_TAB_KEYS = ['analyze', 'fusion', 'captured', 'agents', 'settings']
 
 /** Session states that need the user (contract §3 codes = Health.session values). */
 export const ATTENTION_SESSIONS = ['logged_out', 'challenge', 'blocked']
@@ -96,8 +120,10 @@ export const NOT_CAPTURED = 'not_captured'
 
 /** The capture switch label (plan Stage 2 row, verbatim) and the ToS wording next to it / in the notice. */
 export const CAPTURE_LABEL = `Capture reply text from this page into ${APP_NAME} (needed for Analyze/Fusion)`
+// Google's clause is quoted from policies.google.com/terms ("Don't abuse our services", effective
+// 2026-07-30), checked word for word on 2026-10-17.
 export const CAPTURE_NOTICE_TEXT =
-  'Capture is off by default for every site. Switching it on for a pane makes ' + APP_NAME + ' read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, and xAI’s forbid automated access beyond a conventional browser. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the three switches has been set once.'
+  'Capture is off by default for every site. Switching it on for a pane makes ' + APP_NAME + ' read that site’s reply text out of the page — the act the providers’ terms of service name: OpenAI’s terms forbid to “automatically or programmatically extract data or Output”, Anthropic’s consumer terms forbid access “through automated or non-human means”, xAI’s forbid automated access beyond a conventional browser, and Google’s forbid “using automated means to access content from any of our services in violation of the machine-readable instructions on our web pages”. Typing the prompt into the composer is unaffected; Analyze and Fusion only see captured text. Decide per site with the switch in each pane header — this notice stays until each of the four switches has been set once (every switch on screen, when fewer sites are seated).'
 export const CAPTURE_TITLE = 'Reads the reply out of this page, the act the site’s terms of service name. Off by default; your decision per site.'
 
 export const PERSIST_KEYS = { mode: 'triplex.panes.mode', active: 'triplex.panes.active', targets: 'triplex.panes.targets', drawerOpen: 'triplex.panes.drawerOpen' }
@@ -183,9 +209,9 @@ export function normalizeKeyStatus(status) {
   return out
 }
 
-function perSite(value) {
+function perSite(value, sites = SITES) {
   const o = {}
-  for (const k of SITES) o[k] = value
+  for (const k of sites) o[k] = value
   return o
 }
 
@@ -195,9 +221,10 @@ function perSite(value) {
  */
 export function initialPanes(persisted) {
   const p = persisted && typeof persisted === 'object' ? persisted : {}
-  // Targets start with the three sites ON (the persisted shape of Stage 1/2); a non-site member is
-  // absent from the map until switched, and `selectedTargets` reads absent as on.
-  const targets = perSite(true)
+  // Targets start with the classic three ON (the persisted shape of Stage 1/2); any other member —
+  // Gemini included (header) — is absent from the map until switched, and `selectedTargets` reads
+  // absent as on.
+  const targets = perSite(true, CLASSIC_SITES)
   if (p.targets && typeof p.targets === 'object') {
     for (const k of SLOT_IDS) if (typeof p.targets[k] === 'boolean') targets[k] = p.targets[k]
   }
@@ -205,14 +232,15 @@ export function initialPanes(persisted) {
     mode: isMode(p.mode) ? p.mode : 'split',
     active: isSlotId(p.active) ? p.active : 'chatgpt',
     targets,
-    health: perSite(null),
+    health: perSite(null, CLASSIC_SITES),
     lastSend: {},
     sending: false,
-    zoom: perSite(1),
-    capture: perSite(false),
+    zoom: perSite(1, CLASSIC_SITES),
+    capture: perSite(false, CLASSIC_SITES),
     bridge: { connected: false },
     turn: {},
     drawerOpen: typeof p.drawerOpen === 'boolean' ? p.drawerOpen : false,
+    drawerTab: 'analyze',
     analyst: { slot: null, visible: false, health: null },
     council: null,
     openRouterKey: null,
@@ -330,7 +358,9 @@ export function panesReducer(s = initialPanes(), a) {
       return isSiteId(a.slot) && typeof a.phase === 'string' ? setIn(s, 'turn', a.slot, a.phase) : s
     case 'panes/drawer': {
       const open = a.open === undefined ? !s.drawerOpen : !!a.open
-      return open === s.drawerOpen ? s : { ...s, drawerOpen: open }
+      // An unknown tab is ignored (the open/close part still applies), never thrown.
+      const drawerTab = DRAWER_TAB_KEYS.includes(a.tab) ? a.tab : s.drawerTab
+      return open === s.drawerOpen && drawerTab === s.drawerTab ? s : { ...s, drawerOpen: open, drawerTab }
     }
     case 'panes/analyst': {
       const next = { ...s.analyst }
@@ -442,9 +472,14 @@ export function phaseText(phase) {
   return PHASE_TEXT[phase] || phase
 }
 
-/** True when every capture switch has been set at least once (the first-run notice hides). */
-export function allCaptureTouched(touched) {
-  return SITES.every((k) => !!(touched && touched[k]))
+/**
+ * True when every capture switch has been set at least once (the first-run notice hides). `sites`
+ * (2026-10-17) narrows that to the switches ON SCREEN (PaneDeck passes the council's site panes):
+ * a site outside the council has no switch to set, and with Gemini new to every existing profile a
+ * user who removes it before touching its switch would otherwise keep a notice nothing can dismiss.
+ */
+export function allCaptureTouched(touched, sites = SITES) {
+  return sites.every((k) => !!(touched && touched[k]))
 }
 
 /**
@@ -516,8 +551,10 @@ export function persistPanes(storage = defaultStorage(), panes) {
 }
 
 /**
- * Read which capture switches were touched once: `{claude, chatgpt, grok: bool}`. Accepts the JSON
- * map this module writes and a bare `true` (= all seen); anything else means "none yet".
+ * Read which capture switches were touched once: `{<site>: bool}` over SITES. Accepts the JSON map
+ * this module writes and a bare `true` — the Stage 2 shape, written when only the classic three
+ * existed, so it means those three seen and Gemini not yet (2026-10-17) — anything else means
+ * "none yet".
  */
 export function loadCaptureTouched(storage = defaultStorage()) {
   const out = perSite(false)
@@ -526,7 +563,7 @@ export function loadCaptureTouched(storage = defaultStorage()) {
     const raw = storage.getItem(CAPTURE_NOTICE_KEY)
     if (!raw) return out
     const parsed = JSON.parse(raw)
-    if (parsed === true) return perSite(true)
+    if (parsed === true) return { ...out, ...perSite(true, CLASSIC_SITES) }
     if (parsed && typeof parsed === 'object') for (const k of SITES) if (parsed[k] === true) out[k] = true
   } catch {
     /* a bad value or an unavailable storage means "nothing persisted" */

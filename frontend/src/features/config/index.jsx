@@ -7,7 +7,7 @@
 // slices; no slice of its own.
 //
 // Stage 3 (renderer-drawer): desktop mode. `desktop` groups the analyst picker as "web sessions
-// (hidden analyst page)" — the three fixed `web:<site>:analyst` ids (names from the desktop
+// (hidden analyst page)" — one fixed `web:<site>:analyst` id per site (names from the desktop
 // catalog when loaded, contract §6) — and "local Ollama" — every `ollama:<name>` the catalog
 // lists — with a "none" option (plan Decision 4), and hides the grounded toggle (OpenRouter web
 // search never applies to a web session). Council (2026-09-27): once an OpenRouter key is
@@ -52,12 +52,13 @@ function label(m) {
   return m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id
 }
 
-// Desktop (contract §6): the three web analysts are fixed ids whatever the catalog holds (offline
-// the picker still works); Ollama entries come only from GET /api/models. Mirrored from
+// Desktop (contract §6): the web analysts are fixed ids whatever the catalog holds (offline the
+// picker still works); Ollama entries come only from GET /api/models. Mirrored from
 // backend/llm/webmodels.py (features never import across each other). SITES are the sites with a
-// native view and a Stage-1 adapter — a subset of the 7-vendor catalog, not the council.
-export const SITES = ['claude', 'chatgpt', 'grok']
-export const SITE_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' }
+// native view and an adapter — a subset of the 7-vendor catalog, not the council; gemini joined
+// 2026-10-17, so `web:gemini:analyst` (a hidden page signed in to Gemini) is offered too.
+export const SITES = ['claude', 'chatgpt', 'grok', 'gemini']
+export const SITE_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini' }
 export const WEB_ANALYST_GROUP = 'web sessions (hidden analyst page)'
 export const OLLAMA_GROUP = 'local Ollama'
 export const OPENROUTER_STRUCTURED_GROUP = 'OpenRouter — structured outputs (recommended)'

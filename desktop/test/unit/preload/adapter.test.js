@@ -228,6 +228,7 @@ test('countAssistant(): assistant-role containers only — a user turn is never 
       '.font-claude-message',
       "[data-testid='assistant-message']",
       "div[id^='response-']:has([data-testid='assistant-message'])",
+      'model-response', // 2026-10-17: gemini's turn element (public sources, unmeasured), last
     ],
   )
   assert.ok(ASSISTANT_SELECTORS.every((s) => !MESSAGE_SELECTORS.includes(s) || s !== '[data-message-author-role]'))
@@ -972,9 +973,10 @@ test('observe: done_selector — a visible done match on or after the last conta
     doc.match["button[data-testid='copy-turn-action-button']"] = [copy]
   }, 150)
   const r = await a.observe({ baselineCount: 1 })
-  // 2026-10-11: the three reading flags ride beside the text (internal result; the bridge frame never carries them)
-  assert.deepEqual(Object.keys(r).sort(), ['bodyMatched', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'text'])
-  assert.deepEqual([r.bodyMatched, r.heldUserTurn, r.echoesPrompt], [true, false, false])
+  // 2026-10-11: the reading flags ride beside the text (internal result; the bridge frame never carries them);
+  // `bodyMissed` since 2026-10-17 — false here: the body cascade matched
+  assert.deepEqual(Object.keys(r).sort(), ['bodyMatched', 'bodyMissed', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'text'])
+  assert.deepEqual([r.bodyMatched, r.heldUserTurn, r.echoesPrompt, r.bodyMissed], [true, false, false, false])
   assert.equal(r.text, 'the reply\nline 2') // the .markdown part, not the container's own innerText
   assert.equal(r.doneBy, 'done_selector')
   assert.ok(Number.isInteger(r.ms) && r.ms >= 100)

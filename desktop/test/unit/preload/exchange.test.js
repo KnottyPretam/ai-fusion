@@ -176,19 +176,25 @@ test('readTextExcluding: without a predicate, or with nothing excluded underneat
 
 // --- 3./4. replyReading: the exchange fallback and its scope ----------------------------------------
 
-test('the predicates: isScreenReaderOnly keys on the class tokens sr-only / visually-hidden only; isUserTurn on USER_TURN_SELECTORS; exchangeChrome is their union', () => {
-  assert.deepEqual([...SR_ONLY_CLASSES], ['sr-only', 'visually-hidden'])
+test('the predicates: isScreenReaderOnly keys on the class tokens sr-only / visually-hidden / cdk-visually-hidden only; isUserTurn on USER_TURN_SELECTORS; exchangeChrome is their union', () => {
+  // 2026-10-17: Angular CDK's `cdk-visually-hidden` (gemini's "You said" / "Gemini said" labels) joined
+  assert.deepEqual([...SR_ONLY_CLASSES], ['sr-only', 'visually-hidden', 'cdk-visually-hidden'])
   assert.equal(isScreenReaderOnly(parseFragment('<h5 class="sr-only">You said:</h5>')), true)
   assert.equal(isScreenReaderOnly(parseFragment('<span class="visually-hidden">x</span>')), true)
+  assert.equal(isScreenReaderOnly(parseFragment('<span class="cdk-visually-hidden screen-reader-user-query-label">You said</span>')), true)
+  assert.equal(isScreenReaderOnly(parseFragment('<span class="cdk-visually-hidden-ish">x</span>')), false)
   assert.equal(isScreenReaderOnly(parseFragment('<div class="not-sr-only focus-within:not-sr-only">x</div>')), false, 'a token that merely contains it')
   assert.equal(isScreenReaderOnly(parseFragment('<div class="sr-only-ish">x</div>')), false)
   assert.equal(isScreenReaderOnly(parseFragment('<div>x</div>')), false)
   assert.equal(isScreenReaderOnly(null), false)
   for (const selector of USER_TURN_SELECTORS) {
+    // an attribute entry, or (2026-10-17) a bare custom-element tag — gemini's `user-query`
     const attr = /^\[([a-z-]+)~?='(.+?)'\]$/.exec(selector)
-    const html = attr[1] === 'class' ? `<div class="${attr[2]} flex">x</div>` : `<div ${attr[1]}="${attr[2]}">x</div>`
+    const html = attr === null ? `<${selector}>x</${selector}>` : attr[1] === 'class' ? `<div class="${attr[2]} flex">x</div>` : `<div ${attr[1]}="${attr[2]}">x</div>`
     assert.equal(isUserTurn(parseFragment(html)), true, selector)
   }
+  assert.ok(USER_TURN_SELECTORS.includes('user-query'))
+  assert.equal(isUserTurn(parseFragment('<model-response>x</model-response>')), false)
   assert.equal(isUserTurn(parseFragment('<article data-message-author-role="assistant">x</article>')), false)
   assert.equal(isUserTurn(null), false)
   assert.equal(exchangeChrome(parseFragment('<h5 class="sr-only">x</h5>')), true)
@@ -267,12 +273,13 @@ test('observe over the ask-the-user lifecycle: the exchange mounts with the user
   await clock.advance(2000) // one chatgpt settle window (settleMs 1200) past the vanished control
   assert.equal(state.error, null)
   assert.equal(state.done, true)
-  assert.deepEqual(Object.keys(state.value).sort(), ['bodyMatched', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'text'])
+  assert.deepEqual(Object.keys(state.value).sort(), ['bodyMatched', 'bodyMissed', 'doneBy', 'echoesPrompt', 'heldUserTurn', 'ms', 'text'])
   assert.equal(state.value.doneBy, 'stop_gone')
   assert.equal(state.value.text, `${WIDGET_TEXT}\n\n${WIDGET_LABEL}`)
   assert.equal(state.value.text.includes(PROMPT), false, 'never the prompt')
   assert.equal(state.value.text.includes('You said'), false)
   assert.deepEqual([state.value.bodyMatched, state.value.heldUserTurn, state.value.echoesPrompt], [false, true, false])
+  assert.equal(state.value.bodyMissed, true, '2026-10-17: chatgpt has a body cascade, and nothing in the exchange matched it')
 })
 
 test('echoesPrompt is true when the captured text carries the typed prompt (an echo in a turn-level body; the probes over the projection), and the other two flags describe a body-matched turn-level read', async () => {
@@ -289,6 +296,7 @@ test('echoesPrompt is true when the captured text carries the typed prompt (an e
   assert.equal(state.value.text, `Echo: ${PROMPT}`)
   assert.equal(state.value.doneBy, 'done_selector')
   assert.deepEqual([state.value.bodyMatched, state.value.heldUserTurn, state.value.echoesPrompt], [true, false, true])
+  assert.equal(state.value.bodyMissed, false, '2026-10-17: the body cascade matched')
 })
 
 test('the SAME ask-the-user exchange, read WITHOUT the fallback strip, would echo the prompt — so echoesPrompt is the net the strip removes the need for, and false is the strip working; with no typed text the flag is false', async () => {

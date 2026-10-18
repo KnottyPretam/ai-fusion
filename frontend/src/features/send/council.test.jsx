@@ -42,10 +42,10 @@ const conv = (cfg, over = {}) => {
 const MODELS = { items: [], byId: {}, loaded: true, error: null }
 
 describe('the catalog and the council view', () => {
-  test('SLOT_IDS is the 7-vendor catalog with the classic three first; SITES and DEFAULT_COUNCIL are those three', () => {
+  test('SLOT_IDS is the 7-vendor catalog with the classic three first; DEFAULT_COUNCIL stays those three (the web app), SITES gains Gemini', () => {
     expect(SLOT_IDS).toEqual(['claude', 'chatgpt', 'grok', 'gemini', 'deepseek', 'qwen', 'mimo'])
     expect(DEFAULT_COUNCIL).toEqual(['claude', 'chatgpt', 'grok'])
-    expect(SITES).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(SITES).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
     expect(Object.keys(SLOT_VENDORS)).toEqual(SLOT_IDS)
     expect(SLOT_VENDORS).toMatchObject({ gemini: 'google', deepseek: 'deepseek', qwen: 'qwen', mimo: 'xiaomi' })
     expect(Object.keys(SLOT_LABELS)).toEqual(SLOT_IDS)

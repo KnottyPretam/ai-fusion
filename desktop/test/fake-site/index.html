@@ -37,6 +37,21 @@
         <button class="voice" type="button" aria-label="Enter voice mode">Voice</button>
       </form>
     </template>
+    <!-- gemini (2026-10-17, HAND-BUILT from public sources — unmeasured): a Quill editor, `rich-textarea >
+         div.ql-editor[contenteditable][role=textbox]`, beside Quill's hidden `div.ql-clipboard[contenteditable]` —
+         put FIRST here on purpose (real Quill appends it after the editor), so a bare `div[contenteditable='true']`
+         entry would pick the decoy. The action slot holds a microphone button while the editor is empty; site.js
+         swaps in button.send-button.submit[aria-label="Send message"] (mat-icon fonticon arrow_upward) once text is in,
+         as gemini.google.com does. No <form>: the send button's own click submits. -->
+    <template id="tpl-gemini">
+      <div class="composer input-area">
+        <rich-textarea class="text-input-field_textarea">
+          <div class="ql-clipboard" contenteditable="true" tabindex="-1"></div>
+          <div class="ql-editor ql-blank textarea" contenteditable="true" role="textbox" aria-label="Enter a prompt for Gemini" aria-multiline="true"></div>
+        </rich-textarea>
+        <button class="voice mic speech_dictation_mic_button" type="button" aria-label="Microphone"><mat-icon class="google-symbols" fonticon="mic"></mat-icon>Mic</button>
+      </div>
+    </template>
     <!-- grok (?composer=textarea): the older textarea composer, kept so the native-value-setter
          insertion path stays covered. -->
     <template id="tpl-grok-textarea">

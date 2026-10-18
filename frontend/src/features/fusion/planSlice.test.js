@@ -199,8 +199,9 @@ describe('plan slice: pure helpers', () => {
       { id: 'web:claude', name: "Claude — this conversation's chat" },
       { id: 'web:chatgpt', name: "ChatGPT — this conversation's chat" },
       { id: 'web:grok', name: "Grok — this conversation's chat" },
+      { id: 'web:gemini', name: "Gemini — this conversation's chat" },
     ])
-    expect(noKey[1].options.map((o) => o.id)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst'])
+    expect(noKey[1].options.map((o) => o.id)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst'])
     expect(noKey[1].options[0].name).toContain('hidden analyst page')
     expect(noKey[2].options.map((o) => o.id)).toEqual(['ollama:hermes3', 'ollama:qwen3'])
     const withKey = planModelOptions({ items: DESKTOP_CATALOG, desktop: true, keyConfigured: true })

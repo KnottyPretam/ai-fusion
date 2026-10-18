@@ -4,6 +4,8 @@
 import { describe, expect, test } from 'vitest'
 import { analystKind, councilSlotConfig, desktopSlotConfig, isDesktopAnalyst, isOpenRouterSlug } from './analyst.js'
 import {
+  COUNCIL_EDIT_MAX,
+  TRANSPORT_TITLES,
   anyOnOpenRouter,
   catalogRefetchNeeded,
   customModelId,
@@ -29,7 +31,10 @@ describe('council.js: transports, models, rows', () => {
   test('a site supports all three transports, any other vendor token or local (MiMo included)', () => {
     expect(TRANSPORTS).toEqual(['web', 'openrouter', 'ollama'])
     for (const s of SITES) expect(transportsFor(s)).toEqual(TRANSPORTS)
-    for (const s of ['gemini', 'deepseek', 'qwen', 'mimo']) expect(transportsFor(s)).toEqual(['openrouter', 'ollama'])
+    expect(transportsFor('gemini')).toEqual(TRANSPORTS) // a site since 2026-10-17
+    for (const s of ['deepseek', 'qwen', 'mimo']) expect(transportsFor(s)).toEqual(['openrouter', 'ollama'])
+    expect(TRANSPORT_TITLES.web).toContain('Claude, ChatGPT, Grok and Gemini')
+    expect(COUNCIL_EDIT_MAX).toBe(4)
     expect(webModelFor('grok')).toBe('web:grok')
     expect(EFFORTS).toEqual(['off', 'low', 'medium', 'high'])
   })
@@ -38,6 +43,8 @@ describe('council.js: transports, models, rows', () => {
     const models = modelsState()
     expect(modelsFor('claude', 'web', models).map((m) => m.id)).toEqual(['web:claude'])
     expect(modelsFor('qwen', 'web', models)).toEqual([]) // no adapter in Stage 1
+    expect(modelsFor('gemini', 'web', models).map((m) => m.id)).toEqual(['web:gemini']) // a site since 2026-10-17
+    expect(defaultModelFor('gemini', 'web', models)).toBe('web:gemini')
     expect(modelsFor('qwen', 'ollama', models).map((m) => m.id)).toEqual(['ollama:hermes3', 'ollama:qwen3'])
     expect(modelsFor('mimo', 'ollama', models).map((m) => m.id)).toEqual(['ollama:hermes3', 'ollama:qwen3'])
     expect(modelsFor('qwen', 'openrouter', models).map((m) => m.id)).toEqual(['qwen/qwen3-235b-a22b'])
@@ -75,7 +82,9 @@ describe('council.js: transports, models, rows', () => {
     expect(specFromRows([...rows].reverse())).toEqual({ slots: CFG5.slots }) // re-keyed in catalog order
     expect(rowsFromSpec(null)).toEqual([])
     expect(rowsFromSpec({ slots: { claude: { model: 'web:claude' } } })).toEqual([]) // one member
-    expect(defaultRows()).toEqual(rowsFromSpec(CFG))
+    // every site on its web session: four rows since 2026-10-17
+    expect(defaultRows()).toEqual(SITES.map((slot) => ({ slot, transport: 'web', model: `web:${slot}`, effort: 'off' })))
+    expect(defaultRows().map((r) => r.slot)).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
     expect(freeSlots(rows)).toEqual(['deepseek', 'mimo'])
     expect(freeSlots(rows, 'gemini')).toEqual(['gemini', 'deepseek', 'mimo'])
   })
@@ -202,7 +211,8 @@ describe('analyst.js: the council config and the OpenRouter analyst', () => {
     // a web session and a local model never need the key; junk stays junk
     expect(analystKind('web:grok:analyst', { keyConfigured: true })).toBe('web')
     expect(analystKind('ollama:hermes3', { keyConfigured: true })).toBe('ollama')
-    expect(analystKind('web:gemini:analyst', { keyConfigured: true })).toBe('other')
+    expect(analystKind('web:gemini:analyst', { keyConfigured: true })).toBe('web') // a site since 2026-10-17
+    expect(analystKind('web:deepseek:analyst', { keyConfigured: true })).toBe('other')
     expect(analystKind('not a slug', { keyConfigured: true })).toBe('other')
   })
 })

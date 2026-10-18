@@ -1,6 +1,6 @@
-// desktop/main/views.js — the site views: one per site with a Stage-1 adapter, always the same
-// three whatever council a conversation seats (a site outside the council gets a null rect and is
-// hidden; contract §2/§5; plan Stage 1 electron-main).
+// desktop/main/views.js — the site views: one per site with an adapter (sites.js SLOTS — four since
+// gemini joined on 2026-10-17, all created eagerly), the same set whatever council a conversation seats
+// (a site outside the council gets a null rect and is hidden; contract §2/§5; plan Stage 1 electron-main).
 //
 // Every view: `WebContentsView` on `persist:<slot>` with `preload/site.cjs`, `sandbox:true`,
 // `contextIsolation:true`, `nodeIntegration:false`, `backgroundThrottling:false` (hidden views

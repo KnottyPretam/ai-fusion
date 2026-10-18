@@ -25,15 +25,17 @@ const panes = (openRouterKey) => ({ mode: 'split', active: 'chatgpt', targets: {
 const groupsOf = () => [...screen.getByTestId('config-analyst-model').querySelectorAll('optgroup')].map((g) => [g.getAttribute('label'), [...g.querySelectorAll('option')].map((o) => o.value)])
 
 describe('desktopAnalystGroups', () => {
-  test('SITES / SITE_LABELS name the three sites with a view; the grounded title no longer counts to three', () => {
-    expect(SITES).toEqual(['claude', 'chatgpt', 'grok'])
-    expect(SITE_LABELS).toEqual({ claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok' })
+  test('SITES / SITE_LABELS name the four sites with a view (Gemini since 2026-10-17); the grounded title no longer counts to three', () => {
+    expect(SITES).toEqual(['claude', 'chatgpt', 'grok', 'gemini'])
+    expect(SITE_LABELS).toEqual({ claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini' })
     expect(GROUNDED_TITLE).toContain('every Send (one call per agent)')
   })
 
   test('without a key the OpenRouter groups are empty; with one they hold the tagged slugs, structured first, name-sorted', () => {
     const none = desktopAnalystGroups(CATALOG)
-    expect(none.web.map((m) => m.id)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst'])
+    expect(none.web.map((m) => m.id)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst'])
+    // not in this test's catalog: the fixed id with the name webmodels.py would give it
+    expect(none.web[3]).toEqual({ id: 'web:gemini:analyst', name: 'Gemini web session (hidden analyst page)' })
     expect(none.ollama.map((m) => m.id)).toEqual(['ollama:hermes3'])
     expect(none.openrouter).toEqual({ structured: [], other: [] })
     const keyed = desktopAnalystGroups(CATALOG, { keyConfigured: true })
@@ -49,7 +51,7 @@ describe('SlotConfigBar in desktop mode', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => CATALOG })))
     const { unmount } = renderWithStore(<SlotConfigBar desktop analyst="web:chatgpt:analyst" onAnalystChange={() => {}} />, { preloaded: { conversation: CONV, slotConfig: CFG, models, panes: panes(null) } })
     expect(groupsOf()).toEqual([
-      [WEB_ANALYST_GROUP, ['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst']],
+      [WEB_ANALYST_GROUP, ['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst']],
       [OLLAMA_GROUP, ['ollama:hermes3']],
     ])
     unmount()
@@ -57,7 +59,7 @@ describe('SlotConfigBar in desktop mode', () => {
       preloaded: { conversation: CONV, slotConfig: { ...CFG, analyst_model: 'openai/gpt-5' }, models, panes: panes({ configured: true, prefix: 'sk-or-v1-', length: 73, pushed: true }) },
     })
     expect(groupsOf()).toEqual([
-      [WEB_ANALYST_GROUP, ['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst']],
+      [WEB_ANALYST_GROUP, ['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst']],
       [OLLAMA_GROUP, ['ollama:hermes3']],
       [OPENROUTER_STRUCTURED_GROUP, ['google/gemini-2.5-pro', 'openai/gpt-5']],
       [OPENROUTER_OTHER_GROUP, ['qwen/qwen3-235b-a22b']],

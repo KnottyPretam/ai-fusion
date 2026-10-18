@@ -7,11 +7,11 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import DesktopShell from './index.jsx' // registers the `panes` slice (+ slots / analyze / fusion / meter through the drawer)
-import Drawer, { ANALYZE_BLOCKED_HINT, CHOOSE_ANALYST_HINT, DRAWER_TABS, analystHint, analystPageText, captureHint } from './Drawer.jsx'
+import Drawer, { ANALYZE_BLOCKED_HINT, CHOOSE_ANALYST_HINT, DRAWER_TABS, TAB_KEYS, analystHint, analystPageText, captureHint } from './Drawer.jsx'
 import CostMeter from '../meter/index.jsx'
 import { emptyRow, initialMeter } from '../meter/slice.js'
 import { ANALYST_KEY, DEFAULT_ANALYST } from './analyst.js'
-import { PERSIST_KEYS, initialPanes } from './slice.js'
+import { DRAWER_TAB_KEYS, PERSIST_KEYS, initialPanes } from './slice.js'
 import { renderWithStore } from '../../state/testing.jsx'
 import { useDispatch, useSlice } from '../../state/store.jsx'
 import { CFG, RECTS, conv, fakeTriplex, installFakeResizeObserver, jsonResponse, pinViewportRects, seqOf, stubFetch, syncFrames } from './fakes.js'
@@ -194,6 +194,37 @@ describe('Drawer: tabs and panes', () => {
   })
 })
 
+describe('Drawer: the tab lives in panes.drawerTab (2026-10-17)', () => {
+  test('DRAWER_TAB_KEYS (the slice’s mirror) equals the drawer’s own tabs; the Agents tip says two to four', () => {
+    expect(DRAWER_TAB_KEYS).toEqual(TAB_KEYS)
+    expect(DRAWER_TABS.find((t) => t.key === 'agents').tip).toBe('Assemble the council: two to four agents, each on a web session, OpenRouter or local Ollama; and the OpenRouter key.')
+  })
+
+  test('a tab click writes panes.drawerTab; a panes/drawer {open, tab} from elsewhere (the stepper’s More options…) opens the drawer on that tab', () => {
+    const fake = fakeTriplex()
+    mount(fake, { conversation: convWith([sendTurn('t1', 'q')]), slotConfig: CFG })
+    fireEvent.click(tab('fusion'))
+    expect(drawer()).toHaveAttribute('data-tab', 'fusion')
+    fireEvent.click(screen.getByTestId('drawer-toggle'))
+    expect(drawer()).toHaveAttribute('data-open', 'false')
+    act(() => store.dispatch({ type: 'panes/drawer', open: true, tab: 'agents' }))
+    expect(drawer()).toHaveAttribute('data-open', 'true')
+    expect(drawer()).toHaveAttribute('data-tab', 'agents')
+    expect(tab('agents')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('drawer-panel-agents')).not.toHaveAttribute('hidden')
+    expect(screen.getByTestId('agents-page')).toBeInTheDocument()
+    // the toggle keeps the tab: closing and reopening comes back to Agents
+    fireEvent.click(screen.getByTestId('drawer-toggle'))
+    fireEvent.click(screen.getByTestId('drawer-toggle'))
+    expect(drawer()).toHaveAttribute('data-tab', 'agents')
+  })
+
+  test('a junk drawerTab in the state reads as Analyze', () => {
+    mount(fakeTriplex(), { panes: { ...initialPanes(), drawerOpen: true, drawerTab: 'nope' } })
+    expect(drawer()).toHaveAttribute('data-tab', 'analyze')
+  })
+})
+
 describe('Drawer: hints', () => {
   test('the capture hint lists exactly the not_captured slots of the latest send turn, and nothing when it was fully captured', () => {
     const fake = fakeTriplex()
@@ -243,7 +274,8 @@ describe('Drawer: Settings and the analyst choice', () => {
     const groups = [...select.querySelectorAll('optgroup')].map((g) => g.label)
     expect(groups).toEqual(['web sessions (hidden analyst page)', 'local Ollama'])
     const web = [...select.querySelectorAll('optgroup')][0]
-    expect([...web.querySelectorAll('option')].map((o) => o.value)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst'])
+    expect([...web.querySelectorAll('option')].map((o) => o.value)).toEqual(['web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst'])
+    expect(web.querySelector('option[value="web:gemini:analyst"]')).toHaveTextContent('Gemini web session (hidden analyst page)')
     expect(web.querySelector('option[value="web:claude:analyst"]')).toHaveTextContent('Claude web session (hidden analyst page)')
     const ollama = [...select.querySelectorAll('optgroup')][1]
     expect([...ollama.querySelectorAll('option')].map((o) => o.value)).toEqual(['ollama:hermes3'])
@@ -327,14 +359,14 @@ describe('Drawer: Settings and the analyst choice', () => {
     expect(localStorage.getItem(ANALYST_KEY)).toBe('web:claude:analyst')
   })
 
-  test('the Settings select falls back to the three fixed web analysts when the catalog is not loaded', () => {
+  test('the Settings select falls back to the four fixed web analysts when the catalog is not loaded', () => {
     const fake = fakeTriplex()
     stubFetch([{ method: 'GET', url: '/api/models', respond: jsonResponse({ detail: { error: 'nope' } }, 500) }])
     mount(fake, { models: { items: [], byId: {}, loaded: false, error: 'down' } })
     fireEvent.click(tab('settings'))
     const select = screen.getByTestId('config-analyst-model')
     expect([...select.querySelectorAll('optgroup')].map((g) => g.label)).toEqual(['web sessions (hidden analyst page)'])
-    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst'])
+    expect([...select.querySelectorAll('option')].map((o) => o.value)).toEqual(['', 'web:claude:analyst', 'web:chatgpt:analyst', 'web:grok:analyst', 'web:gemini:analyst'])
     expect(select).toHaveValue(DEFAULT_ANALYST)
   })
 })
@@ -552,7 +584,7 @@ describe('Drawer through the shell', () => {
     expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual(RECTS)
     // the deck shrank under the open drawer: the observers fire and the new rects reach main
     vi.restoreAllMocks()
-    const smaller = { claude: { ...RECTS.claude, height: 300 }, chatgpt: { ...RECTS.chatgpt, height: 300 }, grok: { ...RECTS.grok, height: 300 } }
+    const smaller = { claude: { ...RECTS.claude, height: 300 }, chatgpt: { ...RECTS.chatgpt, height: 300 }, grok: { ...RECTS.grok, height: 300 }, gemini: { ...RECTS.gemini, height: 300 } }
     pinViewportRects(smaller)
     act(() => ro.triggerResize())
     expect(fake.setLayout.mock.calls.at(-1)[0]).toEqual(smaller)

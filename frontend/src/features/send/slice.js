@@ -45,8 +45,10 @@ export const COUNCIL_MAX = 5
 // Slot -> OpenRouter slug vendor prefix (backend/schemas.py SLOT_VENDORS).
 export const SLOT_VENDORS = { claude: 'anthropic', chatgpt: 'openai', grok: 'x-ai', gemini: 'google', deepseek: 'deepseek', qwen: 'qwen', mimo: 'xiaomi' }
 export const SLOT_LABELS = { claude: 'Claude', chatgpt: 'ChatGPT', grok: 'Grok', gemini: 'Gemini', deepseek: 'DeepSeek', qwen: 'Qwen', mimo: 'MiMo' }
-// The sites with a native view and a Stage-1 adapter (`web:<site>` is a legal model only for these).
-export const SITES = ['claude', 'chatgpt', 'grok']
+// The sites with a native view and an adapter (`web:<site>` is a legal model only for these);
+// gemini joined 2026-10-17. DEFAULT_COUNCIL above stays the classic three: it is the web app's
+// default and mirrors the frozen backend default (only the desktop starts new chats with four).
+export const SITES = ['claude', 'chatgpt', 'grok', 'gemini']
 // The three transports a slot's model string names (backbone rule 1: transport IS the model string).
 export const TRANSPORTS = ['web', 'openrouter', 'ollama']
 export const TRANSPORT_LABELS = { web: 'web', openrouter: 'OpenRouter', ollama: 'local' }

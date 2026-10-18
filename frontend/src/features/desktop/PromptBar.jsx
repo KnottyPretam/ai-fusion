@@ -36,7 +36,7 @@
 // instance when given, else one of our own); disabled while any stream runs.
 //
 // Council (2026-09-27): the target checkboxes and the result lines range over the COUNCIL — the
-// open conversation's `slotConfig`, else main's default (`panes.council`), else the classic three —
+// open conversation's `slotConfig`, else main's default (`panes.council`), else every site (DEFAULT_COUNCIL, four since 2026-10-17) —
 // a member the target map has never seen is checked (`selectedTargets`), and a first Send creates
 // the conversation with `councilSlotConfig(panes.council)` (main's default council + the analyst).
 // An OpenRouter analyst counts as chosen only once a key is configured (`panes.openRouterKey`).

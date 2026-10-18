@@ -37,6 +37,19 @@
 // key check precedes any network call); the key round trip through __triplexTest.openRouterKey and
 // GET /api/session/openrouter_key with `Bearer e2e`, settings.json holding a base64 blob that never
 // contains the key, DELETE in afterEach.
+//
+// 2026-10-17 — gemini.google.com is the FOURTH site and new chats start with all four web sites, so a
+// fresh profile shows four panes and every default-council row above runs on four (SLOTS); the rows that
+// POST an explicit three-member council loop CLASSIC. New rows: (describe 'desktop gemini (trusted input)')
+// a {claude, gemini} council with the gemini look-alike under `&untrusted=ignore` — it drops every
+// UNTRUSTED submit, so a captured gemini reply proves main typed it with TRUSTED input (webContents.insertText
+// + sendInputEvent) — with the gemini pane visible, hidden (tabs mode on claude) and as the hidden ANALYST
+// page (a Pre-parse); (describe 'desktop agents stepper (2–4)') `agents-stepper-*` remove / add in an EMPTY
+// conversation (changed in place: same id, PUT slot_config) and in a SETTLED one (a new chat with the new set,
+// the old one kept), the bounds at 4 and 2, the change becoming main's default; (describe 'desktop settings
+// migration (legacy three → four)') a profile whose settings.json holds the classic three and no `migrations`
+// key launches on four, writes the `council-four-sites` marker, logs it once, pushes the four as the backend
+// defaults — and a deliberate three chosen afterwards survives a relaunch.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -53,7 +66,12 @@ const FAKE_BASE = `http://127.0.0.1:${process.env.TRIPLEX_FAKE_PORT || '5199'}`
 const RENDERER_URL = process.env.TRIPLEX_RENDERER_URL || 'http://localhost:5184'
 const BACKEND_URL = process.env.TRIPLEX_BACKEND_URL || 'http://127.0.0.1:8021'
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'e2e'
-const SLOTS = ['claude', 'chatgpt', 'grok']
+/** Every site with a native view and a fake look-alike, in SLOTS order — and the DEFAULT council since 2026-10-17. */
+const SLOTS = ['claude', 'chatgpt', 'grok', 'gemini']
+/** The classic three: the rows that POST an explicit three-member council loop these. */
+const CLASSIC = ['claude', 'chatgpt', 'grok']
+/** The settings.json council a pre-gemini build wrote (the old default): the one-time migration's input. */
+const LEGACY_COUNCIL = { slots: { claude: { model: 'web:claude', effort: 'off' }, chatgpt: { model: 'web:chatgpt', effort: 'off' }, grok: { model: 'web:grok', effort: 'off' } } }
 // A real backtick, double quotes, a dollar-brace and a newline — the text every composer must receive verbatim.
 const PROMPT = 'hello `x` "y" ${z}\nline2'
 /** The fake site's CANNED_PREPARSE restatement (test/fake-site/site.js), answered to any prompt carrying "Question to restate:". */
@@ -64,11 +82,14 @@ const FAKE_CHAT_URL_PATTERN = `^${FAKE_BASE.replace(/[.]/g, '\\.')}/c/[A-Za-z0-9
 /** The port the app should report for the backend it attached to. */
 const BACKEND_PORT = Number(new URL(BACKEND_URL).port || '80')
 
-/** `query` is appended to every site URL (Stage 2: `replyMs=150` makes the fake site stream `Echo: <text>`). */
-function sitesJson(query = '') {
+/**
+ * `query` is appended to every site URL (Stage 2: `replyMs=150` makes the fake site stream `Echo: <text>`);
+ * `perSlot[slot]` after it, for one site only (2026-10-17: `{gemini: '&untrusted=ignore'}`).
+ */
+function sitesJson(query = '', perSlot = {}) {
   const sites = {}
   for (const slot of SLOTS) {
-    const url = `${FAKE_BASE}/?site=${slot}${query}`
+    const url = `${FAKE_BASE}/?site=${slot}${query}${perSlot[slot] || ''}`
     sites[slot] = { url, newChatUrl: url, hosts: ['127.0.0.1', 'localhost'] }
   }
   return JSON.stringify(sites)
@@ -142,7 +163,10 @@ function sendKey(app, target, key) {
   }, { target, key })
 }
 
-/** {url, site, submitted} straight from a site view's page (null while the view is still loading). */
+/**
+ * {url, site, submitted, untrustedDropped} straight from a site view's page (null while the view is still loading).
+ * `untrustedDropped` (2026-10-17) counts the UNTRUSTED submits a `?untrusted=ignore` look-alike took no notice of.
+ */
 function fakeState(app, slot) {
   return app.evaluate(async (_electron, s) => {
     const wc = globalThis.__triplexTest.views.webContents(s)
@@ -152,7 +176,7 @@ function fakeState(app, slot) {
     }
     try {
       return await wc.executeJavaScript(
-        '(() => ({ url: location.href, site: window.__fake ? window.__fake.site : null, submitted: window.__fake ? window.__fake.submitted.slice() : null }))()',
+        '(() => ({ url: location.href, site: window.__fake ? window.__fake.site : null, submitted: window.__fake ? window.__fake.submitted.slice() : null, untrustedDropped: window.__fake && typeof window.__fake.untrustedDropped === "number" ? window.__fake.untrustedDropped : null }))()',
       )
     } catch (_e) {
       return null
@@ -288,18 +312,18 @@ test.describe('desktop shell', () => {
     }
   })
 
-  test('tabs: exactly two views are hidden and the active one fills its placeholder', async () => {
+  test('tabs: every view but one is hidden and the active one fills its placeholder', async () => {
     await page.getByTestId('deck-mode-tabs').click()
     await expect
       .poll(async () => {
         const states = await Promise.all(SLOTS.map((s) => viewState(app, s)))
-        return states.map((v) => (v && v.visible ? 'shown' : 'hidden')).join(',')
+        return states.filter((v) => v && v.visible).length
       }, { timeout: 15_000 })
-      .toMatch(/^(shown,hidden,hidden|hidden,shown,hidden|hidden,hidden,shown)$/)
+      .toBe(1)
     const states = await Promise.all(SLOTS.map((s) => viewState(app, s)))
     const active = SLOTS[states.findIndex((v) => v.visible)]
     await expect.poll(() => boundsMatch(app, page, active), { timeout: 15_000 }).toBe('ok')
-    expect(states.filter((v) => !v.visible)).toHaveLength(2)
+    expect(states.filter((v) => !v.visible)).toHaveLength(SLOTS.length - 1)
   })
 
   test('Ctrl+2 switches the active tab to chatgpt (main handles the shortcut, the renderer re-lays out)', async () => {
@@ -318,9 +342,13 @@ test.describe('desktop shell', () => {
     await sendKey(app, 'chatgpt', '3') // typed while the ChatGPT view holds the keyboard focus
     await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
     await expect.poll(() => viewState(app, 'chatgpt').then((v) => v && v.visible)).toBe(false)
+    // 2026-10-17: the fourth member of the default council is the fourth tab
+    await sendKey(app, 'grok', '4')
+    await expect.poll(() => viewState(app, 'gemini').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible)).toBe(false)
   })
 
-  test('one Send types the exact text into all three fake composers and submits each once', async () => {
+  test('one Send types the exact text into every fake composer (gemini through main\'s trusted input) and submits each once', async () => {
     await page.getByTestId('deck-mode-split').click()
     for (const slot of SLOTS) await ensureTargetChecked(page, slot)
     for (const slot of SLOTS) expect((await fakeState(app, slot)).submitted).toEqual([])
@@ -459,7 +487,7 @@ test.describe('desktop send (bridge)', () => {
   test('a Send from the PromptBar persists a SendTurn with not_captured errors (capture off by default)', async () => {
     await page.getByTestId('deck-mode-split').click()
     for (const slot of SLOTS) await ensureTargetChecked(page, slot)
-    expect(readSettings(userData).capture).toEqual({ claude: false, chatgpt: false, grok: false })
+    expect(readSettings(userData).capture).toEqual({ claude: false, chatgpt: false, grok: false, gemini: false })
     await sendFromPromptBar(page, FIRST)
 
     for (const slot of SLOTS) {
@@ -472,7 +500,7 @@ test.describe('desktop send (bridge)', () => {
         const turn = conv && lastSendTurn(conv)
         return turn ? SLOTS.filter((s) => turn.errors && turn.errors[s]).length : -1
       }, { timeout: 60_000 })
-      .toBe(3)
+      .toBe(SLOTS.length)
     convId = conv.id
     const turn = lastSendTurn(conv)
     for (const slot of SLOTS) {
@@ -487,13 +515,13 @@ test.describe('desktop send (bridge)', () => {
     }
   })
 
-  test('toggling capture on for all three via the pane headers → the next Send persists the three fake replies', async () => {
+  test('toggling capture on for every site via the pane headers → the next Send persists every fake reply', async () => {
     for (const slot of SLOTS) {
       const sw = page.getByTestId(`pane-${slot}-capture`)
       await expect(sw).toBeVisible({ timeout: 10_000 })
       if ((await toggleState(sw)) === 'off') await sw.click()
     }
-    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true })
+    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true, gemini: true })
     await expect.poll(() => backend('/api/bridge/status').then((s) => SLOTS.every((x) => s.sites && s.sites[x] && s.sites[x].capture === true)), { timeout: 10_000 }).toBe(true)
 
     await sendFromPromptBar(page, SECOND)
@@ -508,7 +536,7 @@ test.describe('desktop send (bridge)', () => {
         if (!turn || turn.prompt !== SECOND) return 'no turn yet'
         return SLOTS.map((s) => (turn.responses[s] === null ? 'pending' : 'done')).join(',')
       }, { timeout: 120_000 })
-      .toBe('done,done,done')
+      .toBe(SLOTS.map(() => 'done').join(','))
     const turn = lastSendTurn(conv)
     for (const slot of SLOTS) {
       expect(turn.responses[slot], slot).toBe(`Echo: ${SECOND}`)
@@ -656,7 +684,7 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     await expect(page.getByTestId('deck-tab-analyst')).toBeHidden()
   })
 
-  test('a conversation whose analyst_model is web:chatgpt:analyst, captured on all three, gets three replies', async () => {
+  test('a conversation whose analyst_model is web:chatgpt:analyst, captured on its three panes, gets three replies', async () => {
     const created = await backend('/api/conversations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -672,13 +700,15 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     await row.getByTestId('conv-select').click()
 
     await page.getByTestId('deck-mode-split').click()
-    for (const slot of SLOTS) {
+    // the conversation seats the classic three (desktopSlotConfig): gemini's pane is not rendered
+    await expect(page.getByTestId('pane-gemini')).toHaveCount(0)
+    for (const slot of CLASSIC) {
       await ensureTargetChecked(page, slot)
       const sw = page.getByTestId(`pane-${slot}-capture`)
       await expect(sw).toBeVisible({ timeout: 10_000 })
       if ((await toggleState(sw)) === 'off') await sw.click()
     }
-    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true })
+    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toEqual({ claude: true, chatgpt: true, grok: true, gemini: false })
 
     await sendFromPromptBar(page, PROMPT_A)
     await expect
@@ -686,11 +716,11 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
         const conv = await backend(`/api/conversations/${convId}`)
         const turn = lastSendTurn(conv)
         if (!turn || turn.prompt !== PROMPT_A) return 'no turn yet'
-        return SLOTS.map((s) => (turn.responses[s] === null ? 'pending' : 'done')).join(',')
+        return CLASSIC.map((s) => (turn.responses[s] === null ? 'pending' : 'done')).join(',')
       }, { timeout: 180_000 })
       .toBe('done,done,done')
     const conv = await backend(`/api/conversations/${convId}`)
-    for (const slot of SLOTS) expect(lastSendTurn(conv).responses[slot], slot).toBe(`Echo: ${PROMPT_A}`)
+    for (const slot of CLASSIC) expect(lastSendTurn(conv).responses[slot], slot).toBe(`Echo: ${PROMPT_A}`)
   })
 
   test('Analyze runs on the hidden analyst view and renders analyze-report; the chatgpt PANE never sees the analyst prompt', async () => {
@@ -716,13 +746,13 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     expect(analyst.submitted.at(-1)).toContain('<<<R1>>>')
     expect((await fakeState(app, 'chatgpt')).submitted.length, 'the pane typed nothing extra').toBe(paneBefore)
     expect(await analystState()).toMatchObject({ slot: 'chatgpt', hasView: true, viewVisible: false })
-    // the analyst page is the hidden fourth view, so it is never a pane chat link
-    expect(Object.keys(readChats(userData)[convId] || {}).sort()).toEqual([...SLOTS].sort())
+    // the analyst page is a hidden extra view, so it is never a pane chat link
+    expect(Object.keys(readChats(userData)[convId] || {}).sort()).toEqual([...CLASSIC].sort())
   })
 
   test('Fusion(1) challenges the three panes, checks convergence on the analyst view and exits converged', async () => {
     const before = {}
-    for (const slot of SLOTS) before[slot] = (await fakeState(app, slot)).submitted.length
+    for (const slot of CLASSIC) before[slot] = (await fakeState(app, slot)).submitted.length
     await expect.poll(() => analystFakeState().then((s) => (s ? 'ready' : 'pending')), { timeout: 30_000 }).toBe('ready')
     const analystChatBefore = (await analystFakeState()).url
 
@@ -743,7 +773,7 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
     const fusion = [...conv.turns].reverse().find((t) => t.type === 'fusion')
     expect(fusion.exit_reason).toBe('converged')
     // one challenge per label with a position on d1 → one more submission in each PANE
-    for (const slot of SLOTS) {
+    for (const slot of CLASSIC) {
       const s = await fakeState(app, slot)
       expect(s.submitted.length, `${slot} was challenged in its own chat`).toBeGreaterThan(before[slot])
       expect(s.submitted.at(-1), slot).toContain('YOUR CLAIM')
@@ -844,7 +874,8 @@ test.describe('desktop analyze + fusion (hidden analyst page)', () => {
   // place (the canned restatement, then the deterministic answer block), the panes type nothing
   // until Send, and Send still sends the composer text byte for byte. "New chat everywhere" first,
   // so every pane starts on a fresh chat and its submitted[0] IS that Send — with the conversation
-  // it creates carrying the default `web:chatgpt:analyst`, the same analyst this describe runs on.
+  // it creates carrying the default `web:chatgpt:analyst`, the same analyst this describe runs on, and
+  // the default council: the four web sites since 2026-10-17, so gemini's (trusted) pane is in it too.
   test('Pre-parse rewrites the composer from the hidden analyst view, the panes type nothing until Send, and Send types the composer text verbatim', async () => {
     await page.getByTestId('prompt-newchat').click()
     for (const slot of SLOTS) {
@@ -1057,18 +1088,19 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
     }
   })
 
-  test('the default council reaches the renderer and the backend: getCouncil() is the classic three and the session defaults carry them', async () => {
+  test('the default council reaches the renderer and the backend: getCouncil() is the four web sites and the session defaults carry them', async () => {
     const council = await page.evaluate(() => window.triplex.getCouncil())
-    expect(Object.keys(council.slots)).toEqual(['claude', 'chatgpt', 'grok'])
+    expect(Object.keys(council.slots)).toEqual(SLOTS)
     for (const slot of SLOTS) expect(council.slots[slot]).toEqual({ model: `web:${slot}`, effort: 'off' })
     expect(readSettings(userData).council).toEqual(council)
+    expect(readSettings(userData).migrations).toEqual(['council-four-sites'])
     // pushed on the bridge's connected edge: the backend's in-process default is the same council
-    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['claude', 'chatgpt', 'grok'])
+    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(SLOTS)
     expect((await keyStatus()).configured).toBe(false)
     expect((await backendKey()).configured).toBe(false)
   })
 
-  test('a council of two web sites: the third view is hidden with a null rect, the renderer shows no pane-grok, and a Send reaches the two panes only', async () => {
+  test('a council of two web sites: the other site views are hidden with a null rect, the renderer shows no pane-grok / pane-gemini, and a Send reaches the two panes only', async () => {
     await createAndSelect('two sites', TWO_SITES)
     await page.getByTestId('deck-mode-split').click()
     for (const slot of ['claude', 'chatgpt']) {
@@ -1076,9 +1108,11 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
       await expect.poll(() => boundsMatch(app, page, slot), { timeout: 15_000 }).toBe('ok')
     }
     await expect(page.getByTestId('pane-grok')).toHaveCount(0)
-    // the view still exists (views.slots() is always the three sites) but sits hidden on a null rect
+    await expect(page.getByTestId('pane-gemini')).toHaveCount(0)
+    // the views still exist (views.slots() is always every site) but sit hidden on a null rect
     expect(await app.evaluate(() => globalThis.__triplexTest.views.slots())).toEqual(SLOTS)
     await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
+    await expect.poll(() => viewState(app, 'gemini').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
     // A null rect hides the view (`setVisible(false)`); its LAST bounds are kept, exactly as tabs mode
     // keeps a hidden pane's bounds — measured 2026-09-27 (446×590 here), so hidden is the invariant.
     expect(await viewState(app, 'grok')).not.toBeNull()
@@ -1087,6 +1121,7 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
     for (const slot of SLOTS) before[slot] = (await fakeState(app, slot)).submitted.length
     for (const slot of ['claude', 'chatgpt']) await ensureTargetChecked(page, slot)
     await expect(page.getByTestId('prompt-target-grok')).toHaveCount(0)
+    await expect(page.getByTestId('prompt-target-gemini')).toHaveCount(0)
     await sendFromPromptBar(page, PROMPT_TWO)
     for (const slot of ['claude', 'chatgpt']) {
       await expect.poll(() => fakeState(app, slot).then((s) => s && s.submitted.slice(before[slot])), { timeout: 45_000 }).toEqual([PROMPT_TWO])
@@ -1101,9 +1136,10 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
       .toBe('chatgpt,claude')
     expect(Object.keys(conv.threads).sort()).toEqual(['chatgpt', 'claude'])
     expect((await fakeState(app, 'grok')).submitted.length, 'the hidden grok page typed nothing').toBe(before.grok)
+    expect((await fakeState(app, 'gemini')).submitted.length, 'the hidden gemini page typed nothing').toBe(before.gemini)
   })
 
-  test('a mixed council: qwen is a renderer column, views.slots() stays three, and a Send echoes on chatgpt while qwen fails on the missing key before any network call', async () => {
+  test('a mixed council: qwen is a renderer column, views.slots() stays every site, and a Send echoes on chatgpt while qwen fails on the missing key before any network call', async () => {
     const convId = await createAndSelect('mixed', MIXED)
     await page.getByTestId('deck-mode-split').click()
     const column = page.getByTestId('pane-qwen')
@@ -1113,6 +1149,7 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
     for (const slot of ['claude', 'chatgpt']) await expect.poll(() => boundsMatch(app, page, slot), { timeout: 15_000 }).toBe('ok')
     expect(await app.evaluate(() => globalThis.__triplexTest.views.slots())).toEqual(SLOTS)
     await expect.poll(() => viewState(app, 'grok').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
+    await expect.poll(() => viewState(app, 'gemini').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
 
     // the chatgpt pane captures its echo; claude stays not_captured; qwen never leaves the machine
     const sw = page.getByTestId('pane-chatgpt-capture')
@@ -1198,8 +1235,381 @@ test.describe('desktop council (2–5 agents, OpenRouter key)', () => {
     expect(Object.keys(set.slots)).toEqual(['chatgpt', 'qwen'])
     expect(readSettings(userData).council).toEqual(set)
     await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['chatgpt', 'qwen'])
-    // restore the default so the sidebar's "New conversation" keeps seating the classic three
+    // restore the default so the sidebar's "New conversation" keeps seating the four web sites
     await page.evaluate((c) => window.triplex.setCouncil(c), before)
-    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(['claude', 'chatgpt', 'grok'])
+    await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(SLOTS)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Gemini, the fourth site (2026-10-17): main types into it with TRUSTED input
+// ---------------------------------------------------------------------------------------------
+//
+// The gemini look-alike runs under `&untrusted=ignore`: an UNTRUSTED submit (the adapter's synthetic click or
+// Enter) is dropped and counted in `window.__fake.untrustedDropped`, exactly the failure publicly reported for
+// gemini.google.com in an Electron-44 embed. So a gemini reply that arrives at all — with untrustedDropped 0 —
+// proves main typed and submitted it with trusted input (webContents.insertText + sendInputEvent), in the three
+// places a gemini view can be: a visible pane, a pane hidden behind another tab, and the hidden analyst page.
+
+test.describe('desktop gemini (trusted input)', () => {
+  test.describe.configure({ mode: 'serial', timeout: 240_000 })
+  const logs = []
+  const PROMPT_VISIBLE = 'gemini visible'
+  const PROMPT_HIDDEN = 'gemini hidden'
+  let userData
+  let app
+  let page
+  let convId = null
+
+  const agent = (model, effort = 'off') => ({ model, effort })
+  const PAIR = { slots: { claude: agent('web:claude'), gemini: agent('web:gemini') }, analyst_model: 'web:gemini:analyst', max_iterations: 1, materiality_min: 'medium', grounded: false }
+
+  /** {url, site, submitted, untrustedDropped} from the hidden analyst view's page (null while it is still loading). */
+  function analystFakeState() {
+    return app.evaluate(async () => {
+      const wc = globalThis.__triplexTest.analystViews.webContents()
+      if (!wc || wc.isDestroyed() || wc.isLoading()) return null
+      try {
+        return await wc.executeJavaScript('(() => ({ url: location.href, site: window.__fake ? window.__fake.site : null, submitted: window.__fake ? window.__fake.submitted.slice() : null, untrustedDropped: window.__fake ? window.__fake.untrustedDropped : null }))()')
+      } catch (_e) {
+        return null
+      }
+    })
+  }
+
+  test.beforeAll(async () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-gemini-'))
+    const override = {}
+    for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
+    fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+    // ?reply=json answers the analyst's "Question to restate:" (the Pre-parse row) and echoes everything else
+    ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150&reply=json', { gemini: '&untrusted=ignore' }) }))
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => backend('/api/bridge/status').then((s) => Object.keys(s.sites || {})), { timeout: 15_000 }).toEqual(expect.arrayContaining(SLOTS))
+  })
+
+  test.afterAll(async () => {
+    if (app) await app.close().catch(() => {})
+  })
+
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+      await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+    }
+  })
+
+  test('a {claude, gemini} council with the gemini pane VISIBLE: the gemini look-alike ignores untrusted input, and the Send is still typed, submitted and captured there', async () => {
+    const created = await backend('/api/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'claude + gemini', slot_config: PAIR }) })
+    convId = created.id
+    expect(Object.keys(created.slot_config.slots)).toEqual(['claude', 'gemini'])
+    await page.reload()
+    await page.waitForSelector('[data-testid="desktop-shell"]', { timeout: 45_000 })
+    const row = page.getByTestId('sidebar').getByTestId('conv-row').filter({ hasText: 'claude + gemini' }).first()
+    await expect(row).toBeVisible({ timeout: 20_000 })
+    await row.getByTestId('conv-select').click()
+
+    await page.getByTestId('deck-mode-split').click()
+    for (const slot of ['claude', 'gemini']) {
+      await expect(page.getByTestId(`pane-${slot}`)).toBeVisible({ timeout: 15_000 })
+      await expect.poll(() => boundsMatch(app, page, slot), { timeout: 15_000 }).toBe('ok')
+      await ensureTargetChecked(page, slot)
+      const sw = page.getByTestId(`pane-${slot}-capture`)
+      await expect(sw).toBeVisible({ timeout: 10_000 })
+      if ((await toggleState(sw)) === 'off') await sw.click()
+    }
+    for (const slot of ['chatgpt', 'grok']) await expect(page.getByTestId(`pane-${slot}`)).toHaveCount(0)
+    await expect.poll(() => readSettings(userData).capture, { timeout: 10_000 }).toMatchObject({ claude: true, gemini: true })
+    const before = await fakeState(app, 'gemini')
+    expect(before.untrustedDropped, 'the look-alike runs under ?untrusted=ignore').toBe(0)
+
+    await sendFromPromptBar(page, PROMPT_VISIBLE)
+    await expect.poll(() => fakeState(app, 'gemini').then((s) => s && s.submitted.slice(before.submitted.length)), { timeout: 45_000 }).toEqual([PROMPT_VISIBLE])
+    await expect
+      .poll(async () => {
+        const conv = await backend(`/api/conversations/${convId}`)
+        const turn = lastSendTurn(conv)
+        if (!turn || turn.prompt !== PROMPT_VISIBLE) return 'no turn yet'
+        return ['claude', 'gemini'].map((s) => (turn.responses[s] !== null ? 'done' : turn.errors && turn.errors[s] ? `error: ${turn.errors[s]}` : 'pending')).join(',')
+      }, { timeout: 120_000 })
+      .toBe('done,done')
+    const conv = await backend(`/api/conversations/${convId}`)
+    expect(lastSendTurn(conv).responses.gemini).toBe(`Echo: ${PROMPT_VISIBLE}`)
+    expect(conv.threads.gemini.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect((await fakeState(app, 'gemini')).untrustedDropped, 'no untrusted submit ever reached the gemini page').toBe(0)
+    // main's one submit line names the trusted insert and never the prompt
+    await expect.poll(() => logs.join(''), { timeout: 10_000 }).toMatch(/gemini: submitted by \w+ \(insert: trusted, send: trusted-enter\)/)
+    expect(logs.join('').includes(PROMPT_VISIBLE)).toBe(false)
+  })
+
+  test('the gemini pane HIDDEN (tabs mode on claude): the trusted insert and Enter still land, and the reply is captured', async () => {
+    await page.getByTestId('deck-mode-tabs').click()
+    await page.getByTestId('deck-tab-claude').click()
+    await expect.poll(() => viewState(app, 'claude').then((v) => v && v.visible), { timeout: 15_000 }).toBe(true)
+    await expect.poll(() => viewState(app, 'gemini').then((v) => v && v.visible), { timeout: 15_000 }).toBe(false)
+    const before = await fakeState(app, 'gemini')
+    for (const slot of ['claude', 'gemini']) await ensureTargetChecked(page, slot)
+
+    await sendFromPromptBar(page, PROMPT_HIDDEN)
+    await expect.poll(() => fakeState(app, 'gemini').then((s) => s && s.submitted.slice(before.submitted.length)), { timeout: 45_000 }).toEqual([PROMPT_HIDDEN])
+    await expect
+      .poll(async () => {
+        const conv = await backend(`/api/conversations/${convId}`)
+        const turn = lastSendTurn(conv)
+        if (!turn || turn.prompt !== PROMPT_HIDDEN) return 'no turn yet'
+        return turn.responses.gemini !== null ? 'done' : turn.errors && turn.errors.gemini ? `error: ${turn.errors.gemini}` : 'pending'
+      }, { timeout: 120_000 })
+      .toBe('done')
+    expect(lastSendTurn(await backend(`/api/conversations/${convId}`)).responses.gemini).toBe(`Echo: ${PROMPT_HIDDEN}`)
+    expect((await fakeState(app, 'gemini')).untrustedDropped).toBe(0)
+    expect((await viewState(app, 'gemini')).visible, 'it stayed hidden throughout').toBe(false)
+  })
+
+  test('gemini as the hidden ANALYST page: a Pre-parse is typed there with trusted input and rewrites the composer; no pane types anything', async () => {
+    await page.evaluate(() => window.triplex.setAnalyst('gemini'))
+    await expect.poll(() => readSettings(userData).analyst, { timeout: 10_000 }).toBe('gemini')
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.analyst), { timeout: 15_000 }).toBe('gemini')
+    const panesBefore = {}
+    for (const slot of ['claude', 'gemini']) panesBefore[slot] = (await fakeState(app, slot)).submitted.length
+
+    const composer = page.getByTestId('prompt-composer')
+    await expect(composer).toBeEditable({ timeout: 30_000 })
+    await composer.fill(PROMPT)
+    const preparse = page.getByTestId('prompt-preparse')
+    await expect(preparse).toBeEnabled({ timeout: 20_000 })
+    await preparse.click()
+    await expect
+      .poll(async () => {
+        const v = await composer.inputValue()
+        return v.startsWith(CANNED_QUESTION) ? 'rewritten' : `still: ${v.slice(0, 60)}`
+      }, { timeout: 180_000 })
+      .toBe('rewritten')
+    await expect.poll(() => analystFakeState().then((s) => (s && s.submitted && s.submitted.length ? s.submitted.at(-1) : '')), { timeout: 30_000 }).toContain('Question to restate:')
+    const analyst = await analystFakeState()
+    expect(analyst.site).toBe('gemini')
+    expect(analyst.untrustedDropped, 'the hidden analyst page took a trusted submit (it ignores untrusted ones)').toBe(0)
+    expect(await app.evaluate(() => globalThis.__triplexTest.analystViews.slot())).toBe('gemini')
+    for (const slot of ['claude', 'gemini']) expect((await fakeState(app, slot)).submitted.length, `${slot} pane typed nothing`).toBe(panesBefore[slot])
+    await composer.fill('') // leave the composer empty for whatever runs next
+    await page.evaluate(() => window.triplex.setAnalyst('chatgpt'))
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// The agents stepper (2026-10-17): − / + in the pane bar, two to four agents
+// ---------------------------------------------------------------------------------------------
+//
+// `agents-stepper` (data-count, data-mode) sits in the deck bar. In an EMPTY conversation − / + change the
+// conversation's council in place (PUT slot_config: same id); in a SETTLED one (any turn) the council is fixed
+// (409 council_changed), so − / + start a NEW chat with the new set and the old conversation keeps its agents.
+// Either way the set becomes main's default (settings.json `council`, pushed to the backend defaults). The
+// editors cap at four; a council needs two.
+
+test.describe('desktop agents stepper (2–4)', () => {
+  test.describe.configure({ mode: 'serial', timeout: 240_000 })
+  const logs = []
+  const AUTH = { authorization: `Bearer ${BRIDGE_TOKEN}` }
+  const PROMPT_SETTLE_FOUR = 'stepper settles four'
+  const PROMPT_SETTLE_THREE = 'stepper settles three'
+  let userData
+  let app
+  let page
+
+  const stepper = () => page.getByTestId('agents-stepper')
+  const keysOf = (conv) => Object.keys(conv.slot_config.slots)
+  const defaultsKeys = () => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null))
+  /** The newest conversation the backend knows (the list is newest-first). */
+  const newest = async () => {
+    const list = await backend('/api/conversations')
+    return list.length ? backend(`/api/conversations/${list[0].id}`) : null
+  }
+  async function addAgent(slot) {
+    await page.getByTestId('agents-stepper-add').click()
+    await expect(page.getByTestId('agents-stepper-menu')).toBeVisible({ timeout: 10_000 })
+    const item = page.getByTestId(`agents-stepper-add-${slot}`)
+    await expect(item).toHaveAttribute('data-seatable', 'true', { timeout: 15_000 })
+    await item.click()
+  }
+
+  test.beforeAll(async () => {
+    userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-stepper-'))
+    const override = {}
+    for (const slot of SLOTS) override[slot] = { chatUrlPattern: FAKE_CHAT_URL_PATTERN }
+    fs.writeFileSync(path.join(userData, 'selectors.json'), JSON.stringify(override))
+    ;({ app, page } = await launch(userData, logs, { sites: sitesJson('&replyMs=150') }))
+    await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+  })
+
+  test.afterAll(async () => {
+    if (app) await app.close().catch(() => {})
+  })
+
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+      await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+    }
+  })
+
+  test('a fresh profile: four agents, "−" names Gemini (the right-most), "+" is at the four-agent cap', async () => {
+    await expect(stepper()).toBeVisible({ timeout: 15_000 })
+    await expect(stepper()).toHaveAttribute('data-count', '4')
+    await expect(page.getByTestId('agents-stepper-count')).toContainText('4')
+    await expect(page.getByTestId('agents-stepper-remove')).toHaveAttribute('aria-label', 'Remove Gemini')
+    await expect(page.getByTestId('agents-stepper-add')).toBeDisabled()
+    for (const slot of SLOTS) await expect(page.getByTestId(`pane-${slot}`)).toBeVisible({ timeout: 15_000 })
+  })
+
+  test('an EMPTY conversation changes in place: "−" drops gemini from the same conversation (PUT), the default follows; "+" seats it again', async () => {
+    await page.getByTestId('prompt-newchat').click()
+    let conv = null
+    await expect.poll(async () => {
+      conv = await newest()
+      return conv && (conv.turns || []).length === 0 ? keysOf(conv) : null
+    }, { timeout: 20_000 }).toEqual(SLOTS)
+    const id = conv.id
+    await expect(stepper()).toHaveAttribute('data-mode', 'in-place', { timeout: 15_000 })
+
+    await page.getByTestId('agents-stepper-remove').click()
+    await expect(stepper()).toHaveAttribute('data-count', '3', { timeout: 15_000 })
+    await expect.poll(() => backend(`/api/conversations/${id}`).then(keysOf), { timeout: 15_000 }).toEqual(CLASSIC)
+    expect((await newest()).id, 'no new conversation: the same one changed').toBe(id)
+    await expect(page.getByTestId('pane-gemini')).toHaveCount(0)
+    await expect.poll(() => viewState(app, 'gemini').then((v) => v && v.visible), { timeout: 10_000 }).toBe(false)
+    await expect.poll(() => Object.keys(readSettings(userData).council.slots), { timeout: 10_000 }).toEqual(CLASSIC)
+    await expect.poll(defaultsKeys, { timeout: 15_000 }).toEqual(CLASSIC)
+
+    await addAgent('gemini')
+    await expect(stepper()).toHaveAttribute('data-count', '4', { timeout: 15_000 })
+    await expect.poll(() => backend(`/api/conversations/${id}`).then(keysOf), { timeout: 15_000 }).toEqual(SLOTS)
+    const after = await backend(`/api/conversations/${id}`)
+    expect(after.threads.gemini, 'the re-stamped conversation has a gemini thread').toEqual([])
+    expect((await newest()).id).toBe(id)
+    await expect(page.getByTestId('pane-gemini')).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => Object.keys(readSettings(userData).council.slots), { timeout: 10_000 }).toEqual(SLOTS)
+    await expect.poll(defaultsKeys, { timeout: 15_000 }).toEqual(SLOTS)
+  })
+
+  test('the bounds: from four down to two in place, "−" is disabled at two; back up to four', async () => {
+    await expect(stepper()).toHaveAttribute('data-mode', 'in-place', { timeout: 15_000 })
+    await page.getByTestId('agents-stepper-remove').click() // − gemini
+    await expect(stepper()).toHaveAttribute('data-count', '3', { timeout: 15_000 })
+    await expect(page.getByTestId('agents-stepper-remove')).toHaveAttribute('aria-label', 'Remove Grok')
+    await page.getByTestId('agents-stepper-remove').click() // − grok
+    await expect(stepper()).toHaveAttribute('data-count', '2', { timeout: 15_000 })
+    await expect(page.getByTestId('agents-stepper-remove')).toBeDisabled()
+    expect(keysOf(await newest())).toEqual(['claude', 'chatgpt'])
+    await addAgent('grok')
+    await expect(stepper()).toHaveAttribute('data-count', '3', { timeout: 15_000 })
+    await addAgent('gemini')
+    await expect(stepper()).toHaveAttribute('data-count', '4', { timeout: 15_000 })
+    await expect(page.getByTestId('agents-stepper-add')).toBeDisabled()
+    await expect.poll(() => newest().then(keysOf), { timeout: 15_000 }).toEqual(SLOTS)
+  })
+
+  test('a SETTLED conversation: "−" starts a NEW chat with the three (the old one keeps its four and stays in the sidebar); after a Send there, "+" starts another with the four', async () => {
+    await page.getByTestId('deck-mode-split').click()
+    for (const slot of SLOTS) await ensureTargetChecked(page, slot)
+    await sendFromPromptBar(page, PROMPT_SETTLE_FOUR)
+    let settled = null
+    await expect.poll(async () => {
+      settled = await conversationByFirstPrompt(PROMPT_SETTLE_FOUR)
+      const turn = settled && lastSendTurn(settled)
+      return turn ? SLOTS.filter((s) => turn.responses[s] !== null || (turn.errors && turn.errors[s])).length : -1
+    }, { timeout: 120_000 }).toBe(SLOTS.length)
+    // Every pane has recorded its chat for the settled conversation before "−" is pressed, as a person's pace
+    // allows. With capture off a Send ends at submit, while the site mints its chat URL a beat later: a new chat
+    // opened inside that window finds the pane still on newChatUrl (so `openChats` keeps it), and then the old
+    // page's own URL change lands the previous chat — the same for New chat everywhere (decisions row, 2026-10-17).
+    await expect.poll(() => Object.keys(readChats(userData)[settled.id] || {}).sort(), { timeout: 20_000 }).toEqual([...SLOTS].sort())
+    await expect(stepper()).toHaveAttribute('data-mode', 'new-chat', { timeout: 15_000 })
+
+    await page.getByTestId('agents-stepper-remove').click()
+    let fresh = null
+    await expect.poll(async () => {
+      fresh = await newest()
+      return fresh && fresh.id !== settled.id ? keysOf(fresh) : null
+    }, { timeout: 20_000 }).toEqual(CLASSIC)
+    expect((fresh.turns || []).length, 'a brand-new chat').toBe(0)
+    expect(keysOf(await backend(`/api/conversations/${settled.id}`)), 'the settled conversation keeps its agents').toEqual(SLOTS)
+    await expect(page.getByTestId('sidebar').getByTestId('conv-row').filter({ hasText: PROMPT_SETTLE_FOUR }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(stepper()).toHaveAttribute('data-count', '3', { timeout: 15_000 })
+    await expect(stepper()).toHaveAttribute('data-mode', 'in-place', { timeout: 15_000 })
+    // every remaining pane opened a fresh chat for the new conversation
+    for (const slot of CLASSIC) await expect.poll(() => fakeState(app, slot).then((s) => s && s.url), { timeout: 20_000 }).toBe(`${FAKE_BASE}/?site=${slot}&replyMs=150`)
+    await expect.poll(() => Object.keys(readSettings(userData).council.slots), { timeout: 10_000 }).toEqual(CLASSIC)
+    await expect.poll(defaultsKeys, { timeout: 15_000 }).toEqual(CLASSIC)
+
+    // settle the three, then "+" gemini: another new chat, now with the four
+    await sendFromPromptBar(page, PROMPT_SETTLE_THREE)
+    let three = null
+    await expect.poll(async () => {
+      three = await conversationByFirstPrompt(PROMPT_SETTLE_THREE)
+      return three ? three.id : null
+    }, { timeout: 60_000 }).toBe(fresh.id)
+    await expect.poll(() => Object.keys(readChats(userData)[fresh.id] || {}).sort(), { timeout: 20_000 }).toEqual([...CLASSIC].sort())
+    await expect(stepper()).toHaveAttribute('data-mode', 'new-chat', { timeout: 30_000 })
+    await addAgent('gemini')
+    let four = null
+    await expect.poll(async () => {
+      four = await newest()
+      return four && four.id !== three.id ? keysOf(four) : null
+    }, { timeout: 20_000 }).toEqual(SLOTS)
+    expect(keysOf(await backend(`/api/conversations/${three.id}`))).toEqual(CLASSIC)
+    await expect(stepper()).toHaveAttribute('data-count', '4', { timeout: 15_000 })
+    await expect(page.getByTestId('pane-gemini')).toBeVisible({ timeout: 15_000 })
+    await expect.poll(() => Object.keys(readSettings(userData).council.slots), { timeout: 10_000 }).toEqual(SLOTS)
+    await expect.poll(defaultsKeys, { timeout: 15_000 }).toEqual(SLOTS)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// The one-time settings migration (2026-10-17): a legacy three becomes the four
+// ---------------------------------------------------------------------------------------------
+
+test.describe('desktop settings migration (legacy three → four)', () => {
+  test.describe.configure({ timeout: 240_000 })
+  const AUTH = { authorization: `Bearer ${BRIDGE_TOKEN}` }
+
+  test('a profile holding the classic three (no migrations key) launches on four, marks the migration once, pushes the four; a three chosen afterwards survives a relaunch', async ({}, testInfo) => {
+    const logs = []
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'triplex-e2e-migrate-'))
+    fs.writeFileSync(path.join(userData, 'settings.json'), JSON.stringify({ version: 1, analyst: 'chatgpt', council: LEGACY_COUNCIL, theme: 'light' }))
+    let app = null
+    try {
+      let page
+      ;({ app, page } = await launch(userData, logs))
+      const council = await page.evaluate(() => window.triplex.getCouncil())
+      expect(Object.keys(council.slots)).toEqual(SLOTS)
+      for (const slot of SLOTS) expect(council.slots[slot]).toEqual({ model: `web:${slot}`, effort: 'off' })
+      const onDisk = readSettings(userData)
+      expect(onDisk.council).toEqual(council)
+      expect(onDisk.migrations).toEqual(['council-four-sites'])
+      expect(onDisk.theme, 'the rest of the profile survives the rewrite').toBe('light')
+      // (the one info line is pinned by main-wiring.test.js: settings.load runs before Playwright's stdout
+      // listener here is guaranteed to be attached, so its absence would prove nothing)
+      await expect.poll(() => backend('/api/bridge/status').then((s) => s.connected), { timeout: 15_000 }).toBe(true)
+      await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(SLOTS)
+      for (const slot of SLOTS) await expect(page.getByTestId(`pane-${slot}`)).toBeVisible({ timeout: 15_000 })
+      await expect(page.getByTestId('agents-stepper')).toHaveAttribute('data-count', '4', { timeout: 15_000 })
+
+      // a deliberate three after the migration: the marker is on disk, so it is never migrated again
+      await page.evaluate((c) => window.triplex.setCouncil(c), LEGACY_COUNCIL)
+      await expect.poll(() => Object.keys(readSettings(userData).council.slots), { timeout: 10_000 }).toEqual(CLASSIC)
+      await app.close()
+      app = null
+      const relaunchLogs = []
+      ;({ app, page } = await launch(userData, relaunchLogs))
+      expect(Object.keys((await page.evaluate(() => window.triplex.getCouncil())).slots)).toEqual(CLASSIC)
+      expect(relaunchLogs.join('')).not.toMatch(/one-time migration/)
+      expect(readSettings(userData).migrations).toEqual(['council-four-sites'])
+      await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(CLASSIC)
+      // leave the backend's default as every other block expects it
+      await page.evaluate((c) => window.triplex.setCouncil(c), { slots: Object.fromEntries(SLOTS.map((s) => [s, { model: `web:${s}`, effort: 'off' }])) })
+      await expect.poll(() => backend('/api/session/defaults', { headers: AUTH }).then((d) => (d.slot_config ? Object.keys(d.slot_config.slots) : null)), { timeout: 15_000 }).toEqual(SLOTS)
+    } finally {
+      if (testInfo.status !== testInfo.expectedStatus && logs.length) {
+        await testInfo.attach('electron-logs', { body: logs.join(''), contentType: 'text/plain' })
+      }
+      if (app) await app.close().catch(() => {})
+    }
   })
 })
