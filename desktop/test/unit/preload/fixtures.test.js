@@ -28,9 +28,10 @@ const S = DEFAULT_SELECTORS
 const EXPECTED = {
   'chatgpt-composer': { composer: 0, send: 0, reply: null, stop: null, session: 'ok', messages: 0, assistant: 0 },
   // 2026-10-10: chatgpt's `assistant` cascade gained the exchange-group-by-user-turn entry as entry 0; these
-  // hand-built fixtures carry the `data-message-author-role` layout, so they match entry 1
-  'chatgpt-streaming': { composer: 0, send: null, reply: 1, stop: 0, session: 'ok', messages: 2, assistant: 1 },
-  'chatgpt-done': { composer: 0, send: 0, reply: 1, stop: null, session: 'ok', messages: 2, assistant: 1 },
+  // hand-built fixtures carry the `data-message-author-role` layout, so they match entry 1 — entry 2 since 2026-10-18
+  // (the group-by-block entry went in front of it; neither group entry matches this layout)
+  'chatgpt-streaming': { composer: 0, send: null, reply: 2, stop: 0, session: 'ok', messages: 2, assistant: 1 },
+  'chatgpt-done': { composer: 0, send: 0, reply: 2, stop: null, session: 'ok', messages: 2, assistant: 1 },
   'chatgpt-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
   // 2026-09-27 (Part 0): two failed captures' own snapshots of the layout chatgpt.com ships with its effort
   // picker — no data-* turn attributes at all. `thinking`: 108 s into the first reply of a fresh chat — no
@@ -79,6 +80,22 @@ const EXPECTED = {
   // pool placed by transform). One container (entry 0), one user turn, two rows + two bubbles = 4 messages; settled,
   // so no stop; the composer is the measured TipTap editor (entry 0) and the voice button sits where submit would.
   'grok-oct11-fresh': { composer: 0, send: null, reply: 0, stop: null, session: 'ok', messages: 4, assistant: 1 },
+  // 2026-10-18: a plain Send's failed capture on chatgpt.com (`containers=0 anchor=0 stopNow=true`, a 9-minute reply in a
+  // 413 px pane), pruned to the transcript and the composer like the others (README) — the answer's MarkdownRoot cut to
+  // its first six blocks and its citation links dropped (they carried the chat's topic). ONE exchange group holding
+  // only the activity-header block and the answer block: the USER block is unmounted, so the `:has(user turn)` entry
+  // (now entry 1) matches nothing and the group-by-block entry (entry 0) is the one container; no user turn at all;
+  // still answering — the stop control is the plain "Stop" (entry 3), no send button, no done marker. The ProseMirror
+  // editor has no #prompt-textarea id (composer entry 1). One message: the group (the cascade is counted too).
+  'chatgpt-oct18-unmounted-user': { composer: 1, send: null, reply: 0, stop: 3, session: 'ok', messages: 1, assistant: 1 },
+  // 2026-10-18: the FIRST real gemini page (`snapshots/gemini-failed-1792365237747.html`: Argon still thinking at the
+  // 90 s first-row deadline, `reply_not_found`, `containers=0 anchor=1 stopNow=true`), pruned to the chat history and
+  // the input area (the side navigation — the user's conversation titles — and the account header are gone). The
+  // exchange is `pending-request.conversation-container` holding the `user-query`, a `thinking-dots-animation` and a
+  // `pending-response` with no text; no `model-response` yet. The composer (entry 0) and the stop control (entry 0)
+  // are the seeded entries, now measured; `reply` is entry 0, the one entry that names both reply elements. Two
+  // messages: the user turn and the pending row.
+  'gemini-oct18-pending': { composer: 0, send: null, reply: 0, stop: 0, session: 'ok', messages: 2, assistant: 1 },
   'claude-logged-out': { composer: null, send: null, reply: null, stop: null, session: 'logged_out', messages: 0, assistant: 0 },
   // grok's composer is the one measured fact (grok.com, signed in, 2026-09-16): the TipTap editor
   // must win over the hidden helper textarea, and the submit button exists only once text is in —
@@ -171,7 +188,8 @@ test('every state of every site has a fixture, and every fixture has an expectat
   // Every site has the four states; a site may add a NAMED extra state measured later (2026-09-27:
   // `chatgpt-thinking`, the effort-picker composer mid-thought). Every file on disk has an expectation.
   // 2026-10-17: `gemini-thinking`, hand-built — the expanded thinking panel the body cascade must skip
-  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status', 'grok-oct11-fresh', 'gemini-thinking']
+  // 2026-10-18: `chatgpt-oct18-unmounted-user` and `gemini-oct18-pending`, both pruned from the day's failure snapshots
+  const EXTRA = ['chatgpt-thinking', 'chatgpt-effort-streaming', 'chatgpt-virtualized', 'claude-virtualized', 'grok-virtualized', 'chatgpt-oct10-done', 'claude-oct10-status', 'grok-oct11-fresh', 'gemini-thinking', 'chatgpt-oct18-unmounted-user', 'gemini-oct18-pending']
   assert.deepEqual(names, [...wanted, ...EXTRA].sort())
   assert.deepEqual(Object.keys(EXPECTED).sort(), names)
   assert.ok(fs.existsSync(path.join(FIXTURES_DIR, 'README.md')), 'the fixtures must document what is measured and what is not')
@@ -366,6 +384,69 @@ test('claude-oct10-status: the redesign in its status phase — the `assistant-m
   assert.equal(adapter.findSendButton(), null, 'the send control swaps with the stop control')
   const settled = adapterFor('claude-virtualized')
   for (const c of settled.adapter.assistantContainers()) assert.equal(settled.adapter.findDone(c).selector, S.claude.done[0])
+})
+
+// ---- 2026-10-18: the day's failure snapshots (chatgpt `containers=0 anchor=0`, gemini `containers=0 anchor=1`) ----------
+
+test('chatgpt-oct18-unmounted-user: an exchange group whose USER block is unmounted — the old `:has(user turn)` entry matches nothing, the group-by-block entry (0) finds the one group; no user turn on the page; the body is the MarkdownRoot; still answering ("Stop", no done marker)', () => {
+  const { doc, adapter } = adapterFor('chatgpt-oct18-unmounted-user')
+  assert.equal(doc.querySelectorAll(S.chatgpt.assistant[1]).length, 0, 'the 10-10 entry: the user block it keys on is gone')
+  assert.equal(doc.querySelectorAll(S.chatgpt.assistant[0]).length, 1)
+  assert.equal(doc.querySelectorAll('div.group.flex.flex-col').length, 2, 'the bare triple also matches the answer wrapper; the block entry does not')
+  const [group] = adapter.assistantContainers()
+  assert.equal(adapter.countAssistant(), 1)
+  const blocks = group.querySelectorAll("[class^='block-']")
+  assert.equal(blocks.length, 2, 'the activity header and the answer — no user block')
+  assert.equal(blocks[0].querySelectorAll("[class*='group/activity-header']").length, 1)
+  assert.equal(adapter.userTurns().length, 0)
+  assert.equal(doc.querySelectorAll("[class~='group/user-message']").length, 0)
+  const body = adapter.replyBlocks(group)
+  assert.equal(body.length, 1)
+  assert.ok(body[0].matches("[class*='MarkdownRoot-']"))
+  assert.ok(adapter.replyText(group).startsWith('# …'))
+  assert.deepEqual([adapter.replyReading(group).bodyMatched, adapter.replyReading(group).heldUserTurn], [true, false])
+  assert.equal(adapter.health().matched.stop, "button[aria-label='Stop']")
+  assert.equal(adapter.findDone(group), null, 'still answering when the capture gave up')
+  assert.equal(adapter.findSendButton(), null)
+})
+
+test('the 2026-10-18 MESSAGE_SELECTORS entries keep the session rules quiet inside a reply: an error phrase or a sign-in control INSIDE the chatgpt group with no user block, or inside gemini\'s pending row, is reply text — never a banner, never a wall', () => {
+  const withInside = (name, anchor, html) => {
+    const src = fixture(name)
+    assert.ok(src.includes(anchor), `${name}: the anchor is in the fixture`)
+    const doc = parseHtml(src.replace(anchor, anchor + html))
+    return createAdapter({ document: doc, site: name.split('-')[0], selectors: DEFAULT_SELECTORS })
+  }
+  const CHATGPT_IN = '<div class="min-w-0 text-size-chat relative overflow-visible py-0">'
+  const GEMINI_IN = '<pending-response class="ng-star-inserted">'
+  for (const [name, anchor] of [['chatgpt-oct18-unmounted-user', CHATGPT_IN], ['gemini-oct18-pending', GEMINI_IN]]) {
+    const errorText = DEFAULT_SELECTORS[name.split('-')[0]].errorText[0]
+    assert.equal(withInside(name, anchor, `<div role="status">${errorText}</div>`).sessionState(), 'ok', `${name}: an error phrase inside the reply`)
+  }
+  assert.equal(withInside('chatgpt-oct18-unmounted-user', CHATGPT_IN, '<button data-testid="login-button">…</button>').sessionState(), 'ok')
+  assert.equal(withInside('gemini-oct18-pending', GEMINI_IN, '<a aria-label="Sign in">…</a>').sessionState(), 'ok')
+  // …and the same controls OUTSIDE any message are the walls and banners they always were (the checks above are not vacuous)
+  assert.equal(withInside('chatgpt-oct18-unmounted-user', '<body>', '<button data-testid="login-button">…</button>').sessionState(), 'logged_out')
+  assert.equal(withInside('gemini-oct18-pending', 'variable-context">', '<a aria-label="Sign in">…</a>').sessionState(), 'logged_out')
+  assert.equal(withInside('gemini-oct18-pending', 'variable-context">', `<div role="alert">${DEFAULT_SELECTORS.gemini.errorText[0]}</div>`).sessionState(), 'blocked')
+})
+
+test('gemini-oct18-pending: the first real gemini page — while the model thinks the reply row is `pending-response` (no `model-response` anywhere); entry 0 names it, the `user-query` anchors it, it holds no text; composer and stop are the seeded first entries', () => {
+  const { doc, adapter } = adapterFor('gemini-oct18-pending')
+  assert.equal(doc.querySelectorAll('model-response').length, 0)
+  assert.equal(doc.querySelectorAll('pending-request.conversation-container > pending-response').length, 1)
+  assert.equal(doc.querySelectorAll('thinking-dots-animation').length, 1)
+  const [row] = adapter.assistantContainers()
+  assert.equal(row.localName, 'pending-response')
+  const turns = adapter.userTurns()
+  assert.equal(turns.length, 1)
+  assert.equal(turns[0].localName, 'user-query')
+  assert.equal(adapter.containerForAnchor(turns[0]), row)
+  assert.equal(adapter.replyBlocks(row).length, 0)
+  assert.equal(adapter.replyText(row).trim(), '', 'the pending row holds no text: the stop control keeps the capture waiting')
+  assert.equal(adapter.health().matched.composer, S.gemini.composer[0])
+  assert.equal(adapter.health().matched.stop, "button[aria-label='Stop response']")
+  assert.equal(doc.querySelectorAll("[aria-label^='Google Account:']").length, 0, 'the account header was pruned away')
 })
 
 

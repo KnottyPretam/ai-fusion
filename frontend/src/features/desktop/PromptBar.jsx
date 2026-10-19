@@ -24,7 +24,9 @@
 //
 // Per-slot result line: `panes.lastSend[slot]`, recorded by the slice from the send stream's
 // slot_done / slot_error events (`sent ✓ captured` | `sent ✓ not captured` | `✗ <code>`, see
-// slice.js); "…" while this bar's send is in flight and the slot has no outcome yet. The tabs-mode
+// slice.js); "…" while this bar's send is in flight and the slot has no outcome yet. A "still
+// answering" line is completed by the automatic Read again (2026-10-18, ./useAutoReread.js):
+// `… reading the finished reply`, then `read again ✓ captured` or `✗ read again: <code>`. The tabs-mode
 // auto-reveal of a `logged_out | challenge | blocked` slot happens in the reducer.
 //
 // `bridge-banner` mirrors `triplex.onBridge` (`panes/bridge`): shown until Electron reports its
@@ -110,20 +112,31 @@ import { APP_NAME } from '../../branding.js'
  * A capture that gave up while the site was STILL ANSWERING (2026-10-15): the adapter's diag line says its
  * stop control was up at the last sample. A MIRROR of features/analyze/slice.js `STILL_ANSWERING_RE`
  * (features never import each other): keep the two in step. Not a timeout of the model — the app stopped
- * waiting, and the reply can be read again from the Analyze tab.
+ * waiting, and since 2026-10-18 the reply is read again automatically once the site has finished
+ * (./useAutoReread.js; Read again on the Analyze tab does it by hand).
  */
 export const STILL_ANSWERING_RE = /\bstopNow=true\b/
 const stillAnswering = (r) => !r.ok && typeof r.message === 'string' && STILL_ANSWERING_RE.test(r.message)
 
-/** 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '… still answering — stopped waiting' | '✗ send_not_found' | '' */
+/**
+ * 'sent ✓ captured · 1.2 s' | 'sent ✓ not captured' | '… still answering — read when it finishes' | '✗ send_not_found' | ''
+ * — and the automatic Read again's own lines (2026-10-18, `reread` set by ./autoReread.js):
+ * '… reading the finished reply' | 'read again ✓ captured · 4.1 s' | '✗ read again: reply_not_found'
+ */
 export function formatResult(r) {
   if (!r || typeof r !== 'object') return ''
+  if (r.reread === 'running') return '… reading the finished reply'
+  if (r.reread === 'done') {
+    const seconds = (Number(r.ms) || 0) / 1000
+    return `read again ✓ captured${seconds > 0 ? ` · ${seconds.toFixed(1)} s` : ''}`
+  }
+  if (r.reread === 'failed') return `✗ read again: ${r.code || 'error'}`
   if (r.ok) {
     const seconds = (Number(r.ms) || 0) / 1000
     const tail = seconds > 0 ? ` · ${seconds.toFixed(1)} s` : ''
     return `${r.code === NOT_CAPTURED ? 'sent ✓ not captured' : 'sent ✓ captured'}${tail}`
   }
-  if (stillAnswering(r)) return '… still answering — stopped waiting'
+  if (stillAnswering(r)) return '… still answering — read when it finishes'
   return `✗ ${r.code || 'error'}`
 }
 
@@ -131,7 +144,10 @@ export function formatResult(r) {
 export function resultTitle(r) {
   if (!r || typeof r !== 'object') return ''
   const parts = []
-  if (stillAnswering(r)) parts.push(`${APP_NAME} stopped waiting while the site was still answering; the reply is in the pane. Read it again from the Analyze tab once it has finished.`)
+  if (r.reread === 'running') parts.push(`The site has finished; ${APP_NAME} is reading its reply out of the pane.`)
+  if (r.reread === 'done') parts.push(`The site had finished; ${APP_NAME} read its reply out of the pane and completed the Send.`)
+  if (r.reread === 'failed') parts.push(`The site had finished, but reading its reply out of the pane failed. Try Read again on the Analyze tab.`)
+  if (stillAnswering(r) && !r.reread) parts.push(`${APP_NAME} stopped waiting while the site was still answering; the reply is in the pane. It is read again automatically once the site has finished, while that conversation is open (Read again on the Analyze tab does it by hand).`)
   if (r.message) parts.push(String(r.message))
   if (r.sendSelector) parts.push(`send: ${r.sendSelector}`)
   if (r.url) parts.push(`url: ${r.url}`)

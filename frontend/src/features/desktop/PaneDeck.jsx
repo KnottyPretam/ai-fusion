@@ -18,7 +18,9 @@
 // what that turn captures. `pane-<slot>-phase` shows the turn phase main reports over `onTurn`.
 // Anything that navigates a view — new-chat-all, the per-pane Reload / New chat buttons — is
 // ignored/disabled while `panes.sending` is true (the same rule as PromptBar's "New chat
-// everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`. With an
+// everywhere"): a navigation mid-send fails every in-flight insert with `adapter_gone`. Since
+// 2026-10-18 the same holds while a `reread` stream runs (the automatic Read again reading a pane:
+// a navigation would abandon the read, a Capture flip would change what it reads) — `locked`. With an
 // `onNewChatAll` prop (DesktopShell passes the shared ./chats.js handler) the shortcut is a real
 // "New chat everywhere" (new conversation + openChats); without it, Stage 1's newChat(all).
 // Theme: `deck-theme` cycles light → dark → system → light. main's settings.json is authoritative
@@ -171,6 +173,10 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const panes = useSlice('panes') || initialPanes()
   const slotConfig = useSlice('slotConfig')
   const { mode, active, health, lastSend, zoom, sending, capture, turn } = panes
+  const streams = useSlice('streams') || {}
+  const rereading = !!(streams.reread && streams.reread.status === 'streaming')
+  const locked = sending || rereading
+  const lockedTitle = sending ? 'a send is in flight' : 'a reply is being read again'
   const analyst = panes.analyst && typeof panes.analyst === 'object' ? panes.analyst : initialPanes().analyst
   const analystVisible = !!analyst.visible
   // The council on screen: the open conversation's, else main's default, else every site.
@@ -182,8 +188,8 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const sitePanes = council.filter(isSitePane)
   const viewports = useRef({})
   const [theme, cycleTheme] = useTheme(api, info)
-  const latest = useRef({ mode, active, sending, onNewChatAll, council, sitePanes })
-  latest.current = { mode, active, sending, onNewChatAll, council, sitePanes }
+  const latest = useRef({ mode, active, sending, locked, onNewChatAll, council, sitePanes })
+  latest.current = { mode, active, sending, locked, onNewChatAll, council, sitePanes }
   const stepper = useAgentStepper({ api, chats })
 
   useLayoutReporter(api, mode, active, viewports, analystVisible, `${councilKey}|${sitePanes.join(',')}`)
@@ -281,7 +287,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
       if (name === 'toggle-mode') return dispatch({ type: 'panes/mode', mode: latest.current.mode === 'tabs' ? 'split' : 'tabs' })
       if (name === 'focus-prompt') return promptRef?.current?.focus?.()
       if (name === 'new-chat-all') {
-        if (latest.current.sending) return undefined
+        if (latest.current.locked) return undefined
         const handler = latest.current.onNewChatAll
         return typeof handler === 'function' ? settle(handler()) : settle(api?.newChat?.([...latest.current.sitePanes]))
       }
@@ -307,7 +313,7 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
   const noticeOpen = !allCaptureTouched(touched, sitePanes)
 
   const toggleCapture = (slot, on) => {
-    if (latest.current.sending) return // the switch is disabled during a send; guard the handler too
+    if (latest.current.locked) return // the switch is disabled during a send or a re-read; guard the handler too
     dispatch({ type: 'panes/capture', slot, on })
     setTouched((t) => (t[slot] ? t : { ...t, [slot]: true }))
     Promise.resolve(api?.setCapture?.(slot, on)).catch(() => dispatch({ type: 'panes/capture', slot, on: !on }))
@@ -440,10 +446,10 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
                     {healthText(h)}
                   </span>
                   <span className={css.actions}>
-                    <button type="button" data-testid={`pane-${slot}-reload`} disabled={sending} title={sending ? 'a send is in flight' : `Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
+                    <button type="button" data-testid={`pane-${slot}-reload`} disabled={locked} title={locked ? lockedTitle : `Reload ${SLOT_LABELS[slot]} (Ctrl+R on the active pane)`} onClick={() => settle(api?.reload?.(slot))}>
                       Reload
                     </button>
-                    <button type="button" data-testid={`pane-${slot}-newchat`} disabled={sending} title={sending ? 'a send is in flight' : `Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
+                    <button type="button" data-testid={`pane-${slot}-newchat`} disabled={locked} title={locked ? lockedTitle : `Open a new ${SLOT_LABELS[slot]} chat`} onClick={() => settle(api?.newChat?.([slot]))}>
                       New chat
                     </button>
                     <button type="button" data-testid={`pane-${slot}-open`} title="Open this page in the system browser" onClick={() => settle(api?.openExternal?.(slot))}>
@@ -468,8 +474,8 @@ export default function PaneDeck({ api = desktopApi(), info = null, version = nu
                   </span>
                 </div>
                 <div className={css.captureRow}>
-                  <label className={css.capture} title={sending ? 'a send is in flight' : CAPTURE_TITLE}>
-                    <input type="checkbox" data-testid={`pane-${slot}-capture`} checked={!!capture[slot]} disabled={sending} onChange={(e) => toggleCapture(slot, e.target.checked)} />
+                  <label className={css.capture} title={locked ? lockedTitle : CAPTURE_TITLE}>
+                    <input type="checkbox" data-testid={`pane-${slot}-capture`} checked={!!capture[slot]} disabled={locked} onChange={(e) => toggleCapture(slot, e.target.checked)} />
                     <span>{CAPTURE_LABEL}</span>
                   </label>
                   <span data-testid={`pane-${slot}-phase`} className={css.phase} data-phase={phase || 'none'} title={phase ? `turn phase: ${phase}` : 'no turn reported for this pane yet'}>

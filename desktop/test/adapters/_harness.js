@@ -31,11 +31,17 @@ export const FAKE_ASSISTANT = Object.freeze({
   chatgpt: "[data-message-author-role='assistant']",
   claude: DEFAULT_SELECTORS.claude.assistant[0],
   grok: DEFAULT_SELECTORS.grok.assistant[0],
-  gemini: DEFAULT_SELECTORS.gemini.assistant[0],
+  // 2026-10-18: gemini's entry 0 is the LIST 'model-response, pending-response', and a list cannot prefix a descendant
+  // selector (`${list} code` reads "model-response, or a code inside pending-response") — the specs name the reply element
+  gemini: 'model-response',
 })
+/** The selectors a cascade entry names: the entry itself, or each member of a selector LIST. */
+const members = (entry) => entry.split(',').map((s) => s.trim())
 for (const site of SLOTS) {
-  if (!DEFAULT_SELECTORS[site].assistant.includes(FAKE_ASSISTANT[site])) throw new Error(`_harness: FAKE_ASSISTANT.${site} is not in the site's assistant cascade`)
+  if (!DEFAULT_SELECTORS[site].assistant.some((e) => members(e).includes(FAKE_ASSISTANT[site]))) throw new Error(`_harness: FAKE_ASSISTANT.${site} is not in the site's assistant cascade`)
 }
+/** The cascade ENTRY that names FAKE_ASSISTANT[site] — what `health().matched.reply` reports (2026-10-18: a list on gemini). */
+export const FAKE_ASSISTANT_ENTRY = Object.freeze(Object.fromEntries(SLOTS.map((site) => [site, DEFAULT_SELECTORS[site].assistant.find((e) => members(e).includes(FAKE_ASSISTANT[site]))])))
 
 export const CONFIRMED_BY = ['stop_button', 'composer_cleared', 'assistant_count']
 
@@ -127,7 +133,8 @@ export async function open(page, opts = {}) {
   const q = new URLSearchParams({ site })
   // 2026-10-11: chatgptLayout (`group` = the exchange-group layout) and askUser (the ask-the-user widget turn), see exchange.spec.js
   // 2026-10-17: untrusted (`ignore` | `stall`: how the look-alike treats an UNTRUSTED submit), see trusted.spec.js
-  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn', 'chatgptLayout', 'askUser', 'untrusted']
+  // 2026-10-18: dropUserMs (the group layout's user block unmounted N ms into the reply), see exchange.spec.js
+  const KEYS = ['state', 'thread', 'sendDelayMs', 'composer', 'replyMs', 'reply', 'nostop', 'nodone', 'blockAfterMs', 'doneLagMs', 'twoTurns', 'remountMs', 'placeholderMs', 'webUrlMs', 'thinking', 'codeCopyDone', 'lullMs', 'stopBlinkMs', 'replyChars', 'lulls', 'thinkMs', 'keepLast', 'order', 'assistantAtSubmit', 'userMarkdown', 'echoTurn', 'chatgptLayout', 'askUser', 'untrusted', 'dropUserMs']
   for (const key of KEYS) {
     if (query[key] !== undefined && query[key] !== null && query[key] !== false && query[key] !== '') q.set(key, String(query[key]))
   }
@@ -179,6 +186,10 @@ export const replyState = (page) =>
     chatgptLayout: window.__fake.chatgptLayout,
     askUser: window.__fake.askUser,
     askedAt: window.__fake.askedAt,
+    // 2026-10-18: when ?dropUserMs unmounted the group's user block; the life of gemini's pending row under ?thinkMs
+    userDroppedAt: window.__fake.userDroppedAt,
+    pendingAt: window.__fake.pendingAt,
+    pendingGoneAt: window.__fake.pendingGoneAt,
   }))
 export const ipcState = (page) => page.evaluate(() => ({ results: window.__triplexFakeIpc.results, healths: window.__triplexFakeIpc.healths, invoked: window.__triplexFakeIpc.invoked }))
 export const outerHtml = (page) => page.evaluate(() => document.documentElement.outerHTML)

@@ -631,3 +631,157 @@ test('re-read in a chat that does not hold the prompt (another conversation\'s, 
   assert.equal(hazard.error, null, 'the fallback rule (what requireAnchor switches off) would have answered…')
   assert.equal(hazard.value.text, OTHER_REPLY, '…with another conversation\'s reply')
 })
+
+// ---- 2026-10-18: a prompt the site UNMOUNTED (chatgpt), and a reply row that is only PENDING (gemini) ----------------
+//
+// chatgpt.com, measured from that day's failure snapshot (fixture chatgpt-oct18-unmounted-user): a 9-minute reply in a
+// 413 px pane had scrolled the prompt far out of view and the exchange group held only its activity-header and answer
+// blocks — the `:has(user turn)` entry matched nothing, `containers=0 anchor=0`. gemini.google.com (fixture
+// gemini-oct18-pending): while Argon thinks the reply row is `pending-response`, and a `model-response` only cascade found
+// no container before the 90 s first-row deadline.
+
+/** chatgpt's exchange group as the 10-18 page held it: the activity header and the answer, NO user block. */
+const chatgptGroupNoUser = (answer, { done = true } = {}) =>
+  `<div class="group flex flex-col"><div class="flex flex-col gap-3"><div class="block-x"><div class="min-w-0 text-size-chat relative overflow-visible py-0"><div class="group/activity-header relative inline-flex"><span>Thought for 8m 41s</span></div></div></div><div class="block-x"><div><h4 class="sr-only">ChatGPT said:</h4><div><div class="group flex min-w-0 flex-col"><div class="MarkdownRoot-x"><p>${answer}</p></div></div></div></div></div></div>${done ? '<div class="turn-action-controls"><button aria-label="Rate response">Rate</button></div>' : ''}</div>`
+/** The user block chatgpt mounts back once the top of the group is scrolled into view. */
+const chatgptUserBlock = (prompt) =>
+  `<div class="block-x"><div class="group/user-message flex flex-col items-end gap-2"><div class="w-full"><div class="group/user-message flex w-full flex-col"><div class="text-size-chat whitespace-pre-wrap">${prompt}</div></div></div></div></div>`
+
+test('chatgpt (2026-10-18): the exchange group RE-RENDERED without its user block mid-reply is still this turn\'s reply and is captured; the 10-10 cascade (the `:has(user turn)` entry first) lost it for good and timed out with containers=0', async () => {
+  const PROMPT = 'Explain how the gyroscope range register of the BMI088 works and how I would set it'
+  const ANSWER = 'GYRO_RANGE at 0x0F selects 2000, 1000, 500, 250 or 125 deg/s.'
+  const run = async (extra) => {
+    const s = setup(CHATGPT_PAGE, 'chatgpt', extra)
+    await s.adapter.submit(0)
+    const thinking = mount(s.doc, s.thread, chatgptGroup(PROMPT, '', { done: false }))
+    const state = settled(s.adapter.observe({ baselineCount: 0, timeoutMs: 9000, firstTokenMs: 3000, quietMs: 1000, settleMs: 400, text: PROMPT }))
+    await s.clock.advance(2000)
+    assert.equal(state.done, false, 'thinking: the stop control is up')
+    thinking.remove() // React re-renders the group; the prompt has scrolled away, so its block does not come back
+    mount(s.doc, s.thread, chatgptGroupNoUser(ANSWER))
+    await s.clock.advance(1000)
+    s.stop.remove()
+    await s.clock.advance(8000)
+    return state
+  }
+  const fixed = await run({})
+  assert.equal(fixed.error, null, fixed.error && fixed.error.message)
+  assert.deepEqual([fixed.value.text, fixed.value.doneBy], [ANSWER, 'done_selector'])
+  const old = await run({ chatgpt: { assistant: S.chatgpt.assistant.slice(1) } })
+  assert.equal(old.error && old.error.code, 'timeout')
+  assert.match(old.error.message, /\[containers=0 followed=- connected=false anchor=0 /)
+})
+
+test('re-read (2026-10-18), the prompt UNMOUNTED by the virtualizer: the newest group is scrolled into view at its top (once), the remounted user block anchors it, and the finished answer is read — diag-free success', async () => {
+  const PROMPT = 'Explain how the gyroscope range register of the BMI088 works and how I would set it'
+  const ANSWER = 'GYRO_RANGE at 0x0F selects 2000, 1000, 500, 250 or 125 deg/s.'
+  const { doc, clock, adapter, thread, stop } = setup(CHATGPT_PAGE, 'chatgpt')
+  stop.remove() // the reply finished minutes ago
+  mount(doc, thread, chatgptGroup('an earlier prompt about the accelerometer', 'An earlier answer.'))
+  const group = mount(doc, thread, chatgptGroupNoUser(ANSWER, { done: false })) // the action bar scrolled away too
+  const calls = []
+  group.scrollIntoView = (opts) => {
+    calls.push(opts)
+    const blocks = group.querySelector('div.flex.flex-col.gap-3')
+    mount(doc, blocks, chatgptUserBlock(PROMPT), blocks.childNodes[0])
+  }
+  const state = settled(adapter.observe({ timeoutMs: 60000, firstTokenMs: 30000, quietMs: 800, settleMs: 200, text: PROMPT, requireAnchor: true }))
+  await clock.advance(4000)
+  assert.equal(state.error, null, state.error && state.error.message)
+  assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'quiet'])
+  assert.deepEqual(calls, [{ block: 'start', inline: 'nearest' }], 'one scroll: the anchor was there on the next sample')
+})
+
+test('re-read (2026-10-18), the prompt unmounted and NEVER remounted (a chat without it): at most REVEAL_MAX scrolls, REVEAL_GAP_MS apart, then still reply_not_found — never the unanchored reply; `reveal=` joins the diag only when it scrolled', async () => {
+  const PROMPT = 'Explain how the gyroscope range register of the BMI088 works and how I would set it'
+  const { doc, clock, adapter, thread, stop } = setup(CHATGPT_PAGE, 'chatgpt')
+  stop.remove()
+  const group = mount(doc, thread, chatgptGroupNoUser('Somebody else\'s answer.'))
+  const at = []
+  group.scrollIntoView = () => at.push(clock.now())
+  const state = settled(adapter.observe({ timeoutMs: 60000, firstTokenMs: 6000, quietMs: 800, settleMs: 200, text: PROMPT, requireAnchor: true }))
+  await clock.advance(6500)
+  assert.equal(state.error && state.error.code, 'reply_not_found')
+  assert.match(state.error.message, / anchor=0 /)
+  assert.match(state.error.message, / reveal=3\]$/)
+  assert.equal(at.length, 3)
+  assert.ok(at[1] - at[0] >= 1500 && at[2] - at[1] >= 1500, `the scrolls were ${at.join(', ')} ms`)
+  // the same page in a capture (no requireAnchor): the fallback rule answers and nothing is scrolled
+  const plain = setup(CHATGPT_PAGE, 'chatgpt')
+  plain.stop.remove()
+  const other = mount(plain.doc, plain.thread, chatgptGroupNoUser('A reply.'))
+  other.scrollIntoView = () => assert.fail('only a re-read scrolls the pane')
+  const captured = settled(plain.adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 3000, quietMs: 800, settleMs: 200, text: PROMPT }))
+  await plain.clock.advance(3000)
+  assert.equal(captured.error, null, captured.error && captured.error.message)
+  assert.equal(captured.value.text, 'A reply.')
+})
+
+const GEMINI_PAGE = `<html><head><title>Google Gemini</title></head><body><chat-app><main class="thread"></main><form><input-area-v2><rich-textarea><div class="ql-editor" contenteditable="true" role="textbox" aria-label="Enter a prompt for Gemini"><p></p></div></rich-textarea><button aria-label="Stop response">Stop</button></input-area-v2></form></chat-app></body></html>`
+/** gemini's exchange while the model thinks (measured 2026-10-18): no `model-response`, a text-free `pending-response`. */
+const geminiPending = (prompt) =>
+  `<pending-request class="conversation-container"><user-query><span class="user-query-container"><div class="query-text"><h5 class="cdk-visually-hidden">You said</h5><p class="query-text-line">${prompt}</p></div></span></user-query><thinking-dots-animation><div class="thinking-dots-animation"></div></thinking-dots-animation><pending-response><response-container><div class="response-container"><div class="response-container-content"></div></div></response-container></pending-response></pending-request>`
+/** …and once the answer comes (the hand-built shape of gemini-done): the exchange box with the reply turn. */
+const geminiExchange = (prompt, answer, { done = true } = {}) =>
+  `<div class="conversation-container"><user-query><span class="user-query-container"><div class="query-text"><h5 class="cdk-visually-hidden">You said</h5><p class="query-text-line">${prompt}</p></div></span></user-query><model-response><message-content><div class="markdown markdown-main-panel"><p>${answer}</p></div></message-content>${done ? '<message-actions><button aria-label="Good response">up</button></message-actions>' : ''}</model-response></div>`
+
+test('gemini (2026-10-18): Argon THINKING past the first-row deadline — the pending row is a container, so the capture waits with the stop control up instead of `reply_not_found`, and follows `model-response` when the answer replaces the pending exchange', async () => {
+  const PROMPT = 'Explain how the gyroscope range register of the BMI088 works and how I would set it'
+  const ANSWER = 'GYRO_RANGE at 0x0F selects the range.'
+  const run = async (extra) => {
+    const s = setup(GEMINI_PAGE, 'gemini', extra)
+    const pending = mount(s.doc, s.thread, geminiPending(PROMPT))
+    const state = settled(s.adapter.observe({ baselineCount: 0, timeoutMs: 60000, firstTokenMs: 1000, quietMs: 1000, settleMs: 400, text: PROMPT }))
+    await s.clock.advance(3000) // three times the first-row deadline
+    if (state.done) return state
+    pending.remove()
+    mount(s.doc, s.thread, geminiExchange(PROMPT, ANSWER))
+    await s.clock.advance(500)
+    s.stop.remove()
+    await s.clock.advance(6000) // gemini's 5 s stop-gone grace does not apply: the thumbs-up is the done marker
+    return state
+  }
+  const fixed = await run({})
+  assert.equal(fixed.error, null, fixed.error && fixed.error.message)
+  assert.deepEqual([fixed.value.text, fixed.value.doneBy], [ANSWER, 'done_selector'])
+  const old = await run({ gemini: { assistant: ['model-response'] } })
+  assert.equal(old.error && old.error.code, 'reply_not_found', 'the 10-17 cascade gave up on a reply that was still coming')
+  assert.match(old.error.message, /\[containers=0 followed=- connected=false anchor=1 .* stopNow=true /)
+})
+
+test('gemini (2026-10-18): why the two reply elements share ONE cascade entry — on a chat with an earlier answer, a `model-response` entry of its own wins the first-entry cascade and the new turn\'s pending row is never a container', () => {
+  const doc = parseHtml(GEMINI_PAGE)
+  const thread = doc.querySelector('main.thread')
+  mount(doc, thread, geminiExchange('an earlier question about the accelerometer', 'An earlier answer.'))
+  mount(doc, thread, geminiPending('the new question about the gyroscope'))
+  const one = createAdapter({ document: doc, site: 'gemini', selectors: DEFAULT_SELECTORS })
+  assert.deepEqual(one.assistantContainers().map((c) => c.localName), ['model-response', 'pending-response'])
+  const turns = one.userTurns()
+  assert.equal(one.containerForAnchor(turns[1]).localName, 'pending-response')
+  const split = createAdapter({ document: doc, site: 'gemini', selectors: mergeSelectors(DEFAULT_SELECTORS, { gemini: { assistant: ['model-response', 'pending-response'] } }).merged })
+  assert.deepEqual(split.assistantContainers().map((c) => c.localName), ['model-response'], 'the pending row is hidden behind the earlier reply')
+  assert.equal(split.containerForAnchor(split.userTurns()[1]), null)
+})
+
+test('re-read (2026-10-18 review): once the remounted prompt has anchored the group, the site unmounting it AGAIN brings no second scroll — the followed group is read to the end; a second scroll would only yank the pane the user is reading', async () => {
+  const PROMPT = 'Explain how the gyroscope range register of the BMI088 works and how I would set it'
+  const ANSWER = 'GYRO_RANGE at 0x0F selects 2000, 1000, 500, 250 or 125 deg/s.'
+  const { doc, clock, adapter, thread, stop } = setup(CHATGPT_PAGE, 'chatgpt')
+  stop.remove()
+  const group = mount(doc, thread, chatgptGroupNoUser(ANSWER, { done: false }))
+  const blocks = group.querySelector('div.flex.flex-col.gap-3')
+  let userBlock = null
+  const calls = []
+  group.scrollIntoView = (opts) => {
+    calls.push(opts)
+    userBlock = mount(doc, blocks, chatgptUserBlock(PROMPT), blocks.childNodes[0])
+  }
+  const state = settled(adapter.observe({ timeoutMs: 60000, firstTokenMs: 30000, quietMs: 2500, settleMs: 1200, text: PROMPT, requireAnchor: true }))
+  await clock.advance(600) // the scroll, the remount, the anchored pick
+  assert.equal(calls.length, 1)
+  userBlock.remove() // chatgpt's virtualizer drops the prompt again (the user scrolled down to read)
+  await clock.advance(6000)
+  assert.equal(state.error, null, state.error && state.error.message)
+  assert.deepEqual([state.value.text, state.value.doneBy], [ANSWER, 'quiet'])
+  assert.equal(calls.length, 1, 'no second scroll while the group is followed')
+})

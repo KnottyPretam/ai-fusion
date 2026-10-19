@@ -75,6 +75,10 @@ export default function AnalyzePane() {
   // Analyze compares its artifact — the restated question, the knowledge graph and the reduced replies —
   // instead of the whole answers. Read by slice KEY, so nothing imports across features.
   const refactor = useSlice('refactor') || refactorInitial()
+  // The desktop's pane state, by KEY (2026-10-18): only a still-answering slot whose capture switch is on is
+  // read again automatically (features/desktop/autoReread.js), so only that one is promised it. Absent in the
+  // web app, where nothing is rereadable anyway.
+  const panes = useSlice('panes')
 
   const send = latestSendTurn(conversation)
   const complete = isSendTurnComplete(send)
@@ -145,8 +149,9 @@ export default function AnalyzePane() {
   // Read again (2026-10-15): when a failed slot is a web pane whose reply can be read again
   // (`rereadableSlots`), "cannot be analyzed — Send again" is no longer true, and a capture that gave up
   // with the site's stop control still up is not a failure of the model at all: it was still answering
-  // when the app stopped waiting. That branch says so and points at the Read-again row; every other turn
-  // keeps the wording above, word for word.
+  // when the app stopped waiting. That branch says so and points at the Read-again row (and, since
+  // 2026-10-18, says such a slot is read again automatically once the site has finished); every other
+  // turn keeps the wording above, word for word.
   const errs = (send && send.errors) || {}
   const failed = Object.keys(errs)
   const notCaptured = failed.filter((s) => String(errs[s] || '').startsWith(NOT_CAPTURED_MESSAGE_PREFIX))
@@ -170,7 +175,14 @@ export default function AnalyzePane() {
     if (notCaptured.length) said.push(`capture was off for ${list(notCaptured)}, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}`)
     const capture = notCaptured.some((s) => rereadable.includes(s)) ? ` Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} first.` : ''
     const rest = failed.filter((s) => !rereadable.includes(s))
-    hint = `${said.join('; ')}.${capture} Read ${list(rereadable)} again below${still.length ? ' once the site has finished' : ''}${rest.length ? `; ${list(rest)} cannot be read again — Send again for ${rest.length === 1 ? 'it' : 'them'}` : ''}.`
+    // 2026-10-18: a slot that was still answering is read again BY ITSELF once its site has finished, while
+    // this conversation is open (features/desktop/useAutoReread.js); the button stays the manual path.
+    const auto = rereadable.filter((s) => still.includes(s) && !!(panes && panes.capture && panes.capture[s] === true))
+    const manual = rereadable.filter((s) => !auto.includes(s))
+    const how = []
+    if (auto.length) how.push(`${APP_NAME} reads ${list(auto)} again by itself once the site has finished, while this conversation is open (or use the button below)`)
+    if (manual.length) how.push(`Read ${list(manual)} again below`)
+    hint = `${said.join('; ')}.${capture} ${how.join('; ')}${rest.length ? `; ${list(rest)} cannot be read again — Send again for ${rest.length === 1 ? 'it' : 'them'}` : ''}.`
   } else if (notCaptured.length && !errored.length) {
     hint = `${list(notCaptured)} replied on screen but capture ${were(notCaptured)} off, so ${APP_NAME} never read ${notCaptured.length === 1 ? 'it' : 'them'}. Turn Capture on in ${notCaptured.length === 1 ? 'that pane header' : 'those pane headers'} and Send again: capture applies to the next Send, not this one.`
   } else if (errored.length) {

@@ -121,6 +121,23 @@ describe('panes slice: shape and reducer', () => {
     expect(done.lastSend.grok).toBe(s.lastSend.grok)
   })
 
+  test('rereadResult (2026-10-18) writes ONLY lastSend[slot]: a send in flight stays in flight', () => {
+    const started = panesReducer(initialPanes(), { type: 'panes/sendStart', targets: ['claude'] })
+    expect(started.sending).toBe(true)
+    const line = { ok: false, reread: 'running' }
+    const s = panesReducer(started, { type: 'panes/rereadResult', slot: 'chatgpt', result: line })
+    expect(s.sending).toBe(true)
+    expect(s.lastSend.chatgpt).toBe(line)
+    // idle: sending stays false
+    const idle = panesReducer(initialPanes(), { type: 'panes/rereadResult', slot: 'chatgpt', result: line })
+    expect(idle.sending).toBe(false)
+    expect(idle.lastSend).toEqual({ chatgpt: line })
+    // the same object again, an unknown slot, or no result: unchanged identity
+    expect(panesReducer(s, { type: 'panes/rereadResult', slot: 'chatgpt', result: line })).toBe(s)
+    expect(panesReducer(s, { type: 'panes/rereadResult', slot: 'bing', result: line })).toBe(s)
+    expect(panesReducer(s, { type: 'panes/rereadResult', slot: 'chatgpt', result: null })).toBe(s)
+  })
+
   test('health / zoom / target updates keep the untouched per-slot maps and keys by identity', () => {
     const s = initialPanes()
     const h = health()

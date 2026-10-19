@@ -489,6 +489,27 @@ blank read is `empty_reply` and never persisted. The turn's `usage` is not chang
 
 **Wording.** A capture that gave up with the stop control still up is "still answering when the app
 stopped waiting", never "timed out" or "no reply came back": the prompt bar shows `… still answering —
-stopped waiting`, and the Analyze pane's hint says so and offers **Read <slot> again** for every slot
-`rereadableSlots` admits (the renderer's mirror of the pre-checks above). A turn with no re-readable
-slot keeps the old wording word for word.
+read when it finishes` (2026-10-18; it was `… still answering — stopped waiting`), and the Analyze pane's
+hint says so and offers **Read <slot> again** for every slot `rereadableSlots` admits (the renderer's
+mirror of the pre-checks above). A turn with no re-readable slot keeps the old wording word for word.
+
+**Read again by itself (2026-10-18).** The desktop renderer reads a still-answering slot again WITHOUT a
+click (`features/desktop/autoReread.js` + `useAutoReread.js`, called once from the always-mounted shell;
+docs/desktop-contract.md §2 `chatOf`, §7): a slot of the OPEN conversation's latest Send that
+`rereadableSlots` admits and whose persisted error says the site was still answering (`stopNow=true`),
+once — for `AUTO_REREAD_SETTLE_MS` (3 s) — the bridge is connected, no stream runs, no send is in flight,
+and that site's pane reports its stop control gone (`health.stop === false`), `session:'ok'`, its capture
+switch on, and its page being THIS conversation's recorded chat (`health.chatOf`, stamped by main — so it
+never reads, or navigates, a chat the user moved the pane to). It is the same POST as the button. It is
+tried once per conversation + turn + slot per app session; a transient refusal (`bridge_unavailable`,
+`bridge_disconnected`, `bridge_no_ack`, `busy`, `view_busy`, `adapter_gone`, `navigation`, `cancelled`, a
+failed POST) is tried ONE more time; nothing loops. While it runs it locks what any stream locks (the
+composer, Send, Pre-parse, New chat, the sidebar, each pane's Reload / New chat / Capture). The prompt-bar
+line follows it only while that line is still this Send's still-answering line (or the line this read
+last wrote): `… reading the finished reply`, then `read again ✓ captured · N s` or `✗ read again:
+<code>` (`panes/rereadResult`, which never touches `sending`). The Analyze hint says such a slot is read
+again by itself once the site has finished, while that conversation is open — unless its capture switch
+is off, when it offers the button alone; the button stays the manual path. A re-read whose page holds reply
+rows but no user turn carrying the prompt first scrolls the newest reply row into view at its top — at most
+three times, 1.5 s apart, never while a live row is being followed — because the site may only have
+unmounted the prompt (chatgpt.com does under a long answer); the anchoring rule is unchanged.

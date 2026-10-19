@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '@playwright/test'
-import { DEFAULT_SELECTORS, FAKE_ASSISTANT, SLOTS, SNAPSHOT_KEEP_ATTRS, TRICKY, open, request, fake, replyState, ipcState, withOverride } from './_harness.js'
+import { DEFAULT_SELECTORS, FAKE_ASSISTANT, FAKE_ASSISTANT_ENTRY, SLOTS, SNAPSHOT_KEEP_ATTRS, TRICKY, open, request, fake, replyState, ipcState, withOverride } from './_harness.js'
 import { lintText } from '../unit/preload/_fixture-lint.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -74,7 +74,7 @@ for (const site of SLOTS) {
       await expect(page.locator(STOP[site])).toHaveCount(1) // streaming: the stop button holds the send slot
       const streaming = await request(page, { op: 'health' })
       // the entry the fake's reply row is built around (2026-10-10: chatgpt's first entry is the exchange group the fake does not render)
-      expect(streaming.health).toMatchObject({ stop: true, reply: true, session: 'ok', matched: { stop: sel.stop[0], reply: FAKE_ASSISTANT[site] } })
+      expect(streaming.health).toMatchObject({ stop: true, reply: true, session: 'ok', matched: { stop: sel.stop[0], reply: FAKE_ASSISTANT_ENTRY[site] } })
       const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount })
       expectObserved(res, 'Echo: ' + TRICKY, DONE_BY[site])
       const r = await replyState(page)
@@ -84,7 +84,7 @@ for (const site of SLOTS) {
       if (site === 'chatgpt') await expect(page.locator(CHATGPT_DONE)).toHaveCount(1)
       expect((await request(page, { op: 'ready', timeoutMs: 2000 })).ok).toBe(true)
       const after = await request(page, { op: 'health' })
-      expect(after.health).toMatchObject({ reply: true, stop: false, session: 'ok', matched: { reply: FAKE_ASSISTANT[site], stop: null } })
+      expect(after.health).toMatchObject({ reply: true, stop: false, session: 'ok', matched: { reply: FAKE_ASSISTANT_ENTRY[site], stop: null } })
     })
 
     test('?nostop=1 (+ ?nodone=1): no stop button and no marker — the reply is done once its text is quiet for quietMs', async ({ page }) => {
@@ -1149,5 +1149,34 @@ test.describe('S10: a container that mounts empty and stays empty while the mode
     expect(res.message).toMatch(/ \[containers=1 followed=0 connected=true anchor=1 order=oldest geom=yes presubmit=0 stopNow=true stopSeen=true end=- md=\d+ pre=\d+ code=\d+ reply=0 inner=\d+ textContent=\d+ maxContainer=\d+ rect=\d+×\d+ viewport=\d+×\d+\]$/)
     const r = await replyState(page)
     expect(r.containers).toBe(1) // it was following this turn's own container the whole time
+  })
+})
+
+// 2026-10-18 — measured on gemini.google.com (fixture gemini-oct18-pending, the first real gemini page): while Argon THINKS
+// the reply row is a text-free `pending-response` beside thinking dots and there is no `model-response` at all; a Send
+// whose model thought past the 90 s first-row deadline failed `reply_not_found` (`containers=0 anchor=1 stopNow=true`).
+// The look-alike's ?thinkMs on gemini is that shape: the pending row, then a FRESH model-response once the answer comes.
+test.describe('gemini: a reply row that is only PENDING while the model thinks (2026-10-18)', () => {
+  test('5 s in a pending row against a 2 s first-row deadline: no reply_not_found — the pending row is the container — and the answer streamed into the fresh model-response is captured whole', async ({ page }) => {
+    test.setTimeout(60000)
+    await open(page, { site: 'gemini', replyMs: 800, thinkMs: 5000, selectors: withOverride('gemini', { quietMs: 400, settleMs: 400, stopGoneGraceMs: 400 }) })
+    const prompt = 'Explain how the gyroscope range register of the BMI088 works'
+    const sent = await request(page, { op: 'insertAndSubmit', text: prompt })
+    expect(sent.ok).toBe(true)
+    await expect(page.locator('pending-response')).toHaveCount(1)
+    await expect(page.locator('model-response')).toHaveCount(0)
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, firstTokenMs: 2000, text: prompt })
+    const r = await replyState(page)
+    expect(r.pendingGoneAt - r.pendingAt).toBeGreaterThanOrEqual(4500)
+    await expect(page.locator('pending-response')).toHaveCount(0)
+    expectObserved(res, r.replySource, 'done_selector')
+    expect(res.ms).toBeGreaterThan(5000) // it waited the think out
+    // the 10-17 cascade, for the record: the same page gives up at the first-row deadline
+    await open(page, { site: 'gemini', replyMs: 800, thinkMs: 5000, selectors: withOverride('gemini', { assistant: ['model-response'], quietMs: 400, settleMs: 400 }) })
+    const again = await request(page, { op: 'insertAndSubmit', text: prompt })
+    expect(again.ok).toBe(true)
+    const lost = await request(page, { op: 'observe', baselineCount: again.assistantCount, firstTokenMs: 2000, text: prompt })
+    expect(lost).toMatchObject({ ok: false, code: 'reply_not_found' })
+    expect(lost.message).toMatch(/\[containers=0 followed=- connected=false anchor=1 .* stopNow=true /)
   })
 })

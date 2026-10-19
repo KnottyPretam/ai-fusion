@@ -53,7 +53,7 @@ test('every desktop/test/fixtures/dom/*.html passes the lint, and there really a
   assert.ok(FIXTURES_DIR.endsWith(path.join('desktop', 'test', 'fixtures', 'dom')), FIXTURES_DIR)
   assert.deepEqual(findings, [], `fixture lint findings: ${JSON.stringify(findings, null, 2)}`)
   for (const f of files) assert.ok(f.endsWith('.html'))
-  assert.equal(files.length, 25, 'four sites × composer / streaming / done / logged-out (gemini\'s HAND-BUILT, 2026-10-17), plus chatgpt-thinking, chatgpt-effort-streaming, the three <site>-virtualized snapshots (2026-09-27), chatgpt-oct10-done / claude-oct10-status (2026-10-10), grok-oct11-fresh (2026-10-11) and gemini-thinking (2026-10-17, hand-built)')
+  assert.equal(files.length, 27, 'four sites × composer / streaming / done / logged-out (gemini\'s HAND-BUILT, 2026-10-17), plus chatgpt-thinking, chatgpt-effort-streaming, the three <site>-virtualized snapshots (2026-09-27), chatgpt-oct10-done / claude-oct10-status (2026-10-10), grok-oct11-fresh (2026-10-11), gemini-thinking (2026-10-17, hand-built) and chatgpt-oct18-unmounted-user / gemini-oct18-pending (2026-10-18, the first real gemini page)')
 })
 
 test('every committed fixture is in the scrubbed shape: allow-listed attributes only, every text node `…`, no dropped tags', () => {

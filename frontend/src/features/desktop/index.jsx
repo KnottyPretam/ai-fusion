@@ -30,6 +30,10 @@
 // `catalogRefetchNeeded(prev, next)` says the key status changed the catalog (./council.js). A
 // sequence counter lets only the latest refetch land; a loader already in flight when the push
 // lands could still answer last with the no-key catalog (accepted: the next status change refetches).
+// Automatic Read again (2026-10-18): `useAutoReread()` runs here, in the always-mounted shell, so a slot
+// whose capture gave up while its site was still answering is read out of its pane once the site's stop
+// control is gone — whether or not the drawer (and the Analyze tab's Read again button) is open
+// (./autoReread.js, ./useAutoReread.js).
 import { useEffect, useRef, useState } from 'react'
 import { api as http } from '../../api/http.js'
 import { registerSlice } from '../../state/registry.js'
@@ -41,6 +45,7 @@ import PaneDeck, { desktopApi } from './PaneDeck.jsx'
 import { FEATURE as PREPARSE, initial as preparseInitial, reducer as preparseReducer } from './preparseSlice.js'
 import PromptBar from './PromptBar.jsx'
 import { initialPanes, loadPersistedPanes, panesReducer, persistPanes } from './slice.js'
+import { useAutoReread } from './useAutoReread.js'
 import css from './desktop.module.css'
 
 registerSlice('panes', panesReducer, () => initialPanes(loadPersistedPanes()))
@@ -53,6 +58,7 @@ export default function DesktopShell() {
   const [info, setInfo] = useState(null)
   const promptRef = useRef(null)
   const chats = useOpenChats(api)
+  useAutoReread()
 
   useEffect(() => {
     if (!api || typeof api.getInfo !== 'function') return undefined

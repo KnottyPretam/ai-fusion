@@ -302,6 +302,14 @@
   /** Stage 2 observe cadence: a DOM mutation triggers a check at most every 100 ms; a poll runs every 300 ms regardless. */
   const OBSERVE_THROTTLE_MS = 100
   const OBSERVE_POLL_MS = 300
+  /**
+   * A RE-READ's reveal (2026-10-18; `observe{requireAnchor}`): while no user turn carries the typed text but reply
+   * rows are on the page, the newest row is scrolled into view at its top — at most REVEAL_MAX times, REVEAL_GAP_MS
+   * apart — so a virtualized transcript mounts the prompt again (chatgpt.com unmounts an exchange's USER block once a
+   * long answer has scrolled it out of view, measured that day). The scroll is the only page action; it moves the pane.
+   */
+  const REVEAL_MAX = 3
+  const REVEAL_GAP_MS = 1500
   /** snapshot (contract §2/§3): elements dropped with their subtrees, and the only attributes kept (emitted in DOM order). */
   const SNAPSHOT_DROP_TAGS = Object.freeze(['script', 'style', 'link', 'meta', 'img', 'svg', 'iframe', 'video', 'audio'])
   const SNAPSHOT_KEEP_ATTRS = Object.freeze([
@@ -339,6 +347,7 @@
     '[data-message-author-role]', // chatgpt (and the fake site): user + assistant turns
     "[class~='group/user-message']", // chatgpt, effort-picker layout (2026-09-27): user turns
     "div.group.flex.flex-col:has([class~='group/user-message'])", // chatgpt (2026-10-10): the exchange group, identified by the user turn it holds
+    "div.group.flex.flex-col:has([class^='block-'])", // chatgpt (2026-10-18): the same group once its user block is unmounted — still "inside a message" for the session rules
     "div.group.flex.flex-col.pb-2.pt-2", // chatgpt, effort-picker layout: one turn group per exchange
     "[data-testid='user-message']", // claude user turns
     '.font-claude-message', // claude assistant turns (older markup)
@@ -346,14 +355,15 @@
     "[data-testid='assistant-message']", // claude assistant turns (2026-10-10 redesign); grok's bubbles carry it too
     "div[id^='response-']", // grok rows (user AND assistant: every row is one)
     '.message-bubble', // grok user/assistant bubbles
-    'user-query', // gemini user turns (2026-10-17, public sources — unmeasured)
+    'user-query', // gemini user turns (2026-10-17, public sources; measured 2026-10-18 — the anchor matched on the live page)
     'model-response', // gemini assistant turns (2026-10-17, public sources — unmeasured)
+    'pending-response', // gemini's reply row while the model thinks (2026-10-18, measured — the first real gemini snapshot)
   ])
   const MESSAGE_SELECTOR = MESSAGE_SELECTORS.join(', ')
   /**
    * The user's OWN turn, per site — what tells an exchange-shaped container apart from a single reply (2026-09-27),
-   * and what the anchor rule matches the typed text against. `user-query` is gemini's custom element (2026-10-17,
-   * unmeasured): without it the anchor rule, and with it the capture on a long chat, would find no turn at all.
+   * and what the anchor rule matches the typed text against. `user-query` is gemini's custom element (2026-10-17;
+   * measured 2026-10-18, `anchor=1` on the live page): without it the anchor rule, and with it the capture on a long chat, would find no turn at all.
    */
   const USER_TURN_SELECTORS = Object.freeze(["[data-message-author-role='user']", "[data-testid='user-message']", "[class~='group/user-message']", 'user-query'])
   /**
@@ -524,7 +534,18 @@
       // the answer's inner `div.group.flex.min-w-0.flex-col` wrapper, so the group is identified by the USER
       // TURN it holds: `:has([class~='group/user-message'])`. Identical to the old entry on every Sept-27
       // fixture (1 / 2 / 5), 1 on the Oct-10 page where the old entry is 0. Older entries stay after it.
-      assistant: ["div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"],
+      // 2026-10-18 (snapshot chatgpt-failed-1792360840977, fixture chatgpt-oct18-unmounted-user): the exchange group
+      // can lose its USER block. A 9-minute reply in a 413 px pane (four panes in split mode) had scrolled the prompt
+      // far out of view, and the group held only its activity-header block and the answer block: the `:has(user
+      // turn)` entry matched NOTHING (`containers=0 anchor=0 stopNow=true`), so neither the capture nor a re-read could
+      // ever see the answer. The group is now identified by the `block-<hash>` wrappers it always holds (the answer's
+      // inner `div.group.flex.min-w-0.flex-col` holds none). Measured in Chrome on every chatgpt page since 2026-09-27
+      // — the failure snapshots of 10-10 / 10-17 / 10-18 and the fixtures: the same count as the old entry everywhere
+      // (1 on each one-exchange page, 5 on chatgpt-virtualized, 2 on chatgpt-effort-streaming), 1 on the 10-18 page
+      // where the old entry is 0, and 0 on the data-attribute layout (which falls through to its own entry).
+      // FIRST because the cascade is first-entry-wins: on a long chat the old entry still matches the OLDER groups and
+      // would hide the newest. The older entries stay behind it.
+      assistant: ["div.group.flex.flex-col:has([class^='block-'])", "div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"],
       // 2026-09-27 (virtualized transcripts): the last entry is scoped OUT of the user's own turn. In the
       // effort-picker layout the user message is `div.text-size-chat.whitespace-pre-wrap` inside
       // `group/user-message`, so before `MarkdownRoot-` mounts the bare class handed the PROMPT back as
@@ -704,9 +725,19 @@
       composerWaitMs: 15000,
       sendWaitMs: 4000, // as chatgpt's: a short courtesy poll, a trusted Enter is the submit on this site
       submitVerifyMs: 5000,
+      // 2026-10-18 (snapshot gemini-failed-1792365237747, fixture gemini-oct18-pending): the first entry matched the
+      // live page — `button[aria-label='Stop response']` while Argon was thinking — as did the composer's first entry
       stop: ["button[aria-label='Stop response']", 'button.send-button.stop', '.send-button.stop button', "button:has(mat-icon[fonticon='stop'])"],
-      // the turn element — not `div.conversation-container`, which holds the user's `user-query` as well
-      assistant: ['model-response'],
+      // the turn element — not `div.conversation-container`, which holds the user's `user-query` as well.
+      // 2026-10-18 (the same snapshot — the first real gemini DOM): while the model THINKS there is no
+      // `model-response` at all. The exchange is `pending-request.conversation-container` holding the `user-query`, a
+      // `thinking-dots-animation` and a `pending-response > response-container` with no text; Argon thought past the
+      // 90 s first-row deadline and the Send failed `reply_not_found` (`containers=0 anchor=1 stopNow=true`) on a
+      // reply that was still coming. ONE entry for both elements, never two: the cascade is first-entry-wins, so a
+      // `model-response` entry of its own would match an EARLIER turn's reply and hide this turn's pending row.
+      // The pending row is a container with no text — the stop control keeps the capture waiting, and once
+      // `model-response` mounts the re-pick each sample takes it (the anchor rule; the lowest row below the prompt).
+      assistant: ['model-response, pending-response'],
       // the reply BODY, scoped OUT of the thinking panel: an expanded `model-thoughts` renders its own
       // `message-content` with its own markdown before the answer's (public sources), so an unscoped entry would
       // capture the model's thoughts as the reply (fixture gemini-thinking pins it); `.thoughts-container` too
@@ -3223,7 +3254,9 @@
      * override the selectors; a missing `baselineCount` means the current count; `text` (2026-09-27) is
      * the prompt that was typed, the anchor — absent, the text insertAndSubmit last typed stands in;
      * `requireAnchor: true` (2026-10-15, main's re-read) follows ONLY the anchored turn's reply — with no
-     * user turn carrying `text`, nothing is picked and the observe ends `reply_not_found`.
+     * user turn carrying `text`, nothing is picked and the observe ends `reply_not_found`; since 2026-10-18 it
+     * first scrolls the newest reply row into view at its top (`reveal`, at most REVEAL_MAX times, never while a live row is followed), because the
+     * prompt may only be unmounted by the site's virtualizer (diag `reveal=N`, printed only when it scrolled).
      */
     function observe({ baselineCount, quietMs, timeoutMs, firstTokenMs, settleMs, expect, incompleteGraceMs, text: promptText, requireAnchor, signal } = {}) {
       const t0 = clock()
@@ -3339,7 +3372,7 @@
             `stopNow=${!!findStop()} stopSeen=${seenStop} ` +
             `end=${endSeen || '-'} md=${count(container, '.markdown')} pre=${count(container, 'pre')} code=${count(container, 'code')} ` +
             `reply=${len(text)} inner=${container ? len(readText(container)) : 0} textContent=${container ? len(String(container.textContent || '')) : 0} ` +
-            `maxContainer=${maxContainer} rect=${rect} viewport=${viewport}`
+            `maxContainer=${maxContainer} rect=${rect} viewport=${viewport}${reveals > 0 ? ` reveal=${reveals}` : ''}`
           )
         } catch (_e) {
           return ''
@@ -3394,8 +3427,28 @@
           pick = containerForAnchor(anchor, containers, turns, geo)
           if (pick === null) pick = newestOf(containers.filter((c) => !containsDeep(c, anchor) && !ownRowOf(anchor, c) && !base.ids.has(c) && !oldByText(c)), geo)
         } else if (!anchorOnly) pick = newestOf(containers.filter((c) => !base.ids.has(c) && !oldByText(c)), geo)
+        // …and only while no live container is being followed (review 2026-10-18): a prompt the site unmounts AGAIN after
+        // the pick changes nothing for the capture, and a second scroll would only yank the pane the user is reading
+        else if (probes && containers.length > 0 && (container === null || container.isConnected === false)) reveal(newestOf(containers, geo))
         if (geo.usable !== null) geomSeen = geo.usable
         return pick
+      }
+      // A re-read with no anchor on the page (2026-10-18; REVEAL_MAX above): the prompt may only be UNMOUNTED — chatgpt.com
+      // drops an exchange's user block once a long answer has scrolled it away — so the newest reply row is scrolled
+      // into view at its top and the next sample (the remount is a mutation) looks for the anchor again. Nothing is
+      // picked meanwhile: the rule stays "the anchored turn's reply or nothing". `reveals` feeds the diag.
+      let reveals = 0
+      let lastRevealAt = -Infinity
+      const reveal = (el) => {
+        const at = clock()
+        if (!el || reveals >= REVEAL_MAX || at - lastRevealAt < REVEAL_GAP_MS || typeof el.scrollIntoView !== 'function') return
+        reveals += 1
+        lastRevealAt = at
+        try {
+          el.scrollIntoView({ block: 'start', inline: 'nearest' })
+        } catch (_e) {
+          /* a node the site just unmounted: the next sample re-picks */
+        }
       }
 
       /** The session gate: a banner → site_error carrying ONLY the configured phrase; a wall / challenge → that state; each with the partial. */

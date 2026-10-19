@@ -13,7 +13,9 @@ import css from './conversations.module.css'
 import { APP_NAME } from '../../branding.js'
 import logoUrl from '../../assets/logo.png'
 
-export const STREAM_FEATURES = ['send', 'analyze', 'fusion']
+// 'reread' (2026-10-18): the desktop's automatic Read again — a switch mid-read would snap back like one
+// mid-stream (the web app never opens one)
+export const STREAM_FEATURES = ['send', 'analyze', 'fusion', 'reread']
 const CREATING = Symbol('creating')
 
 export function fmtWhen(ts) {

@@ -19,7 +19,7 @@ import { test, expect } from '@playwright/test'
 import { DEFAULT_SELECTORS, TRICKY, open, request, fake, replyState, withOverride } from './_harness.js'
 
 const PROMPT = 'Give me investment advice for a ten year horizon with moderate risk and no crypto.'
-const GROUP = DEFAULT_SELECTORS.chatgpt.assistant[0] // div.group.flex.flex-col:has([class~='group/user-message'])
+const GROUP = DEFAULT_SELECTORS.chatgpt.assistant[0] // div.group.flex.flex-col:has([class^='block-']) — 2026-10-18; the user-turn entry is [1]
 const STOP = DEFAULT_SELECTORS.chatgpt.stop[0]
 const RATE = "button[aria-label='Rate response']"
 const FLAGS = ['bodyMatched', 'echoesPrompt', 'heldUserTurn']
@@ -145,4 +145,25 @@ test.describe('claude, grok and gemini', () => {
       else expect([res.bodyMatched, res.text]).toEqual([false, `${askUser.text}\n\n${askUser.label}`])
     })
   }
+})
+
+// 2026-10-18 — measured that day (fixture chatgpt-oct18-unmounted-user): a 9-minute reply in a 413 px pane had scrolled the
+// prompt out of view and chatgpt.com's virtualizer UNMOUNTED the exchange's user block; the `:has(user turn)` entry then
+// matched nothing (`containers=0 anchor=0`). Here in real Chrome: the group-by-block entry still names the group after
+// the drop, the old entry does not, and the capture reads the whole answer.
+test.describe('chatgpt exchange group whose USER block is unmounted mid-reply (?dropUserMs, 2026-10-18)', () => {
+  test('the user block goes 500 ms into a 2.5 s reply: entry 0 still matches the group (entry 1 no longer does), no user turn is left, and the capture is the whole echo by the done marker', async ({ page }) => {
+    test.setTimeout(60000)
+    await open(page, { site: 'chatgpt', chatgptLayout: 'group', replyMs: 2500, dropUserMs: 500, selectors: withOverride('chatgpt', { quietMs: 400, settleMs: 400 }) })
+    const sent = await request(page, { op: 'insertAndSubmit', text: PROMPT })
+    expect(sent).toMatchObject({ ok: true, submitted: true })
+    const res = await request(page, { op: 'observe', baselineCount: sent.assistantCount, text: PROMPT })
+    const r = await replyState(page)
+    expect(r.userDroppedAt).not.toBeNull()
+    await expect(page.locator("[class~='group/user-message']")).toHaveCount(0)
+    await expect(page.locator(DEFAULT_SELECTORS.chatgpt.assistant[0])).toHaveCount(1)
+    await expect(page.locator(DEFAULT_SELECTORS.chatgpt.assistant[1])).toHaveCount(0)
+    expectCapture(res, { text: r.replySource, doneBy: 'done_selector', flags: [true, true, false] })
+    expect(res.text.length).toBe(r.replySource.length)
+  })
 })

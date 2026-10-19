@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createChats, sanitizeChats, isChatLink, CHATS_FILE } from '../../../main/chats.js'
+import { createChats, sanitizeChats, isChatLink, chatKey, CHATS_FILE } from '../../../main/chats.js'
 import { SITES } from '../../../main/sites.js'
 import { fakeLog, fakeSites } from './_fakes.js'
 
@@ -124,3 +124,27 @@ test('links must be https on the site\'s hosts (http only on loopback): a tamper
   assert.equal(isChatLink('', SITES, 'grok'), false)
   assert.equal(isChatLink('https://grok.com/c/1', null, 'grok'), true, 'no site table: the scheme rule alone')
 })
+
+test('chatKey / conversationsOf (2026-10-18): which conversations own the chat a pane shows — origin + path, the query, hash and a trailing slash ignored; per slot; [] for nothing', () => {
+  assert.equal(chatKey('https://chatgpt.com/c/abc?model=x#y'), 'https://chatgpt.com/c/abc')
+  assert.equal(chatKey('https://chatgpt.com/c/abc/'), 'https://chatgpt.com/c/abc')
+  assert.equal(chatKey('not a url'), null)
+  assert.equal(chatKey(''), null)
+  assert.equal(chatKey(null), null)
+  const c = createChats({ dir: tmpDir(), sites: SITES, log: fakeLog() })
+  c.load()
+  const OTHER = 'b4d2f3e5-6c7a-4b89-8d1e-f2a3b4c5d6e7'
+  c.set(CONV, 'chatgpt', 'https://chatgpt.com/c/abc')
+  c.set(CONV, 'claude', 'https://claude.ai/chat/0f9e8d7c-1111-4222-8333-944455556666')
+  c.set(OTHER, 'chatgpt', 'https://chatgpt.com/c/zzz')
+  assert.deepEqual(c.conversationsOf('chatgpt', 'https://chatgpt.com/c/abc?temporary-chat=false'), [CONV])
+  assert.deepEqual(c.conversationsOf('chatgpt', 'https://chatgpt.com/c/zzz'), [OTHER])
+  assert.deepEqual(c.conversationsOf('chatgpt', 'https://chatgpt.com/'), [], 'a new chat is nobody\'s')
+  assert.deepEqual(c.conversationsOf('grok', 'https://chatgpt.com/c/abc'), [], 'per slot')
+  assert.deepEqual(c.conversationsOf('nope', 'https://chatgpt.com/c/abc'), [])
+  assert.deepEqual(c.conversationsOf('chatgpt', undefined), [])
+  // two conversations that ended up on one site chat (an adoption) both own it
+  c.set(OTHER, 'chatgpt', 'https://chatgpt.com/c/abc')
+  assert.deepEqual(c.conversationsOf('chatgpt', 'https://chatgpt.com/c/abc'), [CONV, OTHER])
+})
+

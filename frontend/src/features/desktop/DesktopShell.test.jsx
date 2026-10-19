@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import DesktopShell from './index.jsx'
 import { CAPTURE_NOTICE_KEY, PERSIST_KEYS } from './slice.js'
+import { AUTO_REREAD_SETTLE_MS } from './autoReread.js'
 import { renderWithStore, sample } from '../../state/testing.jsx'
-import { RECTS, conv, fakeTriplex, health, installFakeResizeObserver, jsonResponse, pinViewportRects, seqOf, sseResponse, stubFetch, syncFrames } from './fakes.js'
+import { CFG, RECTS, conv, fakeTriplex, health, installFakeResizeObserver, jsonResponse, pinViewportRects, seqOf, sseResponse, stubFetch, syncFrames } from './fakes.js'
 
 beforeEach(() => {
   localStorage.clear()
@@ -247,5 +248,52 @@ describe('DesktopShell: the agents stepper shares the shell’s chats instance (
     expect(fake.openChats).toHaveBeenCalledTimes(1)
     expect(fake.openChats).toHaveBeenCalledWith('c9')
     expect(screen.queryByTestId('pane-grok')).toBeNull()
+  })
+})
+
+describe('DesktopShell: the automatic Read again is wired in the shell (2026-10-18)', () => {
+  const STILL = 'the reply was still in progress after 525880 ms [containers=0 anchor=0 stopNow=true stopSeen=true reply=0]'
+  const stuck = () => conv({ id: 'c1', turns: [{ id: 's1', type: 'send', prompt: 'Explain it', slot_config: CFG, responses: { claude: 'a', chatgpt: null, grok: 'c' }, errors: { chatgpt: STILL }, usage: { calls: [], totals: {} } }] })
+  const REREAD_URL = '/api/conversations/c1/turns/s1/slots/chatgpt/reread'
+
+  function mountStuck() {
+    const calls = stubFetch([
+      {
+        method: 'POST',
+        url: REREAD_URL,
+        respond: () => sseResponse([{ type: 'reread_start', turn_id: 's1', slot: 'chatgpt' }, { type: 'reread_done', turn_id: 's1', slot: 'chatgpt', chars: 19, done_by: 'quiet' }]),
+      },
+      { method: 'GET', url: /.*/, respond: () => jsonResponse(stuck()) },
+    ])
+    const fake = fakeTriplex({ getCapture: vi.fn(() => ({ claude: false, chatgpt: true, grok: false, gemini: false })) })
+    vi.stubGlobal('triplex', fake)
+    renderWithStore(<DesktopShell />, { preloaded: { conversation: stuck(), slotConfig: CFG } })
+    act(() => fake.emit.bridge({ connected: true, since: 1 }))
+    return { calls, fake }
+  }
+  const rereads = (calls) => calls.filter((c) => c.method === 'POST' && c.url === REREAD_URL)
+
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }))
+  afterEach(() => vi.useRealTimers())
+
+  test('the pane on this chat with its stop control gone: exactly one re-read after the settle window, with the drawer closed', async () => {
+    const { calls, fake } = mountStuck()
+    act(() => fake.emit.health('chatgpt', health({ stop: false, session: 'ok', chatOf: ['c1'] })))
+    expect(screen.getByTestId('desk-drawer')).toHaveAttribute('data-open', 'false')
+    await act(async () => vi.advanceTimersByTime(AUTO_REREAD_SETTLE_MS + 100))
+    await waitFor(() => expect(rereads(calls)).toHaveLength(1))
+    await act(async () => vi.advanceTimersByTime(AUTO_REREAD_SETTLE_MS * 3))
+    expect(rereads(calls)).toHaveLength(1)
+    expect(screen.getByTestId('desk-drawer')).toHaveAttribute('data-open', 'false')
+  })
+
+  test('none while the site is still answering, and none while the pane shows another chat', async () => {
+    const { calls, fake } = mountStuck()
+    act(() => fake.emit.health('chatgpt', health({ stop: true, session: 'ok', chatOf: ['c1'] })))
+    await act(async () => vi.advanceTimersByTime(AUTO_REREAD_SETTLE_MS * 3))
+    expect(rereads(calls)).toHaveLength(0)
+    act(() => fake.emit.health('chatgpt', health({ stop: false, session: 'ok', chatOf: ['c7'] })))
+    await act(async () => vi.advanceTimersByTime(AUTO_REREAD_SETTLE_MS * 3))
+    expect(rereads(calls)).toHaveLength(0)
   })
 })

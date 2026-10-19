@@ -32,6 +32,20 @@ function describeLink(url) {
   }
 }
 
+/**
+ * The identity of a chat page (2026-10-18): `origin + pathname`, a trailing slash dropped — the query and the hash
+ * (`?model=…`, `#settings`) do not change which chat a pane shows. null for anything that is not a URL.
+ */
+export function chatKey(url) {
+  if (typeof url !== 'string' || url === '') return null
+  try {
+    const u = new URL(url)
+    return `${u.origin}${u.pathname.replace(/\/+$/, '')}`
+  } catch (_e) {
+    return null
+  }
+}
+
 /** True when `url` may be stored as the `slot` link: an http(s) URL on the site's hosts (see isSiteUrl). */
 export function isChatLink(url, sites, slot) {
   if (typeof url !== 'string' || url === '') return false
@@ -71,6 +85,9 @@ export function sanitizeChats(raw, { sites = null, onDrop = null } = {}) {
  *                             a link that is not an http(s) URL on the site's hosts
  *   forget(convId)            drop a conversation's links + save; returns true when it existed
  *   forgetSlot(convId, slot)  drop one link + save
+ *   conversationsOf(slot, url) the conversation ids whose `slot` link is the chat at `url` (`chatKey`), oldest
+ *                             entry first; [] when none (2026-10-18: main stamps it on the renderer's copy of a
+ *                             pane's health, so the automatic Read again runs only on that conversation's own chat)
  *   all()                     a deep copy of the document
  *   save()                    atomic write now
  *   file                      the absolute path
@@ -165,6 +182,17 @@ export function createChats({ dir, sites = null, fs = nodeFs, now = Date.now, lo
     return doc[convId] ? { ...doc[convId] } : {}
   }
 
+  function conversationsOf(slot, url) {
+    if (!SLOTS.includes(slot)) return []
+    const key = chatKey(url)
+    if (key === null) return []
+    const out = []
+    for (const [convId, links] of Object.entries(doc)) {
+      if (links && typeof links[slot] === 'string' && chatKey(links[slot]) === key) out.push(convId)
+    }
+    return out
+  }
+
   function set(convId, slot, url) {
     requireConv(convId)
     requireSlot(slot)
@@ -192,5 +220,5 @@ export function createChats({ dir, sites = null, fs = nodeFs, now = Date.now, lo
     return true
   }
 
-  return { file, load, get, links, set, forget, forgetSlot, all, save }
+  return { file, load, get, links, set, forget, forgetSlot, conversationsOf, all, save }
 }

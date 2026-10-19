@@ -69,7 +69,8 @@ tiny DOM in `test/unit/preload/_dom.js`, runs the REAL `createAdapter()` over it
 | grok assistant (`div[id^=response-]`), text (`.response-content-markdown`), stop (`button[aria-label=Stop]`), user bubble (`.message-bubble`) | unverified |
 | grok code block: a header row (language + copy button) before the `pre` | unverified |
 | grok logged out: sign-in links only (see consequence 1) | unverified |
-| gemini — every `gemini-*.html` (composer, logged-out, streaming, done, thinking) | **HAND-BUILT FROM PUBLIC SOURCES (2026-10-17)**, nothing measured by this app — see the last section |
+| gemini — the five `gemini-*.html` (composer, logged-out, streaming, done, thinking) | **HAND-BUILT FROM PUBLIC SOURCES (2026-10-17)**, nothing measured by this app — see the gemini section |
+| gemini — `gemini-oct18-pending.html`: the composer's first entry, the stop control `button[aria-label='Stop response']`, the `user-query` turn, the `pending-response` row while the model thinks | **measured** (2026-10-18), the first real gemini page — see the last section |
 
 `id="response-uuid"` in the grok fixtures is what `scrubValue` makes of `id="response-<uuid>"` — the
 literal word, not an id.
@@ -373,3 +374,24 @@ is the done marker, never a copy button; and the `code-block` custom element is 
 `toMarkdown` treats a hyphenated tag that holds a block as one — before that the whole fence collapsed into one inline
 code span). The scrubbed header text `…` stays a stray paragraph, as on claude and grok (consequence 3), and the fence
 has no language: the code carries no class and the header's token is scrubbed.
+
+## chatgpt-oct18-unmounted-user.html, gemini-oct18-pending.html (2026-10-18)
+
+The day's two failed pane captures, pruned the way the `*-virtualized` and `*-oct10` fixtures were. `gemini-oct18-pending`
+is the **first real gemini page** this app has saved — the five hand-built `gemini-*` files above stay until a settled
+reply, a guest-mode page and a thinking panel are captured too.
+
+| fixture | what it shows | health |
+|---|---|---|
+| `chatgpt-oct18-unmounted-user` | `snapshots/chatgpt-failed-1792360840977.html` (diag `containers=0 followed=- connected=false anchor=0 … presubmit=0 stopNow=true stopSeen=true … reply=0 … viewport=413×803`): a 9-minute reply in a 413 px pane — four panes in split mode — had scrolled the prompt far out of view, and chatgpt.com's virtualizer had UNMOUNTED the exchange's USER block. The one `div.group.flex.flex-col` holds only two `block-<hash>` wrappers — the activity header (`group/activity-header`, the "Thought for …" row) and the answer (`h4.sr-only` + `div.group.flex.min-w-0.flex-col > MarkdownRoot-`) — so the 10-10 entry `div.group.flex.flex-col:has([class~='group/user-message'])` matches NOTHING and the new first entry `div.group.flex.flex-col:has([class^='block-'])` matches the group (measured in Chrome on every chatgpt page since 2026-09-27: the same count as the user-turn entry everywhere, 1 here where it is 0, 0 on the data-attribute layout). Still answering: the composer's stop control is the plain "Stop" (entry 3), no send button, no "Rate response". Pruned to the Conversation region and the composer form; the MarkdownRoot is cut to its first six blocks and its citation links are dropped (their labels carried the chat's topic and source URLs) | `{composer 1, send null, reply 0, stop 3, session ok, messages 1, assistant 1}` |
+| `gemini-oct18-pending` | `snapshots/gemini-failed-1792365237747.html` (diag `containers=0 followed=- connected=false anchor=1 … stopNow=true stopSeen=true … viewport=413×803`, `reply_not_found` after the 90 s first-row deadline): Argon still THINKING. `#chat-history > infinite-scroller[data-test-id=chat-history-container] > pending-request.conversation-container.first-prompt` holding the `user-query` (its `cdk-visually-hidden` "You said" label, `p.query-text-line`, the Copy / Edit prompt buttons), a `thinking-dots-animation` and a text-free `pending-response > response-container` (header, `presented-response-container`, footer) — there is no `model-response` anywhere until the answer comes. The composer is the seeded first entry (`rich-textarea div.ql-editor[contenteditable='true']`, aria-label "Enter a prompt for Gemini") and the stop control `button[aria-label='Stop response']` (entry 0) — both now measured, as is the `user-query` anchor. Pruned to the chat history and the input area: the side navigation (the user's conversation titles) and the header (`Google Account: name`, the model-picker label) are gone | `{composer 0, send null, reply 0, stop 0, session ok, messages 2, assistant 1}` |
+
+What `test/unit/preload/fixtures.test.js` pins on them: the group-by-block entry finds the chatgpt group the user-turn entry
+cannot, no user turn is left on that page, the body is the MarkdownRoot and no done marker exists yet; the gemini pending
+row is the container (`assistant: ['model-response, pending-response']`, ONE entry because the cascade is first-entry-wins),
+the `user-query` anchors it and it holds no text. `test/unit/preload/virtualized.test.js` drives the lifecycles over a fake
+clock: a chatgpt group re-rendered without its user block mid-reply is still captured (the 10-10 cascade times out with
+`containers=0`), a re-read scrolls the newest group into view so the prompt remounts (`reveal`), and a gemini reply that
+thinks past the first-row deadline in its pending row is waited out and then read from the fresh `model-response` (the
+10-17 cascade answers `reply_not_found`). The fake site replays both in real Chrome: `?chatgptLayout=group&dropUserMs=N`
+(`test/adapters/exchange.spec.js`) and `?site=gemini&thinkMs=N` (`test/adapters/observe.spec.js`).

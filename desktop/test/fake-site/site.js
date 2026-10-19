@@ -100,6 +100,10 @@
  *                     done marker. The group is on the page from the SUBMIT tick, the reply block mounts
  *                     into it when the reply begins. Composes with ?replyMs / ?reply=… / ?nostop / ?nodone /
  *                     ?askUser; the placeholder / thinkMs / twoTurns lifecycles keep the article shape
+ *   ?dropUserMs=N     (2026-10-18, with ?chatgptLayout=group) N ms after the reply block mounts, the exchange
+ *                     group's USER block is unmounted — what chatgpt.com's virtualizer did once a long answer
+ *                     had scrolled the prompt out of a narrow pane (fixture chatgpt-oct18-unmounted-user):
+ *                     the group then holds only the reply block. window.__fake.userDroppedAt records it
  *   ?askUser=1        (2026-10-11) the ask-the-user turn measured on chatgpt.com on 2026-10-11 14:41: the
  *                     reply is the fixed ASK_USER_TEXT line (never an echo — it must not carry the prompt),
  *                     streamed as usual, and when it finishes the assistant row mounts a small form (`form.ask-user`:
@@ -193,6 +197,10 @@
  *                    to read as a missing reply — over 570 s of it, measured, while the answer was on
  *                    its way. Does not compose with ?remountMs (checked first).
  *                    window.__fake.thinkingAt / .thinkingEndedAt record both moments.
+ *                    On GEMINI (2026-10-18, measured — fixture gemini-oct18-pending) the think is gemini's own
+ *                    shape instead: the exchange box holds a `thinking-dots-animation` and a text-free
+ *                    `pending-response > response-container` (no `model-response` at all), and at the end of
+ *                    the hold both are REMOVED and the answer streams into a fresh `model-response`.
  *   ?remountMs=N     mount a short placeholder turn (?placeholderMs later it is REMOVED from the DOM
  *                    entirely — zero assistant containers), then mount the REAL reply N ms after that
  *                    removal and stream it as usual. The stop button is raised before the placeholder and
@@ -469,6 +477,8 @@
     echoTurn: params.get('echoTurn') === '1',
     // 2026-10-11: the ask-the-user turn (see the header) — a fixed line, then a widget, the stop gone, no marker
     askUser: params.get('askUser') === '1',
+    // 2026-10-18: the group layout's user block unmounted N ms into the reply (see the header)
+    dropUserMs: params.has('dropUserMs') ? Math.max(0, Number(params.get('dropUserMs')) || 0) : null,
   }
   /** 2026-10-11: chatgpt's exchange-group layout (?chatgptLayout=group), else the article-per-turn layout. */
   const chatgptLayout = site === 'chatgpt' && params.get('chatgptLayout') === 'group' ? 'group' : 'article'
@@ -557,6 +567,10 @@
     untrustedDropped: 0,
     stalled: [],
     stalledAt: null,
+    // 2026-10-18: ?dropUserMs — when the group's user block was unmounted; ?thinkMs on gemini — the pending row's life
+    userDroppedAt: null,
+    pendingAt: null,
+    pendingGoneAt: null,
   }
   window.__fake = fake
 
@@ -1534,6 +1548,18 @@
       if (exchange === null) newExchange()
       exchange.rows.push({ node: built.block, slot: null, assistant: true })
       layoutSlots()
+      if (replyOpts.dropUserMs !== null) {
+        // ?dropUserMs (2026-10-18): the prompt scrolled out of a narrow pane — the virtualizer unmounts the user block
+        const group = built.container
+        setTimeout(() => {
+          const turn = group.querySelector("[class~='group/user-message']")
+          const block = turn ? turn.closest('.block-fake') : null
+          if (block && group.contains(block)) {
+            block.remove()
+            fake.userDroppedAt = Date.now()
+          }
+        }, replyOpts.dropUserMs)
+      }
     } else {
       mountAssistantNode(built.container)
     }
@@ -1571,6 +1597,31 @@
     // ?assistantAtSubmit=1 (2026-09-27) is the same lifecycle at a fixed short hold: the row is on the page
     // in this very tick, empty, beside the stop button — ?thinkMs wins when both are set
     const hold = replyOpts.thinkMs !== null ? replyOpts.thinkMs : replyOpts.assistantAtSubmit ? ASSISTANT_AT_SUBMIT_HOLD_MS : null
+    if (hold !== null && site === 'gemini' && replyOpts.thinkMs !== null) {
+      // 2026-10-18 (measured, fixture gemini-oct18-pending): gemini thinks in a `pending-response` beside thinking dots —
+      // no `model-response` until the answer comes, and then a fresh one (the pending row is removed, never filled)
+      const dots = document.createElement('thinking-dots-animation')
+      dots.appendChild(el('div', 'thinking-dots-animation'))
+      const pending = document.createElement('pending-response')
+      const box = document.createElement('response-container')
+      const inner = el('div', 'response-container')
+      inner.appendChild(el('div', 'response-container-content'))
+      box.appendChild(inner)
+      pending.appendChild(box)
+      if (currentGroup !== null && currentGroup.isConnected) currentGroup.appendChild(dots) // chrome, never a reply row
+      mountAssistantNode(pending)
+      fake.replying = true
+      fake.done = false
+      fake.thinkingAt = fake.pendingAt = Date.now()
+      if (!replyOpts.nostop) actions.streaming(true)
+      setTimeout(() => {
+        dots.remove()
+        pending.remove()
+        fake.thinkingEndedAt = fake.pendingGoneAt = Date.now()
+        streamReply(text)
+      }, hold)
+      return
+    }
     if (hold !== null) {
       const built = buildAssistant()
       appendAssistant(built) // empty: `replyText` reads '' from it for the whole think

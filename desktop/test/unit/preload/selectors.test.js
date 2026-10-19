@@ -169,8 +169,9 @@ test('DEFAULT_SELECTORS v2 entries are contract §4 verbatim for chatgpt and cla
   // 2026-09-27 (Part 0): the effort-picker layout has no data-* turn attributes; the reply body is the
   // direct child of a `block-<hash>` wrapper (fixtures chatgpt-thinking / chatgpt-effort-streaming).
   // 2026-10-10: the exchange group lost `pb-2 pt-2`; it is the `div.group.flex.flex-col` that HOLDS the user turn
-  // (fixture chatgpt-oct10-done), first — the older entries stay behind it
-  assert.deepEqual(chatgpt.assistant, ["div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"])
+  // (fixture chatgpt-oct10-done), first — the older entries stay behind it. 2026-10-18: the group can lose its USER block
+  // (fixture chatgpt-oct18-unmounted-user), so it is identified by the `block-<hash>` wrappers it holds, first of all
+  assert.deepEqual(chatgpt.assistant, ["div.group.flex.flex-col:has([class^='block-'])", "div.group.flex.flex-col:has([class~='group/user-message'])", "[data-message-author-role='assistant']", "div.group.flex.flex-col.pb-2.pt-2"])
   // measured 2026-09-17: `.markdown` (and `.prose`) match on chatgpt.com, `.whitespace-pre-wrap` does
   // NOT any more — it stays as a last fallback because an entry that matches nothing costs nothing
   // 2026-09-27: the last entry is scoped OUT of the user's own turn — in the effort-picker layout the user
@@ -373,8 +374,9 @@ test('DEFAULT_SELECTORS.gemini is the plan table verbatim (2026-10-17, public so
   // guest mode: a signed-out page has a working composer, so the Sign-in link is the ONLY evidence
   assert.deepEqual(g.loggedOut, ["a[href*='accounts.google.com/ServiceLogin']", "a[href*='accounts.google.com/v3/signin']", "a[aria-label='Sign in']"])
   assert.deepEqual(g.loggedOutUrl, ['accounts.google.com'])
-  // the turn element, never the exchange container that holds the user's query as well
-  assert.deepEqual(g.assistant, ['model-response'])
+  // the turn element, never the exchange container that holds the user's query as well; 2026-10-18 (measured, fixture
+  // gemini-oct18-pending): the pending row while the model thinks, in the SAME entry (the cascade is first-entry-wins)
+  assert.deepEqual(g.assistant, ['model-response, pending-response'])
   assert.ok(!g.assistant.some((s) => s.includes('conversation-container')))
   // 2026-10-17 (review): scoped out of the panel's inner `.thoughts-container` too (gemini-dom-research)
   assert.deepEqual(g.assistantText, ['.markdown-main-panel:not(model-thoughts *):not(.thoughts-container *)', 'message-content .markdown:not(model-thoughts *):not(.thoughts-container *)'])

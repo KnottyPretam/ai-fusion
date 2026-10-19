@@ -169,6 +169,26 @@ export function annotateHealth(health, selectorsError) {
   return { ...health, matched: { ...matched, error: String(selectorsError) } }
 }
 
+/**
+ * The RENDERER's copy of a pane's health (2026-10-18): `chatOf` = the conversation ids whose recorded chat link for
+ * `slot` is the page this sample was taken on (`chats.conversationsOf`, same origin + path), [] when none. The renderer's
+ * automatic Read again runs only while it holds the open conversation, so it never reads — or navigates — a chat the
+ * user moved the pane to. Stamped per SAMPLE from the sample's own `url`, so a cached sample of the previous page
+ * carries the previous page's ids. Never on the bridge `health` frame (`bridge_protocol.Health` forbids extra fields)
+ * nor in the views' cache. Without a chats store (tests, Stage 1 wiring) the object is returned as it came.
+ */
+export function stampChatOf(health, slot, chats) {
+  if (!health || typeof health !== 'object' || !chats || typeof chats.conversationsOf !== 'function') return health
+  let chatOf = []
+  try {
+    const ids = chats.conversationsOf(slot, health.url)
+    if (Array.isArray(ids)) chatOf = ids.filter((id) => typeof id === 'string' && id !== '')
+  } catch (_e) {
+    chatOf = []
+  }
+  return { ...health, chatOf }
+}
+
 /** The `panes:bridge` payload for a bridge state: `{connected:true, since}` | `{connected:false, error?}`. */
 export function publicBridgeState(b) {
   if (b.connected && b.since != null) return { connected: true, since: b.since }
@@ -304,7 +324,7 @@ export function pruneSnapshots({ fs = nodeFs, snapshotsDir }, name, keep, { fail
  *   applyTheme(theme)   nativeTheme.themeSource = theme (main owns the electron import)
  *   openRouterKey       openrouter-key.js's module {set, clear, status} (optional; the key channels answer openrouter_key_unavailable without it)
  *   syncKey()           push the key + default council to the backend now (main binds the URL and token); optional
- *   chats               {get(convId, slot)}
+ *   chats               {get(convId, slot), conversationsOf(slot, url)?}
  *   exportTurn(req)     export.js's exportTurn, already bound to the backend URL / dialog / BrowserWindow
  *   sites               the resolved site table
  *   version, dev        for 'panes:getInfo' / 'adapter:config'
@@ -387,7 +407,7 @@ export function registerIpc({
       for (const slot of views.slots()) {
         if (typeof views.getHealth === 'function') {
           const h = views.getHealth(slot)
-          if (h) emit('panes:health', slot, h)
+          if (h) emit('panes:health', slot, stampChatOf(h, slot, chats))
         }
         if (typeof views.zoomFactor === 'function') {
           const factor = views.zoomFactor(slot)
@@ -691,7 +711,7 @@ export function registerIpc({
     }
     const annotated = annotateHealth(health, selectors && typeof selectors.lastError === 'function' ? selectors.lastError() : null)
     views.setHealth(slot, annotated)
-    emit('panes:health', slot, annotated)
+    emit('panes:health', slot, stampChatOf(annotated, slot, chats))
     if (typeof onHealth === 'function') {
       try {
         onHealth(slot, annotated) // Stage 2: main forwards it to the bridge as a `health` frame

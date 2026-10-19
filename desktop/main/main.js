@@ -69,7 +69,7 @@ import { APP_TITLE, iconPath } from './branding.js'
 import { createAnalystViews } from './analyst-views.js'
 import { createOrchestrator } from './orchestrator.js'
 import { createTrustedInput } from './trusted-input.js'
-import { registerIpc, saveDomSnapshot } from './ipc.js'
+import { registerIpc, saveDomSnapshot, stampChatOf } from './ipc.js'
 import { exportTurn } from './export.js'
 import { createShortcuts } from './shortcuts.js'
 import { buildMenuTemplate } from './menu.js'
@@ -305,7 +305,7 @@ function replayToRenderer() {
   if (!views || !windowAlive()) return
   for (const slot of views.slots()) {
     const h = views.getHealth(slot)
-    if (h) sendToRenderer('panes:health', slot, h)
+    if (h) sendToRenderer('panes:health', slot, stampChatOf(h, slot, chats))
     sendToRenderer('panes:zoom', { slot, factor: views.zoomFactor(slot) })
   }
   sendToRenderer('panes:bridge', bridgeState)
@@ -465,7 +465,7 @@ function start() {
     ipcMain,
     openExternal,
     onHealth: (slot, health) => {
-      sendToRenderer('panes:health', slot, health)
+      sendToRenderer('panes:health', slot, stampChatOf(health, slot, chats))
       if (bridge) bridge.sendHealth(slot, health)
     },
     dev: DEV,

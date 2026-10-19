@@ -46,7 +46,9 @@ import { useDispatch, useSlice } from '../../state/store.jsx'
 import { councilSlotConfig } from './analyst.js'
 import { normalizeCouncil } from './slice.js'
 
-export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse'] // preparse: the panes must not navigate while the composer waits on the analyst
+// preparse: the panes must not navigate while the composer waits on the analyst; reread (2026-10-18): nor while a
+// pane's reply is being read again (a navigation would abandon the read)
+export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'preparse', 'reread']
 
 /** Swallow the rejection of an IPC promise (bad_request, a closed window); the UI stays up. */
 function settle(p) {

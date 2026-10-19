@@ -572,6 +572,8 @@ const WEB_CONFIG = {
 }
 const DIAG = '[containers=1 followed=0 connected=true anchor=1 order=oldest geom=yes presubmit=0 stopNow=true stopSeen=true end=- md=0 pre=0 code=0 reply=181 inner=414 textContent=547 maxContainer=414 rect=367×52 viewport=432×691]'
 const STILL = `the reply was still in progress after 300000 ms ${DIAG}`
+// The desktop's pane state (read by KEY): the automatic Read again is promised only with that site's capture on.
+const withCapture = (state, capture = { claude: true }) => ({ ...state, panes: { capture } })
 const stuckTurn = (overrides = {}) =>
   sendTurn({ id: 's2', slot_config: WEB_CONFIG, responses: { claude: null, chatgpt: 'b', grok: 'c' }, errors: { claude: STILL }, partial: { claude: 'Flagging…' }, ...overrides })
 
@@ -601,13 +603,23 @@ describe('Read again: the pure rules (a mirror of backend/features/reread.py)', 
 
 describe('Read again: the hint and the row', () => {
   test('still answering: the hint says the app stopped waiting, never "timeout" / "no reply" / "Send again", and the diag stays off screen', () => {
-    renderPane(stateWith([], { conv: conversation([stuckTurn()]) }))
+    renderPane(withCapture(stateWith([], { conv: conversation([stuckTurn()]) })))
     const hint = screen.getByTestId('analyze-hint')
-    expect(hint).toHaveTextContent(`claude was still answering when ${APP_NAME} stopped waiting; the reply is in the pane. Read claude again below once the site has finished.`)
+    expect(hint).toHaveTextContent(`claude was still answering when ${APP_NAME} stopped waiting; the reply is in the pane. ${APP_NAME} reads claude again by itself once the site has finished, while this conversation is open (or use the button below).`)
     expect(hint.textContent).not.toMatch(/no reply came back|Send again|containers=|cannot be analyzed/)
     expect(screen.getByTestId('analyze-run')).toBeDisabled()
     expect(screen.getByTestId('analyze-reread-claude')).toBeEnabled()
     expect(screen.queryByTestId('analyze-reread-chatgpt')).toBeNull()
+  })
+
+  test('still answering with that site\'s capture switch OFF (2026-10-18): no promise of the automatic read, just the button', () => {
+    for (const state of [withCapture(stateWith([], { conv: conversation([stuckTurn()]) }), { claude: false }), stateWith([], { conv: conversation([stuckTurn()]) })]) {
+      const { unmount } = renderPane(state)
+      const hint = screen.getByTestId('analyze-hint')
+      expect(hint).toHaveTextContent(`claude was still answering when ${APP_NAME} stopped waiting; the reply is in the pane. Read claude again below.`)
+      expect(hint.textContent).not.toMatch(/by itself/)
+      unmount()
+    }
   })
 
   test('capture off on a web pane: turn Capture on first, then read it again', () => {
@@ -622,10 +634,10 @@ describe('Read again: the hint and the row', () => {
       responses: { claude: null, chatgpt: 'b', grok: null },
       errors: { claude: STILL, grok: 'cost_cap_exceeded: session cap reached' },
     })
-    renderPane(stateWith([], { conv: conversation([turn]) }))
+    renderPane(withCapture(stateWith([], { conv: conversation([turn]) })))
     const hint = screen.getByTestId('analyze-hint')
     expect(hint).toHaveTextContent('no reply came back from grok: cost_cap_exceeded: session cap reached')
-    expect(hint).toHaveTextContent('Read claude again below once the site has finished; grok cannot be read again — Send again for it.')
+    expect(hint).toHaveTextContent(`${APP_NAME} reads claude again by itself once the site has finished, while this conversation is open (or use the button below); grok cannot be read again — Send again for it.`)
     expect(screen.queryByTestId('analyze-reread-grok')).toBeNull()
   })
 

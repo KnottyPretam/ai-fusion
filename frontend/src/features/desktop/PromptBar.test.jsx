@@ -98,10 +98,25 @@ describe('PromptBar: pure helpers', () => {
 
   test('formatResult / resultTitle (2026-10-15): a capture that gave up with the stop control still up says "still answering", never "✗ timeout"', () => {
     const still = { ok: false, code: 'timeout', message: 'the reply was still in progress after 300000 ms [containers=1 stopNow=true stopSeen=true]', ms: 0 }
-    expect(formatResult(still)).toBe('… still answering — stopped waiting')
-    expect(resultTitle(still)).toMatch(/^.+ stopped waiting while the site was still answering; the reply is in the pane\. Read it again from the Analyze tab once it has finished\.\n/)
+    expect(formatResult(still)).toBe('… still answering — read when it finishes')
+    expect(resultTitle(still)).toMatch(/^.+ stopped waiting while the site was still answering; the reply is in the pane\. It is read again automatically once the site has finished, while that conversation is open \(Read again on the Analyze tab does it by hand\)\.\n/)
     // a timeout with the stop control gone is a real failure, and keeps its code
     expect(formatResult({ ...still, message: 'the reply was still in progress after 300000 ms [containers=1 stopNow=false stopSeen=true]' })).toBe('✗ timeout')
+  })
+
+  test('formatResult / resultTitle (2026-10-18): the automatic Read again\'s own lines', () => {
+    expect(formatResult({ ok: false, reread: 'running' })).toBe('… reading the finished reply')
+    expect(formatResult({ ok: true, reread: 'done', ms: 4120 })).toBe('read again ✓ captured · 4.1 s')
+    expect(formatResult({ ok: true, reread: 'done', ms: 0 })).toBe('read again ✓ captured')
+    expect(formatResult({ ok: false, reread: 'failed', code: 'reply_not_found', message: 'no assistant container' })).toBe('✗ read again: reply_not_found')
+    expect(formatResult({ ok: false, reread: 'failed' })).toBe('✗ read again: error')
+    expect(resultTitle({ ok: false, reread: 'running' })).toMatch(/is reading its reply out of the pane\.$/)
+    expect(resultTitle({ ok: true, reread: 'done', ms: 4120 })).toMatch(/read its reply out of the pane and completed the Send\.$/)
+    const failed = resultTitle({ ok: false, reread: 'failed', code: 'reply_not_found', message: 'no assistant container' })
+    expect(failed).toMatch(/^The site had finished, but reading its reply out of the pane failed\. Try Read again on the Analyze tab\.\nno assistant container$/)
+    // a failed re-read whose message still carried the diag never reads as "still answering" again
+    expect(formatResult({ ok: false, reread: 'failed', code: 'timeout', message: 'x [containers=1 stopNow=true]' })).toBe('✗ read again: timeout')
+    expect(resultTitle({ ok: false, reread: 'failed', code: 'timeout', message: 'x [containers=1 stopNow=true]' })).not.toMatch(/stopped waiting/)
   })
 
   test('resultTitle carries the message (and the Stage 1 selector / url keys when present)', () => {

@@ -479,6 +479,27 @@ describe('PaneDeck: capture switches, the first-run notice and the turn phase (S
     expect(capture('claude')).toBeEnabled()
   })
 
+  test('a running `reread` stream (2026-10-18, the automatic Read again) locks what a send locks: Reload / New chat / Capture and new-chat-all', () => {
+    const fake = fakeTriplex()
+    mount(fake, { mode: 'split' })
+    act(() => store.dispatch({ type: 'sse/start', feature: 'reread' }))
+    for (const slot of ['claude', 'chatgpt', 'grok']) {
+      expect(capture(slot)).toBeDisabled()
+      expect(screen.getByTestId(`pane-${slot}-reload`)).toBeDisabled()
+      expect(screen.getByTestId(`pane-${slot}-newchat`)).toBeDisabled()
+      expect(screen.getByTestId(`pane-${slot}-reload`)).toHaveAttribute('title', 'a reply is being read again')
+    }
+    fireEvent.click(capture('claude'))
+    expect(fake.setCapture).not.toHaveBeenCalled()
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(fake.newChat).not.toHaveBeenCalled()
+    act(() => store.dispatch({ type: 'sse/end', feature: 'reread', ok: true }))
+    expect(capture('claude')).toBeEnabled()
+    expect(screen.getByTestId('pane-claude-reload')).toBeEnabled()
+    act(() => fake.emit.shortcut('new-chat-all'))
+    expect(fake.newChat).toHaveBeenCalledTimes(1)
+  })
+
   test('pane-<slot>-phase renders the onTurn phase', () => {
     const fake = fakeTriplex()
     mount(fake, { mode: 'split' })

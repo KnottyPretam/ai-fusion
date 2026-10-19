@@ -35,7 +35,9 @@ import { createConversation, loadConversation, loadConversations } from '../../a
 import './register.js'
 import { DEFAULT_COUNCIL, councilOf } from './slice.js'
 
-export const STREAM_KEYS = ['send', 'analyze', 'fusion']
+// 'reread' (2026-10-18): the desktop's automatic Read again runs on its own stream; while it reads a pane the
+// composer is locked like any other stream (the web app never opens one).
+export const STREAM_KEYS = ['send', 'analyze', 'fusion', 'reread']
 
 // The slots a Send targets when `slots` names a strict subset of the council: council members
 // only, de-duplicated, in council (= catalog) order — what the backend's resolve_slots does too;

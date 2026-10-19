@@ -20,7 +20,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { registerIpc, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, requireCouncil, requireOpenRouterKey, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, failurePrefix, resolveSnapshotKind, SNAPSHOT_NAMES, SNAPSHOT_KINDS, ANALYST_SNAPSHOTS_KEPT, FAILURE_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
+import { registerIpc, stampChatOf, requireSlot, requireTargets, requireText, requireDirection, requireActive, requireBoolean, requireConvId, requireAnalystChoice, requireTheme, requireCouncil, requireOpenRouterKey, annotateHealth, snapshotFileName, saveDomSnapshot, pruneSnapshots, failurePrefix, resolveSnapshotKind, SNAPSHOT_NAMES, SNAPSHOT_KINDS, ANALYST_SNAPSHOTS_KEPT, FAILURE_SNAPSHOTS_KEPT, publicBridgeState, MAX_PROMPT_CHARS, MAX_CONV_ID_CHARS, OPEN_CHATS_LOAD_TIMEOUT_MS } from '../../../main/ipc.js'
 import { SLOTS } from '../../../main/sites.js'
 import { fakeIpcMain, fakeWebContents, eventFrom, fakeLog, fakeSites, fakeTimers, tick } from './_fakes.js'
 
@@ -163,7 +163,7 @@ function setup({ dev = true, backend = null, bridge = null, links = {}, urls = {
     applyLayout: (n) => analystViews.layouts.push(n),
     slotOfSender: (event) => (event && event.sender && event.sender.id === analystWc.id && (!event.senderFrame || !event.senderFrame.parent) ? analystViews.slot : null),
   }
-  const chats = { get: (convId, slot) => (convId === CONV && links[slot]) || null }
+  const chats = { get: (convId, slot) => (convId === CONV && links[slot]) || null, conversationsOf: (slot, url) => (links[slot] && links[slot] === url ? [CONV] : []) }
   const orchestrator = { inflight: (s) => (inflight[s] ? { reqId: 'r' } : null) }
   const sent = []
   const opened = []
@@ -441,9 +441,9 @@ test('panes:getInfo replays the cached health, the zoom factor of every view and
   assert.deepEqual(sent, [
     ['panes:zoom', { slot: 'claude', factor: 1.5 }],
     ['panes:zoom', { slot: 'chatgpt', factor: 1 }],
-    ['panes:health', 'grok', h],
+    ['panes:health', 'grok', { ...h, chatOf: [] }], // 2026-10-18: the replayed copy is stamped like a live one
     ['panes:zoom', { slot: 'grok', factor: 1 }],
-    ['panes:health', 'gemini', h],
+    ['panes:health', 'gemini', { ...h, chatOf: [] }],
     ['panes:zoom', { slot: 'gemini', factor: 0.9 }],
     ['panes:bridge', { connected: true, since: 1710000000000 }],
     ['panes:theme', { theme: 'dark' }],
@@ -617,7 +617,8 @@ test('triplex:adapter:health from a site view is cached and forwarded as panes:h
   const { ipcMain, siteWc, renderer, sent, health } = setup()
   const h = { composer: true, send: true, reply: null, stop: null, session: 'ok', matched: { composer: '#p', send: 'b', reply: null, stop: null, error: null }, url: 'u', host: 'h', title: 't', ts: 1 }
   ipcMain.emit('triplex:adapter:health', eventFrom(siteWc.grok), h)
-  assert.deepEqual(sent, [['panes:health', 'grok', h]])
+  // 2026-10-18: the renderer's copy carries `chatOf` (no recorded chat is at 'u'); the views' cache does not
+  assert.deepEqual(sent, [['panes:health', 'grok', { ...h, chatOf: [] }]])
   assert.deepEqual(health.grok, h)
   ipcMain.emit('triplex:adapter:health', eventFrom(renderer), h)
   ipcMain.emit('triplex:adapter:health', eventFrom(siteWc.grok), 'nope')
@@ -960,3 +961,21 @@ test('2026-10-11: a SUSPECT pane snapshot is `<slot>-suspect-<ts>.html` — its 
   assert.deepEqual(removed2.sort(), ['/snap/grok-suspect-1.html', '/snap/grok-suspect-2.html', '/snap/grok-suspect-3.html'], 'the three oldest suspects beyond 20 (the listing predates the write)')
   await assert.rejects(saveDomSnapshot({ client, name: 'grok', snapshotsDir: dir, fs: fs2, kind: 'weird' }), /bad_request/)
 })
+
+test('chatOf (2026-10-18): the renderer\'s health copy names the conversation whose recorded chat the pane shows — the automatic Read again keys on it; the cache and the bridge frame never carry it', () => {
+  const link = 'https://chatgpt.com/c/abc'
+  const { ipcMain, siteWc, sent, health } = setup({ links: { chatgpt: link } })
+  const h = { composer: true, send: false, reply: true, stop: false, session: 'ok', matched: { composer: '#p', send: null, reply: 'x', stop: null, error: null }, url: link, host: 'chatgpt.com', title: 't', ts: 1 }
+  ipcMain.emit('triplex:adapter:health', eventFrom(siteWc.chatgpt), h)
+  assert.deepEqual(sent.at(-1), ['panes:health', 'chatgpt', { ...h, chatOf: [CONV] }])
+  assert.equal('chatOf' in health.chatgpt, false, 'the views cache (and so the bridge health frame) is the adapter\'s object')
+  ipcMain.emit('triplex:adapter:health', eventFrom(siteWc.chatgpt), { ...h, url: 'https://chatgpt.com/c/other', ts: 2 })
+  assert.deepEqual(sent.at(-1)[2].chatOf, [], 'the user moved the pane to another chat')
+  // the pure helper: no store, or a store without the lookup → the object as it came; a throwing lookup → []
+  assert.equal(stampChatOf(h, 'chatgpt', null), h)
+  assert.equal(stampChatOf(h, 'chatgpt', { get: () => null }), h)
+  assert.deepEqual(stampChatOf(h, 'chatgpt', { conversationsOf: () => { throw new Error('x') } }).chatOf, [])
+  assert.deepEqual(stampChatOf(h, 'chatgpt', { conversationsOf: () => ['a', '', 3, 'b'] }).chatOf, ['a', 'b'])
+  assert.equal(stampChatOf(null, 'chatgpt', { conversationsOf: () => [] }), null)
+})
+

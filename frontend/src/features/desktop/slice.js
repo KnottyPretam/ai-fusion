@@ -42,6 +42,8 @@ import { APP_NAME } from '../../branding.js'
 //   panes/sendStart  {targets?}                   sending = true; clears lastSend for the targets (all when omitted)
 //   panes/sendResult {results}                    sending = false; lastSend[slot] = results[slot] (per-slot outcome
 //                                                 objects in the lastSend shape; `{}` just ends the send)
+//   panes/rereadResult {slot, result}             lastSend[slot] = result ONLY — never touches `sending` (2026-10-18:
+//                                                 the automatic Read again's line, ./useAutoReread.js)
 //   panes/zoom       {slot, factor}               from triplex.onZoom / the zoom() reply
 //   panes/capture    {capture} | {slot, on}       whole map (getCapture) or one switch (setCapture)
 //   panes/bridge     {connected, since?, error?}   `error` (S3) is kept only while disconnected: main
@@ -333,6 +335,10 @@ export function panesReducer(s = initialPanes(), a) {
       }
       if (!s.sending && lastSend === s.lastSend) return s
       return { ...s, sending: false, lastSend }
+    }
+    case 'panes/rereadResult': {
+      if (!isSlotId(a.slot) || !a.result || typeof a.result !== 'object' || s.lastSend[a.slot] === a.result) return s
+      return { ...s, lastSend: { ...s.lastSend, [a.slot]: a.result } }
     }
     case 'panes/zoom':
       return isSiteId(a.slot) && isFactor(a.factor) ? setIn(s, 'zoom', a.slot, a.factor) : s
