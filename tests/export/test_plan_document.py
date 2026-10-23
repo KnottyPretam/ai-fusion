@@ -20,7 +20,13 @@ from backend.schemas import (
     PlanTurn,
     Usage,
 )
-from tests.export.conftest import html_headings, md_headings, md_tables
+from tests.export.conftest import (
+    doc_headings,
+    html_headings,
+    is_subsequence,
+    md_headings,
+    md_tables,
+)
 
 PLAN_MODEL = "anthropic/claude-opus-5.5"
 
@@ -251,7 +257,8 @@ def test_both_formats_render_from_the_same_document(planned):
     conv, _, turn = planned()
     doc = build_document(conv, turn.id)
     md, html = render_markdown_doc(doc), render_html_doc(doc)
-    assert [h for h in md_headings(md) if h[0] >= 2] == [h for h in html_headings(html) if h[0] >= 2]
+    assert html_headings(html) == doc_headings(doc)
+    assert is_subsequence(doc_headings(doc, md=True), md_headings(md))
     for needle in ("Use 2000 deg/s.", "Locate the table by its register name.", "0x00..0x04"):
         assert needle in md and needle in html
     assert "**tokens:** 2400 in / 650 out" in md and "**model calls:** 1" in md

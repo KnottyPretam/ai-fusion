@@ -78,3 +78,14 @@ def test_refactor_is_among_them():
     """The specific route that shipped missing, pinned so it cannot regress quietly."""
     assert "refactor" in router_modules()
     assert "/api/conversations/{conv_id}/refactor" in mounted_paths()
+
+
+def test_latex2mathml_symbol_table_ships_in_the_frozen_backend():
+    """2026-10-23: latex2mathml opens `unimathsymbols.txt` beside its own `__file__` when it is
+    IMPORTED (backend/export_render.py turns export equations into MathML with it). No PyInstaller
+    hook ships that file, so the spec must collect it, or the frozen backend fails on the first
+    export import while every source-run test passes."""
+    import latex2mathml
+
+    assert (Path(latex2mathml.__file__).parent / "unimathsymbols.txt").is_file()
+    assert re.search(r'collect_data_files\(\s*"latex2mathml"\s*\)', SPEC.read_text())

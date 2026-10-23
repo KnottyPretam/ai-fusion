@@ -11,7 +11,7 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # `SPECPATH` is injected by PyInstaller: the directory holding this file. Resolving the repo from it
 # rather than from the working directory means the build is the same wherever it is started.
@@ -61,6 +61,10 @@ a = Analysis(
     # offline scenarios replay: both are read from disk at runtime, so they travel with the build.
     datas=[
         (str(ROOT / "backend" / "llm" / "fixtures" / "models.json"), "backend/llm/fixtures"),
+        # 2026-10-23: latex2mathml reads its symbol table (unimathsymbols.txt) at IMPORT time, from
+        # beside its own __file__; no hook ships it, and without it the frozen backend dies on the
+        # first export import (backend/export_render.py turns equations into MathML with it).
+        *collect_data_files("latex2mathml"),
     ],
     hiddenimports=HIDDEN,
     hookspath=[],

@@ -478,6 +478,23 @@ There is deliberately NO `pdf` format: the desktop shell prints the PDF from thi
 window, so the document is authored once. Analyze and Fusion documents keep the R1/R2/R3 labels and are
 asserted leak-free; a Send document names the slots, as its columns do on screen.
 
+**Rendered prose (2026-10-23).** In the HTML (and so the PDF), model prose — replies, partials, Fusion
+justifications and claims, the Refactor question and summaries, the Plan's prose — is RENDERED by
+`backend/export_render.py`: CommonMark + GFM tables / strikethrough / task lists (markdown-it-py), equations
+(`$…$`, `$$…$$`, `\(…\)`, `\[…\]`; currency rules; run-together `$$a$$$$b$$` split) typeset as native MathML
+Core through latex2mathml's element tree and our own allow-listed serializer (`\mathbf` etc. as Unicode math
+letters, no colours, no positive or negative offsets that could paint over the page, TeX source kept in an
+`application/x-tex` annotation, escaped `<code class="tex">` fallback), and an allow-list of attribute-free
+inline tags (br sub sup b strong i em u s del ins mark kbd small) — every other tag, attribute or comment is
+visible escaped text, and HTML blocks are off. Links are anchors only in Send/Continue documents (http/https/
+mailto); images become their alt text. Equations in table cells, bullets and checklist items are typeset too;
+a value with no formula is exactly its escaped text. The user's prompt, error messages and reasoning stay plain
+`<pre>`, raw analyst attempts stay code. The document stays static: no script, no external URL, exactly one
+`<style>`, a `Content-Security-Policy` meta right after the charset (`default-src 'none'; style-src
+'unsafe-inline'; img-src data:`), system math fonts only (MathML Core does not line-break, so a display formula
+wider than the text is clipped in print). The `.md` export is byte-for-byte what it was (pinned by
+`tests/export/test_markdown_pin.py`).
+
 ## Council addendum (2026-09-27 — "a council anyone can assemble", stage 1)
 
 Additive. A conversation now seats a COUNCIL of 2..5 agents from a seven-vendor catalog, each on ONE

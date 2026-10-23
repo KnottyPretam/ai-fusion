@@ -50,8 +50,13 @@ def test_html_renders_hostile_text_inert_and_readable(hostile):
     assert "&amp;" in html
     assert _UNESCAPED_AMP_RE.search(html) is None
     assert "&quot;" in html and "&#x27;" in html
-    # Readable: unescaping the document gives the reply back verbatim.
-    assert HOSTILE_REPLY in unescape(html)
+    # Readable: the reply is rendered Markdown now, so its code span is a <code> -- and every tag it
+    # wrote is still there, as text, once the document is unescaped.
+    text = unescape(html)
+    assert 'Try <script>alert("x & y")</script> and <img src=x onerror=alert(1)>.' in text
+    assert "Fenced code: <code>inline</code> and a &amp; b" in html
+    assert "\"double\" and 'single' quotes." in text
+    assert "<style>body{display:none}</style>" in text
 
 
 def test_markdown_fences_a_reply_that_carries_raw_html(hostile):

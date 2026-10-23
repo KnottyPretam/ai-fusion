@@ -7,7 +7,13 @@ import pytest
 
 from backend.config import settings
 from backend import export
-from tests.export.conftest import html_headings, md_headings, md_tables
+from tests.export.conftest import (
+    doc_headings,
+    html_headings,
+    is_subsequence,
+    md_headings,
+    md_tables,
+)
 
 EXIT_REASONS = ("converged", "stalemate", "max_iterations", "error")
 
@@ -138,9 +144,10 @@ def test_stalemate_round_has_no_revise_and_no_status_change(scenario):
 
 def test_fusion_html_mirrors_the_markdown_sections(scenario):
     conv, _, fusion = scenario()
-    md = export.render_markdown(conv, fusion.id)
-    html = export.render_html(conv, fusion.id)
-    assert [t for _, t in html_headings(html)] == [t for _, t in md_headings(md)]
+    doc = export.build_document(conv, fusion.id)
+    md, html = export.render_markdown_doc(doc), export.render_html_doc(doc)
+    assert html_headings(html) == doc_headings(doc)
+    assert is_subsequence(doc_headings(doc, md=True), md_headings(md))
     assert '<meta name="triplex-export-type" content="fusion">' in html
     assert f'<meta name="triplex-export-turn" content="{fusion.id}">' in html
 

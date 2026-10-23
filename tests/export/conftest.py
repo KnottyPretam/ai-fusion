@@ -419,6 +419,35 @@ def html_headings(text: str) -> list[tuple[int, str]]:
     return [(int(m.group(1)), unescape(m.group(2)).strip()) for m in _HTML_HEADING_RE.finditer(text)]
 
 
+def doc_headings(doc: Any, *, md: bool = False) -> list[tuple[int, str]]:
+    """The document's OWN outline, from the shared model: the title, then every `Heading` block
+    (inside a `Details` too). A heading a model wrote inside a reply is not part of it -- the HTML
+    demotes it (`<h3 class="md-h">`, which `html_headings` does not match) and the Markdown keeps it
+    verbatim inside the body -- so this, not the other rendering, is what each one is compared to.
+    `md=True` spells the text the way the Markdown heading line does (backslash-escaped)."""
+    from backend.export import Details, Heading, _md_inline
+
+    def spell(text: str) -> str:
+        return _md_inline(text) if md else text.strip()
+
+    out: list[tuple[int, str]] = [(1, spell(doc.title))]
+
+    def walk(blocks: Any) -> None:
+        for block in blocks:
+            if isinstance(block, Heading):
+                out.append((max(1, min(6, block.level)), spell(block.text)))
+            elif isinstance(block, Details):
+                walk(block.blocks)
+
+    walk(doc.blocks)
+    return out
+
+
+def is_subsequence(needle: list[Any], haystack: list[Any]) -> bool:
+    it = iter(haystack)
+    return all(any(item == other for other in it) for item in needle)
+
+
 def md_tables(text: str) -> list[list[list[str]]]:
     """Every GFM pipe table as a list of rows of cells (the `---` rule row dropped)."""
     tables: list[list[list[str]]] = []

@@ -17,7 +17,9 @@ from tests.export.conftest import (
     CLAUDE_REASONING,
     GROK_ERROR,
     GROK_PARTIAL,
+    doc_headings,
     html_headings,
+    is_subsequence,
     md_headings,
 )
 
@@ -104,11 +106,12 @@ def test_send_html_has_the_same_sections_and_marker(conv):
 
 
 def test_both_formats_are_built_from_the_same_document(conv):
-    """The two renderers share one document model: the same sections in the same order."""
-    turn = conv.turns[0]
-    md = [t for _, t in md_headings(export.render_markdown(conv, turn.id))]
-    html = [t for _, t in html_headings(export.render_html(conv, turn.id))]
-    assert md == html
+    """The two renderers share one document model: the same sections in the same order. Each is
+    compared to the model's own outline, because a heading INSIDE a reply is verbatim in the
+    Markdown but demoted out of the HTML outline (`doc_headings`)."""
+    doc = export.build_document(conv, conv.turns[0].id)
+    assert html_headings(export.render_html_doc(doc)) == doc_headings(doc)
+    assert is_subsequence(doc_headings(doc, md=True), md_headings(export.render_markdown_doc(doc)))
 
 
 def test_continue_turn_is_a_single_named_slot(conv, add_continue):

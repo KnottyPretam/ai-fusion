@@ -130,6 +130,21 @@ is absent, never fatal. Base64 payloads are excised before the export leak scans
 pinned to the shipped asset, because base64 of any image contains arbitrary letter pairs — `R1` among
 them — and a substring scan would fire on noise.
 
+**Rendered exports (2026-10-23)** — `backend/export_render.py` (one module; `backend/*/__init__.py` are frozen)
+renders model prose in the HTML export — and so the PDF the desktop prints from it with scripting off — as
+static HTML: markdown-it-py (CommonMark + GFM tables / strikethrough / task lists, `html_block` DISABLED), math
+via mdit-py-plugins' dollarmath plus local `\(…\)` / `\[…\]` rules into native MathML Core through
+`latex2mathml.converter.convert_to_element` and OUR serializer (never `convert()`, which un-escapes its own
+output; MathML Core allow-list, `mathvariant` → Unicode math letters, no colours, no offsets — a formula once
+painted over the anonymity notice — `TEX_MAX_CHARS`, `RENDER_MAX_CHARS`, escaped `code.tex` fallback), and an
+attribute-free inline-tag allow-list (br sub sup b strong i em u s del ins mark kbd small; anything else is
+visible text). `export.py`'s `Body.kind` is `plain | markdown | code` (`prose()` at the model-prose sites;
+prompts / errors / reasoning stay plain, raw attempts code) and `Body.links` (anchors only in Send / Continue);
+`inline_html` typesets math in cells / bullets / checklists and equals `esc(value)` without one. The `.md`
+export is byte-for-byte unchanged (`tests/export/test_markdown_pin.py`). latex2mathml reads `unimathsymbols.txt`
+at import, so `packaging/backend.spec` collects it (`tests/packaging` pins that) — the import is lazy, so a
+build missing it would quietly print TeX instead of math: check a frozen export, not just the tests.
+
 **Tooltips** — `frontend/src/components/TooltipLayer.jsx`, mounted once beside the root in `main.jsx`, so both
 shells get it. It is DELEGATED: it listens on the document and reads the description off the nearest
 ancestor carrying `data-tip` (preferred) or `title`, shows it after `TOOLTIP_DELAY_MS` (1000 ms on hover,
@@ -258,7 +273,7 @@ Shared files (`backend/{schemas,config,main,sse,api_errors}.py`, every `__init__
 
 ## Testing Notes
 
-- `uv run pytest -q` — 2174 offline tests (unit, feature, `tests/council/` — vendors, count-aware prompts, the key / defaults routes, anon and fusion over councils of 2 and 5, export — `tests/e2e` HTTP flows over every scenario (the 14 classic ones plus `council_two` / `council_five`), syrupy goldens in `tests/e2e/__snapshots__`, hypothesis fuzz, leak sweep, cost-meter truth, the scripts driven in-process against `respx`); `-m 'not live'` is the default `addopts`, outbound HTTP is blocked by the shared conftest; regenerate goldens deliberately with `uv run pytest tests/e2e/test_golden.py --snapshot-update`
+- `uv run pytest -q` — 2414 offline tests (unit, feature, `tests/council/` — vendors, count-aware prompts, the key / defaults routes, anon and fusion over councils of 2 and 5, export — `tests/e2e` HTTP flows over every scenario (the 14 classic ones plus `council_two` / `council_five`), syrupy goldens in `tests/e2e/__snapshots__`, hypothesis fuzz, leak sweep, cost-meter truth, the scripts driven in-process against `respx`); `-m 'not live'` is the default `addopts`, outbound HTTP is blocked by the shared conftest; regenerate goldens deliberately with `uv run pytest tests/e2e/test_golden.py --snapshot-update`
 - `uv run pytest -m live -rs tests/live` — nine budgeted live checks (needs `OPENROUTER_API_KEY` in `.env`; skipped without it; never in CI; cumulative cost asserted < $0.50; honours `MOCK_RECORD_DIR`)
 - `cd frontend && npm test` (vitest, 769 tests) and `npm run build`
 - `cd frontend && npx playwright test` — default run (`MOCK_SCENARIO=planted_factual`, ports 8011/5174): `smoke`, `flow`, `settings`, `persistence`, `guard`; scenario-gated runs, one per invocation on their own ports: `MOCK_SCENARIO=stalemate BACKEND_PORT=8012 VITE_PORT=5175 npx playwright test e2e/stalemate.spec.js`, then `standing_at_cap` 8013/5176 `cap`, `analyst_degrade` 8014/5177 `degrade`, `truncated` 8015/5178 `truncated`, `grounded` 8016/5179 `grounded`, and `MOCK_DELAY_MS=200 BACKEND_PORT=8017 VITE_PORT=5180 npx playwright test e2e/guard.spec.js` for a paced trace; screenshots land in `docs/screenshots/`; `e2e/theme.spec.js` drives the same flow with `data-theme="dark"` forced and fails on any text under 3:1 against its real background (the dark palette is shared with the desktop shell, so this is where a rule that only ever ran on white shows up)

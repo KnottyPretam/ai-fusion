@@ -34,10 +34,23 @@ model's doing, and the answer is reproduced verbatim on purpose.
 
 QUOTED TEXT. Everything a model or a user wrote is untrusted for the document structure:
 
-* HTML: every interpolated value is escaped (`_esc`) and every quoted body lands inside
-  `<pre class="body">`, so a reply containing `<script>` is inert and still readable. The document
-  references no external URL of any kind -- no stylesheet, font, image or script; the only
-  absolute URLs are the `<a href>` citation links in the body.
+* HTML: the document is STATIC -- no script, and a Content-Security-Policy that lets it load
+  nothing but its own inline style and the embedded logo -- because the desktop shell prints it to
+  PDF with scripting off. Every interpolated value is escaped (`_esc`). A body's `kind` decides how
+  it lands, once, in the builder: model PROSE (a reply, a justification, a claim, a plan step;
+  `prose()`) is rendered Markdown with typeset math inside `<div class="md">`
+  (`export_render.markdown_html`: raw HTML only as an allow-list of attribute-free formatting
+  tags, everything else -- `<script>` included -- shown as text); the user's prompt, an error
+  message and reasoning are shown as written (`body()`), in `<pre class="body">` -- or in
+  `<pre class="code">` when the fence rule below marks them, as it always did; a raw analyst
+  attempt is `<pre class="code">`. Prose longer than `export_render.RENDER_MAX_CHARS` is shown as
+  written too. A table cell, bullet or checklist item typesets its formulas and is otherwise
+  exactly its escaped text (`export_render.inline_html`). Every container of model text clips
+  (`overflow: clip`), so nothing it holds -- a formula, a stack of combining marks -- can paint
+  over the header or the notice. The document references no external URL of any kind -- no
+  stylesheet, font, image or script; the only absolute URLs are anchors: the citation links, and
+  the http(s) / mailto links inside a Send or Continue reply (`Body.links`). Every other document
+  shows a link's text only.
 * Markdown: a quoted body is emitted verbatim -- a model reply IS Markdown, and the panes render
   it with `remark-gfm`, so its own fenced code blocks, lists and tables survive the export. Two
   bodies are wrapped in a fence of their own instead (`Body.code`, decided once in the builder):
@@ -53,13 +66,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from html import escape as _html_escape
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from . import anon, api_errors
 from .branding import HTML_LOGO_PX, MARKDOWN_LOGO_PX, logo_data_uri
 from .config import settings
+from .export_render import RENDER_MAX_CHARS, inline_html, markdown_html, safe_href
+from .export_render import esc as _esc
 from .prompts.council import label_or_list, number_word
 from .schemas import (
     LABELS,
@@ -115,8 +129,8 @@ KIND_TITLES: dict[str, str] = {
 }
 
 #: The app's own three theme states, so an exported document looks like the app it came from (user
-#: request, 2026-09-20). `light` is the palette this module has always rendered, byte for byte, so
-#: every existing document and every golden is unchanged unless a theme is asked for. Markdown has no
+#: request, 2026-09-20). `light`, the default, is `CSS` exactly with no override on top, so a document
+#: changes palette only when a theme is asked for. Markdown has no
 #: styling at all, so a theme only ever affects the HTML — and the PDF, which is that HTML printed
 #: with `printBackground: true` (already the case in desktop/main/export.js, so a dark document really
 #: does print dark rather than light-on-white).
@@ -205,12 +219,22 @@ class Meta:
 class Body:
     """Quoted block text (a prompt, a reply, a justification, a raw analyst attempt).
 
-    `code` is decided ONCE here, by `body()`: a body carrying a raw HTML tag, or one whose own
-    code fences are left open, is fenced in Markdown and shown monospace in HTML; anything else is
-    Markdown prose, verbatim."""
+    Everything is decided ONCE, by `body()` / `prose()`, and both renderers only read it:
+
+    * `code` -- the MARKDOWN decision: a body carrying a raw HTML tag, or one whose own code fences
+      are left open, is wrapped in a fence of its own; anything else is emitted verbatim.
+    * `kind` -- the HTML decision: `"markdown"` (model prose, `prose()`) is rendered Markdown with
+      typeset math in `<div class="md">` -- or, past `RENDER_MAX_CHARS`, shown as written like the
+      other two; `"plain"` is `<pre class="body">`; `"code"` is `<pre class="code">`. `body()`
+      makes a raw attempt `"code"`, and any other body it shows as written (a prompt, an error,
+      reasoning) `"code"` when `code` is set, else `"plain"` -- what the HTML always did.
+    * `links` -- a `"markdown"` body's http(s) / mailto links become anchors (Send and Continue
+      replies only); everywhere else a link is its text."""
 
     text: str
     code: bool = False
+    kind: Literal["plain", "markdown", "code"] = "plain"
+    links: bool = False
 
 
 @dataclass(frozen=True)
@@ -249,7 +273,8 @@ class Link:
 
 @dataclass(frozen=True)
 class Links:
-    """Citations, as an ordered list of plain anchors (the only external URLs in the document)."""
+    """Citations, as an ordered list of plain anchors (with a Send or Continue reply's own links,
+    the only external URLs in the document)."""
 
     items: tuple[Link, ...]
 
@@ -293,11 +318,6 @@ _WS_RE = re.compile(r"\s+")
 _SLUG_RE = re.compile(r"[A-Za-z0-9]+")
 
 
-def _esc(value: Any) -> str:
-    """HTML-escape, quotes included: the only way a value reaches the HTML document."""
-    return _html_escape("" if value is None else str(value), quote=True)
-
-
 def _one_line(value: Any) -> str:
     return _WS_RE.sub(" ", "" if value is None else str(value)).strip()
 
@@ -323,12 +343,24 @@ def _fence_left_open(text: str) -> bool:
     return open_marker is not None
 
 
+def _needs_fence(raw: str) -> bool:
+    return bool(_HTML_TAG_RE.search(raw)) or _fence_left_open(raw)
+
+
 def body(text: Any, *, code: bool | None = None) -> Body:
-    """A quoted block, with the fence decision taken once for both renderers."""
+    """A quoted block shown as written (a prompt, an error, reasoning; `code=True`: a raw attempt),
+    with the fence decision taken once for both renderers."""
     raw = "" if text is None else str(text)
     if code is None:
-        code = bool(_HTML_TAG_RE.search(raw)) or _fence_left_open(raw)
-    return Body(raw.rstrip(), code=code)
+        code = _needs_fence(raw)
+    return Body(raw.rstrip(), code=code, kind="code" if code else "plain")
+
+
+def prose(text: Any, *, links: bool = False) -> Body:
+    """Model-authored Markdown (a reply, a claim, a justification, a plan step): verbatim in the
+    Markdown -- fenced exactly as `body()` would -- and rendered, math typeset, in the HTML."""
+    raw = "" if text is None else str(text)
+    return Body(raw.rstrip(), code=_needs_fence(raw), kind="markdown", links=links)
 
 
 def _fence(text: str) -> str:
@@ -346,17 +378,6 @@ def _slug(text: str, limit: int = 40) -> str:
 def _stamp(ts: str) -> str:
     digits = re.sub(r"\D", "", ts or "")
     return f"{digits[:8]}-{digits[8:14]}" if len(digits) >= 14 else ""
-
-
-def safe_href(url: Any) -> str | None:
-    """Only an absolute http(s) URL may become an anchor (mirrors `safeCitationHref` in the UI)."""
-    if not isinstance(url, str):
-        return None
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    return url if parts.scheme in ("http", "https") and parts.netloc else None
 
 
 def _domain(url: str) -> str:
@@ -525,7 +546,7 @@ def _slot_section(
         meta.append(("truncated", "yes — the reply hit the token limit"))
     out: list[Any] = [Heading(name, 2), Meta(tuple(meta))]
     if reply:
-        out.append(body(reply))
+        out.append(prose(reply, links=True))
     if error:
         out.append(Heading("Error", 3))
         code = error_code_of(error)
@@ -534,7 +555,7 @@ def _slot_section(
         out.append(body(error))
         if partial.strip():
             out.append(Heading("Partial text received before the failure", 3))
-            out.append(body(partial))
+            out.append(prose(partial, links=True))
     if citations:
         out.append(Heading("Citations", 3))
         out.append(_links(citations))
@@ -714,7 +735,7 @@ def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
         return out
 
     out.append(Heading("The question, restated", 2))
-    out.append(body(ref.question))
+    out.append(prose(ref.question))
 
     out.append(Heading("What the question is about", 2))
     out.append(Para(GRAPH_NOTE))
@@ -743,7 +764,7 @@ def _refactor_blocks(conv: Conversation, turn: Any) -> list[Any]:
     for reply in ref.replies:
         out.append(Heading(reply.model, 3))
         if reply.summary:
-            out.append(body(reply.summary))
+            out.append(prose(reply.summary))
         if reply.claims:
             out.append(Bullets(tuple(Bullet(text=c) for c in reply.claims)))
     out.extend(_usage_blocks(turn))
@@ -900,13 +921,13 @@ def _round_blocks(rnd: FusionRound) -> list[Any]:
                     "justification or no named peer argument"
                 )
             )
-        out.append(body(exchange.justification or NONE_GIVEN))
+        out.append(prose(exchange.justification or NONE_GIVEN))
         if exchange.revised_claim:
             out.append(Heading("Revised claim", 4))
-            out.append(body(exchange.revised_claim))
+            out.append(prose(exchange.revised_claim))
         if exchange.persuaded_by:
             out.append(Heading("Persuaded by", 4))
-            out.append(body(exchange.persuaded_by))
+            out.append(prose(exchange.persuaded_by))
     out.append(
         Table(
             ("divergence", f"status after round {rnd.round}"),
@@ -997,9 +1018,9 @@ def _fusion_blocks(conv: Conversation, turn: FusionTurn) -> list[Any]:
             for label in _labels_with_position(divergence):
                 out.append(Heading(label, 4))
                 out.append(Caption("latest claim"))
-                out.append(body(latest_claim(turn.rounds, divergence, label)))
+                out.append(prose(latest_claim(turn.rounds, divergence, label)))
                 out.append(Caption("latest justification"))
-                out.append(body(latest_justification(turn.rounds, divergence, label)))
+                out.append(prose(latest_justification(turn.rounds, divergence, label)))
     out.extend(_usage_blocks(turn))
     return out
 
@@ -1039,7 +1060,7 @@ def _plan_blocks(conv: Conversation, turn: PlanTurn) -> list[Any]:
         return out
 
     out.append(Heading("Objective", 2))
-    out.append(body(plan.objective))
+    out.append(prose(plan.objective))
 
     out.append(Heading("Prerequisites", 2))
     if plan.prerequisites:
@@ -1060,10 +1081,10 @@ def _plan_blocks(conv: Conversation, turn: PlanTurn) -> list[Any]:
         for step in plan.steps:
             out.append(Heading(f"{step.number}. {step.title}", 3))
             out.append(Caption("action"))
-            out.append(body(step.action))
+            out.append(prose(step.action))
             if step.why.strip():
                 out.append(Caption("why"))
-                out.append(body(step.why))
+                out.append(prose(step.why))
             if step.inputs:
                 out.append(Caption("inputs"))
                 out.append(Bullets(tuple(Bullet(text=x) for x in step.inputs)))
@@ -1072,7 +1093,7 @@ def _plan_blocks(conv: Conversation, turn: PlanTurn) -> list[Any]:
                 out.append(Bullets(tuple(Bullet(text=x) for x in step.outputs)))
             if step.verify.strip():
                 out.append(Caption("verify"))
-                out.append(body(step.verify))
+                out.append(prose(step.verify))
 
     out.append(Heading("Decision points", 2))
     if not plan.decisions:
@@ -1087,10 +1108,10 @@ def _plan_blocks(conv: Conversation, turn: PlanTurn) -> list[Any]:
             out.append(Bullets(tuple(Bullet(text=o) for o in decision.options)))
         if decision.recommendation.strip():
             out.append(Caption("recommendation"))
-            out.append(body(decision.recommendation))
+            out.append(prose(decision.recommendation))
         if decision.rationale.strip():
             out.append(Caption("rationale"))
-            out.append(body(decision.rationale))
+            out.append(prose(decision.rationale))
 
     out.append(Heading("Risks", 2))
     if plan.risks:
@@ -1254,6 +1275,10 @@ def render_markdown_doc(doc: Document) -> str:
 
 
 # --------------------------------------------------------------------------- html renderer
+#: The document's Content-Security-Policy (a `<meta>` right after the charset): its one inline
+#: stylesheet and the embedded `data:` logo load, nothing else can -- no script, frame, font or fetch.
+CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+
 # Embedded on purpose: the document must render from a file path with no network at all, and it is
 # also the master the desktop shell prints to PDF.
 CSS = """
@@ -1286,6 +1311,7 @@ pre.body { font: inherit; }
 pre.code {
   border: 1px solid var(--line); border-left: 3px solid var(--accent);
   font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-ligatures: none;
 }
 ul, ol { margin: 8px 0 16px; padding-left: 22px; }
 li { margin: 4px 0; }
@@ -1300,6 +1326,68 @@ th, td {
 }
 th { background: var(--panel); font-weight: 600; }
 a { color: var(--link); }
+/* A rendered reply (export_render.markdown_html): the same left rule and panel as a quoted body. */
+.md {
+  margin: 8px 0 16px; padding: 2px 14px; overflow-wrap: anywhere;
+  border-left: 3px solid var(--accent); background: var(--panel); border-radius: 0 4px 4px 0;
+}
+/* Model text never paints outside the box that holds it -- not a formula, not a stack of combining
+   marks -- so nothing a reply writes can land on the header or the notice. A list clips at the list:
+   an item that clips loses its bullet (measured). `clip`, unlike `hidden`, changes no layout. */
+.md, td, .doc ul, .doc ol, pre.body, pre.code { overflow: clip; }
+.md > :first-child { margin-top: 8px; }
+.md > :last-child { margin-bottom: 8px; }
+.md .md-h {
+  margin: 16px 0 4px; padding: 0; border: 0; color: var(--ink);
+  text-transform: none; letter-spacing: normal; font-size: 15px;
+}
+.md h5.md-h, .md h6.md-h { font-size: 14px; }
+.md code, code.tex {
+  font: 0.88em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-ligatures: none; /* a ligature font draws `--` as a dash and `->` as an arrow */
+  background: var(--rule); border-radius: 3px; padding: 0 3px;
+}
+.md pre.md-code {
+  margin: 8px 0 12px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line);
+  border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-variant-ligatures: none;
+}
+.md pre.md-code code { background: none; padding: 0; font-size: 12.5px; }
+.md blockquote { margin: 8px 0; padding: 0 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.md ul.md-tasks { list-style: none; padding-left: 4px; }
+.md li.md-task input { margin: 0 6px 0 0; vertical-align: middle; }
+.md kbd {
+  font: 0.85em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-ligatures: none;
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; background: var(--bg);
+}
+.md-table { overflow-x: auto; margin: 8px 0 12px; }
+.md-table table { table-layout: auto; }
+.md-table th { background: var(--rule); }
+.md-table td, .md-table th { white-space: normal; overflow-wrap: break-word; } /* never mid-word */
+.al-l { text-align: left; } .al-c { text-align: center; } .al-r { text-align: right; }
+/* Typeset formulas: native MathML Core in an installed OpenType MATH font, named because the
+   `math` generic alone was measured falling back to a text font (no stretchy braces); nothing is
+   embedded. Windows ships Cambria Math, macOS STIX Two Math, most Linux desktops DejaVu Math. */
+math {
+  font-family: "Latin Modern Math", "STIX Two Math", "Cambria Math", "DejaVu Math TeX Gyre",
+    "Libertinus Math", "Noto Sans Math", math;
+}
+.math-block { margin: 8px 0; overflow-x: auto; overflow-y: hidden; }
+math[display="block"] { margin: 6px 0; }
+mtd.ma-l { text-align: left; } mtd.ma-r { text-align: right; } mtd.ma-c { text-align: center; }
+mtable.mt-align > mtr > mtd { padding-left: 0; padding-right: 0; }
+mtable.mt-align > mtr > mtd.ma-r ~ mtd.ma-r { padding-left: 2em; }
+.mv-b { font-weight: bold; } .mv-i { font-style: italic; } .mv-bi { font-weight: bold; font-style: italic; }
+.mv-tt { font-family: ui-monospace, monospace; } .mv-sf { font-family: sans-serif; }
+.me-box { border: 1px solid currentColor; padding: 0 2px; }
+.me-h { background: linear-gradient(currentColor, currentColor) no-repeat center / 100% 1px; }
+.me-up { background: linear-gradient(to top right, transparent 47%, currentColor 49%, currentColor 51%, transparent 53%); }
+.me-down { background: linear-gradient(to bottom right, transparent 47%, currentColor 49%, currentColor 51%, transparent 53%); }
+.me-up.me-down {
+  background: linear-gradient(to top right, transparent 47%, currentColor 49%, currentColor 51%, transparent 53%),
+    linear-gradient(to bottom right, transparent 47%, currentColor 49%, currentColor 51%, transparent 53%);
+}
 details { margin: 8px 0 16px; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: var(--panel); }
 summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; }
@@ -1311,6 +1399,16 @@ summary { cursor: pointer; font-weight: 600; font-size: 13px; }
   .doc { max-width: none; padding: 0; }
   h2, h3, h4 { break-after: avoid; }
   tr, li, pre.body, pre.code, details { break-inside: avoid; }
+  /* Paper cannot scroll: a wide table or formula is laid out whole, code wraps, a formula stays on
+     one page. MathML Core does not line-break, so a formula wider than the text area is clipped. */
+  .md-table, .math-block, .table-wrap { overflow: visible; }
+  .md pre.md-code { white-space: pre-wrap; break-inside: auto; }
+  /* A long item in a reply may break (kept whole, it left half a page blank); a reply's heading
+     stays with what follows it. */
+  .md li { break-inside: auto; }
+  .md .md-h { break-after: avoid; break-inside: avoid; }
+  .md .md-h + * { break-before: avoid; }
+  math, .math-block { break-inside: avoid; }
   a { color: inherit; }
   /* On paper the mark is the PAGE header, drawn in the margin of every sheet by the printer (the
      shell's `printToPDF` headerTemplate). `position: fixed` was tried first and Chromium laid it
@@ -1331,9 +1429,9 @@ DARK_TOKENS = """
 
 
 def theme_css(theme: Theme) -> str:
-    """`CSS` for `light` (byte for byte what this module has always emitted), plus a dark override for
-    `dark` (always) or `system` (only under `prefers-color-scheme: dark`, so the reader's own setting
-    decides — the same rule the app itself applies)."""
+    """`CSS` for `light` (exactly, no override), plus a dark override for `dark` (always) or
+    `system` (only under `prefers-color-scheme: dark`, so the reader's own setting decides — the
+    same rule the app itself applies)."""
     if theme == "light":
         return CSS
     if theme == "dark":
@@ -1360,15 +1458,17 @@ def _html_block(block: Any) -> str:
     if isinstance(block, Body):
         if not block.text.strip():
             return ""
-        cls = "code" if block.code else "body"
+        if block.kind == "markdown" and len(block.text) <= RENDER_MAX_CHARS:
+            return f'<div class="md">\n{markdown_html(block.text, links=block.links)}</div>'
+        cls = "code" if block.code or block.kind == "code" else "body"
         return f'<pre class="{cls}">{_esc(block.text)}</pre>'
     if isinstance(block, Bullets):
         items = []
         for item in block.items:
             parts = []
             if item.lead:
-                parts.append(f"<b>{_esc(item.lead)}</b> — ")
-            parts.append(_esc(item.text))
+                parts.append(f"<b>{inline_html(item.lead)}</b> — ")
+            parts.append(inline_html(item.text))
             if item.tags:
                 tags = ", ".join(_esc(t) for t in item.tags)
                 parts.append(f' <span class="tags">[{tags}]</span>')
@@ -1376,13 +1476,14 @@ def _html_block(block: Any) -> str:
         return "<ul>\n" + "\n".join(items) + "\n</ul>"
     if isinstance(block, Checklist):
         items = [
-            f'<li><input type="checkbox" disabled> {_esc(item)}</li>' for item in block.items
+            f'<li><input type="checkbox" disabled> {inline_html(item)}</li>' for item in block.items
         ]
         return '<ul class="checklist">\n' + "\n".join(items) + "\n</ul>"
     if isinstance(block, Table):
         head = "".join(f"<th>{_esc(h)}</th>" for h in block.headers)
         rows = "\n".join(
-            "<tr>" + "".join(f"<td>{_esc(c)}</td>" for c in row) + "</tr>" for row in block.rows
+            "<tr>" + "".join(f"<td>{inline_html(c)}</td>" for c in row) + "</tr>"
+            for row in block.rows
         )
         return (
             '<div class="table-wrap"><table>\n<thead><tr>'
@@ -1411,8 +1512,9 @@ def _html_block(block: Any) -> str:
 
 
 def render_html_doc(doc: Document, theme: Theme = "light") -> str:
-    """ONE self-contained document: embedded CSS, no external reference of any kind, every quoted
-    value escaped. The only absolute URLs are the citation anchors in the body."""
+    """ONE self-contained, STATIC document: embedded CSS, no script, no external reference of any
+    kind, every quoted value escaped, and a Content-Security-Policy that allows nothing else to
+    load. The only absolute URLs are anchors (citations; a Send or Continue reply's own links)."""
     markers = "\n".join(
         f'<meta name="{_esc(name)}" content="{_esc(value)}">' for name, value in _marker_fields(doc)
     )
@@ -1420,6 +1522,7 @@ def render_html_doc(doc: Document, theme: Theme = "light") -> str:
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+        f'<meta http-equiv="Content-Security-Policy" content="{CSP}">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f"{markers}\n"
         f"<title>{_esc(doc.title)}</title>\n"
