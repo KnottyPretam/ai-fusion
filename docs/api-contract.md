@@ -495,6 +495,17 @@ a value with no formula is exactly its escaped text. The user's prompt, error me
 wider than the text is clipped in print). The `.md` export is byte-for-byte what it was (pinned by
 `tests/export/test_markdown_pin.py`).
 
+**Table of contents (2026-10-28).** Every HTML document (and so the PDF) lists its own sections before the
+first one, after the metadata line and the opening notes: one link per `h2` and per `h3` (nested under the `h2`
+before it) — reply-internal headings and `h4`s are not listed — to the heading's id, `id="sec-N"` (N = the
+heading's position among the document's headings, so derived from nothing quoted). A link is a bare fragment
+(`<a href="#sec-N">`, no `target`, no `rel`): it loads nothing, so the Analyze / Fusion / Refactor / Plan
+documents, which carry no URL, carry these. A document with fewer than two entries has none. On a screen at
+least 76rem wide the list is a sidebar that stays in view (`position: sticky`, screen media only); on a narrow
+screen and on paper it is in the flow. The desktop prints with `generateTaggedPDF` + `generateDocumentOutline`,
+so the PDF also has bookmarks built from every heading (reply headings included) — Electron writes no outline
+without tagging (measured on 43 and 44). The `.md` export has no table of contents and does not move.
+
 ## Council addendum (2026-09-27 — "a council anyone can assemble", stage 1)
 
 Additive. A conversation now seats a COUNCIL of 2..5 agents from a seven-vendor catalog, each on ONE

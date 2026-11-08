@@ -424,6 +424,9 @@ test('pdf only: the HTML is fetched as the print source but no .html file is wri
   assert.doesNotMatch(print.headerTemplate, /file:\/\/|document\.html|\bdate\b|pageNumber|totalPages/i)
   assert.equal(print.pageSize, 'A4')
   assert.deepEqual(print.margins, { ...PDF_MARGINS })
+  // Bookmarks from the headings: Electron builds the outline from the tagged structure only.
+  assert.equal(print.generateDocumentOutline, true)
+  assert.equal(print.generateTaggedPDF, true)
 })
 
 // --- all three -------------------------------------------------------------------------------

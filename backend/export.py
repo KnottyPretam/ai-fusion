@@ -50,7 +50,9 @@ QUOTED TEXT. Everything a model or a user wrote is untrusted for the document st
   over the header or the notice. The document references no external URL of any kind -- no
   stylesheet, font, image or script; the only absolute URLs are anchors: the citation links, and
   the http(s) / mailto links inside a Send or Continue reply (`Body.links`). Every other document
-  shows a link's text only.
+  shows a link's text only. The one other link is the table of contents before the first section
+  (2026-10-28): a bare fragment (`#sec-N`) to one of the document's own headings, which loads
+  nothing, in every document; the PDF printed from it keeps those links and adds bookmarks.
 * Markdown: a quoted body is emitted verbatim -- a model reply IS Markdown, and the panes render
   it with `remark-gfm`, so its own fenced code blocks, lists and tables survive the export. Two
   bodies are wrapped in a fence of their own instead (`Body.code`, decided once in the builder):
@@ -65,6 +67,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -1393,6 +1396,24 @@ summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 18px; }
 .brand img { width: 34px; height: 34px; display: block; }
 .brand span { font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--muted); }
+/* The table of contents: in the flow before the first section (narrow screens, paper), and on a wide
+   screen a sidebar beside the document that stays in view while it scrolls. */
+.toc { margin: 16px 0 8px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.toc-title { margin: 0 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.toc ol { list-style: none; margin: 0; padding-left: 0; font-size: 13.5px; }
+.toc ol ol { padding-left: 16px; font-size: 13px; }
+.toc li { margin: 2px 0; }
+.toc a { color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
+.toc a:hover { text-decoration: underline; }
+.doc h2[id], .doc h3[id], .doc h4[id] { scroll-margin-top: 16px; }
+@media screen and (min-width: 76rem) {
+  .doc:has(> .toc) { position: relative; margin-left: max(18rem, calc((100% - 52rem) / 2)); }
+  .toc { position: absolute; top: 0; bottom: 0; right: 100%; width: 16rem; margin: 0; padding: 0; border: 0; background: none; }
+  .toc-in {
+    position: sticky; top: 0; max-height: 100vh; overflow-y: auto;
+    padding: 40px 12px 24px 16px; border-right: 1px solid var(--line);
+  }
+}
 /* The top margin holds the printed page header (the mark and the name). */
 @page { margin: 24mm 16mm 16mm; }
 @media print {
@@ -1444,10 +1465,73 @@ def theme_css(theme: Theme) -> str:
     )
 
 
-def _html_block(block: Any) -> str:
+#: The heading levels the table of contents lists: the sections (h2) and what they hold (h3). An h4
+#: is a sub-part of one exchange or one attempt ("Revised claim", "attempt 1"); a heading a model
+#: wrote inside a reply is part of the reply, not of the document.
+TOC_LEVELS = (2, 3)
+TOC_TITLE = "Contents"
+
+
+def _anchor(n: int) -> str:
+    """The fragment id of the document's n-th heading (1-based, in document order). Derived from
+    nothing a model or a user wrote, so it is always a valid, unique, harmless id."""
+    return f"sec-{n}"
+
+
+def _outline(blocks: tuple[Any, ...]) -> list[tuple[Heading, str]]:
+    """Every document heading in rendering order -- inside a `Details` too -- with its fragment id."""
+    out: list[tuple[Heading, str]] = []
+
+    def walk(items: tuple[Any, ...]) -> None:
+        for block in items:
+            if isinstance(block, Heading):
+                out.append((block, _anchor(len(out) + 1)))
+            elif isinstance(block, Details):
+                walk(block.blocks)
+
+    walk(blocks)
+    return out
+
+
+def _toc_html(outline: list[tuple[Heading, str]]) -> str:
+    """The table of contents: a STATIC list of in-document links (no script; a fragment is not a
+    URL, so it loads nothing) -- clickable in the HTML and in the PDF printed from it. An h3 nests
+    under the h2 before it. Empty for a document with fewer than two entries."""
+    entries = [(h.level, h.text, anchor) for h, anchor in outline if h.level in TOC_LEVELS]
+    if len(entries) < 2:
+        return ""
+    parts = [
+        f'<nav class="toc" aria-label="{TOC_TITLE}"><div class="toc-in">',
+        f'<p class="toc-title">{TOC_TITLE}</p>',
+        "<ol>",
+    ]
+    item_open = sub_open = False
+    for level, text, anchor in entries:
+        link = f'<a href="#{anchor}">{_esc(text)}</a>'
+        if level > TOC_LEVELS[0] and item_open:
+            if not sub_open:
+                parts.append("<ol>")
+                sub_open = True
+            parts.append(f"<li>{link}</li>")
+            continue
+        if sub_open:
+            parts.append("</ol>")
+            sub_open = False
+        if item_open:
+            parts.append("</li>")
+        parts.append(f"<li>{link}")
+        item_open = True
+    if sub_open:
+        parts.append("</ol>")
+    parts.append("</li>\n</ol>\n</div></nav>")
+    return "\n".join(parts)
+
+
+def _html_block(block: Any, anchors: Iterator[str]) -> str:
+    """`anchors` yields the fragment ids of `_outline`, consumed one per heading in the same order."""
     if isinstance(block, Heading):
         level = max(1, min(6, block.level))
-        return f"<h{level}>{_esc(block.text)}</h{level}>"
+        return f'<h{level} id="{next(anchors)}">{_esc(block.text)}</h{level}>'
     if isinstance(block, Para):
         return f"<p>{_esc(block.text)}</p>"
     if isinstance(block, Caption):
@@ -1505,7 +1589,7 @@ def _html_block(block: Any) -> str:
             items.append(f"<li>{inner}</li>")
         return '<ol class="citations">\n' + "\n".join(items) + "\n</ol>"
     if isinstance(block, Details):
-        inner = "\n".join(p for p in (_html_block(b) for b in block.blocks) if p)
+        inner = "\n".join(p for p in (_html_block(b, anchors) for b in block.blocks) if p)
         # `open`: a collapsed <details> is invisible in a print, and the PDF is this document.
         return f"<details open>\n<summary>{_esc(block.summary)}</summary>\n{inner}\n</details>"
     raise TypeError(f"unknown block {type(block).__name__}")  # pragma: no cover
@@ -1514,11 +1598,23 @@ def _html_block(block: Any) -> str:
 def render_html_doc(doc: Document, theme: Theme = "light") -> str:
     """ONE self-contained, STATIC document: embedded CSS, no script, no external reference of any
     kind, every quoted value escaped, and a Content-Security-Policy that allows nothing else to
-    load. The only absolute URLs are anchors (citations; a Send or Continue reply's own links)."""
+    load. The only absolute URLs are anchors (citations; a Send or Continue reply's own links).
+
+    The table of contents goes right before the first section, after the metadata line and the
+    notes that open the document; every document heading carries the id it links to."""
     markers = "\n".join(
         f'<meta name="{_esc(name)}" content="{_esc(value)}">' for name, value in _marker_fields(doc)
     )
-    blocks = "\n".join(part for part in (_html_block(b) for b in doc.blocks) if part)
+    outline = _outline(doc.blocks)
+    toc = _toc_html(outline)
+    anchors = iter(anchor for _, anchor in outline)
+    parts: list[str] = []
+    for block in doc.blocks:
+        if toc and isinstance(block, Heading):
+            parts.append(toc)
+            toc = ""
+        parts.append(_html_block(block, anchors))
+    blocks = "\n".join(part for part in parts if part)
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'

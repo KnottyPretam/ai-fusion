@@ -141,7 +141,10 @@ attribute-free inline-tag allow-list (br sub sup b strong i em u s del ins mark 
 visible text). `export.py`'s `Body.kind` is `plain | markdown | code` (`prose()` at the model-prose sites;
 prompts / errors / reasoning stay plain, raw attempts code) and `Body.links` (anchors only in Send / Continue);
 `inline_html` typesets math in cells / bullets / checklists and equals `esc(value)` without one. The `.md`
-export is byte-for-byte unchanged (`tests/export/test_markdown_pin.py`). latex2mathml reads `unimathsymbols.txt`
+export is byte-for-byte unchanged (`tests/export/test_markdown_pin.py`). Since 2026-10-28 every HTML document opens
+with a table of contents (`_outline` / `_toc_html`: the h2s and h3s as `#sec-N` fragment links before the first
+section, a sticky sidebar on wide screens) and the desktop prints with `generateTaggedPDF` + `generateDocumentOutline`
+for PDF bookmarks — Electron writes NO outline without tagging. latex2mathml reads `unimathsymbols.txt`
 at import, so `packaging/backend.spec` collects it (`tests/packaging` pins that) — the import is lazy, so a
 build missing it would quietly print TeX instead of math: check a frozen export, not just the tests.
 

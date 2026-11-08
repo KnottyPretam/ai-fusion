@@ -401,7 +401,9 @@ def persist():
 
 # --------------------------------------------------------------------------- structural readers
 _MD_HEADING_RE = re.compile(r"^(#{1,6}) (.+)$", re.MULTILINE)
-_HTML_HEADING_RE = re.compile(r"<h([1-6])>(.*?)</h\1>", re.DOTALL)
+# A document heading carries its table-of-contents id (`id="sec-N"`); a reply's own heading carries
+# `class="md-h"` instead and is not matched.
+_HTML_HEADING_RE = re.compile(r'<h([1-6])(?: id="sec-\d+")?>(.*?)</h\1>', re.DOTALL)
 _MD_TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$", re.MULTILINE)
 
 
@@ -503,3 +505,21 @@ def without_assets(text: str) -> str:
 def logo_uris(text: str) -> list[str]:
     """Every embedded asset payload, in order."""
     return _DATA_URI_RE.findall(text)
+
+
+#: An in-document link (the table of contents): a bare fragment naming one of the document's own
+#: heading ids. It is not a URL -- following it loads nothing -- so it is the one kind of link an
+#: Analyze / Fusion / Refactor / Plan document may hold.
+TOC_LINK_RE = re.compile(r'<a href="#(sec-\d+)">')
+_HEADING_ID_RE = re.compile(r'<h[1-6] id="(sec-\d+)">')
+
+
+def without_toc_links(html: str) -> str:
+    """The document with every table-of-contents link checked and removed: each one must name a
+    heading id the document really carries, so what is left is every OTHER anchor and URL."""
+    ids = set(_HEADING_ID_RE.findall(html))
+    targets = TOC_LINK_RE.findall(html)
+    assert targets, "no table of contents"
+    missing = [t for t in targets if t not in ids]
+    assert not missing, f"links to no heading: {missing}"
+    return TOC_LINK_RE.sub("<a>", html)

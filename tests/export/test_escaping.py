@@ -2,7 +2,8 @@
 
 The HTML is opened from a file path and printed to PDF, so it must be inert AND self-contained:
 every interpolated value escaped, no stylesheet / font / image / script reference of any kind, and
-no absolute URL other than the citation anchors in the body.
+no absolute URL other than the citation anchors in the body (the table of contents links to the
+document's own headings by fragment, which loads nothing).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from html import unescape
 import pytest
 
 from backend import export
-from tests.export.conftest import md_fences
+from tests.export.conftest import md_fences, without_toc_links
 
 HOSTILE_REPLY = (
     'Try <script>alert("x & y")</script> and <img src=x onerror=alert(1)>.\n'
@@ -100,7 +101,7 @@ def test_html_references_no_external_resource(rich_send, add_analyze, add_fusion
     analyze = add_analyze(conv)
     fusion = add_fusion(conv, analyze)
     for turn_id in (conv.turns[0].id, analyze.id, fusion.id):
-        html = export.render_html(conv, turn_id)
+        html = without_toc_links(export.render_html(conv, turn_id))
         lowered = html.lower()
         assert "<link" not in lowered
         assert "<script" not in lowered

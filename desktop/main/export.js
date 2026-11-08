@@ -445,6 +445,13 @@ export async function renderPdf({ html, BrowserWindow, fs = nodeFs, tmpdir = os.
           displayHeaderFooter: Boolean(headerTemplate),
           ...(headerTemplate ? { headerTemplate, footerTemplate: PRINT_FOOTER_TEMPLATE } : {}),
           landscape: false,
+          // PDF bookmarks from the document's headings, so a viewer's sidebar traverses it beside the
+          // in-document table of contents (whose links Chromium keeps either way). The outline is
+          // built from the tagged structure: without `generateTaggedPDF` Electron writes NONE —
+          // measured on Electron 43 and 44, 2026-10-28; tagging left every page pixel-identical and
+          // roughly doubled the file (a 16-page Send, 123 → 234 KB).
+          generateTaggedPDF: true,
+          generateDocumentOutline: true,
         }),
         'export_pdf_timeout',
       )

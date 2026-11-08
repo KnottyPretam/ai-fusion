@@ -37,7 +37,7 @@ from backend.export_render import (
     styled_char,
 )
 from backend.schemas import Plan
-from tests.export.conftest import doc_headings, html_headings, md_headings
+from tests.export.conftest import doc_headings, html_headings, md_headings, without_toc_links
 from tests.export.test_plan_document import make_plan_turn, sample_plan
 from tests.helpers import find_identity_leaks
 
@@ -411,7 +411,7 @@ def test_send_reply_links_are_anchors_only_for_safe_schemes(rich_send):
         '<a href="mailto:someone@example.org" target="_blank" rel="noreferrer noopener">mail</a>'
         in body
     )
-    for anchor in re.findall(r'<a href="([^"]*)"', html):
+    for anchor in re.findall(r'<a href="([^"]*)"', without_toc_links(html)):
         assert safe_href(unescape(anchor), mailto=True) == unescape(anchor)
     assert "javascript:" not in "".join(re.findall(r"<a [^>]*>", html))
     assert 'href="ftp:' not in html and ">ftp</a>" not in html
@@ -457,13 +457,14 @@ def _plant_everywhere(conv, text: str) -> None:
 
 def test_no_anchor_namespace_or_url_outside_send_documents(every_kind):
     """An Analyze / Fusion / Refactor / Plan document cites nothing, even when the prose it quotes
-    holds a link: the link's text survives, its URL does not."""
+    holds a link: the link's text survives, its URL does not. Its only links are the table of
+    contents, which name the document's own headings."""
     conv = every_kind
     _plant_everywhere(conv, LINKED)
     for turn in conv.turns:
         if turn.type in ("send", "continue"):
             continue
-        html = export.render_html(conv, turn.id)
+        html = without_toc_links(export.render_html(conv, turn.id))
         lowered = html.lower()
         assert "<a " not in lowered and "href=" not in lowered, turn.type
         assert "http://" not in lowered and "https://" not in lowered, turn.type
